@@ -166,6 +166,10 @@ function streamEvents(response: ServerResponse, host: SessionHost, sessionId: st
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
+  // writeHead only buffers; Node sends the headers with the first body write. A client resuming at
+  // `since: lastSeq` has nothing to replay, so without this its fetch() would not resolve until the
+  // Agent Session next said something — which for an idle one is never.
+  response.flushHeaders();
 
   const write = (entry: LoggedEvent): void => {
     response.write(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`);

@@ -1,26 +1,32 @@
 // A deliberately plain stub, and it is meant to stay plain until Step 5's redesign. Its job is to
 // exercise every piece of new plumbing end to end — the embedded manifest, the SPA fallback, the
-// cookie handoff, and the shared reducer running in a browser as TypeScript — while the app is still
-// small enough that a fault here is obviously a plumbing fault and not a design one.
+// cookie handoff, the shared transport, and the shared reducer running in a browser as TypeScript —
+// while the app is still small enough that a fault here is obviously a plumbing fault and not a
+// design one.
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-// The whole point of the migration: the reducer the TUI runs, imported rather than copied.
+// The whole point of the migration: the reducer and the transport the TUI runs, imported rather than
+// copied.
+import { connect, type LinkState } from "@client/connection.ts";
 import { initialState, reduce, type Entry, type ViewState } from "@client/reduce.ts";
 import { editDiff } from "@client/diff.ts";
 import { relativeTime } from "@client/relative-time.ts";
 import type { SessionSummary } from "../../src/protocol/commands.ts";
-import type { LoggedEvent } from "../../src/protocol/events.ts";
+
+/**
+ * Same origin, and no token: in the browser the credential is the HttpOnly cookie the /auth handoff
+ * set, so there is nothing for this side to hold (ADR 0004). In the dev server that origin is Vite's,
+ * which proxies /api and /auth at the Session Host.
+ */
+const connection = connect({ url: "" });
 
 /** The Agent Session list, polled the way the TUI polls it. */
 function useAgentSessions(): SessionSummary[] {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
 
   useEffect(() => {
-    const poll = async (): Promise<void> => {
-      const response = await fetch("/api/sessions");
-      if (response.ok) setSessions((await response.json()) as SessionSummary[]);
-    };
+    const poll = async (): Promise<void> => setSessions(await connection.listSessions());
     void poll();
     const timer = setInterval(() => void poll(), 2000);
     return () => clearInterval(timer);
@@ -29,26 +35,26 @@ function useAgentSessions(): SessionSummary[] {
   return sessions;
 }
 
-/** One Presentation Transcript, replayed from seq 0 and then followed. */
-function useTranscript(sessionId: string | undefined): ViewState {
+/** One Presentation Transcript, replayed from seq 0 and then followed across reconnects. */
+function useTranscript(sessionId: string | undefined): { view: ViewState; link: LinkState } {
   const [view, setView] = useState<ViewState>(initialState);
+  const [link, setLink] = useState<LinkState>("connecting");
 
   useEffect(() => {
     setView(initialState());
     if (!sessionId) return;
 
-    // Raw EventSource for now. Step 3 replaces it with src/client/connection.ts, which already
-    // parses these frames properly and keeps `since` across a reconnect instead of replaying the
-    // whole Presentation Transcript every time.
-    const stream = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events?since=0`);
-    stream.onmessage = (message: MessageEvent<string>) => {
-      const logged = JSON.parse(message.data) as LoggedEvent;
-      setView((current) => reduce(current, logged));
-    };
-    return () => stream.close();
+    // subscribe() owns the reconnect: it resumes from the highest seq it delivered, so a dropped
+    // stream costs nothing and the state below keeps accumulating across one.
+    return connection.subscribe({
+      sessionId,
+      since: 0,
+      onEntry: (logged) => setView((current) => reduce(current, logged)),
+      onLink: setLink,
+    });
   }, [sessionId]);
 
-  return view;
+  return { view, link };
 }
 
 function summarise(entry: Entry): string {
@@ -61,7 +67,7 @@ function summarise(entry: Entry): string {
 function App() {
   const sessions = useAgentSessions();
   const [selected, setSelected] = useState<string | undefined>(undefined);
-  const view = useTranscript(selected);
+  const { view, link } = useTranscript(selected);
   const now = Date.now();
 
   return (
@@ -82,7 +88,7 @@ function App() {
       ) : (
         <section>
           <h2>
-            {selected} · {view.status}
+            {selected} · {view.status} · link {link}
             {view.queue.length > 0 ? ` · ${view.queue.length} queued` : ""}
           </h2>
           {view.entries.map((entry) => (

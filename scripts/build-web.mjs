@@ -23,12 +23,17 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
  *
  * The list is the modules the web app is *currently* built from, not every module in src/client/.
  * It can only name what the bundle actually imports, so a shared module the web app does not use yet
- * cannot be asserted here — src/client/connection.ts, context-usage.ts, model-choices.ts,
- * session-label.ts and status.ts are all shared with the TUI and all still absent below. Each joins
- * the list as the web app starts importing it; until then it is shared code with no gate on it, and
- * the compiler is the only thing keeping the two front-ends honest about it.
+ * cannot be asserted here — context-usage.ts, model-choices.ts, session-label.ts and status.ts are
+ * all shared with the TUI and all still absent below. Each joins the list as the web app starts
+ * importing it; until then it is shared code with no gate on it, and the compiler is the only thing
+ * keeping the two front-ends honest about it.
  */
-const SHARED_MODULES = ["src/client/diff.ts", "src/client/reduce.ts", "src/client/relative-time.ts"];
+const SHARED_MODULES = [
+  "src/client/connection.ts",
+  "src/client/diff.ts",
+  "src/client/reduce.ts",
+  "src/client/relative-time.ts",
+];
 
 const result = await build({
   configFile: join(root, "web/vite.config.ts"),

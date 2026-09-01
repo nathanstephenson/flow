@@ -6,10 +6,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-// esbuild-wasm rather than esbuild: the native package resolves to a per-platform binary, so a
-// lockfile written on one OS leaves the build broken on another. This script runs rarely and the
-// bundle is small, so portability is worth more than the milliseconds.
-import { build } from "esbuild-wasm";
+import { build } from "esbuild";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "build");
@@ -33,9 +30,6 @@ const result = await build({
   // pi pulls in optional native and wasm packages that cannot be bundled. They are only reachable
   // through the pi adapter, which is loaded lazily, so the binary works without them.
   external: ["koffi", "@silvia-odwyer/photon-node", "@earendil-works/pi-coding-agent"],
-  // esbuild-wasm's stdio shim throws writing its own summary to a non-TTY pipe, and we print the
-  // numbers we care about ourselves.
-  logLevel: "silent",
   metafile: true,
 });
 

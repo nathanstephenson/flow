@@ -102,20 +102,25 @@ goodharness serve   # prints http://127.0.0.1:PORT/auth?token=… — open that 
 goodharness serve --port 3000 --address 0.0.0.0   # containers reached via a published port
 ```
 
-Several sessions open side by side, collapsible tool calls, file edits rendered as diffs, per-pane
-transcript search, provider-grouped model picker, queue depth and context usage.
+Several Agent Sessions on screen at once, collapsible tool calls, file edits rendered as diffs,
+per-pane transcript search, provider-grouped model picker, Steering Queue depth and context usage —
+the surface M6 is rebuilding.
 
-The browser runs **the same reducer as the TUI**, not a copy: `src/client/reduce.ts` and
-`src/client/diff.ts` import only types, so stripping leaves standalone ESM with no imports — served
-as `/reduce.js` and `/diff.js`, no bundler. A test loads what the server actually serves and asserts
-it produces state identical to the TypeScript reducer, so the two front-ends cannot drift.
+The browser ran **the same reducer as the TUI**, not a copy: `src/client/reduce.ts` and
+`src/client/diff.ts` imported only types, so stripping left standalone ESM with no imports — served
+as `/reduce.js` and `/diff.js`, no bundler — and a test loaded what the Session Host actually served
+and asserted it produced state identical to the TypeScript reducer. **Superseded by M6**, which has
+the browser import the reducer instead of being handed it.
 
 Assets are embedded as strings in `src/web/assets.generated.ts` (`npm run build:assets`), so the
-host never reads them from disk and a single-executable build has nothing to find at runtime. A test
-fails if the generated module drifts from its sources.
+host never reads them from disk and a single-executable build has nothing to find at runtime. That
+module is a build output which is nevertheless committed, because the host imports it statically and
+a fresh clone has to typecheck before anyone has run a bundler — so what stops it going stale is
+load-bearing, and M6 is where it grew teeth.
 
-The `/auth` handoff exists because `EventSource` cannot send an `Authorization` header: the token
-goes into an HttpOnly cookie once, and the UI itself — not just the API — requires it.
+The `/auth` handoff exists because a browser cannot put an `Authorization` header on a navigation or
+an `EventSource`: the token goes into an HttpOnly cookie once, and the UI itself — not just the API
+— requires it.
 
 **M5 (single executable) complete.** `npm run build:binary` produces `build/goodharness`: an esbuild
 bundle injected into a copy of the `node` binary via Node SEA.
@@ -147,25 +152,100 @@ Five things the build needed:
   already the command and `args[0]` is a real flag. Hoisting it there executes `--output-format` as
   a program, and the SDK reports that as "native binary exists but failed to launch — probably a
   libc mismatch", which is not what went wrong.
-- **`esbuild-wasm` rather than `esbuild`.** The native package resolves to a per-platform binary, so
-  a lockfile written on macOS leaves the Linux build broken and vice versa. The script runs rarely
-  and the bundle is small, so portability is worth more than the milliseconds.
+- **Native `esbuild`, after a spell on `esbuild-wasm`.** The wasm build was chosen to keep the
+  lockfile portable: the native package resolves to a per-platform binary, so one installed on macOS
+  looked as though it would leave the Linux build broken. It never would have — `package-lock.json`
+  is lockfileVersion 3 and records every platform's optional binary rather than the host's, as it
+  already did for both agent SDKs and now does for M6's Rolldown and lightningcss bindings too, and
+  `npm ci` picks the right one per OS. The shim was defending a property the tree does not have, at
+  the price of shipping two esbuilds. The switch produced a byte-identical bundle and took
+  `logLevel: "silent"` with it — that existed only because the wasm stdio shim threw writing its own
+  summary to a pipe, and the native package writes nothing there at all.
 - **The packaging asymmetry held**, exactly backwards from intuition: pi is in-process and would
   bundle cleanly if not for its native deps, while Claude — the one that looks like a library — is
   the one needing an external executable.
+
+**M6 (the web client is bundled) in progress.** The browser client is a Vite and React application
+in `web/`, and it *imports* `src/client/reduce.ts` as TypeScript rather than being served that file
+with its types stripped.
+
+M4's arrangement is reversed deliberately. Importing the reducer makes two copies of it impossible
+for the compiler's reasons rather than a test's, and it lifts the ceiling that arrangement imposed:
+nothing shared could import a value, which is why `src/client/diff.ts` compares lines naively. So
+`src/client/` stops being only the shared reducer and becomes the shared front-end core — reducer,
+transport, and the presentation logic both clients need — under a standing rule that everything in
+it stays free of DOM types, because the TUI compiles it under a program that has none.
+
+The Session Host and the single-executable build learn nothing about Vite. `prebuild:binary`
+regenerates `src/web/assets.generated.ts` and the rest of the chain is untouched. What the host
+gained is a manifest instead of six hard-coded files: content-hashed assets served
+`public, max-age=31536000, immutable`, the shell `no-store` — which is doing real work, since an
+immutably cached shell would pin a browser to a deleted asset hash — and a fallback that answers an
+unknown path with the shell so a deep-linked Agent Session survives a reload, with `/api` and
+`/assets` excluded, because a missing hashed chunk answered with HTML costs an hour to diagnose.
+
+The cost is that drift changes shape rather than going away. The generated module is a committed
+build output, so it can have been built from last week's reducer and nothing at runtime would
+notice. Three gates stand in for the test that used to execute the served bytes: the build refuses
+to emit a bundle whose module graph lacks the shared client modules; the generated module carries a
+sha256 over every input — `src/client/**` and the lockfile included — that `npm test` recomputes, so
+editing the reducer without rebuilding fails the suite; and CI rebuilds and refuses a dirty diff,
+the only one of the three that does not depend on remembering a command. The embedded module grows
+from 28 kB to 196 kB, and further once Tailwind and the component set land — under half a percent of
+the binary, but now the largest file in the tree.
+
+The UI itself is still being rebuilt. `/` currently serves a deliberately plain stub whose job is to
+prove the plumbing while the app is small enough that a fault in it is obviously a plumbing fault;
+M4's feature set returns with the redesign, laid out master–detail with a two-up split rather than a
+grid of panes. Until a browser-driven smoke test lands, nothing automatically proves that the
+shipped bundle renders a live Presentation Transcript — the compiler, the module-graph check and the
+hash all prove things about the bundle, not about the app working.
 
 ## Development
 
 ```bash
 npm install
-npm run typecheck
+npm run typecheck   # four programs: host, web presentation logic, web app, its Vite config
 npm test
 npm run spike:auth   # re-verify subscription auth
 
+GOODHARNESS_ASSETS=1 npm test    # adds a Vite rebuild, to prove the embedded module is its output
 GOODHARNESS_E2E=1 npm test       # adds the live Claude contract (spends tokens)
 GOODHARNESS_E2E_PI=1 npm test    # adds the live pi contract (needs pi credentials)
 ```
 
-Sources are run through Node's `--experimental-strip-types`, so TypeScript is limited to
-erasable syntax: no parameter properties, enums, or namespaces. Relative imports carry the `.ts`
-extension and are rewritten on build.
+All three stay out of the default loop for the same reason: `npm test` should need no credentials,
+no network and no bundler, so a fresh clone with no `web/dist` — and an `--omit=dev` install with no
+Vite at all — still runs it green.
+
+Working on the web client means a Session Host to talk to, so start the host first:
+
+```bash
+npm start -- serve --port 4318   # terminal one: the Session Host
+npm run dev                      # terminal two: Vite on 127.0.0.1:5173
+```
+
+The dev server finds the host through `daemon.json`, or `GOODHARNESS_URL` if you set it, and it
+resolves that target once at startup — which is why the host wants a fixed `--port` rather than the
+ephemeral one it picks by default. It proxies `/api` and `/auth` through, so the browser stays on
+one origin; that single origin is what lets the Session Host go on checking `Origin` strictly with
+no CORS.
+
+Do the cookie handoff on **the URL the dev server prints**, not the one the host prints.
+`localhost`, `127.0.0.1` and `[::1]` are three different cookie hosts on one machine, so a cookie
+taken on the host's is not sent to the dev origin, which then answers 401. And `/auth` redirects to
+a relative `/` — which is what makes it work through a proxy at all — so following the host's own
+URL lands you on the embedded bundle rather than on the dev server.
+
+Do not install with `npm ci --omit=optional`. Rolldown, lightningcss and esbuild all resolve their
+native bindings through optional dependencies, so omitting them installs cleanly and then fails at
+build time with an unhelpful "cannot find native binding".
+
+CI (`.github/workflows/ci.yml`) runs the typecheck, the tests and the binary build, and rebuilds the
+embedded assets to fail if the committed module moves.
+
+Sources under `src/`, `test/` and `web/src/presentation/` are run through Node's
+`--experimental-strip-types`, so TypeScript there is limited to erasable syntax: no parameter
+properties, enums, or namespaces. Relative imports carry the `.ts` extension and are rewritten on
+build. The rest of `web/` is Vite's and free of that constraint — but `src/client/**` is not,
+however browser-facing it becomes, because the TUI still runs it stripped.
