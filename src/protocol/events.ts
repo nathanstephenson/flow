@@ -8,10 +8,25 @@
  * produce losslessly. Deriving deltas from pi's snapshots would need prefix-diffing.
  */
 
+/**
+ * How hard a model is asked to think on a turn. The union of both SDKs' vocabularies — Claude
+ * offers low through max, pi offers off through xhigh — with no invented equivalences between
+ * them: a model declares only the levels it actually serves.
+ */
+export type EffortLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export type ModelInfo = {
   id: string;
   provider?: string;
   label?: string;
+  /**
+   * Effort levels this model serves. Absent or empty means it has no effort control — Claude's
+   * haiku reports none — and clients hide the control rather than offering a setting that does
+   * nothing. Effort lives on the model rather than on Capabilities because that is where both
+   * SDKs put it: Claude reports it per entry from `supportedModels()`, and pi's available thinking
+   * levels follow whichever model is selected.
+   */
+  effortLevels?: EffortLevel[];
 };
 
 /**
@@ -44,6 +59,7 @@ export type AgentEvent =
   | { type: "queue_changed"; pending: string[] }
   | { type: "context_usage"; used: number; window: number }
   | { type: "model_changed"; model: ModelInfo }
+  | { type: "effort_changed"; effort: EffortLevel }
   | { type: "notice"; level: NoticeLevel; text: string }
   | { type: "session_dormant"; reason: string }
   | { type: "revived"; fromSeq: number }

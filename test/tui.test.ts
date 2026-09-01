@@ -8,7 +8,7 @@ import { serve, type RunningServer } from "../src/daemon/server.ts";
 import { connect } from "../src/client/connection.ts";
 import { initialState, reduceAll } from "../src/client/reduce.ts";
 import { SessionLog } from "../src/daemon/log.ts";
-import { modelChoices, renderFrame, type UiState } from "../src/tui/render.ts";
+import { effortChoices, modelChoices, renderFrame, type UiState } from "../src/tui/render.ts";
 import { KEY } from "../src/tui/keys.ts";
 import { runTui } from "../src/tui/app.ts";
 import type { Capabilities } from "../src/protocol/events.ts";
@@ -16,7 +16,7 @@ import type { Capabilities } from "../src/protocol/events.ts";
 const CAPABILITIES: Capabilities = {
   providers: ["anthropic", "openai"],
   models: [
-    { id: "claude-opus-5", provider: "anthropic", label: "Opus 5" },
+    { id: "claude-opus-5", provider: "anthropic", label: "Opus 5", effortLevels: ["low", "high", "max"] },
     { id: "gpt-x", provider: "openai", label: "GPT X" },
     { id: "claude-sonnet-5", provider: "anthropic", label: "Sonnet 5" },
   ],
@@ -77,6 +77,27 @@ describe("TUI rendering", () => {
   it("surfaces queue depth, so a queued message is not silently swallowed", () => {
     const ui = baseUi({ view: { ...initialState(), queue: ["a", "b"] } });
     assert.match(renderFrame(ui, { columns: 80, rows: 10 }).join("\n"), /2 queued/);
+  });
+
+  it("offers the Effort levels of the model in force, not of the session", () => {
+    const view = { ...initialState(), capabilities: CAPABILITIES };
+    assert.deepEqual(effortChoices({ ...view, model: { id: "claude-opus-5" } }), ["low", "high", "max"]);
+    assert.deepEqual(effortChoices({ ...view, model: { id: "gpt-x" } }), [], "a model without one offers nothing");
+  });
+
+  it("marks the Effort in force in the picker, and says so when there is none", () => {
+    const view = { ...initialState(), capabilities: CAPABILITIES };
+    const chosen = renderFrame(
+      baseUi({ view: { ...view, model: { id: "claude-opus-5" }, effort: "high" }, overlay: { kind: "effort", index: 0 } }),
+      { columns: 60, rows: 12 },
+    ).join("\n");
+    assert.match(chosen, /high {2}\(in force\)/);
+
+    const none = renderFrame(
+      baseUi({ view: { ...view, model: { id: "gpt-x" } }, overlay: { kind: "effort", index: 0 } }),
+      { columns: 60, rows: 12 },
+    ).join("\n");
+    assert.match(none, /no effort control/);
   });
 
   it("keeps the selected model in view in a long list", () => {
@@ -176,6 +197,16 @@ describe("TUI over the wire", () => {
 
     stdin.write(KEY.escape);
     await waitFor(() => output.join("").includes("idle"));
+  });
+
+  it("sets Effort from the picker", async () => {
+    await waitFor(() => backend.latest.capabilities.models.length > 0);
+    stdin.write(KEY.ctrlE);
+    stdin.write(KEY.down);
+    stdin.write(KEY.enter);
+    // fake-1 offers low/medium/high; the cursor starts on the level in force and steps down.
+    await waitFor(() => backend.latest.effort !== undefined);
+    assert.equal(backend.latest.effort, "medium");
   });
 
   it("edits the input line with backspace", async () => {

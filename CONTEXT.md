@@ -54,6 +54,11 @@ _Avoid_: resume, restart, reconnect
 The working directory an Agent Session is bound to.
 _Avoid_: workspace, project, repo
 
+**Effort**:
+How hard a model is asked to think on a turn. Declared per model rather than per Agent Session,
+because not every model offers it.
+_Avoid_: thinking, reasoning, budget, thinking level
+
 **Capabilities**:
 What a Backend Adapter can be asked to do, declared per Agent Session so clients hide controls
 rather than break on them.

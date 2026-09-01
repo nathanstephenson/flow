@@ -1,5 +1,5 @@
 import type { SessionSummary } from "../protocol/commands.ts";
-import type { Capabilities, ModelInfo } from "../protocol/events.ts";
+import type { Capabilities, EffortLevel, ModelInfo } from "../protocol/events.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
 
 /**
@@ -12,7 +12,8 @@ import type { Entry, ViewState } from "../client/reduce.ts";
 export type Overlay =
   | { kind: "none" }
   | { kind: "sessions"; index: number }
-  | { kind: "models"; index: number };
+  | { kind: "models"; index: number }
+  | { kind: "effort"; index: number };
 
 export type UiState = {
   sessions: SessionSummary[];
@@ -40,6 +41,15 @@ export function modelChoices(capabilities: Capabilities | undefined): ModelChoic
     .flatMap(([provider, models]) => models.map((model) => ({ provider, model })));
 }
 
+/**
+ * The Effort levels on offer, which belong to the model in force rather than to the session — a
+ * model without an effort control returns none and the picker has nothing to show.
+ */
+export function effortChoices(view: ViewState): EffortLevel[] {
+  const current = view.capabilities?.models.find((model) => model.id === view.model?.id);
+  return (current ?? view.model)?.effortLevels ?? [];
+}
+
 export function renderFrame(ui: UiState, size: Size): string[] {
   const width = Math.max(20, size.columns);
   const height = Math.max(6, size.rows);
@@ -55,8 +65,9 @@ export function renderFrame(ui: UiState, size: Size): string[] {
 function header(ui: UiState, width: number): string {
   const summary = ui.sessions.find((session) => session.id === ui.selected);
   const model = ui.view.model?.label ?? ui.view.model?.id ?? "default model";
+  const effort = ui.view.effort && effortChoices(ui.view).length > 0 ? ` · ${ui.view.effort}` : "";
   const left = summary ? `${summary.backend} · ${summary.title}` : "no session";
-  const right = `${model} · ${ui.view.status}`;
+  const right = `${model}${effort} · ${ui.view.status}`;
   return clip(pad(left, Math.max(0, width - right.length - 1)) + " " + right, width);
 }
 
@@ -68,7 +79,7 @@ function status(ui: UiState, width: number): string {
     parts.push(window > 0 ? `context ${Math.round((used / window) * 100)}%` : `${used} tokens`);
   }
   if (ui.notice) parts.push(ui.notice);
-  parts.push("^S sessions  ^P models  esc abort  ^C quit");
+  parts.push("^S sessions  ^P models  ^E effort  esc abort  ^C quit");
   return clip(parts.join("  ·  "), width);
 }
 
@@ -101,6 +112,18 @@ function overlay(ui: UiState, width: number, height: number): string[] {
       ),
     );
     return padTo(["sessions  (enter to switch, n for new, esc to close)", ...rows], height, width);
+  }
+
+  if (ui.overlay.kind === "effort") {
+    const levels = effortChoices(ui.view);
+    const cursor = (ui.overlay as { index: number }).index;
+    const rows = levels.map((level, index) => {
+      const inForce = level === ui.view.effort ? "  (in force)" : "";
+      return clip(`${index === cursor ? ">" : " "} ${level}${inForce}`, width);
+    });
+    const title =
+      levels.length > 0 ? "effort  (enter to set, esc to close)" : "this model has no effort control";
+    return padTo([title, ...rows], height, width);
   }
 
   const choices = modelChoices(ui.view.capabilities);

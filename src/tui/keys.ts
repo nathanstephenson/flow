@@ -1,6 +1,7 @@
 /** Terminal key sequences, named so the input handler reads as intent rather than escape codes. */
 export const KEY = {
   ctrlC: "\u0003",
+  ctrlE: "\u0005",
   ctrlP: "\u0010",
   ctrlS: "\u0013",
   escape: "\u001b",

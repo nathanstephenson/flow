@@ -1,5 +1,5 @@
 /** Commands a client may send to the Session Host. */
-import type { Capabilities } from "./events.ts";
+import type { Capabilities, EffortLevel } from "./events.ts";
 
 export type SendWhen = "now" | "after_turn";
 
@@ -17,10 +17,11 @@ export type SessionSummary = {
 };
 
 export type Command =
-  | { type: "create"; scope: string; backend: string; modelId?: string }
+  | { type: "create"; scope: string; backend: string; modelId?: string; effort?: EffortLevel }
   | { type: "send"; sessionId: string; text: string; when: SendWhen }
   | { type: "abort"; sessionId: string }
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }
   | { type: "set_model"; sessionId: string; modelId: string }
+  | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   | { type: "list" };

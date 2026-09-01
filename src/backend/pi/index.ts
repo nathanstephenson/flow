@@ -9,7 +9,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
-import type { BackendEvent, Capabilities, ModelInfo } from "../../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel, ModelInfo } from "../../protocol/events.ts";
+import { clampEffort } from "../effort.ts";
 
 /**
  * Backend Adapter for the pi SDK.
@@ -29,6 +30,10 @@ import type { BackendEvent, Capabilities, ModelInfo } from "../../protocol/event
 /** pi does not export AgentMessage by that name; take it from the event union instead. */
 type AgentMessage = Extract<AgentSessionEvent, { type: "message_start" }>["message"];
 
+/** pi calls Effort a thinking level, and its levels are a subset of ours. */
+type ThinkingLevel = AgentSession["thinkingLevel"];
+type PiModel = { id: string; provider?: string; name?: string; reasoning?: boolean; thinkingLevelMap?: object };
+
 export type PiBackendOptions = {
   /** Tool names pi may use. Omit for pi's defaults; pass [] to disable tools entirely. */
   tools?: string[];
@@ -44,6 +49,9 @@ export class PiSession implements BackendSession {
 
   private turnId: string | undefined;
   private aborting = false;
+  /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
+  private wantedEffort: EffortLevel | undefined;
+  private effort: EffortLevel | undefined;
   private messageSeq = 0;
   private messageCount = 0;
   private currentMessageId: string | undefined;
@@ -76,7 +84,44 @@ export class PiSession implements BackendSession {
     const model = this.session.modelRegistry.getAll().find((candidate) => candidate.id === modelId);
     if (!model) throw new Error(`Unknown model: ${modelId}`);
     await this.session.setModel(model);
+    // Which levels are on offer follows the model, and pi may have clamped its own thinking level
+    // on the way through, so both the list and the level in force are re-read here.
+    this.capabilities = capabilitiesOf(this.session);
     this.emit({ type: "model_changed", model: describeModel(model) });
+    this.emit({ type: "capabilities_changed", capabilities: this.capabilities });
+    this.reapplyEffort();
+  }
+
+  async setEffort(effort: EffortLevel): Promise<void> {
+    this.wantedEffort = effort;
+    this.applyEffort(effort);
+  }
+
+  private applyEffort(wanted: EffortLevel): void {
+    const level = clampEffort(wanted, availableEffort(this.session));
+    // Nothing to set on a model with no effort control. The request stays on file, so switching
+    // back to a model that has one restores it.
+    if (!level) {
+      this.effort = undefined;
+      return;
+    }
+    // Safe: the level came out of pi's own list of what this model offers.
+    this.session.setThinkingLevel(level as ThinkingLevel);
+    this.effort = (this.session.thinkingLevel as EffortLevel | undefined) ?? level;
+    this.emit({ type: "effort_changed", effort: this.effort });
+  }
+
+  private reapplyEffort(): void {
+    const settled = this.session.thinkingLevel as EffortLevel | undefined;
+    if (!this.wantedEffort) {
+      if (settled && settled !== this.effort) {
+        this.effort = settled;
+        this.emit({ type: "effort_changed", effort: settled });
+      }
+      return;
+    }
+    if (clampEffort(this.wantedEffort, availableEffort(this.session)) === this.effort) return;
+    this.applyEffort(this.wantedEffort);
   }
 
   async dispose(): Promise<void> {
@@ -218,12 +263,28 @@ export class PiBackend implements AgentBackend {
 
     const piSession = new PiSession(session, options.emit, sessionDir);
     options.emit({ type: "capabilities_changed", capabilities: piSession.capabilities });
+    // Which model is in force decides which effort levels a client may offer, so say it up front,
+    // preferring the registry entry: that is the one carrying pi's own answer about its levels.
+    if (session.model) {
+      const described = describeModel(session.model);
+      const listed = piSession.capabilities.models.find((model) => model.id === described.id);
+      options.emit({ type: "model_changed", model: listed ?? described });
+    }
+    if (options.effort) await piSession.setEffort(options.effort);
     return piSession;
   }
 }
 
 function capabilitiesOf(session: AgentSession): Capabilities {
-  const models = session.modelRegistry.getAll().map(describeModel);
+  const current = session.model?.id;
+  const models = session.modelRegistry.getAll().map((model) => {
+    const described = describeModel(model);
+    // pi will only answer for the model it has selected, and that answer is the authoritative one.
+    // Every other entry is inferred from the registry and firms up if you switch to it.
+    if (model.id !== current) return described;
+    const available = availableEffort(session);
+    return available.length > 0 ? { ...described, effortLevels: available } : omitEffort(described);
+  });
   const providers = [...new Set(models.map((model) => model.provider).filter(isString))];
   return {
     providers: providers.length > 0 ? providers : ["pi"],
@@ -233,12 +294,37 @@ function capabilitiesOf(session: AgentSession): Capabilities {
   };
 }
 
-function describeModel(model: { id: string; provider?: string; name?: string }): ModelInfo {
+function describeModel(model: PiModel): ModelInfo {
+  const effortLevels = inferredEffort(model);
   return {
     id: model.id,
     ...(model.provider ? { provider: model.provider } : {}),
     ...(model.name ? { label: model.name } : {}),
+    ...(effortLevels.length > 0 ? { effortLevels } : {}),
   };
+}
+
+/** The levels pi will accept for the model it currently has selected. */
+function availableEffort(session: AgentSession): EffortLevel[] {
+  return session.supportsThinking() ? (session.getAvailableThinkingLevels() as EffortLevel[]) : [];
+}
+
+/**
+ * What a model that is not currently selected probably offers. A model that cannot reason offers
+ * nothing; otherwise its thinkingLevelMap names the levels it was configured with.
+ */
+function inferredEffort(model: PiModel): EffortLevel[] {
+  if (model.reasoning === false) return [];
+  const map = model.thinkingLevelMap as Partial<Record<EffortLevel, unknown>> | undefined;
+  if (!map) return model.reasoning ? PI_EFFORT_LEVELS : [];
+  return PI_EFFORT_LEVELS.filter((level) => map[level] !== undefined && map[level] !== null);
+}
+
+const PI_EFFORT_LEVELS: EffortLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+function omitEffort(model: ModelInfo): ModelInfo {
+  const { effortLevels: _dropped, ...rest } = model;
+  return rest;
 }
 
 function joinBlocks(content: unknown, kind: "text" | "thinking"): string {

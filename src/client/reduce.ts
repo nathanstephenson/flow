@@ -1,4 +1,11 @@
-import type { AgentEvent, Capabilities, LoggedEvent, ModelInfo, NoticeLevel } from "../protocol/events.ts";
+import type {
+  AgentEvent,
+  Capabilities,
+  EffortLevel,
+  LoggedEvent,
+  ModelInfo,
+  NoticeLevel,
+} from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 
 /**
@@ -24,6 +31,7 @@ export type ViewState = {
   scope?: string;
   capabilities?: Capabilities;
   model?: ModelInfo;
+  effort?: EffortLevel;
   entries: Entry[];
   queue: string[];
   contextUsage?: { used: number; window: number };
@@ -108,6 +116,9 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
 
     case "model_changed":
       return { ...state, model: event.model };
+
+    case "effort_changed":
+      return { ...state, effort: event.effort };
 
     case "notice":
       return {

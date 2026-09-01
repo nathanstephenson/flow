@@ -34,6 +34,17 @@ describe("reduce", () => {
     assert.equal(assistant[0]?.kind === "assistant" ? assistant[0].text : "", "partial then whole");
   });
 
+  it("keeps the Effort in force", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "session_started", backend: "fake", scope: "/tmp", capabilities: CAPS },
+        { type: "effort_changed", effort: "high" },
+        { type: "effort_changed", effort: "low" },
+      ).since(0),
+    );
+    assert.equal(state.effort, "low");
+  });
+
   it("is deterministic across replays", () => {
     const log = transcript(...SAMPLE);
     assert.deepEqual(reduceAll(log.since(0)), reduceAll(log.since(0)));

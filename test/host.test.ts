@@ -34,7 +34,25 @@ describe("SessionHost", () => {
   it("dispatches a 'now' send immediately and records what the human sent", async () => {
     await host.send(sessionId, "hello", "now");
     assert.deepEqual(backend.latest.prompts, ["hello"]);
-    assert.deepEqual(typesOf(host, sessionId), ["session_started", "user_message", "turn_started"]);
+    // model_changed: an adapter announces the model in force as soon as the session opens, which
+    // is what tells a client which Effort levels it may offer.
+    assert.deepEqual(typesOf(host, sessionId), [
+      "session_started",
+      "model_changed",
+      "user_message",
+      "turn_started",
+    ]);
+  });
+
+  it("keeps the chosen Effort across a Revive", async () => {
+    await host.setEffort(sessionId, "high");
+    assert.equal(backend.latest.effort, "high");
+
+    await host.shutdown();
+    await host.revive(sessionId);
+
+    assert.equal(backend.sessions.length, 2, "revive must start a fresh Backend Session");
+    assert.equal(backend.latest.effort, "high", "a revived session must not silently drop the choice");
   });
 
   it("holds an 'after_turn' send until the turn ends, then dispatches it", async () => {

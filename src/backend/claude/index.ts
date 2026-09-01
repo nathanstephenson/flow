@@ -3,6 +3,8 @@ import { spawn, spawnSync } from "node:child_process";
 
 import {
   query,
+  type EffortLevel as SdkEffortLevel,
+  type ModelInfo as SdkModelInfo,
   type Options,
   type Query,
   type SDKMessage,
@@ -12,7 +14,14 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
-import type { BackendEvent, Capabilities, ModelInfo, TurnEndReason } from "../../protocol/events.ts";
+import type {
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  ModelInfo,
+  TurnEndReason,
+} from "../../protocol/events.ts";
+import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
@@ -124,14 +133,26 @@ class ClaudeSession implements BackendSession {
   private sdkSessionId = "";
   private turnId: string | undefined;
   private disposed = false;
+  private modelId: string | undefined;
+  private bootedModel: string | undefined;
+  /** The last model id reported to clients, so the model in force is announced exactly once. */
+  private announced: string | undefined;
+  /** Alias (`opus[1m]`) keyed by the id the SDK reports once a model is resolved. */
+  private aliasOf = new Map<string, string>();
+  /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
+  private wantedEffort: EffortLevel | undefined;
+  private effort: EffortLevel | undefined;
   /** Accumulates streamed text per content-block index so we can emit whole snapshots. */
   private partial = new Map<number, string>();
   private partialMessageId: string | undefined;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
+    this.modelId = options.modelId;
+    this.wantedEffort = options.effort;
 
     const allowed = backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const startingEffort = sdkEffort(options.effort);
     const queryOptions: Options = {
       cwd: options.scope,
       includePartialMessages: true,
@@ -143,6 +164,9 @@ class ClaudeSession implements BackendSession {
       ...(backendOptions.disallowedTools ? { disallowedTools: backendOptions.disallowedTools } : {}),
       ...(backendOptions.systemPrompt ? { systemPrompt: backendOptions.systemPrompt } : {}),
       ...(options.modelId ? { model: options.modelId } : {}),
+      // Effort is also settable later, but starting with it avoids a first turn at the wrong level
+      // while the model list is still in flight. Levels Claude does not have wait for the clamp.
+      ...(startingEffort ? { effort: startingEffort } : {}),
       ...(options.resume ? { resume: options.resume } : {}),
       ...(backendOptions.pathToClaudeCodeExecutable
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
@@ -159,6 +183,54 @@ class ClaudeSession implements BackendSession {
 
     this.stream = query({ prompt: this.inbox, options: queryOptions });
     this.pump = this.consume();
+    void this.loadModels();
+  }
+
+  /**
+   * Ask the CLI what models this account can actually reach.
+   *
+   * The init message only names the model the session booted with, which made the picker a list of
+   * one. `supportedModels()` is a control request rather than part of the message stream, so it
+   * answers before the first prompt — the session advertises the real list from the start.
+   */
+  private async loadModels(): Promise<void> {
+    let models: SdkModelInfo[];
+    try {
+      models = await this.stream.supportedModels();
+    } catch (error) {
+      this.emit({ type: "notice", level: "warn", text: `Could not list models: ${message(error)}` });
+      return;
+    }
+    if (this.disposed) return;
+
+    this.aliasOf = new Map(
+      models.filter((model) => model.resolvedModel).map((model) => [model.resolvedModel ?? "", model.value]),
+    );
+    this.capabilities = { ...this.capabilities, models: models.map(describeModel) };
+    this.emit({ type: "capabilities_changed", capabilities: this.capabilities });
+    // Which model is in force decides which effort levels a client may offer, so say it now
+    // rather than waiting for the init message that only arrives with the first turn.
+    this.noteBootedModel(this.bootedModel ?? this.modelId ?? defaultModel(models));
+    await this.reapplyEffort();
+  }
+
+  /**
+   * The init message names the model in its resolved form (`claude-sonnet-...`), but the picker
+   * lists aliases (`sonnet`). Report the alias so the id a client holds matches an entry it can
+   * offer; before the list has arrived there is nothing to match against, and the raw id stands
+   * until loadModels comes back and corrects it.
+   */
+  private noteBootedModel(booted: string | undefined): void {
+    if (!booted) return;
+    this.bootedModel = booted;
+    this.announceModel(this.aliasOf.get(booted) ?? booted);
+  }
+
+  private announceModel(modelId: string): void {
+    if (modelId === this.announced) return;
+    this.announced = modelId;
+    this.modelId = modelId;
+    this.emit({ type: "model_changed", model: this.modelInfo(modelId) });
   }
 
   resumeToken(): string | undefined {
@@ -187,7 +259,48 @@ class ClaudeSession implements BackendSession {
 
   async setModel(modelId: string): Promise<void> {
     await this.stream.setModel(modelId);
-    this.emit({ type: "model_changed", model: { id: modelId, provider: "anthropic" } });
+    this.announceModel(modelId);
+    await this.reapplyEffort();
+  }
+
+  async setEffort(effort: EffortLevel): Promise<void> {
+    this.wantedEffort = effort;
+    await this.applyEffort(effort);
+  }
+
+  /**
+   * The SDK has no setEffort(): `effortLevel` is a settings key, and applyFlagSettings is how a
+   * live session is told about one. It is the same key the CLI's own effort control writes.
+   */
+  private async applyEffort(wanted: EffortLevel): Promise<void> {
+    const level = clampEffort(wanted, this.modelInfo(this.modelId).effortLevels);
+    // A model with no effort control (haiku) leaves the request on file, unapplied: clients hide
+    // the control for such a model, and switching back to one that has it restores the choice.
+    const effortLevel = sdkEffort(level);
+    if (!effortLevel) {
+      this.effort = undefined;
+      return;
+    }
+    try {
+      await this.stream.applyFlagSettings({ effortLevel });
+    } catch (error) {
+      this.emit({ type: "notice", level: "warn", text: `Could not set effort: ${message(error)}` });
+      return;
+    }
+    this.effort = effortLevel;
+    this.emit({ type: "effort_changed", effort: effortLevel });
+  }
+
+  /** After a model change, only re-apply when the new model forces a different level. */
+  private async reapplyEffort(): Promise<void> {
+    if (!this.wantedEffort) return;
+    if (clampEffort(this.wantedEffort, this.modelInfo(this.modelId).effortLevels) === this.effort) return;
+    await this.applyEffort(this.wantedEffort);
+  }
+
+  private modelInfo(modelId: string | undefined): ModelInfo {
+    const known = this.capabilities.models.find((model) => model.id === modelId);
+    return known ?? { id: modelId ?? "default", provider: "anthropic" };
   }
 
   async dispose(): Promise<void> {
@@ -220,13 +333,7 @@ class ClaudeSession implements BackendSession {
       case "system":
         if (sdkMessage.subtype === "init") {
           this.sdkSessionId = sdkMessage.session_id;
-          this.capabilities = {
-            providers: ["anthropic"],
-            models: modelsFrom(sdkMessage),
-            compaction: true,
-            fork: true,
-          };
-          this.emit({ type: "capabilities_changed", capabilities: this.capabilities });
+          this.noteBootedModel(sdkMessage.model);
         }
         return;
 
@@ -340,8 +447,26 @@ export class ClaudeBackend implements AgentBackend {
   }
 }
 
-function modelsFrom(init: { model?: string }): ModelInfo[] {
-  return init.model ? [{ id: init.model, provider: "anthropic", label: init.model }] : [];
+/** Claude reports one Provider, and per-model effort: haiku carries no supportedEffortLevels. */
+export function describeModel(model: SdkModelInfo): ModelInfo {
+  return {
+    id: model.value,
+    provider: "anthropic",
+    label: model.displayName,
+    ...(model.supportedEffortLevels?.length ? { effortLevels: [...model.supportedEffortLevels] } : {}),
+  };
+}
+
+/** Absent an override, the entry Claude itself calls the default is the model in force. */
+function defaultModel(models: SdkModelInfo[]): string | undefined {
+  return (models.find((model) => model.value === "default") ?? models[0])?.value;
+}
+
+/** Claude has no `off` or `minimal`; those wait for the clamp rather than being mistranslated. */
+function sdkEffort(effort: EffortLevel | undefined): SdkEffortLevel | undefined {
+  return effort === undefined || effort === "off" || effort === "minimal"
+    ? undefined
+    : (effort satisfies SdkEffortLevel);
 }
 
 function textOf(content: Array<{ type: string; text?: string }>): string {

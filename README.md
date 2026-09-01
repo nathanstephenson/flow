@@ -80,8 +80,9 @@ goodharness tui            # terminal client; connects to a running host or embe
 goodharness list
 ```
 
-TUI keys: `^S` sessions · `^P` models (grouped by provider) · `esc` abort · `^C` quit. Typing while
-the agent works queues the message rather than interrupting it — steering is a deliberate act.
+TUI keys: `^S` sessions · `^P` models (grouped by provider) · `^E` effort · `esc` abort · `^C` quit.
+Typing while the agent works queues the message rather than interrupting it — steering is a
+deliberate act.
 
 Transport is POST for commands and SSE for events. SSE rather than WebSocket because the transcript
 is one-directional and sequence-numbered, so reconnect is `?since=N` — a replay, not a
