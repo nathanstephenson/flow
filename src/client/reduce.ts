@@ -1,0 +1,165 @@
+import type { AgentEvent, Capabilities, LoggedEvent, ModelInfo, NoticeLevel } from "../protocol/events.ts";
+import type { SessionStatus } from "../protocol/commands.ts";
+
+/**
+ * The reducer both front-ends share. The TUI and the web UI import this same function, which is
+ * what stops them drifting.
+ *
+ * Pure and order-dependent only on `seq`: replaying a Presentation Transcript twice gives the same
+ * state, and a client joining at `since: N` converges with one that saw everything.
+ */
+
+export type ToolStatus = "running" | "complete" | "error";
+
+export type Entry =
+  | { kind: "user"; id: string; text: string }
+  | { kind: "assistant"; id: string; text: string; final: boolean }
+  | { kind: "thinking"; id: string; text: string; final: boolean }
+  | { kind: "tool"; id: string; name: string; input: unknown; update?: unknown; result?: unknown; status: ToolStatus }
+  | { kind: "notice"; id: string; level: NoticeLevel; text: string };
+
+export type ViewState = {
+  status: SessionStatus;
+  backend?: string;
+  scope?: string;
+  capabilities?: Capabilities;
+  model?: ModelInfo;
+  entries: Entry[];
+  queue: string[];
+  contextUsage?: { used: number; window: number };
+  endedReason?: string;
+  lastSeq: number;
+};
+
+export function initialState(): ViewState {
+  return { status: "idle", entries: [], queue: [], lastSeq: 0 };
+}
+
+export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = initialState()): ViewState {
+  let state = from;
+  for (const entry of entries) state = reduce(state, entry);
+  return state;
+}
+
+export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
+  const next = applyEvent(state, entry.event);
+  return next === state ? state : { ...next, lastSeq: entry.seq };
+}
+
+function applyEvent(state: ViewState, event: AgentEvent): ViewState {
+  switch (event.type) {
+    case "session_started":
+      return { ...state, backend: event.backend, scope: event.scope, capabilities: event.capabilities };
+
+    case "capabilities_changed":
+      return { ...state, capabilities: event.capabilities };
+
+    case "user_message":
+      return { ...state, entries: upsert(state.entries, { kind: "user", id: event.id, text: event.text }) };
+
+    case "turn_started":
+      return { ...state, status: "running" };
+
+    case "message":
+      return {
+        ...state,
+        entries: upsert(state.entries, { kind: "assistant", id: event.id, text: event.text, final: event.final }),
+      };
+
+    case "thinking":
+      return {
+        ...state,
+        entries: upsert(state.entries, { kind: "thinking", id: event.id, text: event.text, final: event.final }),
+      };
+
+    case "tool_started":
+      return {
+        ...state,
+        entries: upsert(state.entries, {
+          kind: "tool",
+          id: event.callId,
+          name: event.name,
+          input: event.input,
+          status: "running",
+        }),
+      };
+
+    case "tool_updated":
+      return { ...state, entries: patchTool(state.entries, event.callId, (tool) => ({ ...tool, update: event.update })) };
+
+    case "tool_ended":
+      return {
+        ...state,
+        entries: patchTool(state.entries, event.callId, (tool) => ({
+          ...tool,
+          result: event.result,
+          status: event.isError ? "error" : "complete",
+        })),
+      };
+
+    case "turn_ended":
+      return { ...state, status: "idle" };
+
+    case "queue_changed":
+      return { ...state, queue: [...event.pending] };
+
+    case "context_usage":
+      return { ...state, contextUsage: { used: event.used, window: event.window } };
+
+    case "model_changed":
+      return { ...state, model: event.model };
+
+    case "notice":
+      return {
+        ...state,
+        entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
+      };
+
+    case "session_dormant":
+      return {
+        ...state,
+        status: "dormant",
+        queue: [],
+        entries: [
+          ...state.entries,
+          { kind: "notice", id: `dormant-${state.entries.length}`, level: "info", text: `Dormant: ${event.reason}` },
+        ],
+      };
+
+    case "revived":
+      return {
+        ...state,
+        status: "idle",
+        entries: [
+          ...state.entries,
+          { kind: "notice", id: `revived-${event.fromSeq}`, level: "info", text: `Revived from seq ${event.fromSeq}` },
+        ],
+      };
+
+    case "session_ended":
+      return { ...state, status: "ended", endedReason: event.reason };
+  }
+}
+
+/** Upsert by id — the snapshot semantics the event union is built on. */
+function upsert(entries: Entry[], entry: Entry): Entry[] {
+  const index = entries.findIndex((candidate) => candidate.kind === entry.kind && candidate.id === entry.id);
+  if (index < 0) return [...entries, entry];
+  const copy = [...entries];
+  copy[index] = entry;
+  return copy;
+}
+
+function patchTool(
+  entries: Entry[],
+  callId: string,
+  patch: (tool: Extract<Entry, { kind: "tool" }>) => Entry,
+): Entry[] {
+  const index = entries.findIndex((candidate) => candidate.kind === "tool" && candidate.id === callId);
+  if (index < 0) return entries;
+  const existing = entries[index];
+  if (!existing || existing.kind !== "tool") return entries;
+  const copy = [...entries];
+  copy[index] = patch(existing);
+  return copy;
+}
