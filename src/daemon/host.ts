@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
-import type { AgentEvent, BackendEvent, Capabilities, LoggedEvent } from "../protocol/events.ts";
+import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import { SessionLog } from "./log.ts";
 import type { SessionMeta, TranscriptStore } from "./store.ts";
 
@@ -19,11 +19,18 @@ type SessionRecord = {
    * otherwise see an idle session and jump the queue.
    */
   turnInFlight: boolean;
+  /**
+   * Events an adapter emits while its Backend Session is still being created, held back so the
+   * transcript opens with session_started (or revived) rather than with whatever the adapter
+   * announced on its way up — the model in force, its capabilities.
+   */
+  buffered: BackendEvent[] | undefined;
   queue: string[];
   title: string;
   capabilities: Capabilities | undefined;
   resumeToken: string | undefined;
   modelId: string | undefined;
+  effort: EffortLevel | undefined;
   createdAt: string;
   updatedAt: string;
 };
@@ -92,11 +99,13 @@ export class SessionHost {
         session: undefined,
         status: meta.status === "ended" ? "ended" : "dormant",
         turnInFlight: false,
+        buffered: undefined,
         queue: [],
         title: meta.title,
         capabilities: capabilitiesFrom(entries),
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
+        effort: meta.effort,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
       };
@@ -111,7 +120,12 @@ export class SessionHost {
     }
   }
 
-  async create(options: { scope: string; backend: string; modelId?: string }): Promise<string> {
+  async create(options: {
+    scope: string;
+    backend: string;
+    modelId?: string;
+    effort?: EffortLevel;
+  }): Promise<string> {
     const backend = this.backendFor(options.backend);
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -124,17 +138,20 @@ export class SessionHost {
       session: undefined,
       status: "idle",
       turnInFlight: false,
+      buffered: undefined,
       queue: [],
       title: options.scope,
       capabilities: undefined,
       resumeToken: undefined,
       modelId: options.modelId,
+      effort: options.effort,
       createdAt: now,
       updatedAt: now,
     };
     this.sessions.set(id, record);
     this.persist(record);
 
+    record.buffered = [];
     const session = await this.startBackendSession(record);
     record.log.append({
       type: "session_started",
@@ -142,6 +159,7 @@ export class SessionHost {
       scope: options.scope,
       capabilities: session.capabilities,
     });
+    this.flushBuffered(record);
     return id;
   }
 
@@ -152,9 +170,11 @@ export class SessionHost {
     if (record.status === "ended") throw new Error(`Session ${sessionId} has ended`);
 
     const fromSeq = record.log.lastSeq;
+    record.buffered = [];
     await this.startBackendSession(record);
     record.status = "idle";
     record.log.append({ type: "revived", fromSeq });
+    this.flushBuffered(record);
   }
 
   async send(sessionId: string, text: string, when: SendWhen = "now"): Promise<void> {
@@ -186,6 +206,14 @@ export class SessionHost {
     const record = this.record(sessionId);
     await record.session?.setModel(modelId);
     record.modelId = modelId;
+    this.touch(record);
+  }
+
+  async setEffort(sessionId: string, effort: EffortLevel): Promise<void> {
+    const record = this.record(sessionId);
+    await record.session?.setEffort(effort);
+    // Remembered as asked for, not as clamped: a Revive onto a model that can serve it should.
+    record.effort = effort;
     this.touch(record);
   }
 
@@ -223,6 +251,7 @@ export class SessionHost {
           scope: command.scope,
           backend: command.backend,
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
+          ...(command.effort === undefined ? {} : { effort: command.effort }),
         });
       case "send":
         return await this.send(command.sessionId, command.text, command.when);
@@ -234,6 +263,8 @@ export class SessionHost {
         return await this.dispose(command.sessionId);
       case "set_model":
         return await this.setModel(command.sessionId, command.modelId);
+      case "set_effort":
+        return await this.setEffort(command.sessionId, command.effort);
       case "list":
         return this.list();
     }
@@ -245,6 +276,7 @@ export class SessionHost {
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
+      ...(record.effort === undefined ? {} : { effort: record.effort }),
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
     });
@@ -279,9 +311,19 @@ export class SessionHost {
     await record.session.prompt(text);
   }
 
+  private flushBuffered(record: SessionRecord): void {
+    const buffered = record.buffered ?? [];
+    record.buffered = undefined;
+    for (const event of buffered) this.onBackendEvent(record.id, event);
+  }
+
   private onBackendEvent(sessionId: string, event: BackendEvent): void {
     const record = this.sessions.get(sessionId);
     if (!record || record.status === "ended") return;
+    if (record.buffered) {
+      record.buffered.push(event);
+      return;
+    }
 
     record.log.append(event);
     this.touch(record);
@@ -350,6 +392,7 @@ export class SessionHost {
       status: record.status,
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
+      ...(record.effort === undefined ? {} : { effort: record.effort }),
     };
     this.store.writeMeta(meta);
   }

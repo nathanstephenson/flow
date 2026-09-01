@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
-import type { BackendEvent, Capabilities } from "../../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel } from "../../protocol/events.ts";
+import { clampEffort } from "../effort.ts";
 
+// Two models on purpose: one with an effort control and one without, which is the split every
+// real backend has (Claude's haiku offers no effort) and the one clients must cope with.
 const FAKE_CAPABILITIES: Capabilities = {
   providers: ["fake"],
-  models: [{ id: "fake-1", provider: "fake", label: "Fake 1" }],
+  models: [
+    { id: "fake-1", provider: "fake", label: "Fake 1", effortLevels: ["low", "medium", "high"] },
+    { id: "fake-2", provider: "fake", label: "Fake 2" },
+  ],
   compaction: false,
   fork: false,
 };
@@ -21,15 +27,19 @@ export class FakeSession implements BackendSession {
   readonly prompts: string[] = [];
   readonly resumedFrom: string | undefined;
   modelId: string;
+  effort: EffortLevel | undefined;
   disposed = false;
 
   private readonly emit: (event: BackendEvent) => void;
   private turnId: string | undefined;
+  private wantedEffort: EffortLevel | undefined;
 
   constructor(options: BackendCreateOptions) {
     this.emit = options.emit;
     this.modelId = options.modelId ?? "fake-1";
     this.resumedFrom = options.resume;
+    this.emit({ type: "model_changed", model: { id: this.modelId, provider: "fake" } });
+    if (options.effort) void this.setEffort(options.effort);
   }
 
   resumeToken(): string | undefined {
@@ -49,6 +59,16 @@ export class FakeSession implements BackendSession {
   async setModel(modelId: string): Promise<void> {
     this.modelId = modelId;
     this.emit({ type: "model_changed", model: { id: modelId, provider: "fake" } });
+    if (this.wantedEffort) await this.setEffort(this.wantedEffort);
+  }
+
+  async setEffort(effort: EffortLevel): Promise<void> {
+    this.wantedEffort = effort;
+    const levels = FAKE_CAPABILITIES.models.find((model) => model.id === this.modelId)?.effortLevels;
+    const level = clampEffort(effort, levels);
+    if (!level) return;
+    this.effort = level;
+    this.emit({ type: "effort_changed", effort: level });
   }
 
   async dispose(): Promise<void> {

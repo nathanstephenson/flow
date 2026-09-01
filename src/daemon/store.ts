@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { LoggedEvent } from "../protocol/events.ts";
+import type { EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 
 /**
@@ -28,6 +28,7 @@ export type SessionMeta = {
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */
   resumeToken?: string;
   modelId?: string;
+  effort?: EffortLevel;
   /** Status as of the last write; on load, anything live becomes Dormant. */
   status: SessionStatus;
 };

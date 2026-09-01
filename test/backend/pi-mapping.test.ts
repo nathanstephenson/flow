@@ -17,12 +17,20 @@ type Stub = {
   fire: (event: AgentSessionEvent) => void;
   prompts: Array<{ text: string; options: unknown }>;
   aborted: number;
+  thinkingLevel: string | undefined;
 };
 
 function stubSession(): Stub {
   let listener: ((event: AgentSessionEvent) => void) | undefined;
   const prompts: Array<{ text: string; options: unknown }> = [];
   const state = { aborted: 0 };
+  // m1 reasons across three levels, m2 not at all — the split every real registry has.
+  const models = [
+    { id: "m1", provider: "anthropic", name: "M1", reasoning: true, thinkingLevelMap: { low: "l", medium: "m", high: "h" } },
+    { id: "m2", provider: "anthropic", name: "M2", reasoning: false },
+  ];
+  let current = models[0];
+  let thinkingLevel: string | undefined = "medium";
 
   const session = {
     subscribe(next: (event: AgentSessionEvent) => void) {
@@ -38,9 +46,24 @@ function stubSession(): Stub {
     async abort() {
       state.aborted += 1;
     },
-    async setModel() {},
+    async setModel(model: { id: string }) {
+      current = models.find((candidate) => candidate.id === model.id) ?? current;
+      // pi clamps its own thinking level when the new model cannot serve the old one.
+      if (current?.reasoning !== true) thinkingLevel = undefined;
+    },
     getContextUsage: () => ({ tokens: 42, contextWindow: 200_000, percent: 0.02 }),
-    modelRegistry: { getAll: () => [{ id: "m1", provider: "anthropic", name: "M1" }] },
+    modelRegistry: { getAll: () => models },
+    get model() {
+      return current;
+    },
+    get thinkingLevel() {
+      return thinkingLevel;
+    },
+    setThinkingLevel(level: string) {
+      thinkingLevel = level;
+    },
+    supportsThinking: () => current?.reasoning === true,
+    getAvailableThinkingLevels: () => (current?.reasoning === true ? ["low", "medium", "high"] : []),
   } as unknown as AgentSession;
 
   return {
@@ -49,6 +72,9 @@ function stubSession(): Stub {
     prompts,
     get aborted() {
       return state.aborted;
+    },
+    get thinkingLevel() {
+      return thinkingLevel;
     },
   };
 }
@@ -173,4 +199,50 @@ describe("pi adapter mapping", () => {
     assert.deepEqual(session.capabilities.providers, ["anthropic"]);
     assert.equal(session.capabilities.models[0]?.label, "M1");
   });
+
+  it("declares pi's thinking levels as Effort, per model", () => {
+    assert.deepEqual(session.capabilities.models[0]?.effortLevels, ["low", "medium", "high"]);
+    assert.equal(session.capabilities.models[1]?.effortLevels, undefined, "a model that cannot reason offers none");
+  });
+
+  it("sets Effort as a thinking level and reports what stuck", async () => {
+    await session.setEffort("high");
+    assert.equal(stub.thinkingLevel, "high");
+    assert.deepEqual(effortEvents(), ["high"]);
+  });
+
+  it("clamps Effort pi cannot serve rather than failing", async () => {
+    // pi has no `max`; the nearest it offers is `high`.
+    await session.setEffort("max");
+    assert.equal(stub.thinkingLevel, "high");
+    assert.deepEqual(effortEvents(), ["high"]);
+  });
+
+  it("follows the model when a switch takes the chosen Effort away", async () => {
+    await session.setEffort("high");
+    events.length = 0;
+    await session.setModel("m2");
+
+    assert.equal(stub.thinkingLevel, undefined, "pi dropped the level; the adapter must not force it back");
+    assert.deepEqual(effortEvents(), [], "a model with no effort control has no level to report");
+    assert.equal(
+      events.find((event) => event.type === "capabilities_changed")?.type,
+      "capabilities_changed",
+      "the levels on offer changed, so clients must be told",
+    );
+  });
+
+  it("restores the chosen Effort on returning to a model that serves it", async () => {
+    await session.setEffort("high");
+    await session.setModel("m2");
+    events.length = 0;
+    await session.setModel("m1");
+
+    assert.equal(stub.thinkingLevel, "high");
+    assert.deepEqual(effortEvents(), ["high"]);
+  });
+
+  function effortEvents(): string[] {
+    return events.filter((event) => event.type === "effort_changed").map((event) => event.effort);
+  }
 });

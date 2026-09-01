@@ -9,13 +9,15 @@ import { serve, type RunningServer } from "../daemon/server.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
+import type { EffortLevel } from "../protocol/events.ts";
 import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
   goodharness tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
   goodharness serve [--port N] [--address HOST]                run the Session Host in the foreground
   goodharness list                                             list Agent Sessions
-  goodharness [--session ID] [--scope DIR] [--backend B] "<prompt>"   one prompt, then exit`;
+  goodharness [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
+                                                               one prompt, then exit`;
 
 type Daemon = { url: string; token: string };
 
@@ -26,6 +28,7 @@ async function main(): Promise<number> {
       scope: { type: "string", default: process.cwd() },
       backend: { type: "string", default: "claude" },
       model: { type: "string" },
+      effort: { type: "string" },
       session: { type: "string" },
       port: { type: "string" },
       address: { type: "string" },
@@ -131,7 +134,11 @@ async function clientConnection(): Promise<{ connection: Connection; stop: () =>
   return { connection: connect(daemon), stop: () => running.close() };
 }
 
-async function oneShot(prompt: string, values: { scope?: string; backend?: string; model?: string; session?: string }): Promise<number> {
+async function oneShot(
+  prompt: string,
+  values: { scope?: string; backend?: string; model?: string; effort?: string; session?: string },
+): Promise<number> {
+  const effort = effortLevel(values.effort);
   const { running, daemon, host } = await startHost();
   const connection = connect(daemon);
   try {
@@ -142,6 +149,7 @@ async function oneShot(prompt: string, values: { scope?: string; backend?: strin
         scope: values.scope ?? process.cwd(),
         backend: values.backend ?? "claude",
         ...(values.model ? { modelId: values.model } : {}),
+        ...(effort ? { effort } : {}),
       }));
 
     console.log(
@@ -223,6 +231,15 @@ function readDaemonFile(): Daemon | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** A bad --effort is worth rejecting outright rather than starting a session that ignores it. */
+function effortLevel(value: string | undefined): EffortLevel | undefined {
+  if (value === undefined) return undefined;
+  const levels: EffortLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const level = levels.find((candidate) => candidate === value);
+  if (!level) throw new Error(`--effort must be one of: ${levels.join(", ")}`);
+  return level;
 }
 
 async function reachable(daemon: Daemon): Promise<boolean> {

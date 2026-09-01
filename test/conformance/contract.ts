@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { BackendSession } from "../../src/backend/types.ts";
-import type { BackendEvent } from "../../src/protocol/events.ts";
+import type { BackendEvent, ModelInfo } from "../../src/protocol/events.ts";
 
 export type ConformanceTarget = {
   name: string;
@@ -97,6 +97,61 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    it("declares Effort per model, never as an empty list", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        for (const model of await models(session)) {
+          assert.ok(
+            model.effortLevels === undefined || model.effortLevels.length > 0,
+            `${model.id} declares an empty effort list; absent is how "no effort control" is said`,
+          );
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("announces the model in force, so a client knows which Effort levels apply", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        const inForce = await modelInForce(session, events);
+        assert.ok(
+          (await models(session)).some((model) => model.id === inForce),
+          `the announced model ${inForce} must be one the picker offers`,
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("honours a level the model in force serves, and shrugs off one it does not", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        // The model in force, rather than any model on the list: it is the one this account can
+        // certainly reach, and it is the one whose levels a client is allowed to offer.
+        const inForce = await modelInForce(session, events);
+        const levels = (await models(session)).find((model) => model.id === inForce)?.effortLevels ?? [];
+        events.length = 0;
+
+        if (levels.length === 0) {
+          // No effort control on this model. Asking anyway must be a no-op, not an error.
+          await session.setEffort("high");
+          assert.deepEqual(effortEvents(events), [], "a model with no effort control must report none");
+          return;
+        }
+
+        const wanted = levels[0];
+        await session.setEffort(wanted ?? "high");
+        assert.deepEqual(
+          effortEvents(events),
+          [wanted],
+          "setting a level the model serves must report exactly that level, once",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it("tolerates being disposed twice", async () => {
       const { dispose } = await start(target);
       await dispose();
@@ -113,6 +168,32 @@ async function start(target: ConformanceTarget): Promise<{
   const events: BackendEvent[] = [];
   const session = await target.createSession((event) => events.push(event));
   return { session, events, dispose: () => session.dispose() };
+}
+
+/** Claude fetches its model list over the control channel, so it lands shortly after create(). */
+async function models(session: BackendSession, timeoutMs = 15_000): Promise<ModelInfo[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (session.capabilities.models.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return session.capabilities.models;
+}
+
+/** Adapters announce the model in force with model_changed as the session opens. */
+async function modelInForce(session: BackendSession, events: BackendEvent[], timeoutMs = 15_000): Promise<string> {
+  const announced = (): string | undefined =>
+    events.filter((event) => event.type === "model_changed").at(-1)?.model.id;
+  const deadline = Date.now() + timeoutMs;
+  while (announced() === undefined && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const model = announced();
+  assert.ok(model, "an adapter must say which model its session is running");
+  return model;
+}
+
+function effortEvents(events: BackendEvent[]): string[] {
+  return events.filter((event) => event.type === "effort_changed").map((event) => event.effort);
 }
 
 function count(values: string[], value: string): number {

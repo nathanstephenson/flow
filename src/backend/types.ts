@@ -1,8 +1,9 @@
-import type { BackendEvent, Capabilities } from "../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel } from "../protocol/events.ts";
 
 export type BackendCreateOptions = {
   scope: string;
   modelId?: string;
+  effort?: EffortLevel;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */
   resume?: string;
   /** A directory this adapter may keep its own session state in, beside our transcript. */
@@ -21,6 +22,11 @@ export interface BackendSession {
   prompt(text: string): Promise<void>;
   abort(): Promise<void>;
   setModel(modelId: string): Promise<void>;
+  /**
+   * Asking for a level the current model does not serve is not an error: the adapter clamps to the
+   * nearest one it can serve and reports what it settled on with `effort_changed`.
+   */
+  setEffort(effort: EffortLevel): Promise<void>;
   dispose(): Promise<void>;
 }
 

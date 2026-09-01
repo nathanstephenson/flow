@@ -2,7 +2,7 @@ import type { Connection } from "../client/connection.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { SessionSummary } from "../protocol/commands.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
-import { modelChoices, renderFrame, type Overlay, type UiState } from "./render.ts";
+import { effortChoices, modelChoices, renderFrame, type Overlay, type UiState } from "./render.ts";
 
 /**
  * The terminal client. It speaks only to a Connection — never to a Session Host directly — which is
@@ -121,6 +121,8 @@ export async function runTui(options: TuiOptions): Promise<void> {
       overlay = { kind: "sessions", index: Math.max(0, index) };
     } else if (key === KEY.ctrlP) {
       overlay = { kind: "models", index: 0 };
+    } else if (key === KEY.ctrlE) {
+      overlay = { kind: "effort", index: Math.max(0, effortChoices(view).indexOf(view.effort ?? "off")) };
     } else if (key === KEY.escape) {
       if (selected) await options.connection.command({ type: "abort", sessionId: selected });
     } else if (key === KEY.enter || key === KEY.newline) {
@@ -146,7 +148,11 @@ export async function runTui(options: TuiOptions): Promise<void> {
     }
 
     const length =
-      current.kind === "sessions" ? sessions.length : modelChoices(view.capabilities).length;
+      current.kind === "sessions"
+        ? sessions.length
+        : current.kind === "effort"
+          ? effortChoices(view).length
+          : modelChoices(view.capabilities).length;
 
     if (key === KEY.up) {
       overlay = { ...current, index: Math.max(0, current.index - 1) };
@@ -167,6 +173,16 @@ export async function runTui(options: TuiOptions): Promise<void> {
       const chosen = sessions[current.index];
       overlay = { kind: "none" };
       if (chosen) attach(chosen.id);
+      return;
+    }
+
+    if (current.kind === "effort") {
+      const effort = effortChoices(view)[current.index];
+      overlay = { kind: "none" };
+      if (effort && selected) {
+        await options.connection.command({ type: "set_effort", sessionId: selected, effort });
+        notice = `effort → ${effort}`;
+      }
       return;
     }
 

@@ -49,6 +49,7 @@ function openPane(sessionId) {
     <div class="pane-head">
       <span class="title"></span>
       <select class="models" title="model"></select>
+      <select class="effort" title="effort"></select>
       <span class="state"></span>
       <button class="abort">abort</button>
       <button class="close">×</button>
@@ -73,6 +74,8 @@ function openPane(sessionId) {
   };
   el.querySelector(".models").onchange = (event) =>
     command({ type: "set_model", sessionId, modelId: event.target.value });
+  el.querySelector(".effort").onchange = (event) =>
+    command({ type: "set_effort", sessionId, effort: event.target.value });
 
   const composer = el.querySelector(".composer");
   const textarea = composer.querySelector("textarea");
@@ -128,6 +131,7 @@ function renderPane(pane) {
   state.className = `state status-${view.status}${view.queue.length ? " queued" : ""}`;
 
   renderModels(el.querySelector(".models"), view);
+  renderEffort(el.querySelector(".effort"), view);
   renderTranscript(pane);
 }
 
@@ -164,6 +168,25 @@ function renderModels(select, view) {
     select.append(optgroup);
   }
   if (view.model) select.value = view.model.id;
+}
+
+/** Effort belongs to the model in force; a model without one (Claude's haiku) hides the control. */
+function renderEffort(select, view) {
+  const current = view.capabilities?.models.find((model) => model.id === view.model?.id);
+  const levels = (current ?? view.model)?.effortLevels ?? [];
+  select.hidden = levels.length === 0;
+  if (select.dataset.levels !== levels.join(",")) {
+    select.dataset.levels = levels.join(",");
+    select.replaceChildren(
+      ...levels.map((level) => {
+        const option = document.createElement("option");
+        option.value = level;
+        option.textContent = level;
+        return option;
+      }),
+    );
+  }
+  if (view.effort && levels.includes(view.effort)) select.value = view.effort;
 }
 
 /**
