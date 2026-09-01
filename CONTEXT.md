@@ -60,6 +60,12 @@ Attaching a fresh Backend Session to a Dormant Agent Session, continuing the sam
 Transcript.
 _Avoid_: resume, restart, reconnect
 
+**Ended**:
+The state of an Agent Session disposed of deliberately. No Backend Session runs and the Presentation
+Transcript stays readable, but it refuses a Revive. Unlike Settled it is never Reaped, so it stays on
+disk until removed by hand.
+_Avoid_: closed, deleted, terminated, killed, settled
+
 **Scope**:
 The working directory an Agent Session is bound to.
 _Avoid_: workspace, project, repo

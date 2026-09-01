@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit",
+    "dev": "vite --config web/vite.config.ts",
     "test": "node --test --experimental-strip-types \"test/**/*.test.ts\"",
     "spike:auth": "node --experimental-strip-types spikes/subscription-auth.ts",
     "start": "node --experimental-strip-types src/cli/main.ts",
@@ -24,9 +25,16 @@
     "@earendil-works/pi-coding-agent": "^0.75.5"
   },
   "devDependencies": {
+    "@base-ui/react": "^1.7.0",
     "@types/node": "^22.20.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "esbuild-wasm": "^0.28.2",
     "postject": "^1.0.0-alpha.6",
-    "typescript": "^5.9.3"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
   }
 }
