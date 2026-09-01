@@ -3,7 +3,7 @@ import type { Capabilities, EffortLevel } from "./events.ts";
 
 export type SendWhen = "now" | "after_turn";
 
-export type SessionStatus = "idle" | "running" | "dormant" | "ended";
+export type SessionStatus = "idle" | "running" | "dormant" | "settled" | "ended";
 
 export type SessionSummary = {
   id: string;
@@ -22,6 +22,7 @@ export type Command =
   | { type: "abort"; sessionId: string }
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }
+  | { type: "settle"; sessionId: string }
   | { type: "set_model"; sessionId: string; modelId: string }
   | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   | { type: "list" };

@@ -43,4 +43,12 @@ export class SessionLog {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+
+  /**
+   * Drop every subscriber. Used when an Agent Session is reaped: an open stream to a transcript
+   * that no longer exists would otherwise wait forever on a log nothing can append to again.
+   */
+  closeSubscribers(): void {
+    this.listeners.clear();
+  }
 }

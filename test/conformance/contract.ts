@@ -13,7 +13,7 @@ export type ConformanceTarget = {
   runTurn(session: BackendSession, text: string): Promise<void>;
 };
 
-const HOST_OWNED = new Set(["user_message", "queue_changed", "revived", "session_ended"]);
+const HOST_OWNED = new Set(["user_message", "queue_changed", "revived", "session_settled", "session_ended"]);
 
 /**
  * The Backend Adapter contract. Every adapter runs this same spec unmodified — it is what stops

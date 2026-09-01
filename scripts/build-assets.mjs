@@ -22,6 +22,7 @@ export function buildAssets() {
   };
   const reducer = browserModule("src/client/reduce.ts");
   const diff = browserModule("src/client/diff.ts");
+  const relativeTime = browserModule("src/client/relative-time.ts");
 
   const literal = (value) => JSON.stringify(value);
   return [
@@ -36,6 +37,8 @@ export function buildAssets() {
     `export const REDUCER_JS = ${literal(reducer)};`,
     "",
     `export const DIFF_JS = ${literal(diff)};`,
+    "",
+    `export const RELATIVE_TIME_JS = ${literal(relativeTime)};`,
     "",
   ].join("\n");
 }

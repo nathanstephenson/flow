@@ -37,6 +37,12 @@ type SessionRecord = {
 
 export type SessionHostOptions = {
   store?: TranscriptStore;
+  /**
+   * How long a Settled Agent Session survives before it is reaped, in milliseconds. `"never"`
+   * disables reaping; omitted means the same, so a host built without a retention policy never
+   * deletes anything (ADR 0006).
+   */
+  retention?: number | "never";
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -44,9 +50,11 @@ export class SessionHost {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly backends = new Map<string, AgentBackend>();
   private readonly store: TranscriptStore | undefined;
+  private readonly retention: number | "never";
 
   constructor(options: SessionHostOptions = {}) {
     this.store = options.store;
+    this.retention = options.retention ?? "never";
   }
 
   registerBackend(backend: AgentBackend): void {
@@ -77,7 +85,12 @@ export class SessionHost {
         lastSeq: record.log.lastSeq,
         ...(record.capabilities ? { capabilities: record.capabilities } : {}),
       }))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      // Settled Agent Sessions sink to the bottom: they are the ones their owner is done with, and
+      // they would otherwise sort to the top, since settling is itself the most recent activity.
+      .sort((left, right) => {
+        const settled = Number(left.status === "settled") - Number(right.status === "settled");
+        return settled !== 0 ? settled : right.updatedAt.localeCompare(left.updatedAt);
+      });
   }
 
   /**
@@ -97,7 +110,7 @@ export class SessionHost {
         backendName: meta.backend,
         log: this.newLog(meta.id, entries),
         session: undefined,
-        status: meta.status === "ended" ? "ended" : "dormant",
+        status: meta.status === "ended" || meta.status === "settled" ? meta.status : "dormant",
         turnInFlight: false,
         buffered: undefined,
         queue: [],
@@ -118,6 +131,7 @@ export class SessionHost {
       }
       this.persist(record);
     }
+    this.reap();
   }
 
   async create(options: {
@@ -229,6 +243,61 @@ export class SessionHost {
     this.touch(record);
   }
 
+  /**
+   * Settle an Agent Session: the engineer declaring they are done with it.
+   *
+   * The Backend Session stops and the retention clock starts, but unlike `dispose` this is not
+   * terminal — the transcript stays readable and a Revive (or the next message) un-settles it.
+   * That reversibility is the point: a Settle you regret in the morning is recoverable, while one
+   * you forget about is reaped (ADR 0006).
+   */
+  async settle(sessionId: string): Promise<void> {
+    const record = this.record(sessionId);
+    if (record.status === "ended") throw new Error(`Session ${sessionId} has ended`);
+    if (record.status === "settled") return;
+
+    const session = record.session;
+    record.session = undefined;
+    record.status = "settled";
+    record.queue.length = 0;
+    record.turnInFlight = false;
+    await session?.dispose();
+    // Close a turn we are interrupting before recording the Settle. Leaving it open would let the
+    // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
+    // the rail would say settled while the pane said idle.
+    const openTurn = openTurnId(record.log.since(0));
+    if (openTurn) record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
+    record.log.append({ type: "session_settled" });
+    // Stamps updatedAt, which is what starts the retention clock: a Settled Agent Session runs
+    // nothing and so records no further activity, and it always gets a full window.
+    this.touch(record);
+  }
+
+  /**
+   * Delete Settled Agent Sessions whose retention window has passed. Only Settled ones: no other
+   * state is deleted on a rule its owner did not opt into.
+   *
+   * Takes `now` so it can be tested without waiting, and returns what it removed.
+   */
+  reap(now = Date.now()): string[] {
+    const retention = this.retention;
+    if (retention === "never") return [];
+
+    const reaped: string[] = [];
+    for (const record of [...this.sessions.values()]) {
+      if (record.status !== "settled") continue;
+      const settledAt = Date.parse(record.updatedAt);
+      // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
+      if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
+
+      record.log.closeSubscribers();
+      this.sessions.delete(record.id);
+      this.store?.deleteSession(record.id);
+      reaped.push(record.id);
+    }
+    return reaped;
+  }
+
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
   async shutdown(): Promise<void> {
     for (const record of this.sessions.values()) {
@@ -261,6 +330,8 @@ export class SessionHost {
         return await this.revive(command.sessionId);
       case "dispose":
         return await this.dispose(command.sessionId);
+      case "settle":
+        return await this.settle(command.sessionId);
       case "set_model":
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
@@ -292,11 +363,7 @@ export class SessionHost {
    * rewriting the turn that never finished.
    */
   private closeTornTurn(record: SessionRecord, entries: LoggedEvent[]): void {
-    let openTurn: string | undefined;
-    for (const entry of entries) {
-      if (entry.event.type === "turn_started") openTurn = entry.event.turnId;
-      if (entry.event.type === "turn_ended") openTurn = undefined;
-    }
+    const openTurn = openTurnId(entries);
     if (!openTurn) return;
     record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
   }
@@ -319,7 +386,7 @@ export class SessionHost {
 
   private onBackendEvent(sessionId: string, event: BackendEvent): void {
     const record = this.sessions.get(sessionId);
-    if (!record || record.status === "ended") return;
+    if (!record || record.status === "ended" || record.status === "settled") return;
     if (record.buffered) {
       record.buffered.push(event);
       return;
@@ -396,6 +463,16 @@ export class SessionHost {
     };
     this.store.writeMeta(meta);
   }
+}
+
+/** The turn still open at the end of these entries, if any. */
+function openTurnId(entries: LoggedEvent[]): string | undefined {
+  let openTurn: string | undefined;
+  for (const entry of entries) {
+    if (entry.event.type === "turn_started") openTurn = entry.event.turnId;
+    if (entry.event.type === "turn_ended") openTurn = undefined;
+  }
+  return openTurn;
 }
 
 function lastEventType(entries: LoggedEvent[]): string | undefined {

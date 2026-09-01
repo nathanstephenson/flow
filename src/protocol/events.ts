@@ -62,6 +62,7 @@ export type AgentEvent =
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "notice"; level: NoticeLevel; text: string }
   | { type: "session_dormant"; reason: string }
+  | { type: "session_settled" }
   | { type: "revived"; fromSeq: number }
   | { type: "session_ended"; reason: string };
 
@@ -76,6 +77,7 @@ export type HostOwnedEventType =
   | "queue_changed"
   | "revived"
   | "session_dormant"
+  | "session_settled"
   | "session_ended";
 
 export type BackendEvent = Exclude<AgentEvent, { type: HostOwnedEventType }>;

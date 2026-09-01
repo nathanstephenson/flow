@@ -1,6 +1,7 @@
 import type { SessionSummary } from "../protocol/commands.ts";
 import type { Capabilities, EffortLevel, ModelInfo } from "../protocol/events.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
+import { relativeTime } from "../client/relative-time.ts";
 
 /**
  * Frame rendering, kept pure so it can be tested without a terminal.
@@ -22,6 +23,8 @@ export type UiState = {
   input: string;
   overlay: Overlay;
   notice?: string;
+  /** Passed in rather than read from the clock, so a frame renders identically twice. */
+  now?: number;
 };
 
 export type Size = { columns: number; rows: number };
@@ -105,13 +108,32 @@ function entryLines(entry: Entry, width: number): string[] {
 
 function overlay(ui: UiState, width: number, height: number): string[] {
   if (ui.overlay.kind === "sessions") {
-    const rows = ui.sessions.map((session, index) =>
-      clip(
-        `${index === (ui.overlay as { index: number }).index ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${session.title}`,
-        width,
-      ),
+    const cursor = (ui.overlay as { index: number }).index;
+    const now = ui.now ?? Date.now();
+    const rows: string[] = [];
+    let openedSettled = false;
+
+    // list() sorts Settled last, so one divider separates the two groups. It is a label rather than
+    // a row: the cursor indexes into ui.sessions, and a selectable heading would shift every index.
+    for (const [index, session] of ui.sessions.entries()) {
+      if (session.status === "settled" && !openedSettled) {
+        openedSettled = true;
+        rows.push(clip("  ── settled ──", width));
+      }
+      const updated = relativeTime(session.updatedAt, now);
+      rows.push(
+        clip(
+          `${index === cursor ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${updated.padEnd(10)} ${session.title}`,
+          width,
+        ),
+      );
+    }
+
+    return padTo(
+      ["sessions  (enter to switch, n for new, s to settle, esc to close)", ...rows],
+      height,
+      width,
     );
-    return padTo(["sessions  (enter to switch, n for new, esc to close)", ...rows], height, width);
   }
 
   if (ui.overlay.kind === "effort") {

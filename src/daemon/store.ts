@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +92,17 @@ export class TranscriptStore {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Remove an Agent Session from disk entirely: transcript, meta, and the backend's state dir.
+   *
+   * This is the one operation that destroys a Presentation Transcript. ADR 0001 makes a transcript
+   * append-only so that what a human saw is never quietly altered; removing one wholesale is a
+   * different act, and a deliberate one (ADR 0006).
+   */
+  deleteSession(sessionId: string): void {
+    rmSync(this.sessionDir(sessionId), { recursive: true, force: true });
   }
 
   async listSessionIds(): Promise<string[]> {

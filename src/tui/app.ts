@@ -30,7 +30,15 @@ export async function runTui(options: TuiOptions): Promise<void> {
   let unsubscribe: (() => void) | undefined;
 
   const draw = (): void => {
-    const ui: UiState = { sessions, selected, view, input, overlay, ...(notice ? { notice } : {}) };
+    const ui: UiState = {
+      sessions,
+      selected,
+      view,
+      input,
+      overlay,
+      now: Date.now(),
+      ...(notice ? { notice } : {}),
+    };
     const frame = renderFrame(ui, { columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
     stdout.write(`[H[2J${frame.join("\r\n")}`);
   };
@@ -165,6 +173,17 @@ export async function runTui(options: TuiOptions): Promise<void> {
     if (key === "n" && current.kind === "sessions") {
       overlay = { kind: "none" };
       await newSession();
+      return;
+    }
+    if (key === "s" && current.kind === "sessions") {
+      const chosen = sessions[current.index];
+      if (!chosen) return;
+      await options.connection.command({ type: "settle", sessionId: chosen.id });
+      await refreshSessions();
+      // Stay in the list rather than attaching. Settling is filing something away, not choosing
+      // what to work on next, and the settled session has just sunk to the bottom anyway.
+      overlay = { kind: "sessions", index: Math.min(current.index, Math.max(0, sessions.length - 1)) };
+      notice = `settled ${chosen.title || chosen.id}`;
       return;
     }
     if (key !== KEY.enter && key !== KEY.newline) return;

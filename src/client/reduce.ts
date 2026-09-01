@@ -137,6 +137,17 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         ],
       };
 
+    case "session_settled":
+      return {
+        ...state,
+        status: "settled",
+        queue: [],
+        entries: [
+          ...state.entries,
+          { kind: "notice", id: `settled-${state.entries.length}`, level: "info", text: "Settled" },
+        ],
+      };
+
     case "revived":
       return {
         ...state,

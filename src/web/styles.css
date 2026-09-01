@@ -53,7 +53,14 @@ button:hover { border-color: var(--accent); }
   margin: 4px 0 12px;
 }
 
+/* Sits above the list now, so the default paragraph margin would double the gap under the heading. */
+#rail p { margin: 0 0 12px; }
+
 .session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
   padding: 7px 8px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -63,13 +70,45 @@ button:hover { border-color: var(--accent); }
 
 .session:hover { background: var(--panel-2); }
 .session.open { border-color: var(--accent); background: var(--panel-2); }
-.session .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session .meta { color: var(--dim); font-size: 11px; }
+.session .title { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session .meta { grid-area: 2 / 1; color: var(--dim); font-size: 11px; }
+.session .updated { grid-area: 2 / 2; color: var(--dim); font-size: 11px; white-space: nowrap; }
+/*
+ * Settle without opening: the row is the only way in, so this must not look like part of it.
+ * Revealed on hover to keep the rail quiet. Hidden with visibility rather than display so its grid
+ * column stays reserved and the title beside it does not reflow as the button comes and goes.
+ */
+.session .settle {
+  grid-area: 1 / 2;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--dim);
+  visibility: hidden;
+}
+
+.session:hover .settle { visibility: visible; }
+.session .settle:hover { color: var(--fg); }
 
 .status-running { color: var(--accent); }
 .status-dormant { color: var(--dim); }
+.status-settled { color: var(--warn); }
 .status-ended { color: var(--err); }
 .status-idle { color: var(--ok); }
+
+.settled-group { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+
+.settled-group > summary {
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  margin-bottom: 4px;
+  list-style-position: inside;
+}
+
+.settled-group > summary:hover { color: var(--fg); }
 
 /* ---- pane grid ---- */
 
