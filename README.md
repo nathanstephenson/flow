@@ -98,6 +98,7 @@ Two bugs the tests caught that a manual try would likely have missed:
 
 ```bash
 goodharness serve   # prints http://127.0.0.1:PORT/auth?token=… — open that once
+goodharness serve --port 3000 --address 0.0.0.0   # containers reached via a published port
 ```
 
 Several sessions open side by side, collapsible tool calls, file edits rendered as diffs, per-pane

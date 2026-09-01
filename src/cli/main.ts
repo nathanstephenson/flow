@@ -15,7 +15,7 @@ import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
   goodharness tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
-  goodharness serve [--port N]                                 run the Session Host in the foreground
+  goodharness serve [--port N] [--address HOST]                run the Session Host in the foreground
   goodharness list                                             list Agent Sessions
   goodharness [--session ID] [--scope DIR] [--backend B] "<prompt>"   one prompt, then exit`;
 
@@ -30,6 +30,7 @@ async function main(): Promise<number> {
       model: { type: "string" },
       session: { type: "string" },
       port: { type: "string" },
+      address: { type: "string" },
       help: { type: "boolean", default: false },
     },
   });
@@ -41,9 +42,18 @@ async function main(): Promise<number> {
   }
 
   if (command === "serve") {
-    const { running, daemon } = await startHost(values.port ? Number(values.port) : undefined);
+    const { running, daemon } = await startHost(
+      values.port ? Number(values.port) : undefined,
+      values.address,
+    );
     writeDaemonFile(daemon);
-    console.log(`Session Host listening on ${daemon.url}`);
+    console.log(`Session Host listening on ${running.url}`);
+    if (values.address && values.address !== LOOPBACK) {
+      // ADR 0004 binds loopback because tools are pre-approved: reaching this host means running
+      // commands as this user. Off-loopback, the bearer token is the only thing in the way.
+      console.log(`  WARNING: bound to ${values.address}, not loopback. Anything that can route`);
+      console.log("           here can run commands as you if it has the token.");
+    }
     console.log(`  web handoff: ${daemon.url}/auth?token=${daemon.token}`);
     await new Promise<void>((resolve) => running.server.on("close", resolve));
     return 0;
@@ -84,7 +94,12 @@ async function main(): Promise<number> {
 }
 
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */
-async function startHost(port?: number): Promise<{ running: RunningServer; daemon: Daemon; host: SessionHost }> {
+const LOOPBACK = "127.0.0.1";
+
+async function startHost(
+  port?: number,
+  address?: string,
+): Promise<{ running: RunningServer; daemon: Daemon; host: SessionHost }> {
   const host = new SessionHost({ store: new TranscriptStore() });
   host.registerBackend(new ClaudeBackend());
   host.registerBackend(new PiBackend());
@@ -97,8 +112,11 @@ async function startHost(port?: number): Promise<{ running: RunningServer; daemo
     token,
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
+    ...(address === undefined ? {} : { address }),
   });
-  return { running, daemon: { url: running.url, token }, host };
+  // Clients on this machine should dial loopback even when the socket is bound wider.
+  const url = running.url.replace(`//${address ?? LOOPBACK}:`, `//${LOOPBACK}:`);
+  return { running, daemon: { url, token }, host };
 }
 
 /**
