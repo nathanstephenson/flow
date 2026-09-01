@@ -71,7 +71,30 @@ any client is notified — a client must never see an event a restart would lose
 Claude's `resumeDropsTurn` takes a message id rather than a boolean, so there is no generic
 "drop the torn turn" hint to pass down; the torn turn is closed in our transcript instead.
 
-Next: M3 — the TUI.
+**M3 (transport and TUI) complete.** The terminal client talks to the Session Host over the wire,
+never to a session object.
+
+```bash
+goodharness serve          # Session Host on 127.0.0.1, prints the web handoff URL
+goodharness tui            # terminal client; connects to a running host or embeds one
+goodharness list
+```
+
+TUI keys: `^S` sessions · `^P` models (grouped by provider) · `esc` abort · `^C` quit. Typing while
+the agent works queues the message rather than interrupting it — steering is a deliberate act.
+
+Transport is POST for commands and SSE for events. SSE rather than WebSocket because the transcript
+is one-directional and sequence-numbered, so reconnect is `?since=N` — a replay, not a
+resynchronisation protocol — and it needs no dependency in Node or the browser.
+
+Two bugs the tests caught that a manual try would likely have missed:
+
+- **A stdin chunk is not a keystroke.** A paste arrives as one chunk and an arrow key as a
+  three-byte escape sequence, so chunks are tokenised into keys.
+- **Chunk handlers raced.** Key handling is async, so a chunk arriving mid-walk interleaved with the
+  previous one and applied keys out of order. Chunks are now processed strictly in sequence.
+
+Next: M4 — the web UI, reusing this transport with the cookie handoff.
 
 ## Development
 
