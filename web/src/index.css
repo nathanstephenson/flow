@@ -1,0 +1,210 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * The Presentation Transcript is a document; the chrome is an instrument.
+ *
+ * That sentence decides everything below. Transcript content gets no cards, no bubbles, no shadows
+ * and no alternating backgrounds — 1px lines do the separating, and colour is spent only on encoding
+ * state, never on decoration. Dark stays the default because it is the product's existing identity.
+ *
+ * The dark values are the ten this UI already shipped, kept exactly. What is new is the vocabulary a
+ * real design needs on top of them: a well that recedes below the base, an overlay that sits above
+ * it, a stronger line for the focused pane, and two extra text weights so a title, a body and a
+ * timestamp can differ without reaching for colour.
+ */
+
+@theme {
+  /* No webfonts. Both stacks are the platform's, and the mono one is the one this UI already used. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /*
+   * Denser than Tailwind's defaults. The transcript stays at the 13px this UI has always used, but
+   * gains leading, because it is read in paragraphs rather than glanced at. Chrome goes smaller than
+   * the transcript on purpose: it should be legible without competing for the eye.
+   */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.45;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.5;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.55;
+  --text-base: 0.8125rem;
+  --text-base--line-height: 1.65;
+
+  /* Nothing rounder than the 4px this UI already used. Softer corners read as a consumer app. */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+}
+
+/*
+ * Dark is the default and lives on :root so it applies with no class at all; .light opts out. Both
+ * are also exposed under an explicit .dark so a future toggle can force either way.
+ */
+@layer base {
+  :root,
+  .dark {
+    --color-bg: #0d1117;
+    --color-surface: #131922;
+    --color-surface-2: #182029;
+    /* Wells recede *below* the base so tool output and diffs read as inset, not as raised cards. */
+    --color-inset: #0a0f14;
+    --color-overlay: #1b232e;
+    --color-line: #232c38;
+    --color-line-strong: #2f3a49;
+
+    --color-fg: #c9d3df;
+    --color-fg-strong: #e6edf5;
+    --color-fg-muted: #7c8b9d;
+    --color-fg-faint: #5b6878;
+
+    --color-accent: #7aa2f7;
+    --color-accent-strong: #a3bdfa;
+    --color-accent-quiet: color-mix(in oklab, #7aa2f7 14%, transparent);
+
+    --color-ok: #7ac794;
+    --color-warn: #d6b16a;
+    --color-err: #e07a7a;
+    /* The model's private reasoning gets its own hue, so it is distinct from chrome metadata
+     * without shouting. Dim grey alone made thinking look like a label. */
+    --color-thinking: #9a8fc7;
+
+    --color-diff-add-fg: #7ac794;
+    --color-diff-add-bg: color-mix(in oklab, #7ac794 10%, transparent);
+    --color-diff-del-fg: #e07a7a;
+    --color-diff-del-bg: color-mix(in oklab, #e07a7a 10%, transparent);
+
+    /* Derived from warn rather than the unrelated olive this UI used, so a search hit belongs to
+     * the same system as everything else. */
+    --color-mark-bg: color-mix(in oklab, #d6b16a 28%, transparent);
+    --color-mark-fg: #f0e6d0;
+
+    --color-ring: color-mix(in oklab, #7aa2f7 60%, transparent);
+  }
+
+  /*
+   * Warm paper rather than white, and not an inversion of the dark set. A long Presentation
+   * Transcript is read, so the page is a shade off-white and the accent is darkened until it holds
+   * contrast against it; a hue that works on #0d1117 does not survive on paper.
+   */
+  .light {
+    --color-bg: #fbfaf8;
+    --color-surface: #f4f2ee;
+    --color-surface-2: #eae7e1;
+    --color-inset: #f0ede7;
+    --color-overlay: #ffffff;
+    --color-line: #dedad2;
+    --color-line-strong: #c9c4ba;
+
+    --color-fg: #23282e;
+    --color-fg-strong: #10141a;
+    --color-fg-muted: #5d6673;
+    --color-fg-faint: #838d9a;
+
+    --color-accent: #2f52c9;
+    --color-accent-strong: #1e3fae;
+    --color-accent-quiet: color-mix(in oklab, #2f52c9 10%, transparent);
+
+    --color-ok: #2f7d4f;
+    --color-warn: #8a6410;
+    --color-err: #b02b2b;
+    --color-thinking: #5d51a0;
+
+    /* Washes read weaker on paper, so both diff tints go up from 10%. */
+    --color-diff-add-fg: #2f7d4f;
+    --color-diff-add-bg: color-mix(in oklab, #2f7d4f 12%, transparent);
+    --color-diff-del-fg: #b02b2b;
+    --color-diff-del-bg: color-mix(in oklab, #b02b2b 12%, transparent);
+
+    --color-mark-bg: color-mix(in oklab, #d6b16a 40%, white);
+    --color-mark-fg: #3a2f10;
+
+    --color-ring: color-mix(in oklab, #2f52c9 55%, transparent);
+  }
+}
+
+/*
+ * Status tones. Every one of the five is the hue this UI already used, so the redesign changes the
+ * shape of the signal, not its meaning. Nothing outside this file may name a status colour: code
+ * goes through statusTone() in src/client/status.ts, which returns one of these token names.
+ *
+ * `idle` deliberately keeps its own tone rather than borrowing Dormant's. They are different states
+ * — idle means a Backend Session is attached and between turns, Dormant means none is running — and
+ * CONTEXT.md bans "idle" as a synonym for Dormant precisely because conflating them misleads.
+ */
+@layer base {
+  :root,
+  .dark,
+  .light {
+    --color-status-idle: var(--color-ok);
+    --color-status-running: var(--color-accent);
+    --color-status-dormant: var(--color-fg-muted);
+    --color-status-settled: var(--color-warn);
+    /* Terminal, not broken: desaturated toward muted so a filled err stays reserved for an actual
+     * error notice or a failed tool call. */
+    --color-status-ended: color-mix(in oklab, var(--color-err) 70%, var(--color-fg-muted));
+  }
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+    /* Sans is the chrome default; the transcript opts into mono where content is verbatim. */
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    /* Relative times and percentages tick without the row reflowing around them. */
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Focus is never invisible and never a browser default. */
+  :focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 1px;
+    box-shadow: 0 0 0 3px var(--color-ring);
+  }
+
+  /* The only motion in the app is the running indicator, and it answers the question this UI exists
+   * to answer. Everything else is still, and even that yields to a reduced-motion preference. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/*
+ * The transcript scroller. A plain overflow container, deliberately, rather than a ScrollArea
+ * component: the stick-to-bottom rule owns scrollTop directly, and a component that runs its own
+ * scroll handler on every streamed frame would be fighting it for no gain over these two lines.
+ *
+ * overflow-anchor is off because the browser's own anchoring competes with an explicit scrollTop
+ * write, and scroll-behavior is pinned to auto so the pin cannot animate.
+ */
+@utility transcript-scroller {
+  overflow-y: auto;
+  overflow-anchor: none;
+  scroll-behavior: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}

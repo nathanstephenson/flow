@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,7 +88,7 @@ function devHandoff(): Plugin {
 
 export default defineConfig(({ command }) => ({
   root: here,
-  plugins: [react(), devHandoff()],
+  plugins: [react(), tailwindcss(), devHandoff()],
   resolve: {
     // Mirrors "paths" in web/tsconfig.json — Vite does not read tsconfig paths. Keep the two in step.
     alias: {

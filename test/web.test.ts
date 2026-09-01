@@ -56,9 +56,15 @@ describe("web assets", () => {
   it("records which client modules the bundle is required to be built from", () => {
     assert.deepEqual([...SHARED_MODULES].sort(), [
       "src/client/connection.ts",
+      "src/client/context-usage.ts",
       "src/client/diff.ts",
+      "src/client/model-choices.ts",
       "src/client/reduce.ts",
       "src/client/relative-time.ts",
+      "src/client/search.ts",
+      "src/client/session-label.ts",
+      "src/client/status.ts",
+      "src/client/tool-summary.ts",
     ]);
   });
 

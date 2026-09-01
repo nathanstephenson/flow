@@ -21,18 +21,25 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
  * build:assets -> here. You cannot produce a binary whose bundle was not built from the shared
  * reducer.
  *
- * The list is the modules the web app is *currently* built from, not every module in src/client/.
- * It can only name what the bundle actually imports, so a shared module the web app does not use yet
- * cannot be asserted here — context-usage.ts, model-choices.ts, session-label.ts and status.ts are
- * all shared with the TUI and all still absent below. Each joins the list as the web app starts
- * importing it; until then it is shared code with no gate on it, and the compiler is the only thing
- * keeping the two front-ends honest about it.
+ * The list is the modules the web app is *currently* built from, not every module in src/client/. It
+ * can only name what the bundle actually imports, so a shared module the web app does not use yet
+ * cannot be asserted here. As of the redesign that is all of them: the reducer and the transport, the
+ * diff and the relative time both front-ends print, and the presentation rules they must agree on —
+ * which status permits which action, which models and Effort levels a backend offers, how the
+ * Conversation Context is labelled, what to call an Agent Session with no title, what a search looks
+ * at, and how a tool call's arguments are précised.
  */
 const SHARED_MODULES = [
   "src/client/connection.ts",
+  "src/client/context-usage.ts",
   "src/client/diff.ts",
+  "src/client/model-choices.ts",
   "src/client/reduce.ts",
   "src/client/relative-time.ts",
+  "src/client/search.ts",
+  "src/client/session-label.ts",
+  "src/client/status.ts",
+  "src/client/tool-summary.ts",
 ];
 
 const result = await build({

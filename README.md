@@ -191,15 +191,19 @@ to emit a bundle whose module graph lacks the shared client modules; the generat
 sha256 over every input — `src/client/**` and the lockfile included — that `npm test` recomputes, so
 editing the reducer without rebuilding fails the suite; and CI rebuilds and refuses a dirty diff,
 the only one of the three that does not depend on remembering a command. The embedded module grows
-from 28 kB to 196 kB, and further once Tailwind and the component set land — under half a percent of
-the binary, but now the largest file in the tree.
+from 28 kB to 526 kB — under half a percent of the binary, but comfortably the largest file in the
+tree.
 
-The UI itself is still being rebuilt. `/` currently serves a deliberately plain stub whose job is to
-prove the plumbing while the app is small enough that a fault in it is obviously a plumbing fault;
-M4's feature set returns with the redesign, laid out master–detail with a two-up split rather than a
-grid of panes. Until a browser-driven smoke test lands, nothing automatically proves that the
-shipped bundle renders a live Presentation Transcript — the compiler, the module-graph check and the
-hash all prove things about the bundle, not about the app working.
+The UI is master–detail: a sidebar of Agent Sessions, one in focus, and an opt-in two-up split where
+M4 opened a pane per Agent Session. Ten modules are shared with the terminal client rather than the
+three the old arrangement allowed, so the model and Effort pickers, the status predicates, transcript
+search and the relative clock are now one implementation each instead of two that had already
+drifted. The Presentation Transcript is treated as a document — monospace, no cards, no bubbles,
+colour spent only on encoding state — while the chrome around it is not.
+
+Nothing automatically proves the shipped bundle renders. The compiler, the module-graph check and the
+hash all prove things about the bundle rather than about the app working, and closing that gap needs
+a browser-driven smoke test that is designed but deferred.
 
 ## Development
 

@@ -28,9 +28,9 @@ every input, `src/client/` included, that a test recomputes; and CI rebuilds and
 diff, the only one of the three that does not depend on remembering a command. A browser-driven test
 of the shipped bundle is the remaining gap, and it is deferred rather than solved.
 
-Two consequences contradict things written elsewhere. The embedded module grows about sevenfold,
-from 28 kB to 198 kB with React alone and further as the component set lands — a rounding error
-against the binary, which is dominated by the copy of `node` it is injected into, but enough to make
-it the largest tracked file in the repository. And the lockfile gains per-platform native bindings,
-which is what `scripts/build-binary.mjs` chose `esbuild-wasm` to avoid; it already carried them for
-both agent SDKs, so that comment was defending a property the tree had lost.
+Two consequences contradict things written elsewhere. The embedded module grows from 28 kB to 526
+kB, roughly nineteenfold — a rounding error against the binary, which is dominated by the copy of
+`node` it is injected into, but enough to make it comfortably the largest tracked file in the
+repository. And the lockfile gains per-platform native bindings, which is what
+`scripts/build-binary.mjs` chose `esbuild-wasm` to avoid; it already carried them for both agent
+SDKs, so that comment was defending a property the tree had lost.

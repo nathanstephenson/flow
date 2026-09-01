@@ -18,5 +18,9 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["web/src/presentation/**/*.ts"]
+  // web/src/store/** is here for the same reason, and it buys the same guarantee: the store's tests
+  // need node types, and pulling the store into this program is what forces its one browser
+  // dependency — requestAnimationFrame, for coalescing — through a named, replaceable seam rather
+  // than reaching for an ambient global from anywhere in the state layer.
+  "include": ["web/src/presentation/**/*.ts", "web/src/store/**/*.ts"]
 }
