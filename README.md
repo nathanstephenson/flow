@@ -141,8 +141,11 @@ Five things the build needed:
   `<node> <cli-path> …` using `process.execPath` as the interpreter — but inside a single executable
   that *is* the GoodHarness binary, so the spawn re-invokes GoodHarness with the CLI's arguments,
   argument parsing rejects them, and it surfaces as `Claude Code process exited with code 1`. A
-  `spawnClaudeCodeProcess` override executes the CLI path itself, which works whether Claude Code is
-  installed as a shebang script or a native binary.
+  `spawnClaudeCodeProcess` override executes the CLI path itself. It rewrites *only* interpreter
+  spawns: a native Claude Code install is spawned with no interpreter at all, so the binary is
+  already the command and `args[0]` is a real flag. Hoisting it there executes `--output-format` as
+  a program, and the SDK reports that as "native binary exists but failed to launch — probably a
+  libc mismatch", which is not what went wrong.
 - **`esbuild-wasm` rather than `esbuild`.** The native package resolves to a per-platform binary, so
   a lockfile written on macOS leaves the Linux build broken and vice versa. The script runs rarely
   and the bundle is small, so portability is worth more than the milliseconds.

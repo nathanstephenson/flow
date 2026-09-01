@@ -65,16 +65,20 @@ export function resolveClaudeExecutable(): string | undefined {
 /**
  * Work out what to actually execute when the SDK asks for the CLI.
  *
- * The SDK runs the CLI as `<node> <cli-path> ...`, using process.execPath as the interpreter. Inside
+ * A JS install is run as `<node> <cli-path> ...`, using process.execPath as the interpreter. Inside
  * a single executable, process.execPath is *this binary*, so that spawn re-invokes GoodHarness with
  * the CLI's arguments, argument parsing rejects them, and the exit status surfaces as "Claude Code
- * process exited with code 1". Executing the CLI path directly sidesteps the interpreter entirely,
- * which works whether Claude Code is installed as a shebang script or a native binary.
+ * process exited with code 1". Executing the CLI path directly sidesteps the interpreter entirely.
+ *
+ * A native install has no interpreter to get wrong: the SDK spawns the binary as the command and
+ * args[0] is a real flag. Hoisting args[0] there would execute `--output-format` as a program, and
+ * the SDK reports the resulting failure as a libc mismatch, which sends you a long way off course.
  */
 export function seaSpawnTarget(options: { command: string; args: string[] }): {
   command: string;
   args: string[];
 } {
+  if (options.command !== process.execPath) return options;
   const [cliPath, ...rest] = options.args;
   if (!cliPath) return options;
   return { command: cliPath, args: rest };

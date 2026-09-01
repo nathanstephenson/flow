@@ -36,11 +36,11 @@ describe("packaging", () => {
 });
 
 describe("spawning the CLI from a single executable", () => {
-  it("runs the CLI directly instead of through process.execPath", () => {
+  it("runs a JS install directly instead of through process.execPath", () => {
     // Inside a SEA, process.execPath is the GoodHarness binary, so the SDK's default spawn would
     // re-invoke GoodHarness with the CLI's arguments.
     const target = seaSpawnTarget({
-      command: "/opt/goodharness/goodharness",
+      command: process.execPath,
       args: ["/usr/local/bin/claude", "--output-format", "stream-json"],
     });
     assert.deepEqual(target, {
@@ -49,8 +49,18 @@ describe("spawning the CLI from a single executable", () => {
     });
   });
 
+  it("leaves a native install alone", () => {
+    // No interpreter here: the binary is the command and args[0] is a flag, so hoisting it would
+    // try to execute `--output-format`. The SDK misreports that failure as a libc mismatch.
+    const options = {
+      command: "/usr/local/share/npm-global/bin/claude",
+      args: ["--output-format", "stream-json", "--verbose"],
+    };
+    assert.deepEqual(seaSpawnTarget(options), options);
+  });
+
   it("leaves a spawn with no script path alone", () => {
-    const options = { command: "/usr/bin/node", args: [] };
+    const options = { command: process.execPath, args: [] };
     assert.deepEqual(seaSpawnTarget(options), options);
   });
 });
