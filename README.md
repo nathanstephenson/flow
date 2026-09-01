@@ -29,7 +29,26 @@ Verified along the way:
   fall-through so a stray tool cannot stall a turn. The SDK warns that allowlisted tools skip the
   callback; that is the intent, not a misconfiguration.
 
-Next: M1 — the pi adapter, running the same contract unmodified, before either UI exists.
+**M1 (pi adapter) complete.** Both backends now sit behind the same Backend Adapter contract.
+
+pi's real `AgentSessionEvent` union was read out of its type declarations with the compiler API
+(`spikes/pi-event-union.ts`) rather than inferred, which corrected three things:
+
+- **pi separates runs from turns.** `agent_start`/`agent_end` bracket one exchange with the human;
+  `turn_start`/`turn_end` fire once per model call, many times inside it. Our `turn_started` /
+  `turn_ended` map to `agent_*`. Mapping them to `turn_*` would emit N pairs per prompt.
+- **`agent_end` carries `willRetry`.** When set, pi is about to auto-retry and the exchange is not
+  over, so no `turn_ended` is emitted yet.
+- The union has 17 members, including `compaction_start` and `thinking_level_changed`, which are not
+  visible from how existing consumers use it.
+
+`Capabilities.providers` earns its place: Claude reports `["anthropic"]`, pi reports 32.
+
+pi keeps its own credential store, so live pi runs need `pi` + `/login`. The translation itself is
+covered without credentials in `test/backend/pi-mapping.test.ts`, including a regression test that
+we always send `streamingBehavior: "steer"` and never touch pi's native follow-up queue.
+
+Next: M2 — durability and revive.
 
 ## Development
 
@@ -39,7 +58,8 @@ npm run typecheck
 npm test
 npm run spike:auth   # re-verify subscription auth
 
-GOODHARNESS_E2E=1 npm test   # includes the live Claude contract (spends tokens)
+GOODHARNESS_E2E=1 npm test       # adds the live Claude contract (spends tokens)
+GOODHARNESS_E2E_PI=1 npm test    # adds the live pi contract (needs pi credentials)
 ```
 
 Sources are run through Node's `--experimental-strip-types`, so TypeScript is limited to

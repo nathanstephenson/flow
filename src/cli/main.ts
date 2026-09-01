@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 
 import { ClaudeBackend } from "../backend/claude/index.ts";
 import { FakeBackend } from "../backend/fake/index.ts";
+import { PiBackend } from "../backend/pi/index.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 
@@ -22,12 +23,13 @@ async function main(): Promise<number> {
 
   const prompt = positionals.join(" ").trim();
   if (values.help || !prompt) {
-    console.log("usage: goodharness [--scope DIR] [--backend claude|fake] [--model ID] \"<prompt>\"");
+    console.log("usage: goodharness [--scope DIR] [--backend claude|pi|fake] [--model ID] \"<prompt>\"");
     return prompt ? 0 : 1;
   }
 
   const host = new SessionHost();
   host.registerBackend(new ClaudeBackend());
+  host.registerBackend(new PiBackend());
   host.registerBackend(new FakeBackend());
 
   const sessionId = await host.create({
