@@ -124,7 +124,11 @@ child process, and a child needs a real file on disk, which a SEA blob cannot pr
 separately (`npm i -g @anthropic-ai/claude-code`); the binary resolves `claude` from PATH, or from
 `GOODHARNESS_CLAUDE_PATH`. Running from source is unaffected — the SDK finds its own copy.
 
-Three things the build needed:
+Building on macOS additionally needs Xcode command line tools: injection invalidates the `node`
+binary's code signature, so the build strips it, injects into a `NODE_SEA` Mach-O segment, then
+re-signs ad hoc. Without that the kernel SIGKILLs the binary at launch and prints only `killed`.
+
+Four things the build needed:
 
 - **`import.meta.url` becomes `undefined` in a CommonJS bundle**, which breaks the
   `createRequire(import.meta.url)` calls inside bundled dependencies. The build defines it as a real
@@ -133,6 +137,9 @@ Three things the build needed:
   packages, so a bundle cannot require it at startup. On demand, its absence is a clear error when
   you ask for a pi session rather than a crash at launch — the binary is Claude-only unless pi is
   installed alongside it.
+- **`esbuild-wasm` rather than `esbuild`.** The native package resolves to a per-platform binary, so
+  a lockfile written on macOS leaves the Linux build broken and vice versa. The script runs rarely
+  and the bundle is small, so portability is worth more than the milliseconds.
 - **The packaging asymmetry held**, exactly backwards from intuition: pi is in-process and would
   bundle cleanly if not for its native deps, while Claude — the one that looks like a library — is
   the one needing an external executable.

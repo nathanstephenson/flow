@@ -6,7 +6,10 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
+// esbuild-wasm rather than esbuild: the native package resolves to a per-platform binary, so a
+// lockfile written on one OS leaves the build broken on another. This script runs rarely and the
+// bundle is small, so portability is worth more than the milliseconds.
+import { build } from "esbuild-wasm";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "build");
@@ -30,7 +33,9 @@ const result = await build({
   // pi pulls in optional native and wasm packages that cannot be bundled. They are only reachable
   // through the pi adapter, which is loaded lazily, so the binary works without them.
   external: ["koffi", "@silvia-odwyer/photon-node", "@earendil-works/pi-coding-agent"],
-  logLevel: "info",
+  // esbuild-wasm's stdio shim throws writing its own summary to a non-TTY pipe, and we print the
+  // numbers we care about ourselves.
+  logLevel: "silent",
   metafile: true,
 });
 
@@ -46,6 +51,13 @@ execFileSync(process.execPath, ["--experimental-sea-config", join(out, "sea-conf
 
 const binary = join(out, "goodharness");
 copyFileSync(process.execPath, binary);
+
+// macOS refuses to run a binary whose code signature no longer matches its contents, and injection
+// changes the contents. The signature is stripped first and an ad-hoc one applied afterwards;
+// without this the kernel SIGKILLs the binary at launch with no diagnostic beyond "killed".
+const isMac = process.platform === "darwin";
+if (isMac) codesign(["--remove-signature", binary]);
+
 execFileSync(
   process.execPath,
   [
@@ -55,8 +67,23 @@ execFileSync(
     join(out, "sea.blob"),
     "--sentinel-fuse",
     "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2",
+    // Mach-O has no equivalent of an ELF note section; the blob needs a segment of its own.
+    ...(isMac ? ["--macho-segment-name", "NODE_SEA"] : []),
   ],
   { stdio: "inherit" },
 );
 
+if (isMac) codesign(["--sign", "-", binary]);
+
 console.log(`\nbuilt ${binary}`);
+
+function codesign(args) {
+  try {
+    execFileSync("codesign", args, { stdio: "inherit" });
+  } catch (error) {
+    throw new Error(
+      `codesign ${args[0]} failed. Xcode command line tools are required to build the binary on ` +
+        `macOS: xcode-select --install. (${error instanceof Error ? error.message : error})`,
+    );
+  }
+}
