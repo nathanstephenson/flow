@@ -2,9 +2,7 @@ import { parseArgs } from "node:util";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { ClaudeBackend } from "../backend/claude/index.ts";
-import { FakeBackend } from "../backend/fake/index.ts";
-import { PiBackend } from "../backend/pi/index.ts";
+import { registerBackends } from "../backend/registry.ts";
 import { readOrCreateToken } from "../daemon/auth.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
@@ -101,9 +99,7 @@ async function startHost(
   address?: string,
 ): Promise<{ running: RunningServer; daemon: Daemon; host: SessionHost }> {
   const host = new SessionHost({ store: new TranscriptStore() });
-  host.registerBackend(new ClaudeBackend());
-  host.registerBackend(new PiBackend());
-  host.registerBackend(new FakeBackend());
+  registerBackends(host);
   await host.load();
 
   const token = readOrCreateToken(defaultStateRoot());

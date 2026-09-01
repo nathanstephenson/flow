@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -24,7 +25,40 @@ export type ClaudeBackendOptions = {
   allowedTools?: string[];
   disallowedTools?: string[];
   systemPrompt?: string;
+  /** Where the Claude Code CLI lives. Needed in a bundled build; see resolveClaudeExecutable. */
+  pathToClaudeCodeExecutable?: string;
 };
+
+/**
+ * Locate the Claude Code CLI.
+ *
+ * The Agent SDK spawns the CLI as a child process, and a child needs a real file on disk. Normally
+ * the SDK finds it inside its own package, but a single-executable build has no node_modules to
+ * look in — so there, Claude Code is a documented prerequisite and we resolve it from PATH.
+ */
+export function resolveClaudeExecutable(): string | undefined {
+  const override = process.env["GOODHARNESS_CLAUDE_PATH"];
+  if (override) return override;
+  if (!isSingleExecutable()) return undefined;
+
+  const found = spawnSync(process.platform === "win32" ? "where" : "which", ["claude"], {
+    encoding: "utf8",
+  });
+  const path = found.stdout?.split("\n")[0]?.trim();
+  if (!path) {
+    throw new Error(
+      "Claude Code was not found on PATH. A GoodHarness binary needs it installed separately: " +
+        "npm i -g @anthropic-ai/claude-code (or set GOODHARNESS_CLAUDE_PATH).",
+    );
+  }
+  return path;
+}
+
+function isSingleExecutable(): boolean {
+  // getBuiltinModule works the same in ESM and in the CommonJS bundle a SEA build produces.
+  const sea = process.getBuiltinModule?.("node:sea") as { isSea?(): boolean } | undefined;
+  return sea?.isSea?.() ?? false;
+}
 
 const DEFAULT_ALLOWED_TOOLS = [
   "Read",
@@ -70,6 +104,9 @@ class ClaudeSession implements BackendSession {
       ...(backendOptions.systemPrompt ? { systemPrompt: backendOptions.systemPrompt } : {}),
       ...(options.modelId ? { model: options.modelId } : {}),
       ...(options.resume ? { resume: options.resume } : {}),
+      ...(backendOptions.pathToClaudeCodeExecutable
+        ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
+        : {}),
       canUseTool: async (toolName: string) =>
         allowed.includes(toolName)
           ? { behavior: "allow" as const, updatedInput: {} }
@@ -250,7 +287,8 @@ export class ClaudeBackend implements AgentBackend {
   private readonly options: ClaudeBackendOptions;
 
   constructor(options: ClaudeBackendOptions = {}) {
-    this.options = options;
+    const resolved = options.pathToClaudeCodeExecutable ?? resolveClaudeExecutable();
+    this.options = { ...options, ...(resolved ? { pathToClaudeCodeExecutable: resolved } : {}) };
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {

@@ -116,7 +116,26 @@ fails if the generated module drifts from its sources.
 The `/auth` handoff exists because `EventSource` cannot send an `Authorization` header: the token
 goes into an HttpOnly cookie once, and the UI itself — not just the API — requires it.
 
-Next: M5 — the SEA spike.
+**M5 (single executable) complete.** `npm run build:binary` produces `build/goodharness`: an esbuild
+bundle injected into a copy of the `node` binary via Node SEA.
+
+**Claude Code is a prerequisite for the binary, not a payload.** The Agent SDK spawns the CLI as a
+child process, and a child needs a real file on disk, which a SEA blob cannot provide. Install it
+separately (`npm i -g @anthropic-ai/claude-code`); the binary resolves `claude` from PATH, or from
+`GOODHARNESS_CLAUDE_PATH`. Running from source is unaffected — the SDK finds its own copy.
+
+Three things the build needed:
+
+- **`import.meta.url` becomes `undefined` in a CommonJS bundle**, which breaks the
+  `createRequire(import.meta.url)` calls inside bundled dependencies. The build defines it as a real
+  file URL.
+- **pi is loaded lazily** (`src/backend/registry.ts`). It is ESM-only and pulls in native and wasm
+  packages, so a bundle cannot require it at startup. On demand, its absence is a clear error when
+  you ask for a pi session rather than a crash at launch — the binary is Claude-only unless pi is
+  installed alongside it.
+- **The packaging asymmetry held**, exactly backwards from intuition: pi is in-process and would
+  bundle cleanly if not for its native deps, while Claude — the one that looks like a library — is
+  the one needing an external executable.
 
 ## Development
 
