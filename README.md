@@ -128,7 +128,7 @@ Building on macOS additionally needs Xcode command line tools: injection invalid
 binary's code signature, so the build strips it, injects into a `NODE_SEA` Mach-O segment, then
 re-signs ad hoc. Without that the kernel SIGKILLs the binary at launch and prints only `killed`.
 
-Four things the build needed:
+Five things the build needed:
 
 - **`import.meta.url` becomes `undefined` in a CommonJS bundle**, which breaks the
   `createRequire(import.meta.url)` calls inside bundled dependencies. The build defines it as a real
@@ -137,6 +137,12 @@ Four things the build needed:
   packages, so a bundle cannot require it at startup. On demand, its absence is a clear error when
   you ask for a pi session rather than a crash at launch — the binary is Claude-only unless pi is
   installed alongside it.
+- **The CLI is spawned directly, not through `process.execPath`.** The SDK runs the CLI as
+  `<node> <cli-path> …` using `process.execPath` as the interpreter — but inside a single executable
+  that *is* the GoodHarness binary, so the spawn re-invokes GoodHarness with the CLI's arguments,
+  argument parsing rejects them, and it surfaces as `Claude Code process exited with code 1`. A
+  `spawnClaudeCodeProcess` override executes the CLI path itself, which works whether Claude Code is
+  installed as a shebang script or a native binary.
 - **`esbuild-wasm` rather than `esbuild`.** The native package resolves to a per-platform binary, so
   a lockfile written on macOS leaves the Linux build broken and vice versa. The script runs rarely
   and the bundle is small, so portability is worth more than the milliseconds.

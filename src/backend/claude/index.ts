@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type Options,
+  type Query,
+  type SDKMessage,
+  type SDKUserMessage,
+  type SpawnOptions,
+  type SpawnedProcess,
+} from "@anthropic-ai/claude-agent-sdk";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
 import type { BackendEvent, Capabilities, ModelInfo, TurnEndReason } from "../../protocol/events.ts";
@@ -52,6 +60,34 @@ export function resolveClaudeExecutable(): string | undefined {
     );
   }
   return path;
+}
+
+/**
+ * Work out what to actually execute when the SDK asks for the CLI.
+ *
+ * The SDK runs the CLI as `<node> <cli-path> ...`, using process.execPath as the interpreter. Inside
+ * a single executable, process.execPath is *this binary*, so that spawn re-invokes GoodHarness with
+ * the CLI's arguments, argument parsing rejects them, and the exit status surfaces as "Claude Code
+ * process exited with code 1". Executing the CLI path directly sidesteps the interpreter entirely,
+ * which works whether Claude Code is installed as a shebang script or a native binary.
+ */
+export function seaSpawnTarget(options: { command: string; args: string[] }): {
+  command: string;
+  args: string[];
+} {
+  const [cliPath, ...rest] = options.args;
+  if (!cliPath) return options;
+  return { command: cliPath, args: rest };
+}
+
+function spawnClaudeDirectly(options: SpawnOptions): SpawnedProcess {
+  const target = seaSpawnTarget(options);
+  return spawn(target.command, target.args, {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    env: options.env,
+    signal: options.signal,
+    stdio: ["pipe", "pipe", "pipe"],
+  }) as unknown as SpawnedProcess;
 }
 
 function isSingleExecutable(): boolean {
@@ -107,6 +143,7 @@ class ClaudeSession implements BackendSession {
       ...(backendOptions.pathToClaudeCodeExecutable
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
         : {}),
+      ...(isSingleExecutable() ? { spawnClaudeCodeProcess: spawnClaudeDirectly } : {}),
       canUseTool: async (toolName: string) =>
         allowed.includes(toolName)
           ? { behavior: "allow" as const, updatedInput: {} }
