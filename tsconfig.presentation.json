@@ -1,0 +1,22 @@
+// The web app's presentation logic, checked under the Session Host's compiler options rather than the
+// browser's: ES2023 with no DOM lib and no jsx.
+//
+// That is the whole point. Nothing under src/ or test/ imports web/, so these modules would otherwise
+// be checked only by web/tsconfig.json — which has DOM — and one could reach for `document` and still
+// typecheck. Here a stray `document`, or a transitive import of a .tsx, is a compile error. It is what
+// makes "presentation logic is DOM-free and testable under node --test" a guarantee rather than a
+// convention.
+//
+// A separate config rather than an entry in the root include, because the root program is
+// rootDir: "." + outDir: dist + declaration: true, so including web/ there would emit dead
+// dist/web/src/presentation/** JS and .d.ts on every build — the same argument that keeps
+// web/vite.config.ts out of the root program.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["web/src/presentation/**/*.ts"]
+}

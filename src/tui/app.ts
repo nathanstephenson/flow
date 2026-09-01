@@ -1,8 +1,11 @@
 import type { Connection } from "../client/connection.ts";
+import { effortChoices, modelChoices } from "../client/model-choices.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
+import { sessionLabel } from "../client/session-label.ts";
+import { canSettle } from "../client/status.ts";
 import type { SessionSummary } from "../protocol/commands.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
-import { effortChoices, modelChoices, renderFrame, type Overlay, type UiState } from "./render.ts";
+import { renderFrame, type Overlay, type UiState } from "./render.ts";
 
 /**
  * The terminal client. It speaks only to a Connection — never to a Session Host directly — which is
@@ -177,13 +180,14 @@ export async function runTui(options: TuiOptions): Promise<void> {
     }
     if (key === "s" && current.kind === "sessions") {
       const chosen = sessions[current.index];
-      if (!chosen) return;
+      // A Settled Agent Session has nothing to Settle and an Ended one refuses, so offer neither.
+      if (!chosen || !canSettle(chosen.status)) return;
       await options.connection.command({ type: "settle", sessionId: chosen.id });
       await refreshSessions();
       // Stay in the list rather than attaching. Settling is filing something away, not choosing
       // what to work on next, and the settled session has just sunk to the bottom anyway.
       overlay = { kind: "sessions", index: Math.min(current.index, Math.max(0, sessions.length - 1)) };
-      notice = `settled ${chosen.title || chosen.id}`;
+      notice = `settled ${sessionLabel(chosen)}`;
       return;
     }
     if (key !== KEY.enter && key !== KEY.newline) return;
@@ -217,8 +221,12 @@ export async function runTui(options: TuiOptions): Promise<void> {
     const text = input.trim();
     if (!text || !selected) return;
     input = "";
-    // Typing while the agent works queues rather than interrupts; steering is a deliberate act.
-    const when = view.status === "running" ? "after_turn" : "now";
-    await options.connection.command({ type: "send", sessionId: selected, text, when });
+    // Always after_turn, never derived from our own status. The Session Host marks a turn in flight
+    // when it dispatches rather than when the backend reports turn_started, and only after_turn is
+    // guarded by that flag — so a client that believed itself idle on the strength of turn_started
+    // would prompt a busy backend and bypass the Steering Queue ADR 0002 exists to own. after_turn
+    // already means "queue if busy, else dispatch now", so it is identical in every other case.
+    // "now" stays in the protocol for a deliberate interrupt-and-steer, which is not this.
+    await options.connection.command({ type: "send", sessionId: selected, text, when: "after_turn" });
   }
 }

@@ -7,8 +7,10 @@ import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
 import { connect } from "../src/client/connection.ts";
 import { initialState, reduceAll } from "../src/client/reduce.ts";
+import { sessionLabel } from "../src/client/session-label.ts";
 import { SessionLog } from "../src/daemon/log.ts";
-import { effortChoices, modelChoices, renderFrame, type UiState } from "../src/tui/render.ts";
+import { effortChoices, modelChoices } from "../src/client/model-choices.ts";
+import { renderFrame, type UiState } from "../src/tui/render.ts";
 import { KEY } from "../src/tui/keys.ts";
 import { runTui } from "../src/tui/app.ts";
 import type { Capabilities } from "../src/protocol/events.ts";
@@ -66,6 +68,30 @@ describe("TUI rendering", () => {
     const dividerAt = frame.indexOf("── settled ──");
     assert.ok(dividerAt > frame.indexOf("Live one"), "divider comes after the live sessions");
     assert.ok(dividerAt < frame.indexOf("Filed away"), "divider comes before the settled ones");
+  });
+
+  it("names an Agent Session by its id while it has no title yet", () => {
+    // The title is derived from the first message, so an Agent Session nobody has written to has
+    // none — and an empty string renders as nothing at all.
+    assert.equal(sessionLabel({ id: "s1", title: "" }), "s1");
+    const ui = baseUi({
+      overlay: { kind: "sessions", index: 0 },
+      sessions: [
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "", updatedAt: "", lastSeq: 0 },
+      ],
+    });
+    const frame = renderFrame(ui, { columns: 80, rows: 12 });
+    assert.match(frame[0] ?? "", /fake · s1/, "the header must name the Agent Session");
+    assert.match(frame.join("\n"), /idle {5}fake {4}.*s1/, "so must the list row");
+  });
+
+  it("renders a structural marker as a rule rather than as one more notice line", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "session_dormant", reason: "host shutdown" }, "2026-01-01T00:00:00Z");
+    log.append({ type: "notice", level: "warn", text: "just a message" }, "2026-01-01T00:00:00Z");
+    const frame = renderFrame(baseUi({ view: reduceAll(log.since(0)) }), { columns: 60, rows: 12 }).join("\n");
+    assert.match(frame, /── Dormant: host shutdown ─+/);
+    assert.match(frame, /! just a message/);
   });
 
   it("renders exactly the terminal height, whatever the content", () => {

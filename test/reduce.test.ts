@@ -80,7 +80,29 @@ describe("reduce", () => {
     );
     assert.equal(state.status, "settled");
     assert.deepEqual(state.queue, []);
-    assert.equal(state.entries.at(-1)?.kind, "notice");
+    assert.equal(state.entries.at(-1)?.kind, "marker");
+  });
+
+  it("records going Dormant, Settling and Reviving as markers rather than as notices", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "session_dormant", reason: "host shutdown" },
+        { type: "revived", fromSeq: 1 },
+        { type: "session_settled" },
+        { type: "notice", level: "warn", text: "a message about the Agent Session" },
+      ).since(0),
+    );
+
+    // A front-end must be able to tell a break in an Agent Session's life from a message about it
+    // without sniffing the text it happens to carry.
+    assert.deepEqual(
+      state.entries.map((entry) => (entry.kind === "marker" ? entry.marker : entry.kind)),
+      ["dormant", "revived", "settled", "notice"],
+    );
+    assert.deepEqual(
+      state.entries.flatMap((entry) => (entry.kind === "marker" ? [entry.text] : [])),
+      ["Dormant: host shutdown", "Revived from seq 1", "Settled"],
+    );
   });
 
   it("returns a Settled Agent Session to idle when it is revived", () => {

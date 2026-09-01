@@ -10,14 +10,16 @@
     "goodharness": "./dist/cli/main.js"
   },
   "scripts": {
+    "prebuild": "npm run build:assets",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.presentation.json && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit",
     "dev": "vite --config web/vite.config.ts",
-    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\"",
+    "test": "node --test --experimental-strip-types \"test/**/*.test.ts\" \"web/**/*.test.ts\"",
     "spike:auth": "node --experimental-strip-types spikes/subscription-auth.ts",
     "start": "node --experimental-strip-types src/cli/main.ts",
     "spike:adapter": "node --experimental-strip-types spikes/adapter-smoke.ts",
-    "build:assets": "node scripts/build-assets.mjs",
+    "build:assets": "node scripts/build-web.mjs",
+    "prebuild:binary": "npm run build:assets",
     "build:binary": "node scripts/build-binary.mjs"
   },
   "dependencies": {

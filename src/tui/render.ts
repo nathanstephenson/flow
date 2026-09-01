@@ -1,7 +1,9 @@
 import type { SessionSummary } from "../protocol/commands.ts";
-import type { Capabilities, EffortLevel, ModelInfo } from "../protocol/events.ts";
+import { contextUsageLabel } from "../client/context-usage.ts";
+import { effortChoices, modelChoices, type ModelChoice } from "../client/model-choices.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
 import { relativeTime } from "../client/relative-time.ts";
+import { sessionLabel } from "../client/session-label.ts";
 
 /**
  * Frame rendering, kept pure so it can be tested without a terminal.
@@ -29,30 +31,6 @@ export type UiState = {
 
 export type Size = { columns: number; rows: number };
 
-export type ModelChoice = { provider: string; model: ModelInfo };
-
-/** Models grouped by provider. Claude offers one group, pi offers dozens; the list is the same. */
-export function modelChoices(capabilities: Capabilities | undefined): ModelChoice[] {
-  if (!capabilities) return [];
-  const byProvider = new Map<string, ModelInfo[]>();
-  for (const model of capabilities.models) {
-    const provider = model.provider ?? "other";
-    byProvider.set(provider, [...(byProvider.get(provider) ?? []), model]);
-  }
-  return [...byProvider.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .flatMap(([provider, models]) => models.map((model) => ({ provider, model })));
-}
-
-/**
- * The Effort levels on offer, which belong to the model in force rather than to the session — a
- * model without an effort control returns none and the picker has nothing to show.
- */
-export function effortChoices(view: ViewState): EffortLevel[] {
-  const current = view.capabilities?.models.find((model) => model.id === view.model?.id);
-  return (current ?? view.model)?.effortLevels ?? [];
-}
-
 export function renderFrame(ui: UiState, size: Size): string[] {
   const width = Math.max(20, size.columns);
   const height = Math.max(6, size.rows);
@@ -69,7 +47,7 @@ function header(ui: UiState, width: number): string {
   const summary = ui.sessions.find((session) => session.id === ui.selected);
   const model = ui.view.model?.label ?? ui.view.model?.id ?? "default model";
   const effort = ui.view.effort && effortChoices(ui.view).length > 0 ? ` · ${ui.view.effort}` : "";
-  const left = summary ? `${summary.backend} · ${summary.title}` : "no session";
+  const left = summary ? `${summary.backend} · ${sessionLabel(summary)}` : "no session";
   const right = `${model}${effort} · ${ui.view.status}`;
   return clip(pad(left, Math.max(0, width - right.length - 1)) + " " + right, width);
 }
@@ -77,10 +55,8 @@ function header(ui: UiState, width: number): string {
 function status(ui: UiState, width: number): string {
   const parts: string[] = [];
   if (ui.view.queue.length > 0) parts.push(`${ui.view.queue.length} queued`);
-  if (ui.view.contextUsage) {
-    const { used, window } = ui.view.contextUsage;
-    parts.push(window > 0 ? `context ${Math.round((used / window) * 100)}%` : `${used} tokens`);
-  }
+  const context = contextUsageLabel(ui.view.contextUsage);
+  if (context) parts.push(context);
   if (ui.notice) parts.push(ui.notice);
   parts.push("^S sessions  ^P models  ^E effort  esc abort  ^C quit");
   return clip(parts.join("  ·  "), width);
@@ -103,7 +79,18 @@ function entryLines(entry: Entry, width: number): string[] {
       return [clip(`  [${entry.status}] ${entry.name}`, width)];
     case "notice":
       return wrap(`! ${entry.text}`, width);
+    case "marker":
+      return [rule(entry.text, width)];
   }
+}
+
+/**
+ * A structural marker is a break in the Presentation Transcript rather than another line of text, so
+ * it gets a labelled rule — the same `──` vocabulary the Settled divider in the session list uses.
+ */
+function rule(label: string, width: number): string {
+  const dashes = Math.max(0, width - label.length - 4);
+  return clip(`── ${label} ${"─".repeat(dashes)}`, width);
 }
 
 function overlay(ui: UiState, width: number, height: number): string[] {
@@ -123,7 +110,7 @@ function overlay(ui: UiState, width: number, height: number): string[] {
       const updated = relativeTime(session.updatedAt, now);
       rows.push(
         clip(
-          `${index === cursor ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${updated.padEnd(10)} ${session.title}`,
+          `${index === cursor ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${updated.padEnd(10)} ${sessionLabel(session)}`,
           width,
         ),
       );

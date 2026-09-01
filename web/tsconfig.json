@@ -14,5 +14,9 @@
     "skipLibCheck": true,
     "paths": { "@/*": ["./src/*"], "@client/*": ["../src/client/*"] }
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run under `node --test`, not in the browser, so they are checked by
+  // ../tsconfig.presentation.json — which has node types and no DOM. Leaving them here would fail on
+  // `node:test`, and typing them for both would hand browser code node globals it must not have.
+  "exclude": ["src/**/*.test.ts"]
 }
