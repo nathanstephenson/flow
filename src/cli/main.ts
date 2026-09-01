@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { registerBackends } from "../backend/registry.ts";
 import { readOrCreateToken } from "../daemon/auth.ts";
+import { loadConfig } from "../daemon/config.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
@@ -97,15 +98,25 @@ async function main(): Promise<number> {
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */
 const LOOPBACK = "127.0.0.1";
 
+/** How often a running Session Host sweeps for Settled Agent Sessions past their window. */
+const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 async function startHost(
   port?: number,
   address?: string,
 ): Promise<{ running: RunningServer; daemon: Daemon; host: SessionHost }> {
-  const host = new SessionHost({ store: new TranscriptStore() });
-  registerBackends(host);
-  await host.load();
+  const root = defaultStateRoot();
+  const { config, warning } = loadConfig(root);
+  if (warning) console.error(`  WARNING: ${warning}`);
 
-  const token = readOrCreateToken(defaultStateRoot());
+  const host = new SessionHost({ store: new TranscriptStore(), retention: config.retention.settled });
+  registerBackends(host);
+  // load() sweeps once, so a daemon that was off for a week catches up on the way in.
+  await host.load();
+  // unref: a one-shot prompt and the tests build a host in-process and must still be able to exit.
+  setInterval(() => host.reap(), SWEEP_INTERVAL_MS).unref();
+
+  const token = readOrCreateToken(root);
   const running = await serve({
     host,
     token,

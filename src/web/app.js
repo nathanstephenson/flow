@@ -2,6 +2,7 @@
 // with its types stripped — so the two front-ends cannot disagree about what a transcript means.
 import { initialState, reduce } from "/reduce.js";
 import { editDiff } from "/diff.js";
+import { relativeTime } from "/relative-time.js";
 
 const railEl = document.getElementById("sessions");
 const gridEl = document.getElementById("grid");
@@ -9,6 +10,8 @@ const gridEl = document.getElementById("grid");
 /** sessionId -> { el, view, source, search, entryEls } */
 const panes = new Map();
 let sessions = [];
+// The rail is rebuilt from scratch on every poll, so the disclosure state cannot live in the DOM.
+let settledOpen = false;
 
 async function command(body) {
   const response = await fetch("/api/command", {
@@ -26,18 +29,51 @@ async function refreshSessions() {
 }
 
 function renderRail() {
-  railEl.replaceChildren(
-    ...sessions.map((session) => {
-      const el = document.createElement("div");
-      el.className = `session${panes.has(session.id) ? " open" : ""}`;
-      el.innerHTML =
-        `<span class="title"></span><span class="meta status-${session.status}"></span>`;
-      el.querySelector(".title").textContent = session.title || session.id;
-      el.querySelector(".meta").textContent = `${session.status} · ${session.backend}`;
-      el.onclick = () => (panes.has(session.id) ? closePane(session.id) : openPane(session.id));
-      return el;
-    }),
-  );
+  const now = Date.now();
+  const active = sessions.filter((session) => session.status !== "settled");
+  const settled = sessions.filter((session) => session.status === "settled");
+
+  const children = active.map((session) => sessionRow(session, now));
+  // Settled Agent Sessions are the ones their owner is done with, so they are folded away rather
+  // than competing for attention with live work.
+  if (settled.length > 0) children.push(settledGroup(settled, now));
+  railEl.replaceChildren(...children);
+}
+
+function settledGroup(settled, now) {
+  const details = document.createElement("details");
+  details.className = "settled-group";
+  details.open = settledOpen;
+  details.ontoggle = () => {
+    settledOpen = details.open;
+  };
+  const summary = document.createElement("summary");
+  summary.textContent = `settled · ${settled.length}`;
+  details.append(summary, ...settled.map((session) => sessionRow(session, now)));
+  return details;
+}
+
+function sessionRow(session, now) {
+  const el = document.createElement("div");
+  el.className = `session${panes.has(session.id) ? " open" : ""}`;
+  el.innerHTML =
+    `<span class="title"></span><span class="meta status-${session.status}"></span>` +
+    `<button class="settle" title="settle">settle</button><span class="updated"></span>`;
+  el.querySelector(".title").textContent = session.title || session.id;
+  el.querySelector(".meta").textContent = `${session.status} · ${session.backend}`;
+  el.querySelector(".updated").textContent = relativeTime(session.updatedAt, now);
+
+  const settle = el.querySelector(".settle");
+  settle.hidden = session.status === "settled" || session.status === "ended";
+  settle.onclick = async (event) => {
+    // The row opens the session; settling from it must not.
+    event.stopPropagation();
+    await command({ type: "settle", sessionId: session.id });
+    await refreshSessions();
+  };
+
+  el.onclick = () => (panes.has(session.id) ? closePane(session.id) : openPane(session.id));
+  return el;
 }
 
 function openPane(sessionId) {
@@ -51,6 +87,7 @@ function openPane(sessionId) {
       <select class="models" title="model"></select>
       <select class="effort" title="effort"></select>
       <span class="state"></span>
+      <button class="settle">settle</button>
       <button class="abort">abort</button>
       <button class="close">×</button>
     </div>
@@ -67,6 +104,10 @@ function openPane(sessionId) {
 
   el.querySelector(".close").onclick = () => closePane(sessionId);
   el.querySelector(".abort").onclick = () => command({ type: "abort", sessionId });
+  el.querySelector(".settle").onclick = async () => {
+    await command({ type: "settle", sessionId });
+    await refreshSessions();
+  };
   el.querySelector(".pane-search input").oninput = (event) => {
     pane.search = event.target.value.toLowerCase();
     pane.entryEls.clear();
@@ -129,6 +170,9 @@ function renderPane(pane) {
   const state = el.querySelector(".state");
   state.textContent = `${view.status}${queued}${contextLabel(view)}`;
   state.className = `state status-${view.status}${view.queue.length ? " queued" : ""}`;
+
+  // Nothing to settle once it is Settled, and an Ended session cannot be.
+  el.querySelector(".settle").hidden = view.status === "settled" || view.status === "ended";
 
   renderModels(el.querySelector(".models"), view);
   renderEffort(el.querySelector(".effort"), view);

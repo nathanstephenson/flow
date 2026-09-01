@@ -41,6 +41,7 @@ describe("web assets", () => {
       ["/app.js", "text/javascript"],
       ["/reduce.js", "text/javascript"],
       ["/diff.js", "text/javascript"],
+      ["/relative-time.js", "text/javascript"],
     ] as const) {
       const response = await get(path);
       assert.equal(response.status, 200, path);

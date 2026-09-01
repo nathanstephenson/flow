@@ -71,6 +71,25 @@ describe("reduce", () => {
     assert.equal(tool?.kind === "tool" ? tool.status : "", "error");
   });
 
+  it("shows a Settled Agent Session as settled, and clears its queue", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "queue_changed", pending: ["a"] },
+        { type: "session_settled" },
+      ).since(0),
+    );
+    assert.equal(state.status, "settled");
+    assert.deepEqual(state.queue, []);
+    assert.equal(state.entries.at(-1)?.kind, "notice");
+  });
+
+  it("returns a Settled Agent Session to idle when it is revived", () => {
+    const state = reduceAll(
+      transcript({ type: "session_settled" }, { type: "revived", fromSeq: 1 }).since(0),
+    );
+    assert.equal(state.status, "idle");
+  });
+
   it("keeps queue depth in view state", () => {
     const state = reduceAll(transcript({ type: "queue_changed", pending: ["a", "b"] }).since(0));
     assert.deepEqual(state.queue, ["a", "b"]);

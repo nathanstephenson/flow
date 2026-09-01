@@ -45,6 +45,16 @@ The state of an Agent Session with no Backend Session running. Its transcript is
 be Revived.
 _Avoid_: idle, stopped, paused, dead
 
+**Settled**:
+The state of an Agent Session its owner has declared themselves done with. No Backend Session runs,
+the transcript stays readable, and a Revive un-settles it — but left alone it is Reaped.
+_Avoid_: closed, archived, done, finished, ended
+
+**Reap**:
+Deleting a Settled Agent Session and its Presentation Transcript from disk once its retention window
+has passed.
+_Avoid_: cleanup, purge, expire, prune, garbage collection
+
 **Revive**:
 Attaching a fresh Backend Session to a Dormant Agent Session, continuing the same Presentation
 Transcript.

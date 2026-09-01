@@ -46,6 +46,28 @@ describe("TUI rendering", () => {
     );
   });
 
+  it("groups Settled Agent Sessions under their own divider, with last-updated badges", () => {
+    const now = Date.parse("2026-09-01T12:00:00.000Z");
+    const at = (ms: number): string => new Date(now - ms).toISOString();
+    const ui = baseUi({
+      overlay: { kind: "sessions", index: 0 },
+      now,
+      sessions: [
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "Live one", updatedAt: at(30_000), lastSeq: 0 },
+        { id: "s2", scope: "/tmp", backend: "fake", status: "dormant", title: "Older", updatedAt: at(3 * 3_600_000), lastSeq: 0 },
+        { id: "s3", scope: "/tmp", backend: "fake", status: "settled", title: "Filed away", updatedAt: at(5 * 60_000), lastSeq: 0 },
+      ],
+    });
+
+    const frame = renderFrame(ui, { columns: 80, rows: 14 }).join("\n");
+    assert.match(frame, /just now.*Live one/);
+    assert.match(frame, /3h.*Older/);
+    // The divider sits above the Settled group and below the live ones.
+    const dividerAt = frame.indexOf("── settled ──");
+    assert.ok(dividerAt > frame.indexOf("Live one"), "divider comes after the live sessions");
+    assert.ok(dividerAt < frame.indexOf("Filed away"), "divider comes before the settled ones");
+  });
+
   it("renders exactly the terminal height, whatever the content", () => {
     const log = new SessionLog("s1");
     for (let index = 0; index < 50; index += 1) {
@@ -207,6 +229,20 @@ describe("TUI over the wire", () => {
     // fake-1 offers low/medium/high; the cursor starts on the level in force and steps down.
     await waitFor(() => backend.latest.effort !== undefined);
     assert.equal(backend.latest.effort, "medium");
+  });
+
+  it("settles from the session list without opening the session", async () => {
+    const settled = backend.latest;
+    stdin.write(KEY.ctrlS);
+    await waitFor(() => output.join("").includes("s to settle"));
+
+    stdin.write("s");
+    await waitFor(() => settled.disposed);
+
+    // The list stays up: settling is filing something away, not picking what to work on next.
+    const frame = output.at(-1) ?? "";
+    assert.match(frame, /sessions {2}\(enter to switch/, "the session list is still open");
+    assert.match(frame, /settled/);
   });
 
   it("edits the input line with backspace", async () => {

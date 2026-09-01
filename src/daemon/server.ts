@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import type { Command } from "../protocol/commands.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
-import { APP_JS, DIFF_JS, INDEX_HTML, REDUCER_JS, STYLES_CSS } from "../web/assets.generated.ts";
+import { APP_JS, DIFF_JS, INDEX_HTML, REDUCER_JS, RELATIVE_TIME_JS, STYLES_CSS } from "../web/assets.generated.ts";
 import { tokenMatches } from "./auth.ts";
 import type { SessionHost } from "./host.ts";
 
@@ -125,6 +125,7 @@ const ASSETS: Record<string, { type: string; body: string } | undefined> = {
   "/app.js": { type: "text/javascript; charset=utf-8", body: APP_JS },
   "/reduce.js": { type: "text/javascript; charset=utf-8", body: REDUCER_JS },
   "/diff.js": { type: "text/javascript; charset=utf-8", body: DIFF_JS },
+  "/relative-time.js": { type: "text/javascript; charset=utf-8", body: RELATIVE_TIME_JS },
 };
 
 function sendAsset(response: ServerResponse, type: string, body: string): void {
