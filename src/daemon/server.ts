@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 
 import type { Command } from "../protocol/commands.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
+import { APP_JS, DIFF_JS, INDEX_HTML, REDUCER_JS, STYLES_CSS } from "../web/assets.generated.ts";
 import { tokenMatches } from "./auth.ts";
 import type { SessionHost } from "./host.ts";
 
@@ -18,6 +19,8 @@ export type ServeOptions = {
   host: SessionHost;
   token: string;
   port?: number;
+  /** Default Scope offered to clients creating a session. */
+  scope?: string;
   /** Loopback only. Overridable for tests, never for deployment (ADR 0004). */
   address?: string;
 };
@@ -87,6 +90,19 @@ async function handle(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/config") {
+    send(response, 200, { scope: options.scope ?? process.cwd(), backends: options.host.backendNames() });
+    return;
+  }
+
+  // Assets are served from embedded strings rather than disk, so a single-executable build has
+  // nothing to find at runtime.
+  const asset = ASSETS[url.pathname];
+  if (request.method === "GET" && asset) {
+    sendAsset(response, asset.type, asset.body);
+    return;
+  }
+
   const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
@@ -101,6 +117,23 @@ async function handle(
   }
 
   send(response, 404, { error: "Not found" });
+}
+
+const ASSETS: Record<string, { type: string; body: string } | undefined> = {
+  "/": { type: "text/html; charset=utf-8", body: INDEX_HTML },
+  "/styles.css": { type: "text/css; charset=utf-8", body: STYLES_CSS },
+  "/app.js": { type: "text/javascript; charset=utf-8", body: APP_JS },
+  "/reduce.js": { type: "text/javascript; charset=utf-8", body: REDUCER_JS },
+  "/diff.js": { type: "text/javascript; charset=utf-8", body: DIFF_JS },
+};
+
+function sendAsset(response: ServerResponse, type: string, body: string): void {
+  response.writeHead(200, {
+    "content-type": type,
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+  });
+  response.end(body);
 }
 
 function streamEvents(response: ServerResponse, host: SessionHost, sessionId: string, since: number): void {

@@ -92,7 +92,12 @@ async function startHost(port?: number): Promise<{ running: RunningServer; daemo
   await host.load();
 
   const token = readOrCreateToken(defaultStateRoot());
-  const running = await serve({ host, token, ...(port === undefined ? {} : { port }) });
+  const running = await serve({
+    host,
+    token,
+    scope: process.cwd(),
+    ...(port === undefined ? {} : { port }),
+  });
   return { running, daemon: { url: running.url, token }, host };
 }
 

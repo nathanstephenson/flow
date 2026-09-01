@@ -94,7 +94,28 @@ Two bugs the tests caught that a manual try would likely have missed:
 - **Chunk handlers raced.** Key handling is async, so a chunk arriving mid-walk interleaved with the
   previous one and applied keys out of order. Chunks are now processed strictly in sequence.
 
-Next: M4 — the web UI, reusing this transport with the cookie handoff.
+**M4 (web UI) complete.** A richer surface than the TUI, on the same transport and the same reducer.
+
+```bash
+goodharness serve   # prints http://127.0.0.1:PORT/auth?token=… — open that once
+```
+
+Several sessions open side by side, collapsible tool calls, file edits rendered as diffs, per-pane
+transcript search, provider-grouped model picker, queue depth and context usage.
+
+The browser runs **the same reducer as the TUI**, not a copy: `src/client/reduce.ts` and
+`src/client/diff.ts` import only types, so stripping leaves standalone ESM with no imports — served
+as `/reduce.js` and `/diff.js`, no bundler. A test loads what the server actually serves and asserts
+it produces state identical to the TypeScript reducer, so the two front-ends cannot drift.
+
+Assets are embedded as strings in `src/web/assets.generated.ts` (`npm run build:assets`), so the
+host never reads them from disk and a single-executable build has nothing to find at runtime. A test
+fails if the generated module drifts from its sources.
+
+The `/auth` handoff exists because `EventSource` cannot send an `Authorization` header: the token
+goes into an HttpOnly cookie once, and the UI itself — not just the API — requires it.
+
+Next: M5 — the SEA spike.
 
 ## Development
 
