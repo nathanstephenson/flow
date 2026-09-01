@@ -11,11 +11,14 @@ export type LogListener = (entry: LoggedEvent) => void;
 export class SessionLog {
   readonly sessionId: string;
 
-  private readonly entries: LoggedEvent[] = [];
+  private readonly entries: LoggedEvent[];
   private readonly listeners = new Set<LogListener>();
+  private readonly sink: LogListener | undefined;
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, options: { sink?: LogListener; existing?: LoggedEvent[] } = {}) {
     this.sessionId = sessionId;
+    this.entries = options.existing ? [...options.existing] : [];
+    this.sink = options.sink;
   }
 
   get lastSeq(): number {
@@ -25,6 +28,8 @@ export class SessionLog {
   append(event: AgentEvent, at = new Date().toISOString()): LoggedEvent {
     const entry: LoggedEvent = { seq: this.entries.length + 1, sessionId: this.sessionId, at, event };
     this.entries.push(entry);
+    // Durable before observable: a client must never see an event that a restart would lose.
+    this.sink?.(entry);
     for (const listener of this.listeners) listener(entry);
     return entry;
   }

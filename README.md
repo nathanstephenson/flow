@@ -32,7 +32,7 @@ Verified along the way:
 **M1 (pi adapter) complete.** Both backends now sit behind the same Backend Adapter contract.
 
 pi's real `AgentSessionEvent` union was read out of its type declarations with the compiler API
-(`spikes/pi-event-union.ts`) rather than inferred, which corrected three things:
+(`spikes/probe-type.ts`) rather than inferred, which corrected three things:
 
 - **pi separates runs from turns.** `agent_start`/`agent_end` bracket one exchange with the human;
   `turn_start`/`turn_end` fire once per model call, many times inside it. Our `turn_started` /
@@ -48,7 +48,30 @@ pi keeps its own credential store, so live pi runs need `pi` + `/login`. The tra
 covered without credentials in `test/backend/pi-mapping.test.ts`, including a regression test that
 we always send `streamingBehavior: "steer"` and never touch pi's native follow-up queue.
 
-Next: M2 — durability and revive.
+**M2 (durability and revive) complete.** Agent Sessions outlive the process that started them.
+
+```bash
+goodharness --backend claude "Remember the word marmalade"   # prints a session id
+goodharness --session <id> "What word did I ask you to remember?"   # → marmalade
+goodharness --list
+```
+
+Transcripts live at `$GOODHARNESS_STATE_DIR` (default `~/.goodharness`), one directory per Agent
+Session: `meta.json` plus append-only `transcript.jsonl`. Writes are synchronous and happen before
+any client is notified — a client must never see an event a restart would lose.
+
+- On restart, previously running sessions load as **Dormant**: transcripts readable, nothing
+  running, nothing spent. The next message revives them, or `revive` does it explicitly.
+- A turn torn by an unclean shutdown is **closed on load** with `reason: "aborted"`. The transcript
+  is append-only, so we record that we now know it ended rather than rewriting it.
+- Dormancy is an event (`session_dormant`), not just host state. Without it a client reducing the
+  transcript sees `turn_ended` and shows a ready prompt for a session with no backend attached.
+- A half-written final line in `transcript.jsonl` is tolerated: parsing stops at the last good entry.
+
+Claude's `resumeDropsTurn` takes a message id rather than a boolean, so there is no generic
+"drop the torn turn" hint to pass down; the torn turn is closed in our transcript instead.
+
+Next: M3 — the TUI.
 
 ## Development
 

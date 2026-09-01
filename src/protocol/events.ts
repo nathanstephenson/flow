@@ -45,6 +45,7 @@ export type AgentEvent =
   | { type: "context_usage"; used: number; window: number }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "notice"; level: NoticeLevel; text: string }
+  | { type: "session_dormant"; reason: string }
   | { type: "revived"; fromSeq: number }
   | { type: "session_ended"; reason: string };
 
@@ -54,7 +55,12 @@ export type AgentEventType = AgentEvent["type"];
  * Events the Session Host owns and a Backend Adapter must never emit. The queue lives above the
  * backend (ADR 0002), the host records what the human sent, and revival is a host concern.
  */
-export type HostOwnedEventType = "user_message" | "queue_changed" | "revived" | "session_ended";
+export type HostOwnedEventType =
+  | "user_message"
+  | "queue_changed"
+  | "revived"
+  | "session_dormant"
+  | "session_ended";
 
 export type BackendEvent = Exclude<AgentEvent, { type: HostOwnedEventType }>;
 

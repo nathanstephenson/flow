@@ -2,6 +2,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
+  SessionManager,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -39,6 +40,7 @@ export class PiSession implements BackendSession {
   private readonly session: AgentSession;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
+  private readonly sessionDir: string | undefined;
 
   private turnId: string | undefined;
   private aborting = false;
@@ -46,16 +48,17 @@ export class PiSession implements BackendSession {
   private messageCount = 0;
   private currentMessageId: string | undefined;
 
-  constructor(session: AgentSession, emit: (event: BackendEvent) => void) {
+  constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string) {
     this.session = session;
     this.emit = emit;
+    this.sessionDir = sessionDir;
     this.capabilities = capabilitiesOf(session);
     this.unsubscribe = session.subscribe((event) => this.translate(event));
   }
 
   resumeToken(): string | undefined {
-    // Revival arrives with durability in M2; pi persists through its SessionManager.
-    return undefined;
+    // pi persists through its own SessionManager; the directory we gave it is the resume handle.
+    return this.sessionDir;
   }
 
   async prompt(text: string): Promise<void> {
@@ -195,15 +198,25 @@ export class PiBackend implements AgentBackend {
     });
     await resourceLoader.reload();
 
+    // Reviving reopens the most recent pi session in the directory we gave this Agent Session;
+    // a fresh Agent Session starts a new one there.
+    const sessionDir = options.stateDir;
+    const sessionManager = sessionDir
+      ? options.resume
+        ? SessionManager.continueRecent(options.scope, sessionDir)
+        : SessionManager.create(options.scope, sessionDir)
+      : undefined;
+
     const { session } = await createAgentSession({
       cwd: options.scope,
       agentDir,
       resourceLoader,
+      ...(sessionManager ? { sessionManager } : {}),
       ...(this.options.tools ? { tools: this.options.tools } : {}),
       ...(this.options.tools?.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit);
+    const piSession = new PiSession(session, options.emit, sessionDir);
     options.emit({ type: "capabilities_changed", capabilities: piSession.capabilities });
     return piSession;
   }

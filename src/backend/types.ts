@@ -5,8 +5,8 @@ export type BackendCreateOptions = {
   modelId?: string;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */
   resume?: string;
-  /** Drop a turn left torn by an unclean shutdown (ADR 0003). */
-  dropTornTurn?: boolean;
+  /** A directory this adapter may keep its own session state in, beside our transcript. */
+  stateDir?: string;
   emit: (event: BackendEvent) => void;
 };
 

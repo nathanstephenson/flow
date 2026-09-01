@@ -4,11 +4,16 @@ import { ClaudeBackend } from "../backend/claude/index.ts";
 import { FakeBackend } from "../backend/fake/index.ts";
 import { PiBackend } from "../backend/pi/index.ts";
 import { SessionHost } from "../daemon/host.ts";
+import { TranscriptStore } from "../daemon/store.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 
+const USAGE = `usage:
+  goodharness [--scope DIR] [--backend claude|pi|fake] [--model ID] [--session ID] "<prompt>"
+  goodharness --list`;
+
 /**
- * M0 walking skeleton: create an Agent Session, send one prompt, render the Presentation
- * Transcript as it arrives. Host, adapter, log and reducer, composed the way the daemon will.
+ * M2 client: create or revive an Agent Session, send one prompt, render the Presentation
+ * Transcript as it arrives. Sessions are left Dormant on exit, not ended, so they can be resumed.
  */
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -17,30 +22,52 @@ async function main(): Promise<number> {
       scope: { type: "string", default: process.cwd() },
       backend: { type: "string", default: "claude" },
       model: { type: "string" },
+      session: { type: "string" },
+      list: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
     },
   });
 
-  const prompt = positionals.join(" ").trim();
-  if (values.help || !prompt) {
-    console.log("usage: goodharness [--scope DIR] [--backend claude|pi|fake] [--model ID] \"<prompt>\"");
-    return prompt ? 0 : 1;
-  }
-
-  const host = new SessionHost();
+  const host = new SessionHost({ store: new TranscriptStore() });
   host.registerBackend(new ClaudeBackend());
   host.registerBackend(new PiBackend());
   host.registerBackend(new FakeBackend());
+  await host.load();
 
-  const sessionId = await host.create({
-    scope: values.scope ?? process.cwd(),
-    backend: values.backend ?? "claude",
-    ...(values.model ? { modelId: values.model } : {}),
-  });
+  if (values.list) {
+    for (const summary of host.list()) {
+      console.log(
+        `${summary.id}  ${summary.status.padEnd(8)} ${summary.backend.padEnd(7)} ${summary.title}`,
+      );
+    }
+    return 0;
+  }
+
+  const prompt = positionals.join(" ").trim();
+  if (values.help || !prompt) {
+    console.log(USAGE);
+    return prompt ? 0 : 1;
+  }
+
+  const sessionId =
+    values.session ??
+    (await host.create({
+      scope: values.scope ?? process.cwd(),
+      backend: values.backend ?? "claude",
+      ...(values.model ? { modelId: values.model } : {}),
+    }));
 
   const log = host.logFor(sessionId);
   let state: ViewState = initialState();
-  let rendered = 0;
+  for (const entry of log.since(0)) state = reduce(state, entry);
+  const resuming = values.session !== undefined;
+  console.log(
+    resuming
+      ? `resuming ${sessionId} (${log.lastSeq} events)`
+      : `session ${sessionId}\n  resume with: --session ${sessionId}`,
+  );
+
+  let rendered = state.entries.length;
   let done: (() => void) | undefined;
   const finished = new Promise<void>((resolve) => {
     done = resolve;
@@ -52,14 +79,13 @@ async function main(): Promise<number> {
     if (entry.event.type === "turn_ended") done?.();
   });
 
-  for (const entry of log.since(0)) state = reduce(state, entry);
-
   await host.send(sessionId, prompt, "now");
   await finished;
 
   render(state, rendered, true);
   unsubscribe();
-  await host.dispose(sessionId);
+  // Leave the session Dormant rather than ending it: the point of a transcript is coming back.
+  await host.shutdown();
   return 0;
 }
 

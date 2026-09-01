@@ -115,6 +115,17 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
       };
 
+    case "session_dormant":
+      return {
+        ...state,
+        status: "dormant",
+        queue: [],
+        entries: [
+          ...state.entries,
+          { kind: "notice", id: `dormant-${state.entries.length}`, level: "info", text: `Dormant: ${event.reason}` },
+        ],
+      };
+
     case "revived":
       return {
         ...state,

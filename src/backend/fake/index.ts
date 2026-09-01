@@ -19,6 +19,7 @@ const FAKE_CAPABILITIES: Capabilities = {
 export class FakeSession implements BackendSession {
   readonly capabilities = FAKE_CAPABILITIES;
   readonly prompts: string[] = [];
+  readonly resumedFrom: string | undefined;
   modelId: string;
   disposed = false;
 
@@ -28,10 +29,11 @@ export class FakeSession implements BackendSession {
   constructor(options: BackendCreateOptions) {
     this.emit = options.emit;
     this.modelId = options.modelId ?? "fake-1";
+    this.resumedFrom = options.resume;
   }
 
   resumeToken(): string | undefined {
-    return `fake-resume-${this.prompts.length}`;
+    return "fake-resume";
   }
 
   async prompt(text: string): Promise<void> {

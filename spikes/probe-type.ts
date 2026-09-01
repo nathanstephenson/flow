@@ -1,14 +1,17 @@
 /**
- * Enumerate pi's AgentSessionEvent union with the TypeScript compiler API.
+ * Print the real shape of any type from an installed SDK, using the TypeScript compiler API.
  *
- * node_modules is unreadable in this environment and `tsc` only prints the first member of a large
- * union, so the compiler API is the reliable way to see the real shape before fixing our schema.
+ * `tsc` only prints the first member of a large union, and node_modules is not always readable, so
+ * this is how the SDK event unions and option bags in this repo were verified rather than guessed.
+ *
+ *   node --experimental-strip-types spikes/probe-type.ts '<type expression>' [propertyFilterRegex]
  */
 import ts from "typescript";
 import { writeFileSync } from "node:fs";
 
 const entry = new URL("./.union-probe.ts", import.meta.url).pathname;
 const target = process.argv[2] ?? "AgentSessionEvent";
+const filter = process.argv[3];
 writeFileSync(
   entry,
   `import type * as pi from "@earendil-works/pi-coding-agent";\nexport declare const probe: ${target};\n`,
@@ -45,6 +48,7 @@ for (const member of members) {
   const fields = member
     .getProperties()
     .filter((symbol) => symbol.name !== "type")
+    .filter((symbol) => !filter || new RegExp(filter, "i").test(symbol.name))
     .map((symbol) => {
       const optional = (symbol.flags & ts.SymbolFlags.Optional) !== 0 ? "?" : "";
       return `${symbol.name}${optional}: ${checker.typeToString(checker.getTypeOfSymbol(symbol))}`;
