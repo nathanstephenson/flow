@@ -260,6 +260,10 @@ Settings are machine-wide: they govern every Agent Session on the machine, not o
   "fonts": {
     "chrome": "'Inter Variable', sans-serif",
     "monospace": "'MesloLGS NF', monospace"
+  },
+  "projects": {
+    "root": "~/workspace",
+    "include": ["work/api", "e2e", "/srv/elsewhere/thing"]
   }
 }
 ```
@@ -269,6 +273,8 @@ Settings are machine-wide: they govern every Agent Session on the machine, not o
 | `retention.settled` | How long a Settled Agent Session survives before it is reaped. A duration — `90m`, `36h`, `1d` — or `never`. | `1d` |
 | `fonts.chrome` | The interface typeface: labels, transcript prose, buttons. | `'Inter Variable', sans-serif` |
 | `fonts.monospace` | The Shell's terminal, and the chrome that aligns character by character. | a Nerd Font stack (below) |
+| `projects.root` | The Project Root: where Candidates are looked for, and what GoodHarness opens on. Absolute or `~`-relative. | none |
+| `projects.include` | The Projects, opted into. Each entry is relative to the Project Root, or absolute. | none |
 
 Any section may be omitted and keeps its default. The file is read **leniently** and written
 **strictly**, deliberately: a typo on disk costs only its own default and warns on startup, because
@@ -281,6 +287,52 @@ next hourly sweep, and a typeface immediately.
 Shortening `retention.settled` arms a delete. Nothing is removed on save — the sweep does it, within
 the hour — but the Settings page counts the Agent Sessions the new window newly reaches and makes you
 confirm before saving. Only Settled Agent Sessions are ever reaped; an Ended one stays on disk.
+
+#### Projects
+
+A **Project** is a directory you have opted into starting Agent Sessions from — a *candidate* Scope,
+not a Scope. `projects.include` is the list, and it is the whole of it. A repository GoodHarness can
+see beneath the Project Root is a **Candidate** until it appears there:
+
+```
+~/workspace                      projects.include        Offered in the dialog
+├── work/
+│   ├── api/.git      Candidate  → "work/api"            ✓  api        (under "work")
+│   └── web/.git      Candidate                             –
+├── mono/.git         Candidate  → "mono/packages/api"    ✓  api        (under "mono/packages")
+│   └── packages/api             ↑ found by search, not offered as a Candidate
+├── notes/                       → "notes"                ✓  notes  (not a repo)
+└── old-thing/.git    Candidate                              –
+```
+
+Curation is the point: a root full of repositories is mostly repositories you are not working on
+today. Settings → **Projects** is where the list is built, three ways:
+
+- **Candidates** — the repositories found beneath the Project Root, one click each. Found by the
+  same walk as before: a directory holding a `.git` is a Candidate, a repository is never looked
+  inside (so `node_modules` and build output stay out with no blacklist), three levels deep, hidden
+  directories and symlinks skipped.
+- **Any directory** — a search field, because the useful directory is often one no Candidate walk
+  would offer. Type a **name** and it fuzzy-matches beneath the Project Root, *reaching inside*
+  repositories, which is how `mono/packages/api` is reachable at all. Start with `/` or `~` and it
+  completes a **path** anywhere on the machine instead — that is the escape hatch for a Project
+  outside the root. The rule is the first character, so `work/api` is still a name, and narrows.
+- **Project Root** — what the other two can see. Clearing it does not clear your Projects; an
+  absolute entry does not need it.
+
+An opted-in directory need not be a repository, because you chose it deliberately and nothing has to
+guess whether you meant it. An entry whose directory has since gone is **marked**, not dropped —
+silently hiding it would look identical to the Setting having failed to save.
+
+Until something is opted in there are no Projects, so the New Agent Session dialog behaves as it
+did before this existed: one prefilled Scope field. Once there is at least one, the dialog leads
+with a Project picker, the Scope field starts empty, and `n` opens with the picker focused — so `n`,
+a few letters, Enter, Enter starts a session in the right repository. The Scope field stays
+editable throughout, for the directory you did not opt in.
+
+`goodharness tui` uses the Project Root when `--scope` is absent. A one-shot
+`goodharness "<prompt>"` does not: it is run *in* a directory, so that directory is the right
+default and `--scope` is how you say otherwise.
 
 #### Fonts
 

@@ -9,6 +9,7 @@ import {
   type Settings,
   type SettingsPatch,
 } from "./config.ts";
+import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
 
 /**
@@ -57,6 +58,31 @@ export class ConfigStore {
   readonly retention = (): number | "never" => this.config.retention.settled;
 
   /**
+   * The Project Root as an absolute path, asked fresh, or undefined when none is configured.
+   *
+   * The expanded counterpart to `view().projects.root`, which reports the string as typed. Both are
+   * needed and they are not interchangeable: the Settings page has to read back the `~` its reader
+   * wrote, and the walk has to be given a path the filesystem understands. Retention makes exactly
+   * the same split for the same reason — milliseconds for the reaper, `"1d"` for the person.
+   */
+  readonly projectRoot = (): string | undefined => {
+    const root = this.config.projects?.root;
+    return root === undefined ? undefined : expandHome(root);
+  };
+
+  /**
+   * The Project Root exactly as it was written, unexpanded, for resolving `include` entries against.
+   *
+   * Separate from `projectRoot()` because the resolver in ./projects.ts expands as it goes and
+   * handing it an already-expanded root would be harmless but would put the same rule in two
+   * places.
+   */
+  readonly rawProjectRoot = (): string | undefined => this.config.projects?.root;
+
+  /** The opted-in Projects, as configured. Empty when none — see `Projects.include`. */
+  readonly projectInclude = (): readonly string[] => this.config.projects?.include ?? [];
+
+  /**
    * Merge a patch in, write it out, and report the result. Throws ConfigError on anything unusable,
    * having changed nothing.
    *
@@ -67,7 +93,13 @@ export class ConfigStore {
   update(patch: SettingsPatch): Settings {
     const next = applyPatch(this.config, patch);
 
-    const document = { ...this.readRaw(), ...settingsOf(next) };
+    const document: Record<string, unknown> = { ...this.readRaw(), ...settingsOf(next) };
+    // A section that is now *absent* has to be deleted, not merely left unwritten. The merge above
+    // preserves whatever the file already holds — which is what keeps a hand-written key this
+    // daemon has never heard of alive, and would otherwise keep a Project Root that the patch just
+    // cleared. `projects` is the only optional section, so it is the only one that can be cleared.
+    if (next.projects === undefined) delete document["projects"];
+
     mkdirSync(this.root, { recursive: true });
     // Written beside the target and renamed over it: a crash mid-write leaves the old config intact
     // rather than a truncated one, and `loadConfig` treats a truncated file as "use the defaults" —
@@ -104,5 +136,8 @@ function settingsOf(config: Config): Settings {
   return {
     retention: { settled: settled === "never" ? "never" : formatDuration(settled) },
     fonts: config.fonts,
+    // Omitted rather than defaulted when there is no Project Root, which is what
+    // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
+    ...(config.projects === undefined ? {} : { projects: config.projects }),
   };
 }

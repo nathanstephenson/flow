@@ -7,6 +7,8 @@ import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import type { ConfigStore } from "./config-store.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
+import type { Project } from "../protocol/projects.ts";
+import { discoverProjects, includedProjects, searchDirectories } from "./projects.ts";
 import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
 import type { EmbeddedAsset } from "../web/assets.ts";
 import { ASSETS } from "../web/assets.generated.ts";
@@ -122,12 +124,30 @@ async function handle(
 
   if (request.method === "GET" && url.pathname === "/api/config") {
     send(response, 200, {
-      scope: options.scope ?? process.cwd(),
+      // The Project Root first: it is the directory this deployment is anchored to, and a client
+      // with no working directory of its own has nothing better to say it is open on. Resolved here
+      // rather than in main.ts on purpose — computing it at startup is the exact bug ADR 0009
+      // exists to prevent, where editing the root in a browser only reaches the *next* daemon.
+      scope: options.config?.projectRoot() ?? options.scope ?? process.cwd(),
       backends: options.host.backendNames(),
       // Whether this build can open a Shell at all. The web client hides the control when it cannot
       // rather than offering one that fails on click — the rule Capabilities already sets for
       // backends, applied to a host-wide facility.
       shell: (await options.shells?.available()) ?? false,
+      // The two Project lists, disjoint, both derived and both asked fresh on each request.
+      //
+      // `projectList` is what a client offers: the opted-in Projects, resolved from
+      // `projects.include`. `projectCandidates` is what the Settings page offers to opt *into*:
+      // repositories found beneath the Project Root that are not already in the list. Separating
+      // them here rather than sending one annotated list means neither consumer has to filter, and
+      // the dropdown cannot accidentally show a candidate.
+      //
+      // Beside the Settings rather than inside them: both are *derived* state, and folding them in
+      // would break the invariant that `settingsOf()` is one function serving both the file and the
+      // wire, so that GET cannot report something config.json does not hold (ADR 0009). Uncached
+      // for a plainer reason — cloning a repository changes the answer without changing the file, so
+      // a cache would need a filesystem watcher to make it more often wrong.
+      ...projectLists(options.config),
       // Reported rather than decided by the client: the daemon owns config.json, and a font is the
       // one piece of presentation whose right answer depends on the machine (src/daemon/config.ts).
       // Spread rather than nested so `fonts` stays where it was on the wire.
@@ -138,6 +158,26 @@ async function handle(
 
   if (request.method === "PUT" && url.pathname === "/api/config") {
     await handleSettingsUpdate(request, response, options.config);
+    return;
+  }
+
+  /*
+   * `GET /api/directories?q=…` — directories to opt in as Projects.
+   *
+   * Its own endpoint rather than more of /api/config, because it answers a *query* rather than
+   * reporting state: it changes with every keystroke and none of its answers are worth folding into
+   * the document every other client polls.
+   *
+   * This enumerates the filesystem to whoever holds the token. That is not a new privilege — ADR
+   * 0004 has it that anything able to reach this daemon can already run commands as this user — but
+   * it is the first endpoint whose whole job is to read outside the state root, so it is worth being
+   * deliberate: it returns directory *names* only, never file contents, and never follows a symlink.
+   */
+  if (request.method === "GET" && url.pathname === "/api/directories") {
+    send(response, 200, searchDirectories(
+      options.config?.rawProjectRoot(),
+      url.searchParams.get("q") ?? "",
+    ));
     return;
   }
 
@@ -195,6 +235,30 @@ async function handle(
   }
 
   send(response, 404, { error: "Not found" });
+}
+
+/**
+ * The opted-in Projects, and the candidates not yet among them.
+ *
+ * Candidates are the discovered repositories minus whatever is already opted in, compared on the
+ * resolved absolute path so that `work/api` and `/home/me/workspace/work/api` are recognised as the
+ * same directory — which they are, and a candidate list that offered a Project you already have
+ * would be a list that never emptied.
+ */
+function projectLists(config: ConfigStore | undefined): {
+  projectList: Project[];
+  projectCandidates: Project[];
+} {
+  if (!config) return { projectList: [], projectCandidates: [] };
+
+  const projectList = includedProjects(config.rawProjectRoot(), config.projectInclude());
+  const included = new Set(projectList.map((project) => project.path));
+  return {
+    projectList,
+    projectCandidates: discoverProjects(config.projectRoot()).filter(
+      (candidate) => !included.has(candidate.path),
+    ),
+  };
 }
 
 /**

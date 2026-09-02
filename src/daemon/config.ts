@@ -45,6 +45,29 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
 export type Config = {
   retention: Retention;
   fonts: Fonts;
+  /**
+   * The Project Root, as typed — tilde and all. Absent when none is configured, which is not a
+   * defaulted value but a real state: the Session Host then offers no Projects at all.
+   *
+   * Expanded at the point of use rather than here, by `expandHome` in ./projects.ts, for the reason
+   * retention is stored in milliseconds and reported as `"1d"`: the file holds what a person wrote
+   * and has to be able to read back.
+   */
+  projects?: Projects;
+};
+
+export type Projects = {
+  root?: string;
+  /**
+   * The opted-in Projects, as typed — relative to the Project Root, or absolute.
+   *
+   * This list *is* the Projects. A repository beneath the root is only a candidate until it appears
+   * here, which is what keeps the dropdown as short as its owner wants (ADR 0011). Absent and empty
+   * mean the same thing — no Projects — because "opted into nothing" and "not yet opted into
+   * anything" are not usefully different states, and treating them differently would mean a client
+   * had to explain the distinction.
+   */
+  include?: string[];
 };
 
 /**
@@ -85,11 +108,69 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const warnings: string[] = [];
   const retention = parseRetention(parsed, warnings);
   const fonts = parseFonts(parsed, warnings);
+  const projects = parseProjects(parsed, warnings);
 
   return {
-    config: { retention, fonts },
+    config: { retention, fonts, ...(projects === undefined ? {} : { projects }) },
     ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}),
   };
+}
+
+/**
+ * The file's manner again: an unusable value costs only itself, and says so.
+ *
+ * The root and the list are parsed independently, so a typo in one does not cost the other — a bad
+ * root still leaves absolute entries in `include` usable, and a malformed `include` still leaves
+ * the root available for the Settings page to offer candidates from.
+ */
+function parseProjects(parsed: unknown, warnings: string[]): Projects | undefined {
+  const section = (parsed as { projects?: { root?: unknown; include?: unknown } })?.projects;
+  if (section === undefined || section === null) return undefined;
+
+  const projects: Projects = {};
+
+  if (section.root !== undefined) {
+    const problem = checkProjectRoot(section.root);
+    if (problem !== undefined) warnings.push(`${problem}; offering no Project Root`);
+    else projects.root = (section.root as string).trim();
+  }
+
+  if (section.include !== undefined) {
+    if (!Array.isArray(section.include)) {
+      warnings.push("projects.include must be a list of paths; offering no Projects");
+    } else {
+      const usable = section.include.filter((entry): entry is string => typeof entry === "string");
+      if (usable.length !== section.include.length) {
+        warnings.push("projects.include: ignoring an entry that is not a path");
+      }
+      projects.include = usable;
+    }
+  }
+
+  return projects.root === undefined && projects.include === undefined ? undefined : projects;
+}
+
+/**
+ * Whether a value can serve as a Project Root, reported without saying what to do about it.
+ *
+ * Split for the same reason `checkFontFamily` is: the file warns and falls back, a PUT is refused
+ * outright, and the rule itself must not know which caller it is answering.
+ *
+ * **Existence is deliberately not checked.** A root that is not there yields no Projects, and the
+ * Settings page saying "no Projects found beneath <path>" tells its reader more than a refusal
+ * would — while keeping `applyPatch` free of filesystem I/O, so a patch stays a pure merge.
+ */
+export function checkProjectRoot(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") {
+    return "projects.root must be a path";
+  }
+  const path = value.trim();
+  if (!path.startsWith("/") && !path.startsWith("~")) {
+    // A relative root would resolve against the daemon's working directory, which is not a thing
+    // its reader can see, so the same config.json would mean different directories per start.
+    return `projects.root: "${path}" must be absolute, or start with ~`;
+  }
+  return undefined;
 }
 
 function parseRetention(parsed: unknown, warnings: string[]): Retention {
@@ -171,11 +252,58 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects"], "config");
+  const projects = patchProjects(current.projects, body.projects);
   return {
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
+    ...(projects === undefined ? {} : { projects }),
   };
+}
+
+function patchProjects(
+  current: Projects | undefined,
+  patch: SettingsPatch["projects"],
+): Projects | undefined {
+  if (patch === undefined) return current;
+  refuseUnknownKeys(patch, ["root", "include"], "projects");
+
+  const next: Projects = { ...current };
+
+  const root: unknown = patch.root;
+  if (root !== undefined) {
+    // An empty string is how a form says "clear this field", and is the one way back to having no
+    // Project Root without hand-editing the file. It is distinct from omitting the key, which means
+    // "leave it alone".
+    if (root === "") delete next.root;
+    else {
+      const problem = checkProjectRoot(root);
+      if (problem !== undefined) throw new ConfigError(problem);
+      next.root = (root as string).trim();
+    }
+  }
+
+  const include: unknown = patch.include;
+  if (include !== undefined) {
+    // Replaced wholesale rather than merged. Every other Setting is a value that can be patched in
+    // isolation; this is a list, and "merge a list" has no meaning that would not surprise someone
+    // — a removal would be indistinguishable from an omission.
+    if (!Array.isArray(include)) throw new ConfigError("projects.include must be a list of paths");
+    const entries: string[] = [];
+    for (const entry of include as unknown[]) {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new ConfigError("projects.include: every entry must be a path");
+      }
+      const trimmed = entry.trim();
+      // Deduplicated rather than refused: two clients racing to add the same Project is a mistake
+      // worth absorbing, not one worth failing a save over.
+      if (!entries.includes(trimmed)) entries.push(trimmed);
+    }
+    if (entries.length === 0) delete next.include;
+    else next.include = entries;
+  }
+
+  return next.root === undefined && next.include === undefined ? undefined : next;
 }
 
 function patchRetention(

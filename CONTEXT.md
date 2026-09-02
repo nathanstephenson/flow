@@ -68,7 +68,27 @@ _Avoid_: closed, deleted, terminated, killed, settled
 
 **Scope**:
 The working directory an Agent Session is bound to.
-_Avoid_: workspace, project, repo
+_Avoid_: workspace, project, repo — a Project is a distinct thing, defined below, and calling a
+Scope one confuses a binding with a candidate for it.
+
+**Project**:
+A directory its owner has opted into starting Agent Sessions from. A *candidate* Scope, not a Scope:
+it exists before any Agent Session, outlives every one bound to it, and may have several at once.
+Opted into rather than merely found — a repository GoodHarness can see is a Candidate until it is
+listed — and it need not be a repository at all, because someone chose it deliberately.
+_Avoid_: scope, workspace, folder, repo
+
+**Candidate**:
+A repository GoodHarness found beneath the Project Root that is not a Project yet. Offered only so
+that opting in is a click rather than a typed path. Discovered, never configured, and never offered
+as a Scope.
+_Avoid_: project, suggestion, available project
+
+**Project Root**:
+The single directory Candidates are looked for beneath, and the one GoodHarness reports itself as
+open on. Configured, never discovered. It bounds what is suggested, not what a Project may be: a
+Project outside it is named by its own path.
+_Avoid_: workspace, workspace root, home, cwd
 
 **Shell**:
 A shell process serving an Agent Session, started in its Scope. Ephemeral: unlike a Backend Session

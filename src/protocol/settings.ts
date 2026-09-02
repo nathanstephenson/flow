@@ -27,6 +27,27 @@ export type Settings = {
     settled: string;
   };
   fonts: Fonts;
+  /**
+   * Where the Session Host looks for Projects — the Project Root, as the string a person typed, so
+   * `~/workspace` survives the round trip rather than being reported back expanded.
+   *
+   * **Absent rather than defaulted**, which is the one way this section differs from the two above.
+   * A retention window and a typeface both have a right answer for a machine that has never been
+   * configured; a Project Root does not, and "none" is the state every installation starts in. So
+   * the key is omitted entirely when unset, and a client checks for it rather than comparing
+   * against a default it would have to know.
+   */
+  projects?: {
+    root?: string;
+    /**
+     * The opted-in Projects, as typed — each relative to the Project Root, or absolute.
+     *
+     * This list is what a client offers; a repository merely *found* beneath the root is a
+     * candidate, reported separately on /api/config and not a Project until it appears here.
+     * Absent means none, and is not distinguished from an empty list.
+     */
+    include?: string[];
+  };
 };
 
 /**
@@ -39,6 +60,12 @@ export type Settings = {
 export type SettingsPatch = {
   retention?: { settled?: string };
   fonts?: { chrome?: string; monospace?: string };
+  /**
+   * `root` is a value and merges; `include` is a list and **replaces**. Merging a list has no
+   * meaning anyone would predict — a removal would look exactly like an omission — so a client
+   * sends the whole list it wants to end up with.
+   */
+  projects?: { root?: string; include?: string[] };
 };
 
 const UNITS: Record<string, number> = {

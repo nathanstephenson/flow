@@ -19,7 +19,10 @@ const USAGE = `usage:
   goodharness serve [--port N] [--address HOST]                run the Session Host in the foreground
   goodharness list                                             list Agent Sessions
   goodharness [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
-                                                               one prompt, then exit`;
+                                                               one prompt, then exit
+
+  tui without --scope uses the Project Root from config.json, else this directory.
+  A one-shot prompt always uses this directory unless --scope names another.`;
 
 type Daemon = { url: string; token: string };
 
@@ -27,7 +30,9 @@ async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
-      scope: { type: "string", default: process.cwd() },
+      // No default, deliberately: `?? process.cwd()` at each read site would be indistinguishable
+      // from the reader having typed it, and the Project Root has to sit between the two.
+      scope: { type: "string" },
       backend: { type: "string", default: "claude" },
       model: { type: "string" },
       effort: { type: "string" },
@@ -67,7 +72,7 @@ async function main(): Promise<number> {
     try {
       await runTui({
         connection,
-        scope: values.scope ?? process.cwd(),
+        scope: values.scope ?? configuredScope() ?? process.cwd(),
         backend: values.backend ?? "claude",
       });
     } finally {
@@ -94,6 +99,22 @@ async function main(): Promise<number> {
     return 1;
   }
   return await oneShot(prompt, values);
+}
+
+/**
+ * The Project Root, for a client that named no Scope.
+ *
+ * Read straight off disk rather than asked of the daemon, because the TUI may be talking to one it
+ * did not start, and `/api/config`'s `scope` falls back to *that process's* working directory —
+ * which is not this reader's. Only the configured root is a safe answer to borrow; the fallback to
+ * `process.cwd()` has to happen here, where the cwd is the right one.
+ *
+ * A one-time read rather than a read-through, and that does not contradict ADR 0009: an Agent
+ * Session's Scope is fixed for its whole life, so this value is consumed the moment it is asked for
+ * and there is no later one for it to go stale against.
+ */
+function configuredScope(): string | undefined {
+  return new ConfigStore().projectRoot();
 }
 
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */

@@ -1,5 +1,6 @@
 import type { SettingsSection } from "@/presentation/route.ts";
 import { GeneralSettings } from "@/components/settings-general.tsx";
+import { ProjectsSettings } from "@/components/settings-projects.tsx";
 import { AppearanceSettings } from "@/components/settings-appearance.tsx";
 import { KeyboardSettings } from "@/components/settings-keyboard.tsx";
 
@@ -27,6 +28,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
         </p>
 
         {section === "general" ? <GeneralSettings /> : null}
+        {section === "projects" ? <ProjectsSettings /> : null}
         {section === "appearance" ? <AppearanceSettings /> : null}
         {section === "keyboard" ? <KeyboardSettings /> : null}
       </div>

@@ -121,7 +121,13 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
         <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
       </ComboboxTrigger>
       <ComboboxContent>
-        <ComboboxInput placeholder={`Filter ${choices.length} models`} />
+        {/*
+         * `showTrigger={false}` matters: left at its default, ComboboxInput renders a second
+         * ComboboxTrigger inside the popup, which mounts later than the real one above and so
+         * becomes what Base UI anchors to. The popup then measures a 28px icon button inside itself,
+         * `--anchor-width` collapses, and it lands in the corner of the viewport at that width.
+         */}
+        <ComboboxInput showTrigger={false} placeholder={`Filter ${choices.length} models`} />
         <ComboboxList>
           {(group: ProviderGroup) => (
             <ComboboxGroup key={group.provider} items={group.items}>

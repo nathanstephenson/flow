@@ -18,7 +18,7 @@
  */
 
 /** The sections of the Settings, in the order the rail lists them. */
-export const SETTINGS_SECTIONS = ["general", "appearance", "keyboard"] as const;
+export const SETTINGS_SECTIONS = ["general", "projects", "appearance", "keyboard"] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 

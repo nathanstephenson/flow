@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 import type { Connection } from "@client/connection.ts";
+import type { Project } from "../../src/protocol/projects.ts";
 import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
@@ -33,6 +34,27 @@ export type HostConfig = {
    * edit anything.
    */
   retention?: Settings["retention"];
+  /**
+   * The Project Root, as typed. Absent where none is configured — which is not a defaulted value
+   * but a real state, and the one the Projects settings section checks for.
+   */
+  projects?: Settings["projects"];
+  /**
+   * The opted-in Projects — `projects.include`, resolved. This is what a client offers.
+   *
+   * **Derived, not a Setting.** The Setting is the list of paths; this is what they point at, which
+   * is why the host resolves it fresh on each request and reports it beside the Settings rather than
+   * inside them. Empty until something is opted into, and the dialog treats empty and absent alike.
+   */
+  projectList?: Project[];
+  /**
+   * Repositories found beneath the Project Root that are *not* opted in yet.
+   *
+   * Disjoint from `projectList` by construction, so the Settings page can offer these to add
+   * without filtering and the dialog can never accidentally show one. This is all discovery is for
+   * now: suggesting things to opt into (ADR 0011).
+   */
+  projectCandidates?: Project[];
 };
 
 export type HostValue = {
@@ -46,6 +68,15 @@ export type HostValue = {
    * Settings are machine-wide, so this is deliberately not scoped to an Agent Session.
    */
   saveSettings: (patch: SettingsPatch) => Promise<Settings>;
+  /**
+   * Ask the Session Host for its config again.
+   *
+   * The Projects are derived rather than saved, so a `PUT` cannot report them back: saving a new
+   * Project Root tells you the root took, not what is beneath it. This is also what makes a
+   * repository cloned five minutes ago appear in the New Agent Session dialog without a reload —
+   * the payoff for the host walking uncached.
+   */
+  refresh: () => Promise<void>;
 };
 
 const HostContext = createContext<HostValue | undefined>(undefined);
@@ -83,6 +114,16 @@ export function HostProvider({ children }: { children: ReactNode }) {
     return () => abort.abort();
   }, []);
 
+  const refresh = useCallback(async (): Promise<void> => {
+    const response = await fetch("/api/config", { credentials: "same-origin" });
+    if (!response.ok) return;
+    const config = (await response.json()) as HostConfig;
+    applyFonts(config.fonts);
+    // Replaced wholesale rather than merged: this *is* the host's answer, and keeping any part of
+    // the previous one would be preferring a stale value to a fresh one.
+    setGate((current) => (current.state === "ready" ? { state: "ready", config } : current));
+  }, []);
+
   const saveSettings = useCallback(async (patch: SettingsPatch): Promise<Settings> => {
     const response = await fetch("/api/config", {
       method: "PUT",
@@ -100,7 +141,17 @@ export function HostProvider({ children }: { children: ReactNode }) {
     applyFonts(body.fonts);
     setGate((current) =>
       current.state === "ready"
-        ? { state: "ready", config: { ...current.config, fonts: body.fonts, retention: body.retention } }
+        ? {
+            state: "ready",
+            config: {
+              ...current.config,
+              fonts: body.fonts,
+              retention: body.retention,
+              // Spread-with-undefined would leave a stale root behind once one is cleared, because
+              // `projects` is the one section that can be absent.
+              ...(body.projects === undefined ? { projects: undefined } : { projects: body.projects }),
+            },
+          }
         : current,
     );
     return body;
@@ -110,7 +161,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
   if (gate.state === "loading") return <Waiting />;
 
   return (
-    <HostContext.Provider value={{ connection, config: gate.config, saveSettings }}>
+    <HostContext.Provider value={{ connection, config: gate.config, saveSettings, refresh }}>
       {children}
     </HostContext.Provider>
   );

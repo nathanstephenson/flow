@@ -1,8 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 
+import type { Project } from "../../../src/protocol/projects.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import { useHost } from "@/host.tsx";
+import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { Button } from "@/components/ui/button.tsx";
+import {
+  Combobox,
+  ComboboxCollection,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+  ComboboxTrigger,
+  ComboboxValue,
+} from "@/components/ui/combobox.tsx";
 import {
   Dialog,
   DialogContent,
@@ -21,19 +36,28 @@ import {
 } from "@/components/ui/select.tsx";
 
 /**
- * Starting an Agent Session: a Scope and a backend, both prefilled.
+ * Starting an Agent Session: a Project, a Scope and a backend.
  *
- * The backend is a real choice for the first time. The UI this replaces silently hardcoded the first
- * registered backend while the Session Host had been offering the whole list all along, so which
- * backend you got depended on the host's registration order and nothing you could see.
+ * The Scope is the value that is sent, and it is the only one — a Project is a *candidate* Scope
+ * (CONTEXT.md), so choosing one writes its path into the field below rather than travelling
+ * separately. That is why the picker's own value is derived from the field and not stored beside it:
+ * two controls, one string, and no way for them to disagree.
  *
- * **A model cannot be offered here.** `create` accepts a `modelId`, but `Capabilities` arrive on
- * `session_started` *per Agent Session* — so at this moment the list of models does not exist yet.
- * Guessing one would mean guessing which backend's ids are valid. The model picker in the pane header
- * is the first honest moment to choose.
+ * **The dialog offers nothing by default when Projects exist.** It used to prefill the host's
+ * default Scope and put the cursor on Start, which made `n` then Enter start an Agent Session in
+ * whatever directory the daemon happened to be launched from. Now `n` opens with the picker focused,
+ * so the same gesture is `n`, a few letters, Enter, Enter — and it lands somewhere chosen. Where the
+ * host offers no Projects the old behaviour is kept exactly, because there is nothing to choose from
+ * and an empty field would be a worse dialog than the one it replaced.
  *
- * Two fields, so `useState` and no form library: there is no validation graph here, only a string and
- * a choice from a list the host gave us.
+ * The Projects offered are the **opted-in** ones, not everything the host can see (ADR 0011). That
+ * makes "no Projects" the state every installation starts in even with a Project Root set, which is
+ * why the note about candidates below exists: without it, the way to turn the picker on would be
+ * discoverable only by reading the Settings page on a hunch.
+ *
+ * **A model still cannot be offered here.** `create` accepts a `modelId`, but `Capabilities` arrive
+ * on `session_started` *per Agent Session* — so at this moment the list of models does not exist
+ * yet. The model picker in the pane header is the first honest moment to choose.
  */
 export function NewAgentSessionDialog({
   open,
@@ -44,19 +68,40 @@ export function NewAgentSessionDialog({
   onOpenChange: (open: boolean) => void;
   onCreated: (sessionId: string) => void;
 }) {
-  const { config } = useHost();
+  const { config, refresh } = useHost();
   const run = useCommand();
-  const [scope, setScope] = useState(config.scope);
+  const projects = config.projectList ?? [];
+  const offersProjects = projects.length > 0;
+  // Repositories the host found but nobody has opted into. Only interesting when there are no
+  // Projects at all — once the picker is on screen, the place to add more is the Settings page.
+  const uncurated = offersProjects ? 0 : (config.projectCandidates ?? []).length;
+
+  const [scope, setScope] = useState("");
   const [backend, setBackend] = useState(config.backends[0] ?? "");
   const [creating, setCreating] = useState(false);
   const create = useRef<HTMLButtonElement | null>(null);
+  const projectField = useRef<HTMLLabelElement | null>(null);
 
-  // Reopening offers the host's defaults again rather than whatever was typed and abandoned.
+  /*
+   * Reopening offers the host's defaults again rather than whatever was typed and abandoned.
+   *
+   * Keyed on `open` alone, deliberately. The config is also read here, but listing it as a
+   * dependency would make the refresh below reset a Scope its reader is halfway through typing —
+   * this is a reaction to the dialog opening, not a subscription to the config.
+   */
   useEffect(() => {
     if (!open) return;
-    setScope(config.scope);
+    setScope(offersProjects ? "" : config.scope);
     setBackend(config.backends[0] ?? "");
-  }, [open, config.scope, config.backends]);
+    // Ask again on the way in, so a repository cloned since the page loaded is in the list. The
+    // Session Host walks uncached precisely so that this is worth doing.
+    void refresh();
+  }, [open]);
+
+  // Derived, not stored: the Project whose path the field currently holds, or none once it has been
+  // hand-edited to somewhere else.
+  const selected = projects.find((project) => project.path === scope.trim()) ?? null;
+  const groups = groupProjects(projects);
 
   const submit = async (): Promise<void> => {
     if (creating || scope.trim() === "" || backend === "") return;
@@ -73,9 +118,18 @@ export function NewAgentSessionDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        // `n` then Enter starts one, which keeps the one-gesture feel of the old shortcut while
-        // making the Scope and the backend visible and changeable before anything is spent.
-        initialFocus={create}
+        /*
+         * Whichever control is the first real decision: the Project picker when there is a choice
+         * to make, and Start when there is not.
+         *
+         * The picker is found by querying its field rather than by holding a ref to it. A ref would
+         * have to reach the button through `ComboboxTrigger`'s `render` prop, and Base UI needs its
+         * own ref on that same element to anchor the popup to it — so the safe thing is to not put
+         * one there at all. Falls back to Start if the query finds nothing.
+         */
+        initialFocus={() =>
+          (offersProjects ? projectField.current?.querySelector("button") : null) ?? create.current
+        }
       >
         <DialogHeader>
           <DialogTitle>New Agent Session</DialogTitle>
@@ -87,6 +141,85 @@ export function NewAgentSessionDialog({
 
         {/* No `mt-*`: upstream's content is a grid with `gap-6`, so margins here would double up. */}
         <div className="flex flex-col gap-3">
+          {offersProjects ? (
+            <label ref={projectField} className="flex flex-col gap-1">
+              <span className="text-sm font-medium">Project</span>
+              <Combobox
+                items={groups}
+                value={selected}
+                isItemEqualToValue={(left: Project, right: Project) => left.path === right.path}
+                // The label carries the group, so typing "work" narrows to that folder and the two
+                // repositories both called `api` are told apart in the trigger.
+                itemToStringLabel={projectLabel}
+                itemToStringValue={(project: Project) => project.path}
+                onValueChange={(value) => {
+                  const project = value as Project | null;
+                  if (project) setScope(project.path);
+                }}
+              >
+                {/*
+                 * The one and only Trigger in this subtree, which is load-bearing: Base UI anchors
+                 * the popup to a single trigger element, so a second one steals the anchor. See the
+                 * `showTrigger={false}` below.
+                 *
+                 * No ref here either. It would have to reach the button through `render`, and
+                 * whether Base UI's own ref survives that is exactly the kind of thing the anchor
+                 * depends on — so focus is found by querying the field instead (`initialFocus`).
+                 */}
+                <ComboboxTrigger
+                  render={<Button variant="outline" className="w-full justify-between font-normal" />}
+                >
+                  <ComboboxValue>
+                    {(project: Project | null) =>
+                      project === null ? (
+                        <span className="text-muted-foreground">Choose a Project</span>
+                      ) : (
+                        <span className="font-mono text-xs">{projectLabel(project)}</span>
+                      )
+                    }
+                  </ComboboxValue>
+                </ComboboxTrigger>
+                <ComboboxContent>
+                  {/*
+                   * `showTrigger={false}` is not cosmetic. Left at its default, ComboboxInput
+                   * renders `render={<ComboboxTrigger />}` inside the popup — a *second* Trigger,
+                   * which mounts later than the real one and so becomes what Base UI anchors to.
+                   * The popup then measures a 28px icon button inside itself, `--anchor-width`
+                   * collapses, and it lands in the corner of the viewport at that width.
+                   *
+                   * It is also the right control to drop on its own merits: a chevron that opens
+                   * the dropdown, inside the filter field of a dropdown that is already open.
+                   */}
+                  <ComboboxInput
+                    showTrigger={false}
+                    placeholder={`Filter ${projects.length} ${projects.length === 1 ? "Project" : "Projects"}`}
+                  />
+                  <ComboboxList>
+                    {(group: ProjectGroup) => (
+                      <ComboboxGroup key={group.group ?? ""} items={group.items}>
+                        {/*
+                         * The Projects sitting directly in the Project Root get no heading. Naming
+                         * that group "Root" or "Other" would invent a folder its reader never made.
+                         */}
+                        {group.group === undefined ? null : (
+                          <ComboboxLabel>{group.group}</ComboboxLabel>
+                        )}
+                        <ComboboxCollection>
+                          {(project: Project) => (
+                            <ComboboxItem key={project.path} value={project}>
+                              <span className="font-mono text-xs">{project.name}</span>
+                            </ComboboxItem>
+                          )}
+                        </ComboboxCollection>
+                      </ComboboxGroup>
+                    )}
+                  </ComboboxList>
+                  <ComboboxEmpty>No Project matches.</ComboboxEmpty>
+                </ComboboxContent>
+              </Combobox>
+            </label>
+          ) : null}
+
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">Scope</span>
             <Input
@@ -96,6 +229,17 @@ export function NewAgentSessionDialog({
               placeholder="/path/to/the/working/directory"
               spellCheck={false}
             />
+            {offersProjects ? (
+              <span className="text-xs text-muted-foreground">
+                Set by the Project above. Type over it for a directory outside the Project Root —
+                inside a monorepo, say.
+              </span>
+            ) : uncurated > 0 ? (
+              <span className="text-xs text-muted-foreground">
+                {uncurated} {uncurated === 1 ? "repository" : "repositories"} found beneath the
+                Project Root. Opt in under Settings → Projects to pick from them here.
+              </span>
+            ) : null}
           </label>
 
           <label className="flex flex-col gap-1">
@@ -136,4 +280,9 @@ export function NewAgentSessionDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** `work/api` — the group is part of the name here, because two Projects may share a basename. */
+function projectLabel(project: Project): string {
+  return project.group === undefined ? project.name : `${project.group}/${project.name}`;
 }
