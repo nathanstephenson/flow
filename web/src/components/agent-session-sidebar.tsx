@@ -1,4 +1,4 @@
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown, CircleCheck, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -177,14 +177,21 @@ function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
 
 function RailHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
   return (
-    <SidebarHeader className="flex-row items-center border-b border-sidebar-border">
+    <SidebarHeader className="flex-row items-center gap-1 border-b border-sidebar-border">
+      {/*
+       * The Scope takes whatever is left rather than a fixed maximum. A 16rem rail cannot fit a
+       * filesystem path *and* a labelled button, and reserving width for the label pushed the button
+       * off the edge entirely — so the button is an icon and the path gets the remainder.
+       */}
       <Tooltip label={scope}>
-        <ScopeLabel scope={scope} className="max-w-[13rem]" />
+        <ScopeLabel scope={scope} className="min-w-0 flex-1" />
       </Tooltip>
-      <Button size="sm" className="ml-auto" onClick={onNew}>
-        <Plus aria-hidden />
-        New Agent Session
-      </Button>
+      <Tooltip label="New Agent Session">
+        <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={onNew}>
+          <Plus aria-hidden />
+          <span className="sr-only">New Agent Session</span>
+        </Button>
+      </Tooltip>
     </SidebarHeader>
   );
 }
@@ -192,15 +199,27 @@ function RailHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
 /**
  * A Scope is a filesystem path, so it is mono, and the part anyone actually reads is the last
  * segment — the leading directories stay legible but recede.
+ *
+ * Deliberately *not* `dir="rtl"`. That is the usual trick for truncating a path from the left, but
+ * bidi reordering moves leading punctuation to the visual end, so `/workspace/GoodHarness` rendered
+ * as `workspace/GoodHarness/` — a path that does not exist. The directory truncates from the left
+ * with a plain `text-ellipsis` instead, and the basename is never truncated because it is the part
+ * that identifies the Scope. The full path is in the tooltip either way.
  */
 export function ScopeLabel({ scope, className }: { scope: string; className?: string | undefined }) {
   const cut = scope.lastIndexOf("/");
   const directory = cut <= 0 ? "" : `${scope.slice(0, cut)}/`;
-  const basename = cut < 0 ? scope : scope.slice(cut + 1);
+  // A Scope of "/" has no basename to fall back to, and splitting it naively rendered the header
+  // empty. Anything that leaves nothing to show falls back to the Scope verbatim.
+  const basename = (cut < 0 ? scope : scope.slice(cut + 1)) || scope;
   return (
-    <span className={cn("truncate font-mono text-xs", className)} dir="rtl">
-      <span className="text-muted-foreground/70">{directory}</span>
-      <span className="text-foreground">{basename}</span>
+    <span className={cn("flex min-w-0 items-baseline font-mono text-xs", className)}>
+      {directory === "" ? null : (
+        <span className="truncate text-muted-foreground/70" style={{ direction: "ltr" }}>
+          {directory}
+        </span>
+      )}
+      <span className="shrink-0 text-foreground">{basename}</span>
     </span>
   );
 }
@@ -284,17 +303,26 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         </span>
       </SidebarMenuButton>
 
+      {/*
+       * An icon rather than the word, because the reserved slot is permanent — the row must not
+       * reflow when `canSettle` flips — and 48px of a 16rem rail spent on a control that is usually
+       * invisible came straight out of the Agent Session's title. The tooltip carries the domain
+       * term, which the icon cannot.
+       */}
       {canSettle(status) ? (
-        <SidebarMenuAction
-          className={cn("static aspect-auto w-12 shrink-0 text-xs", REVEALED_ON_ROW)}
-          tabIndex={tabIndex}
-          onClick={() => onSettle(summary.id)}
-        >
-          settle
-        </SidebarMenuAction>
+        <Tooltip label="Settle">
+          <SidebarMenuAction
+            className={cn("static size-6 shrink-0", REVEALED_ON_ROW)}
+            tabIndex={tabIndex}
+            onClick={() => onSettle(summary.id)}
+          >
+            <CircleCheck aria-hidden />
+            <span className="sr-only">Settle</span>
+          </SidebarMenuAction>
+        </Tooltip>
       ) : (
         // Same width, still reserved: hiding the affordance must not move the row.
-        <span className="w-12 shrink-0" aria-hidden />
+        <span className="size-6 shrink-0" aria-hidden />
       )}
     </SidebarMenuItem>
   );
