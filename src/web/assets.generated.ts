@@ -23,7 +23,7 @@ export const ASSETS: AssetManifest = {
 };
 
 /** sha256 over every input to the build above. test/web.test.ts recomputes it. */
-export const SOURCE_HASH = "9ad4a169010b5292b97c6b513b2221167d6c90a20f308fda209a0e70fcd1177b";
+export const SOURCE_HASH = "9364d1725219e1d903d433852d15218e62f7a0fabd706f175fa0e6f00f663b8d";
 
 /** What scripts/build-web.mjs proved the bundle contains, so a test can notice if it stops. */
 export const SHARED_MODULES: readonly string[] = ["src/client/connection.ts","src/client/context-usage.ts","src/client/diff.ts","src/client/model-choices.ts","src/client/reduce.ts","src/client/relative-time.ts","src/client/search.ts","src/client/session-label.ts","src/client/status.ts","src/client/tool-summary.ts"];
