@@ -28,6 +28,24 @@ export function AppShell() {
   const [newOpen, setNewOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
 
+  /*
+   * Which Agent Sessions are showing their Shell.
+   *
+   * Client state, and it has to be: whether a Shell is *running* is the host's business, but whether
+   * you are looking at it is not. Closing the pane leaves the Shell alive, so asking the host "is
+   * there a Shell?" would reopen the split on every visit to an Agent Session you had ever used one
+   * in. Held here rather than in the pane because the pane remounts when the focus moves, and a
+   * split that closed itself every time you glanced at another Agent Session would be a bug.
+   */
+  const [shellOpen, setShellOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleShell = useCallback((sessionId: string) => {
+    setShellOpen((current) => {
+      const next = new Set(current);
+      if (!next.delete(sessionId)) next.add(sessionId);
+      return next;
+    });
+  }, []);
+
   /**
    * The focused Agent Session's live chrome, which the rail and the shortcuts both read.
    *
@@ -100,6 +118,11 @@ export function AppShell() {
       settle: () => {
         if (focusedId !== undefined && chrome !== undefined && canSettle(chrome.status)) settle(focusedId);
       },
+      shell: () => {
+        // Silently ignored where the host has no pty, for the same reason the button is absent
+        // there: a shortcut that reports a capability you do not have teaches nothing.
+        if (focusedId !== undefined && config.shell) toggleShell(focusedId);
+      },
       "blur-or-abort": () => {
         // Escape with nothing typing means abort — and aborting discards the Steering Queue, so it
         // says what it dropped rather than leaving the reader to notice.
@@ -112,7 +135,7 @@ export function AppShell() {
         });
       },
     }),
-    [chrome, cursor, focus, focusInPane, focusedId, run, sessions, settle],
+    [chrome, config.shell, cursor, focus, focusInPane, focusedId, run, sessions, settle, toggleShell],
   );
 
   return (
@@ -130,7 +153,16 @@ export function AppShell() {
           onNew={() => setNewOpen(true)}
         />
 
-        {focusedId === undefined ? <NothingFocused /> : <AgentSessionPane sessionId={focusedId} />}
+        {focusedId === undefined ? (
+          <NothingFocused />
+        ) : (
+          <AgentSessionPane
+            sessionId={focusedId}
+            {...(config.shell
+              ? { shell: { open: shellOpen.has(focusedId), onToggle: () => toggleShell(focusedId) } }
+              : {})}
+          />
+        )}
       </div>
 
       <NewAgentSessionDialog open={newOpen} onOpenChange={setNewOpen} onCreated={focus} />

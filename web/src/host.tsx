@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 import type { Connection } from "@client/connection.ts";
+import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
 
 /**
@@ -14,7 +15,18 @@ import { host } from "@/store/host.ts";
 const connection: Connection = host;
 
 /** What the host offers a new Agent Session: a default Scope, and every backend it has registered. */
-export type HostConfig = { scope: string; backends: string[] };
+export type HostConfig = {
+  scope: string;
+  backends: string[];
+  /**
+   * Whether this host can open a Shell. False where the pty addon could not load — notably the
+   * single-executable build, which cannot contain a native addon. The control is hidden rather than
+   * offered and broken, which is the rule Capabilities already sets for backends.
+   */
+  shell?: boolean;
+  /** The typefaces from config.json. Absent means this host reported none, so the defaults stand. */
+  fonts?: Fonts;
+};
 
 type HostValue = { connection: Connection; config: HostConfig };
 
@@ -43,6 +55,8 @@ export function HostProvider({ children }: { children: ReactNode }) {
           return;
         }
         const config = (await response.json()) as HostConfig;
+        // Before the tree mounts, so nothing renders in one typeface and reflows into another.
+        applyFonts(config.fonts);
         setGate({ state: "ready", config });
       } catch {
         if (!abort.signal.aborted) setGate({ state: "loading" });

@@ -1,12 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 
 import type { Command } from "../protocol/commands.ts";
+import type { Fonts } from "./config.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
+import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
 import type { EmbeddedAsset } from "../web/assets.ts";
 import { ASSETS } from "../web/assets.generated.ts";
 import { tokenMatches } from "./auth.ts";
 import type { SessionHost } from "./host.ts";
+import type { ShellRegistry } from "./shell.ts";
 
 /**
  * The Session Host's loopback HTTP surface (ADR 0004).
@@ -14,6 +18,11 @@ import type { SessionHost } from "./host.ts";
  * Commands are POSTed and events arrive over SSE. SSE rather than WebSocket because the transcript
  * is one-directional and sequence-numbered — reconnect is `?since=N`, which is a replay rather than
  * a resynchronisation protocol — and because it needs no dependency in Node or the browser.
+ *
+ * A Shell is the one thing here that is not the transcript, and none of that reasoning covers it:
+ * it is bidirectional, it carries raw bytes rather than sequenced events, and it has no `?since=N`.
+ * So Shells alone speak WebSocket (ADR 0008). The gate is the same on both — same cookie, same
+ * strict Origin check — because an upgrade request is an ordinary HTTP request until it is not.
  */
 
 export type ServeOptions = {
@@ -24,6 +33,10 @@ export type ServeOptions = {
   scope?: string;
   /** Loopback only. Overridable for tests, never for deployment (ADR 0004). */
   address?: string;
+  /** Omitted means this deployment serves no Shells, and clients are told so via /api/config. */
+  shells?: ShellRegistry;
+  /** The typefaces from config.json, passed through to whichever client is doing the drawing. */
+  fonts?: Fonts;
 };
 
 export type RunningServer = {
@@ -39,6 +52,13 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       send(response, 500, { error: error instanceof Error ? error.message : String(error) });
     });
   });
+
+  const shells = options.shells;
+  if (shells) {
+    server.on("upgrade", (request, socket, head) => {
+      void handleUpgrade(request, socket, head, options.token, shells).catch(() => refuse(socket, 500));
+    });
+  }
 
   await new Promise<void>((resolve) => server.listen(options.port ?? 0, address, resolve));
   const port = (server.address() as AddressInfo).port;
@@ -95,7 +115,34 @@ async function handle(
   }
 
   if (request.method === "GET" && url.pathname === "/api/config") {
-    send(response, 200, { scope: options.scope ?? process.cwd(), backends: options.host.backendNames() });
+    send(response, 200, {
+      scope: options.scope ?? process.cwd(),
+      backends: options.host.backendNames(),
+      // Whether this build can open a Shell at all. The web client hides the control when it cannot
+      // rather than offering one that fails on click — the rule Capabilities already sets for
+      // backends, applied to a host-wide facility.
+      shell: (await options.shells?.available()) ?? false,
+      // Reported rather than decided by the client: the host owns config.json, and a font is the
+      // one piece of presentation whose right answer depends on the machine (src/daemon/config.ts).
+      ...(options.fonts ? { fonts: options.fonts } : {}),
+    });
+    return;
+  }
+
+  if (options.shells && url.pathname === "/api/shells") {
+    await handleShellCollection(request, response, url, options.host, options.shells);
+    return;
+  }
+
+  const shellMatch = /^\/api\/shells\/([^/]+)$/.exec(url.pathname);
+  const shellId = shellMatch?.[1];
+  if (options.shells && request.method === "DELETE" && shellId) {
+    if (!options.shells.get(shellId)) {
+      send(response, 404, { error: `No Shell ${shellId}` });
+      return;
+    }
+    options.shells.kill(shellId);
+    send(response, 200, { ok: true });
     return;
   }
 
@@ -136,6 +183,140 @@ async function handle(
   }
 
   send(response, 404, { error: "Not found" });
+}
+
+/**
+ * `/api/shells` — list the Shells beside one Agent Session, or open another.
+ *
+ * Addressed as a collection rather than as `/api/sessions/:id/shell`, because an Agent Session may
+ * own several Shells and a singular path would have to be broken to admit the second one.
+ */
+async function handleShellCollection(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL,
+  host: SessionHost,
+  shells: ShellRegistry,
+): Promise<void> {
+  if (request.method === "GET") {
+    const sessionId = url.searchParams.get("sessionId");
+    if (!sessionId) {
+      send(response, 400, { error: "sessionId is required" });
+      return;
+    }
+    send(response, 200, shells.listFor(sessionId));
+    return;
+  }
+
+  if (request.method !== "POST") {
+    send(response, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  const body = JSON.parse(await readBody(request)) as {
+    sessionId?: string;
+    cols?: number;
+    rows?: number;
+  };
+  if (!body.sessionId) {
+    send(response, 400, { error: "sessionId is required" });
+    return;
+  }
+
+  // The Scope is read from the Agent Session rather than taken from the request: a client that
+  // could name its own working directory would make the Agent Session's Scope decorative.
+  const summary = host.list().find((candidate) => candidate.id === body.sessionId);
+  if (!summary) {
+    send(response, 404, { error: `No Agent Session ${body.sessionId}` });
+    return;
+  }
+  if (summary.status === "settled" || summary.status === "ended") {
+    // Refused rather than opened-and-immediately-killed: the same rule that exits a Shell on Settle
+    // has to also stop one being opened afterwards, or the two disagree.
+    send(response, 409, { error: `Agent Session ${summary.id} is ${summary.status}` });
+    return;
+  }
+
+  try {
+    send(response, 200, await shells.create({
+      sessionId: summary.id,
+      cwd: summary.scope,
+      ...(body.cols === undefined ? {} : { cols: body.cols }),
+      ...(body.rows === undefined ? {} : { rows: body.rows }),
+    }));
+  } catch (error) {
+    send(response, 503, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/**
+ * The Shell socket: `GET /api/shells/:id/stream`, upgraded.
+ *
+ * Binary frames are bytes in both directions — keystrokes up, output down — and text frames carry
+ * the out-of-band messages. Splitting them by frame type rather than by envelope means the hot path
+ * does no parsing and no base64.
+ */
+async function handleUpgrade(
+  request: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  token: string,
+  shells: ShellRegistry,
+): Promise<void> {
+  if (!originAllowed(request)) return refuse(socket, 403);
+  if (!tokenMatches(token, presentedToken(request))) return refuse(socket, 401);
+
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  const shellId = /^\/api\/shells\/([^/]+)\/stream$/.exec(url.pathname)?.[1];
+  if (!shellId) return refuse(socket, 404);
+  const summary = shells.get(shellId);
+  if (!summary) return refuse(socket, 404);
+
+  // Imported here rather than at module scope so that `ws` is only loaded by a host that was given
+  // a ShellRegistry, and so the module graph of a Shell-less deployment stays as it was.
+  const { WebSocketServer } = await import("ws");
+  const wss = new WebSocketServer({ noServer: true });
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    const tell = (frame: ShellServerFrame): void => ws.send(JSON.stringify(frame));
+    tell({ type: "ready", shell: summary });
+
+    const detach = shells.attach(shellId, {
+      output: (chunk) => ws.send(chunk, { binary: true }),
+      exit: (code, signal) => {
+        tell({ type: "exit", code, signal });
+        ws.close();
+      },
+    });
+
+    ws.on("message", (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        shells.write(shellId, data);
+        return;
+      }
+      // A malformed control frame is dropped rather than allowed to tear down a live Shell.
+      let frame: ShellClientFrame;
+      try {
+        frame = JSON.parse(data.toString("utf8")) as ShellClientFrame;
+      } catch {
+        return;
+      }
+      if (frame.type === "resize") shells.resize(shellId, frame.cols, frame.rows);
+    });
+
+    // Detach only. Closing the pane, closing the tab and losing the network all arrive here
+    // identically, and none of them is a reason to kill a Shell someone left `npm run dev` in.
+    ws.on("close", detach);
+    ws.on("error", detach);
+  });
+}
+
+/** An upgrade cannot be answered with a JSON body, so a refusal is a bare status line. */
+function refuse(socket: Duplex, status: number): void {
+  const text =
+    { 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error" }[status] ??
+    "Error";
+  socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
 }
 
 function sendAsset(response: ServerResponse, asset: EmbeddedAsset): void {

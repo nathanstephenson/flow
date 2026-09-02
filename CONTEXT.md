@@ -70,6 +70,18 @@ _Avoid_: closed, deleted, terminated, killed, settled
 The working directory an Agent Session is bound to.
 _Avoid_: workspace, project, repo
 
+**Shell**:
+A shell process serving an Agent Session, started in its Scope. Ephemeral: unlike a Backend Session
+it is never Revived, and it does not survive a daemon restart. An Agent Session may own several, and
+they exit when it is Settled, Ended or Reaped.
+_Avoid_: terminal, pty, console, session
+
+**Scrollback**:
+The bounded ring of recent Shell output the Session Host keeps so a reattaching client sees a
+populated screen. Lossy by design — it is not a Presentation Transcript, and it is never written to
+disk.
+_Avoid_: transcript, history, log, buffer
+
 **Effort**:
 How hard a model is asked to think on a turn. Declared per model rather than per Agent Session,
 because not every model offers it.

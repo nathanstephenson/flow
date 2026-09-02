@@ -29,7 +29,20 @@ const result = await build({
   outfile: join(out, "goodharness.cjs"),
   // pi pulls in optional native and wasm packages that cannot be bundled. They are only reachable
   // through the pi adapter, which is loaded lazily, so the binary works without them.
-  external: ["koffi", "@silvia-odwyer/photon-node", "@earendil-works/pi-coding-agent"],
+  //
+  // node-pty is here for the same reason and with a sharper consequence: a SEA blob cannot contain a
+  // native addon, so the binary serves no Shells. That is reported rather than hidden — the import
+  // is lazy (src/daemon/shell.ts), its failure becomes `shell: false` on /api/config, and the web
+  // client hides the control instead of offering one that breaks. `ws` is pure JS and bundles fine;
+  // only its optional native accelerators are excluded.
+  external: [
+    "koffi",
+    "@silvia-odwyer/photon-node",
+    "@earendil-works/pi-coding-agent",
+    "node-pty",
+    "bufferutil",
+    "utf-8-validate",
+  ],
   metafile: true,
 });
 

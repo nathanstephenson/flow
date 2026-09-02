@@ -31,6 +31,8 @@ export type Binding =
   /** Blur a typing surface if one has focus, otherwise abort the focused pane's turn. */
   | "blur-or-abort"
   | "settle"
+  /** Show or hide the focused Agent Session's Shell. Hiding it does not end it. */
+  | "shell"
   | "keyboard-sheet";
 
 /**
@@ -108,6 +110,11 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
       return "effort-picker";
     case "s":
       return "settle";
+    // The backtick, because every other terminal toggle a reader has met is on this key. It is safe
+    // as an unmodified binding under the first principle above: showing a Shell spends nothing and
+    // sends nothing, and hiding one does not end it.
+    case "`":
+      return "shell";
     case "/":
       return "search";
     case "?":

@@ -22,6 +22,7 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("m"), idle), "model-picker");
     assert.equal(resolveBinding(press("e"), idle), "effort-picker");
     assert.equal(resolveBinding(press("s"), idle), "settle");
+    assert.equal(resolveBinding(press("`"), idle), "shell");
     assert.equal(resolveBinding(press("/"), idle), "search");
     assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-sheet");
     assert.equal(resolveBinding(press("Escape"), idle), "blur-or-abort");
@@ -91,6 +92,12 @@ describe("resolving a keystroke to a binding", () => {
       assert.equal(resolveBinding(press("Home", { repeat: true }), idle), undefined);
       assert.equal(resolveBinding(press("k", { metaKey: true, repeat: true }), idle), undefined);
     });
+  });
+
+  it("does not toggle the Shell while the reader is typing a backtick", () => {
+    // The one binding most likely to be typed rather than pressed: a backtick opens a code fence in
+    // the Composer far more often than it wants a terminal.
+    assert.equal(resolveBinding(press("`"), { modalOpen: false, typing: true }), undefined);
   });
 
   it("has no binding for sending a message or Reviving an Agent Session", () => {

@@ -1,4 +1,4 @@
-import { MoreHorizontal, Square } from "lucide-react";
+import { MoreHorizontal, Square, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 
 import type { EffortLevel } from "../../../src/protocol/events.ts";
@@ -48,9 +48,11 @@ export type AgentSessionPaneHeaderProps = {
   sessionId: string;
   title: string;
   chrome: Chrome;
+  /** Absent where the host cannot open a Shell, which is how the control disappears rather than breaks. */
+  shell?: { open: boolean; onToggle: () => void };
 };
 
-export function AgentSessionPaneHeader({ sessionId, title, chrome }: AgentSessionPaneHeaderProps) {
+export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: AgentSessionPaneHeaderProps) {
   const run = useCommand();
 
   return (
@@ -64,6 +66,28 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome }: AgentSessio
 
         <div className="ml-auto flex items-center gap-1.5">
           <ContextUsageMeter usage={chrome.contextUsage} />
+
+          {shell ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={shell.open ? "Hide the Shell" : "Open a Shell"}
+                    aria-pressed={shell.open}
+                    className={cn(shell.open && "bg-accent text-accent-foreground")}
+                    onClick={shell.onToggle}
+                  />
+                }
+              >
+                <SquareTerminal aria-hidden />
+              </TooltipTrigger>
+              <TooltipContent>
+                {shell.open ? "Hide the Shell — it keeps running" : "Open a Shell in this Scope"}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
 
           <ModelPicker
             capabilities={chrome.capabilities}

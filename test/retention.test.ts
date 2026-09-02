@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
-import { DEFAULT_SETTLED_RETENTION, loadConfig, parseDuration } from "../src/daemon/config.ts";
+import {
+  DEFAULT_CHROME_FONT,
+  DEFAULT_MONOSPACE_FONT,
+  DEFAULT_SETTLED_RETENTION,
+  loadConfig,
+  parseDuration,
+} from "../src/daemon/config.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 import { reduceAll } from "../src/client/reduce.ts";
@@ -232,5 +238,59 @@ describe("config", () => {
     for (const junk of ["", "1", "d", "1w", "-1d", "one day", "1dd"]) {
       assert.equal(parseDuration(junk), undefined, `expected ${junk} to be rejected`);
     }
+  });
+
+  /**
+   * The fonts, which exist so a Shell can render a Powerline prompt: those separators live in the
+   * Private Use Area and no stock system font has them, so the reader has to be able to name one
+   * that does.
+   */
+  describe("fonts", () => {
+    it("reads both typefaces", () => {
+      write(JSON.stringify({ fonts: { chrome: "Berkeley Mono", monospace: "MesloLGS NF, monospace" } }));
+      const { config, warning } = loadConfig(root);
+      assert.equal(config.fonts.chrome, "Berkeley Mono");
+      assert.equal(config.fonts.monospace, "MesloLGS NF, monospace");
+      assert.equal(warning, undefined);
+    });
+
+    it("defaults each one independently, so naming only the mono font is enough", () => {
+      write(JSON.stringify({ fonts: { monospace: "'Hack Nerd Font', monospace" } }));
+      const { config, warning } = loadConfig(root);
+      assert.equal(config.fonts.monospace, "'Hack Nerd Font', monospace");
+      assert.equal(config.fonts.chrome, DEFAULT_CHROME_FONT, "an unset typeface keeps its default");
+      assert.equal(warning, undefined);
+    });
+
+    it("ships a default monospace stack that names the fonts a Powerline prompt needs", () => {
+      const { config } = loadConfig(root);
+      assert.match(config.fonts.monospace, /Nerd Font|MesloLGS/, "tofu out of the box otherwise");
+    });
+
+    it("refuses a value that is not a font-family list, and says which field", () => {
+      write(JSON.stringify({ fonts: { chrome: "red; background: url(http://evil)" } }));
+      const { config, warning } = loadConfig(root);
+      assert.equal(config.fonts.chrome, DEFAULT_CHROME_FONT);
+      assert.match(warning ?? "", /fonts\.chrome/);
+    });
+
+    it("refuses a non-string and an empty string", () => {
+      write(JSON.stringify({ fonts: { chrome: 12, monospace: "   " } }));
+      const { config, warning } = loadConfig(root);
+      assert.equal(config.fonts.chrome, DEFAULT_CHROME_FONT);
+      assert.equal(config.fonts.monospace, DEFAULT_MONOSPACE_FONT);
+      assert.match(warning ?? "", /fonts\.chrome/);
+      assert.match(warning ?? "", /fonts\.monospace/);
+    });
+
+    /** One bad section must not cost the other its value: they are parsed independently. */
+    it("keeps a good retention alongside a bad font, and warns about the font only", () => {
+      write(JSON.stringify({ retention: { settled: "36h" }, fonts: { monospace: "}{" } }));
+      const { config, warning } = loadConfig(root);
+      assert.equal(config.retention.settled, 36 * 60 * 60 * 1000);
+      assert.equal(config.fonts.monospace, DEFAULT_MONOSPACE_FONT);
+      assert.match(warning ?? "", /fonts\.monospace/);
+      assert.doesNotMatch(warning ?? "", /duration/);
+    });
   });
 });

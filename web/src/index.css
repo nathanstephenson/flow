@@ -130,7 +130,18 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --font-heading: var(--font-sans);
+  /*
+   * Both are overwritten at runtime from `fonts` in config.json, which the Session Host reports on
+   * /api/config (web/src/fonts.ts). The values here are the defaults and the pre-fetch fallback, so
+   * the first paint is not unstyled while that request is in flight.
+   *
+   * --font-mono is declared rather than left to Tailwind's default stack because it is now a
+   * setting: it dresses the Shell's terminal and the chrome that has to align character by
+   * character, and one token has to be the place that is changed.
+   */
   --font-sans: 'Inter Variable', sans-serif;
+  --font-mono: 'MesloLGS NF', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font',
+    ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);

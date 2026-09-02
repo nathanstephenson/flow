@@ -50,7 +50,10 @@ function daemonProxy(): { target: string; changeOrigin: boolean; ws: boolean } {
     // Deliberately false: the host parses request.url against a fixed base and never reads Host, and
     // originAllowed() checks hostname only, so Origin: http://127.0.0.1:5173 is already allowed.
     changeOrigin: false,
-    ws: false,
+    // On for the Shell socket at /api/shells/:id/stream, which is the one thing here that is not
+    // SSE (ADR 0008). Without this the upgrade is answered by the dev server rather than forwarded,
+    // and the terminal never connects under `npm run dev` while working fine in the binary.
+    ws: true,
   };
 }
 

@@ -30,6 +30,11 @@ const CONTENT_TYPES = {
   ".json": ["application/json", true],
   ".png": ["image/png", false],
   ".svg": ["image/svg+xml", true],
+  // The Shell's terminal emulator. It is fetched and handed to WebAssembly.compile(), so the type
+  // is not load-bearing the way it would be for instantiateStreaming — but the fallback would call
+  // it application/octet-stream, and being wrong in the manifest is how it gets served wrongly by
+  // the next thing that reads it.
+  ".wasm": ["application/wasm", false],
   ".webp": ["image/webp", false],
   ".woff2": ["font/woff2", false],
 };

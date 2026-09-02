@@ -226,6 +226,41 @@ All three stay out of the default loop for the same reason: `npm test` should ne
 no network and no bundler, so a fresh clone with no `web/dist` — and an `--omit=dev` install with no
 Vite at all — still runs it green.
 
+### Fonts
+
+Both typefaces are settings, in `<stateRoot>/config.json` beside `retention`:
+
+```json
+{
+  "fonts": {
+    "chrome": "'Inter Variable', sans-serif",
+    "monospace": "'MesloLGS NF', monospace"
+  }
+}
+```
+
+`chrome` dresses the interface; `monospace` dresses the Shell's terminal and the chrome that has to
+align character by character — Scopes, Agent Session ids, token counts. Either may be omitted and
+keeps its default, and a value that is not a font-family list is refused with a warning on startup
+rather than taken.
+
+**Set `monospace` to a Nerd Font if your prompt is a Powerline one.** Those separators are Private
+Use Area codepoints — U+E0B0 for the arrow, U+E0A0 for the branch — and no stock system font carries
+them, so a shell prompt that uses them renders as tofu until the terminal is told a font that has
+them. Nothing is bundled: the right font is whichever is already installed on the machine doing the
+reading, so the default stack names the common patched families (`MesloLGS NF`,
+`JetBrainsMono Nerd Font`, `FiraCode Nerd Font`, `Hack Nerd Font`) ahead of the stock ones and picks
+whichever it finds. The defaults live in `src/protocol/fonts.ts`, which is the only copy —
+`web/src/index.css` restates them for the first frame and `test/fonts.test.ts` holds the two
+together.
+
+A Shell — the terminal split the web client can open beside an Agent Session — needs a pty, which is
+a native addon. `npm install` builds it, and where it cannot be loaded the host reports
+`shell: false` on `/api/config` and the web client hides the control rather than offering one that
+breaks. A SEA blob cannot contain a native addon, so the binary from `npm run build:binary` has to
+find `node-pty` on disk: it will on the machine that built it, and will not once shipped elsewhere,
+where it reports `shell: false` and serves no Shells (ADR 0008).
+
 Working on the web client means a Session Host to talk to, so start the host first:
 
 ```bash

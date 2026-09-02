@@ -7,6 +7,7 @@ import { readOrCreateToken } from "../daemon/auth.ts";
 import { loadConfig } from "../daemon/config.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
+import { ShellRegistry } from "../daemon/shell.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
@@ -116,10 +117,17 @@ async function startHost(
   // unref: a one-shot prompt and the tests build a host in-process and must still be able to exit.
   setInterval(() => host.reap(), SWEEP_INTERVAL_MS).unref();
 
+  // Shells exit with the Agent Session they were opened beside. The host announces the closure and
+  // stays ignorant of what listened — it owns Agent Sessions, not the things hanging off them.
+  const shells = new ShellRegistry();
+  host.onSessionClosed((sessionId) => shells.killFor(sessionId));
+
   const token = readOrCreateToken(root);
   const running = await serve({
     host,
     token,
+    shells,
+    fonts: config.fonts,
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),

@@ -51,10 +51,28 @@ export class SessionHost {
   private readonly backends = new Map<string, AgentBackend>();
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never";
+  private readonly closedListeners = new Set<(sessionId: string) => void>();
 
   constructor(options: SessionHostOptions = {}) {
     this.store = options.store;
     this.retention = options.retention ?? "never";
+  }
+
+  /**
+   * Notified when an Agent Session stops being something its owner is working in — Settled, Ended
+   * or Reaped. Dormant is deliberately not one of these: it says the Backend Session went away, not
+   * that the reader did.
+   *
+   * An observer rather than a direct call into the Shells, so the host stays ignorant that Shells
+   * exist. It owns Agent Sessions; what else hangs off one is not its business.
+   */
+  onSessionClosed(listener: (sessionId: string) => void): () => void {
+    this.closedListeners.add(listener);
+    return () => this.closedListeners.delete(listener);
+  }
+
+  private announceClosed(sessionId: string): void {
+    for (const listener of this.closedListeners) listener(sessionId);
   }
 
   registerBackend(backend: AgentBackend): void {
@@ -246,6 +264,7 @@ export class SessionHost {
     await session?.dispose();
     record.log.append({ type: "session_ended", reason });
     this.touch(record);
+    this.announceClosed(sessionId);
   }
 
   /**
@@ -276,6 +295,7 @@ export class SessionHost {
     // Stamps updatedAt, which is what starts the retention clock: a Settled Agent Session runs
     // nothing and so records no further activity, and it always gets a full window.
     this.touch(record);
+    this.announceClosed(sessionId);
   }
 
   /**
@@ -300,6 +320,7 @@ export class SessionHost {
       this.store?.deleteSession(record.id);
       reaped.push(record.id);
     }
+    for (const sessionId of reaped) this.announceClosed(sessionId);
     return reaped;
   }
 
