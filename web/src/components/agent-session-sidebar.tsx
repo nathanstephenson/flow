@@ -23,7 +23,7 @@ import {
   SidebarProvider,
   SidebarSeparator,
 } from "@/components/ui/sidebar.tsx";
-import { Tooltip } from "@/components/ui/tooltip.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 import { useNow } from "@/lib/use-now.ts";
 
@@ -183,14 +183,25 @@ function RailHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
        * filesystem path *and* a labelled button, and reserving width for the label pushed the button
        * off the edge entirely — so the button is an icon and the path gets the remainder.
        */}
-      <Tooltip label={scope}>
-        <ScopeLabel scope={scope} className="min-w-0 flex-1" />
+      <Tooltip>
+        {/*
+         * A plain span is the trigger rather than `render={<ScopeLabel/>}`: upstream's Trigger hands
+         * its own props to whatever it renders, and ScopeLabel does not forward unknown props, so
+         * rendering it directly would silently drop them and the tooltip would never open.
+         */}
+        <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
+          <ScopeLabel scope={scope} className="min-w-0 flex-1" />
+        </TooltipTrigger>
+        <TooltipContent>{scope}</TooltipContent>
       </Tooltip>
-      <Tooltip label="New Agent Session">
-        <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={onNew}>
+      <Tooltip>
+        <TooltipTrigger
+          render={<Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={onNew} />}
+        >
           <Plus aria-hidden />
           <span className="sr-only">New Agent Session</span>
-        </Button>
+        </TooltipTrigger>
+        <TooltipContent>New Agent Session</TooltipContent>
       </Tooltip>
     </SidebarHeader>
   );
@@ -297,8 +308,14 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         <StatusDot status={status} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm">{sessionLabel(summary)}</span>
+          {/*
+           * The status *word*, not just the dot. The dot is `aria-hidden` and now carries only
+           * "is a Backend Session attached" in its shape, so without this a rail row would be the
+           * one place in the app where the state is unreadable — and unreadable to a screen reader
+           * either way.
+           */}
           <span className="block truncate text-xs text-muted-foreground">
-            {summary.backend} · {relativeTime(summary.updatedAt, now)}
+            {status} · {summary.backend} · {relativeTime(summary.updatedAt, now)}
           </span>
         </span>
       </SidebarMenuButton>
@@ -310,15 +327,20 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
        * term, which the icon cannot.
        */}
       {canSettle(status) ? (
-        <Tooltip label="Settle">
-          <SidebarMenuAction
-            className={cn("static size-6 shrink-0", REVEALED_ON_ROW)}
-            tabIndex={tabIndex}
-            onClick={() => onSettle(summary.id)}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <SidebarMenuAction
+                className={cn("static size-6 shrink-0", REVEALED_ON_ROW)}
+                tabIndex={tabIndex}
+                onClick={() => onSettle(summary.id)}
+              />
+            }
           >
             <CircleCheck aria-hidden />
             <span className="sr-only">Settle</span>
-          </SidebarMenuAction>
+          </TooltipTrigger>
+          <TooltipContent>Settle</TooltipContent>
         </Tooltip>
       ) : (
         // Same width, still reserved: hiding the affordance must not move the row.
@@ -352,11 +374,11 @@ function SettledGroup({
   return (
     <SidebarGroup className="p-0">
       <details open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
-        <SidebarGroupLabel asChild>
-          <summary className="cursor-default gap-1 text-muted-foreground select-none">
-            <ChevronDown aria-hidden className={cn("transition-transform", !open && "-rotate-90")} />
-            Settled · {count}
-          </summary>
+        <SidebarGroupLabel
+          render={<summary className="cursor-default gap-1 text-muted-foreground select-none" />}
+        >
+          <ChevronDown aria-hidden className={cn("transition-transform", !open && "-rotate-90")} />
+          Settled · {count}
         </SidebarGroupLabel>
         {/* Reduced contrast here; full contrast once one of them is focused in a pane. */}
         <SidebarGroupContent className="opacity-60">{children}</SidebarGroupContent>
@@ -391,14 +413,22 @@ export function Kbd({ children }: { children: ReactNode }) {
  * The event stream, in one glyph. "gone" is the only terminal state, so it is the only one worth
  * colouring an error: the rest are stages of a loop that is still trying, and a UI that cries
  * outage every time a stream is quiet teaches people to ignore it.
+ *
+ * The other two states used to be `--chart-2` and `--chart-4`, which rhea renders as two greys a
+ * hair apart. They take the Agent Session dot's shape vocabulary instead — filled when the stream is
+ * live, a ring while it is still trying — and the word beside them was always the real signal.
  */
 function LinkDot({ link }: { link: LinkState | undefined }) {
   if (link === undefined) return null;
-  const color =
-    link === "live" ? "var(--chart-2)" : link === "gone" ? "var(--destructive)" : "var(--chart-4)";
   return (
     <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-      <span aria-hidden className="inline-block size-1.5 rounded-full" style={{ backgroundColor: color }} />
+      <span
+        aria-hidden
+        className={cn(
+          "inline-block size-1.5 rounded-full",
+          link === "gone" ? "bg-destructive" : link === "live" ? "bg-current" : "border border-current",
+        )}
+      />
       {link}
     </span>
   );

@@ -1,25 +1,26 @@
 import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol/events.ts";
 import { effortChoices, modelChoices, type ModelChoice } from "@client/model-choices.ts";
 import { initialState } from "@client/reduce.ts";
+import { Button } from "@/components/ui/button.tsx";
 import {
   Combobox,
   ComboboxCollection,
+  ComboboxContent,
   ComboboxEmpty,
   ComboboxGroup,
-  ComboboxGroupLabel,
   ComboboxInput,
   ComboboxItem,
+  ComboboxLabel,
   ComboboxList,
-  ComboboxPopup,
   ComboboxTrigger,
   ComboboxValue,
 } from "@/components/ui/combobox.tsx";
 import {
   Select,
+  SelectContent,
   SelectGroup,
-  SelectGroupLabel,
   SelectItem,
-  SelectPopup,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
@@ -66,10 +67,10 @@ function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
       <SelectTrigger aria-label="Model">
         <SelectValue placeholder="model">{() => modelLabel(model)}</SelectValue>
       </SelectTrigger>
-      <SelectPopup>
+      <SelectContent>
         {groupByProvider(choices).map((group) => (
           <SelectGroup key={group.provider}>
-            <SelectGroupLabel>{group.provider}</SelectGroupLabel>
+            <SelectLabel>{group.provider}</SelectLabel>
             {group.items.map((choice) => (
               <SelectItem key={choice.model.id} value={choice.model.id}>
                 {modelLabel(choice.model)}
@@ -77,7 +78,7 @@ function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
             ))}
           </SelectGroup>
         ))}
-      </SelectPopup>
+      </SelectContent>
     </Select>
   );
 }
@@ -110,15 +111,21 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
         if (choice) onSelect(choice.model.id);
       }}
     >
-      <ComboboxTrigger aria-label="Model">
+      {/*
+       * Upstream's ComboboxTrigger carries no chrome of its own — it is styled for the icon-button
+       * slot inside ComboboxInput's InputGroup — so a standalone closed trigger has to be given a
+       * Button to render as, or the two halves of this one control (Select under thirty choices,
+       * Combobox over) would not look like the same control.
+       */}
+      <ComboboxTrigger aria-label="Model" render={<Button variant="outline" />}>
         <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
       </ComboboxTrigger>
-      <ComboboxPopup>
+      <ComboboxContent>
         <ComboboxInput placeholder={`Filter ${choices.length} models`} />
         <ComboboxList>
           {(group: ProviderGroup) => (
             <ComboboxGroup key={group.provider} items={group.items}>
-              <ComboboxGroupLabel>{group.provider}</ComboboxGroupLabel>
+              <ComboboxLabel>{group.provider}</ComboboxLabel>
               <ComboboxCollection>
                 {(choice: ModelChoice) => (
                   <ComboboxItem key={choice.model.id} value={choice}>
@@ -135,7 +142,7 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
             Showing at most {RENDER_LIMIT} matches — keep typing.
           </p>
         ) : null}
-      </ComboboxPopup>
+      </ComboboxContent>
     </Combobox>
   );
 }
@@ -175,13 +182,13 @@ export function EffortPicker({
       <SelectTrigger aria-label="Effort">
         <SelectValue placeholder="effort">{() => effort ?? "effort"}</SelectValue>
       </SelectTrigger>
-      <SelectPopup>
+      <SelectContent>
         {levels.map((level) => (
           <SelectItem key={level} value={level}>
             {level}
           </SelectItem>
         ))}
-      </SelectPopup>
+      </SelectContent>
     </Select>
   );
 }
