@@ -1,4 +1,4 @@
-import { memo, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
@@ -158,36 +158,51 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 }
 
 /**
- * A running tool gets the accent, a failed one the error hue, a finished one nothing but a quiet
- * ring — the same "shape carries the state, not only colour" rule the Agent Session dots follow.
+ * A failed tool call is one of the three things `--destructive` is spent on — rhea's only coloured
+ * token, and a failure is worth it. Running is filled and finished is a quiet ring, the same "shape
+ * carries the state, not only colour" rule the Agent Session dots follow. `--chart-2` used to stand
+ * in for "finished" and is a grey indistinguishable from the muted text beside it.
  */
+const TOOL_TONE: Record<Of<"tool">["status"], string> = {
+  running: "text-foreground",
+  complete: "text-muted-foreground",
+  error: "text-destructive",
+};
+
 function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
-  const color =
-    status === "error" ? "var(--destructive)" : status === "running" ? "var(--primary)" : "var(--chart-2)";
   return (
     <span
       aria-hidden
-      className="inline-block size-1.5 shrink-0 rounded-full"
-      style={status === "complete" ? { border: `1.5px solid ${color}` } : { backgroundColor: color }}
+      className={cn(
+        "inline-block size-1.5 shrink-0 rounded-full",
+        TOOL_TONE[status],
+        status === "complete" ? "border-[1.5px] border-current" : "bg-current",
+      )}
     />
   );
 }
 
 /**
- * Coloured by its own level. The UI this replaces painted every notice as a warning, throwing away
- * the `info`/`warn`/`error` the reducer records faithfully — so an informational notice shouted and
- * a real error did not stand out.
+ * Distinguished by its own level, still. The UI this replaces painted every notice as a warning,
+ * throwing away the `info`/`warn`/`error` the reducer records faithfully — so an informational
+ * notice shouted and a real error did not stand out.
+ *
+ * `warn` used to be `--chart-4`, which rhea renders as a grey a shade off the muted text `info`
+ * uses. The three levels are a contrast ladder now — receded, full, destructive — which is the one
+ * axis a monochrome palette has three legible steps on. `error` keeps `--destructive`: a notice at
+ * error level is one of the three genuine failures this app spends it on.
  */
+const NOTICE_TONE: Record<Of<"notice">["level"], string> = {
+  info: "text-muted-foreground",
+  warn: "text-foreground",
+  error: "text-destructive",
+};
+
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
-  const color =
-    entry.level === "error"
-      ? "var(--destructive)"
-      : entry.level === "warn"
-        ? "var(--chart-4)"
-        : "var(--muted-foreground)";
+  const tone = NOTICE_TONE[entry.level];
   return (
-    <Row gutter="!" gutterStyle={{ color }}>
-      <p className="m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ color }}>
+    <Row gutter="!" gutterClassName={tone}>
+      <p className={cn("m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>
         <Highlighted text={entry.text} query={query} />
       </p>
     </Row>
@@ -201,20 +216,26 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
  * It switches on `entry.marker`, never on the text. The reducer grew a distinct `marker` kind
  * precisely so no front-end has to sniff a string prefix to find out what happened.
  */
+const MARKER_TONE: Record<Of<"marker">["marker"], string> = {
+  // A Revive is the one of the three that *started* something, so it is the one at full contrast.
+  revived: "text-primary",
+  settled: "text-muted-foreground",
+  dormant: "text-muted-foreground",
+};
+
 function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
-  const color =
-    entry.marker === "revived"
-      ? "var(--primary)"
-      : entry.marker === "settled"
-        ? "var(--color-status-settled)"
-        : "var(--color-status-dormant)";
+  // These two read `--color-status-settled` and `--color-status-dormant` until the mapping that
+  // defined them was deleted; the label already says which of the two this is.
+  const tone = MARKER_TONE[entry.marker];
   return (
-    <div className="flex items-center gap-2 py-2" role="separator" aria-label={entry.text}>
-      <span className="h-px flex-1" style={{ backgroundColor: color, opacity: 0.5 }} aria-hidden />
-      <span className="text-xs" style={{ color }}>
-        {entry.text}
-      </span>
-      <span className="h-px flex-1" style={{ backgroundColor: color, opacity: 0.5 }} aria-hidden />
+    <div
+      className={cn("flex items-center gap-2 py-2", tone)}
+      role="separator"
+      aria-label={entry.text}
+    >
+      <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
+      <span className="text-xs">{entry.text}</span>
+      <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
     </div>
   );
 }
@@ -227,21 +248,15 @@ function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
 function Row({
   gutter,
   gutterClassName,
-  gutterStyle,
   children,
 }: {
   gutter?: string | undefined;
   gutterClassName?: string | undefined;
-  gutterStyle?: CSSProperties | undefined;
   children: ReactNode;
 }) {
   return (
     <div className="grid grid-cols-[2ch_minmax(0,1fr)] gap-0 py-1">
-      <span
-        aria-hidden
-        className={cn("font-mono text-sm select-none", gutterClassName)}
-        style={gutterStyle}
-      >
+      <span aria-hidden className={cn("font-mono text-sm select-none", gutterClassName)}>
         {gutter ?? ""}
       </span>
       {children}

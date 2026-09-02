@@ -3,9 +3,22 @@ import { useEffect, useRef, useState } from "react";
 import { useCommand } from "@/agent-sessions.tsx";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "@/components/ui/dialog.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.tsx";
 
 /**
  * Starting an Agent Session: a Scope and a backend, both prefilled.
@@ -59,17 +72,21 @@ export function NewAgentSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogPopup
+      <DialogContent
         // `n` then Enter starts one, which keeps the one-gesture feel of the old shortcut while
         // making the Scope and the backend visible and changeable before anything is spent.
         initialFocus={create}
       >
-        <DialogTitle>New Agent Session</DialogTitle>
-        <DialogDescription>
-          It is bound to this Scope for its whole life, and the backend cannot be changed afterwards.
-        </DialogDescription>
+        <DialogHeader>
+          <DialogTitle>New Agent Session</DialogTitle>
+          <DialogDescription>
+            It is bound to this Scope for its whole life, and the backend cannot be changed
+            afterwards.
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="mt-4 flex flex-col gap-3">
+        {/* No `mt-*`: upstream's content is a grid with `gap-6`, so margins here would double up. */}
+        <div className="flex flex-col gap-3">
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">Scope</span>
             <Input
@@ -92,18 +109,18 @@ export function NewAgentSessionDialog({
               <SelectTrigger className="w-full">
                 <SelectValue>{() => backend}</SelectValue>
               </SelectTrigger>
-              <SelectPopup>
+              <SelectContent>
                 {config.backends.map((name) => (
                   <SelectItem key={name} value={name}>
                     {name}
                   </SelectItem>
                 ))}
-              </SelectPopup>
+              </SelectContent>
             </Select>
           </label>
         </div>
 
-        <div className="mt-4 flex justify-end gap-2">
+        <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
@@ -115,8 +132,8 @@ export function NewAgentSessionDialog({
           >
             {creating ? "starting…" : "Start"}
           </Button>
-        </div>
-      </DialogPopup>
+        </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }

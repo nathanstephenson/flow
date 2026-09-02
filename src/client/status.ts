@@ -18,24 +18,3 @@ export function canSettle(status: SessionStatus): boolean {
 export function canRevive(status: SessionStatus): boolean {
   return status === "dormant" || status === "settled";
 }
-
-/**
- * A palette token name rather than a colour, so the two front-ends agree on *which* meaning a
- * status carries while each keeps its own idea of what that meaning looks like.
- */
-export type StatusTone = "accent" | "ok" | "warn" | "err" | "dim";
-
-export function statusTone(status: SessionStatus): StatusTone {
-  switch (status) {
-    case "running":
-      return "accent";
-    case "idle":
-      return "ok";
-    case "dormant":
-      return "dim";
-    case "settled":
-      return "warn";
-    case "ended":
-      return "err";
-  }
-}
