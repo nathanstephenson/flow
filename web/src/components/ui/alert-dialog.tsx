@@ -18,11 +18,11 @@ export const AlertDialogClose = BaseAlertDialog.Close;
 export function AlertDialogPopup({ className, children, ...props }: ComponentProps<typeof BaseAlertDialog.Popup>) {
   return (
     <BaseAlertDialog.Portal>
-      <BaseAlertDialog.Backdrop className="fixed inset-0 bg-(--color-bg)/70" />
+      <BaseAlertDialog.Backdrop className="fixed inset-0 z-50 bg-background/70" />
       <BaseAlertDialog.Popup
         className={cn(
-          "fixed top-1/2 left-1/2 w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 " +
-            "rounded-md border border-(--color-line-strong) bg-(--color-surface) p-4 outline-none",
+          "fixed top-1/2 left-1/2 z-50 w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 " +
+            "rounded-lg border bg-background p-6 shadow-lg outline-none",
           className,
         )}
         {...props}
@@ -34,12 +34,7 @@ export function AlertDialogPopup({ className, children, ...props }: ComponentPro
 }
 
 export function AlertDialogTitle({ className, ...props }: ComponentProps<typeof BaseAlertDialog.Title>) {
-  return (
-    <BaseAlertDialog.Title
-      className={cn("font-sans text-sm font-medium text-(--color-fg-strong)", className)}
-      {...props}
-    />
-  );
+  return <BaseAlertDialog.Title className={cn("text-lg leading-none font-semibold", className)} {...props} />;
 }
 
 export function AlertDialogDescription({
@@ -47,9 +42,6 @@ export function AlertDialogDescription({
   ...props
 }: ComponentProps<typeof BaseAlertDialog.Description>) {
   return (
-    <BaseAlertDialog.Description
-      className={cn("mt-1 font-sans text-xs text-(--color-fg-muted)", className)}
-      {...props}
-    />
+    <BaseAlertDialog.Description className={cn("mt-2 text-sm text-muted-foreground", className)} {...props} />
   );
 }

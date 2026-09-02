@@ -67,15 +67,15 @@ export function HostProvider({ children }: { children: ReactNode }) {
 function Unauthorized() {
   return (
     <main className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-      <h1 className="font-sans text-sm font-medium text-(--color-fg-strong)">This browser is not authorised</h1>
-      <p className="max-w-md font-sans text-xs text-(--color-fg-muted)">
+      <h1 className="text-lg font-semibold">This browser is not authorised</h1>
+      <p className="max-w-md text-sm text-muted-foreground">
         The Session Host prints a handoff URL when it starts. Open it once in this browser and it sets
         the cookie every request after that carries.
       </p>
-      <code className="rounded-sm border border-(--color-line) bg-(--color-inset) px-2 py-1 font-mono text-xs text-(--color-fg)">
+      <code className="rounded-md border bg-muted px-2 py-1 font-mono text-sm text-foreground">
         /auth?token=…
       </code>
-      <p className="max-w-md font-sans text-2xs text-(--color-fg-faint)">
+      <p className="max-w-md text-xs text-muted-foreground">
         Use the URL as printed. Under the dev server, use the one the dev handoff printed instead —
         127.0.0.1 and localhost are different cookie hosts.
       </p>
@@ -86,7 +86,7 @@ function Unauthorized() {
 function Waiting() {
   return (
     <main className="flex h-full items-center justify-center">
-      <p className="font-sans text-xs text-(--color-fg-faint)">Reaching the Session Host…</p>
+      <p className="text-sm text-muted-foreground">Reaching the Session Host…</p>
     </main>
   );
 }

@@ -4,8 +4,8 @@ import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils.ts";
 
 /**
- * Base UI's Tooltip. Not decoration: the pane header is icon-only where it has to be, and an
- * unlabelled icon that aborts a turn is not an affordance, it is a dare.
+ * Base UI's Tooltip in shadcn's stock tooltip skin. Not decoration: the pane header is icon-only
+ * where it has to be, and an unlabelled icon that aborts a turn is not an affordance, it is a dare.
  */
 export const TooltipProvider = BaseTooltip.Provider;
 
@@ -21,8 +21,7 @@ export function Tooltip({
         <BaseTooltip.Positioner sideOffset={6}>
           <BaseTooltip.Popup
             className={cn(
-              "rounded-sm border border-(--color-line-strong) bg-(--color-overlay) px-1.5 py-0.5 " +
-                "font-sans text-2xs text-(--color-fg-strong)",
+              "z-50 w-fit rounded-md bg-primary px-3 py-1.5 text-xs text-balance text-primary-foreground",
             )}
           >
             {label}

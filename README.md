@@ -198,8 +198,9 @@ The UI is master–detail: a sidebar of Agent Sessions, one in focus, and an opt
 M4 opened a pane per Agent Session. Ten modules are shared with the terminal client rather than the
 three the old arrangement allowed, so the model and Effort pickers, the status predicates, transcript
 search and the relative clock are now one implementation each instead of two that had already
-drifted. The Presentation Transcript is treated as a document — monospace, no cards, no bubbles,
-colour spent only on encoding state — while the chrome around it is not.
+drifted. Styling is stock shadcn/ui on Base UI primitives, with no bespoke palette to learn: the five
+states an Agent Session can be in are mapped onto shadcn's own chart tokens, and monospace is kept
+only where character alignment carries meaning — transcript text, tool output, diffs and Scope paths.
 
 Nothing automatically proves the shipped bundle renders. The compiler, the module-graph check and the
 hash all prove things about the bundle rather than about the app working, and closing that gap needs

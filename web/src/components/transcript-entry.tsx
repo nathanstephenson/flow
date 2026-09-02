@@ -16,9 +16,12 @@ import { cn } from "@/lib/utils.ts";
  * a row needs to *do* something, it dispatches to context; it does not take a handler.
  *
  * The visual rules all follow from one sentence: the Presentation Transcript is a document. So there
- * are no cards around content, no bubbles, no shadows and no alternating row backgrounds — 1px lines
- * separate, and a 2ch gutter carries one glyph per kind, reusing the vocabulary `src/tui/render.ts`
- * already prints so the two front-ends read the same way.
+ * are no cards around content, no bubbles and no alternating row backgrounds — 1px lines separate,
+ * and a 2ch gutter carries one glyph per kind, reusing the vocabulary `src/tui/render.ts` already
+ * prints so the two front-ends read the same way.
+ *
+ * This is the one place that stays monospaced. Everything a model or a tool emits is aligned text —
+ * code, paths, tables, tracebacks — and the chrome around it is stock shadcn sans.
  */
 export type TranscriptEntryProps = { entry: Entry; query: string };
 
@@ -47,8 +50,8 @@ type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
  */
 function UserEntryView({ entry, query }: { entry: Of<"user">; query: string }) {
   return (
-    <Row gutter=">" gutterClassName="text-(--color-accent)">
-      <p className="m-0 border-l border-(--color-accent-quiet) pl-2 font-mono text-base font-medium whitespace-pre-wrap text-(--color-accent-strong) [overflow-wrap:anywhere]">
+    <Row gutter=">" gutterClassName="text-primary">
+      <p className="m-0 border-l-2 border-border pl-2 font-mono text-sm font-medium whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
         <Highlighted text={entry.text} query={query} />
       </p>
     </Row>
@@ -63,10 +66,10 @@ function UserEntryView({ entry, query }: { entry: Of<"user">; query: string }) {
 function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: string }) {
   return (
     <Row>
-      <p className="m-0 font-mono text-base whitespace-pre-wrap text-(--color-fg) [overflow-wrap:anywhere]">
+      <p className="m-0 font-mono text-sm whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
         <Highlighted text={entry.text} query={query} />
         {entry.final ? null : (
-          <span className="animate-caret-blink ml-px inline-block w-[1ch] text-(--color-accent)" aria-hidden>
+          <span className="animate-caret-blink ml-px inline-block w-[1ch] text-primary" aria-hidden>
             ▍
           </span>
         )}
@@ -76,21 +79,21 @@ function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: s
 }
 
 /**
- * Reasoning is the model talking to itself, so it is set apart by hue and italics and clamped once it
- * is done — but expanded while it streams, because watching it arrive is the only time anyone wants
- * all of it. The full text stays in the DOM either way: a clamp is a CSS decision, and ADR 0001's
- * record of what a human saw is not something to trim.
+ * Reasoning is the model talking to itself, so it is set apart by italics and clamped once it is done
+ * — but expanded while it streams, because watching it arrive is the only time anyone wants all of
+ * it. The full text stays in the DOM either way: a clamp is a CSS decision, and ADR 0001's record of
+ * what a human saw is not something to trim.
  */
 function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: string }) {
   const [expanded, setExpanded] = useState(false);
   const clamped = entry.final && !expanded;
 
   return (
-    <Row gutter="·" gutterClassName="text-(--color-thinking)">
+    <Row gutter="·" gutterClassName="text-muted-foreground">
       <div>
         <p
           className={cn(
-            "m-0 font-mono text-base italic whitespace-pre-wrap text-(--color-thinking) [overflow-wrap:anywhere]",
+            "m-0 font-mono text-sm italic whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]",
             clamped && "line-clamp-3",
           )}
         >
@@ -100,7 +103,7 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
           <button
             type="button"
             onClick={() => setExpanded(!expanded)}
-            className="mt-0.5 font-sans text-2xs text-(--color-fg-faint) hover:text-(--color-fg-muted)"
+            className="mt-0.5 text-xs text-muted-foreground hover:text-foreground"
           >
             {expanded ? "less" : "more"}
           </button>
@@ -112,10 +115,11 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
 
 /**
  * The one thing in the transcript that *is* a card, because a tool call is not prose: it is a
- * bounded, collapsible record of something that happened elsewhere. Native `<details>` rather than a
- * component — the disclosure state survives in the DOM (which an append-only transcript never
- * unmounts), it is keyboard-accessible without a line of code, and browsers expand it for
- * find-in-page.
+ * bounded, collapsible record of something that happened elsewhere. So it takes `bg-card`, and the
+ * payload wells inside it take `bg-muted` — the two have to differ or the well vanishes into the
+ * card that holds it. Native `<details>` rather than a component: the disclosure state survives in
+ * the DOM (which an append-only transcript never unmounts), it is keyboard-accessible without a line
+ * of code, and browsers expand it for find-in-page.
  *
  * An error opens itself. A failure the reader has to click to see is a failure they will not see.
  */
@@ -131,20 +135,20 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
       <details
         open={open}
         onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-sm border border-(--color-line) bg-(--color-surface-2)"
+        className="rounded-lg border bg-card text-card-foreground"
       >
-        <summary className="flex cursor-default items-center gap-2 px-2 py-1 select-none">
+        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <ToolStatusDot status={entry.status} />
-          <span className="shrink-0 font-mono text-xs text-(--color-fg-strong)">{entry.name}</span>
+          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
           {precis === undefined ? null : (
-            <span className="truncate font-mono text-2xs text-(--color-fg-muted)">{precis}</span>
+            <span className="truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
           {entry.status === "running" ? (
-            <span className="ml-auto shrink-0 font-sans text-2xs text-(--color-fg-faint)">running…</span>
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
           ) : null}
         </summary>
 
-        <div className="border-t border-(--color-line) p-2">
+        <div className="border-t p-3">
           <EditDiffView input={entry.input} query={query} />
           <ToolPayloadView entry={entry} query={query} />
         </div>
@@ -159,11 +163,11 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
  */
 function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
   const color =
-    status === "error" ? "var(--color-err)" : status === "running" ? "var(--color-accent)" : "var(--color-ok)";
+    status === "error" ? "var(--destructive)" : status === "running" ? "var(--primary)" : "var(--chart-2)";
   return (
     <span
       aria-hidden
-      className="inline-block h-[6px] w-[6px] shrink-0 rounded-full"
+      className="inline-block size-1.5 shrink-0 rounded-full"
       style={status === "complete" ? { border: `1.5px solid ${color}` } : { backgroundColor: color }}
     />
   );
@@ -177,13 +181,13 @@ function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
   const color =
     entry.level === "error"
-      ? "var(--color-err)"
+      ? "var(--destructive)"
       : entry.level === "warn"
-        ? "var(--color-warn)"
-        : "var(--color-fg-muted)";
+        ? "var(--chart-4)"
+        : "var(--muted-foreground)";
   return (
     <Row gutter="!" gutterStyle={{ color }}>
-      <p className="m-0 font-mono text-base whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ color }}>
+      <p className="m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ color }}>
         <Highlighted text={entry.text} query={query} />
       </p>
     </Row>
@@ -200,14 +204,14 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
 function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
   const color =
     entry.marker === "revived"
-      ? "var(--color-accent)"
+      ? "var(--primary)"
       : entry.marker === "settled"
         ? "var(--color-status-settled)"
         : "var(--color-status-dormant)";
   return (
     <div className="flex items-center gap-2 py-2" role="separator" aria-label={entry.text}>
       <span className="h-px flex-1" style={{ backgroundColor: color, opacity: 0.5 }} aria-hidden />
-      <span className="font-sans text-2xs uppercase tracking-wide" style={{ color }}>
+      <span className="text-xs" style={{ color }}>
         {entry.text}
       </span>
       <span className="h-px flex-1" style={{ backgroundColor: color, opacity: 0.5 }} aria-hidden />
@@ -217,7 +221,8 @@ function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
 
 /**
  * The 2ch gutter every kind shares, so the left edge of the text is the same column all the way
- * down the transcript regardless of which glyph precedes it.
+ * down the transcript regardless of which glyph precedes it. Monospaced, because that is what makes
+ * 2ch a fixed width.
  */
 function Row({
   gutter,
@@ -234,7 +239,7 @@ function Row({
     <div className="grid grid-cols-[2ch_minmax(0,1fr)] gap-0 py-1">
       <span
         aria-hidden
-        className={cn("font-mono text-base select-none", gutterClassName)}
+        className={cn("font-mono text-sm select-none", gutterClassName)}
         style={gutterStyle}
       >
         {gutter ?? ""}

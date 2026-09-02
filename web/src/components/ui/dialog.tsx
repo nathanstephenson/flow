@@ -3,7 +3,7 @@ import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils.ts";
 
-/** Base UI's Dialog. One user of it: starting an Agent Session. */
+/** Base UI's Dialog in shadcn's stock dialog skin. One user of it: starting an Agent Session. */
 export const Dialog = BaseDialog.Root;
 export const DialogTrigger = BaseDialog.Trigger;
 export const DialogClose = BaseDialog.Close;
@@ -11,11 +11,11 @@ export const DialogClose = BaseDialog.Close;
 export function DialogPopup({ className, children, ...props }: ComponentProps<typeof BaseDialog.Popup>) {
   return (
     <BaseDialog.Portal>
-      <BaseDialog.Backdrop className="fixed inset-0 bg-(--color-bg)/70" />
+      <BaseDialog.Backdrop className="fixed inset-0 z-50 bg-background/70" />
       <BaseDialog.Popup
         className={cn(
-          "fixed top-1/2 left-1/2 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 " +
-            "rounded-md border border-(--color-line-strong) bg-(--color-surface) p-4 outline-none",
+          "fixed top-1/2 left-1/2 z-50 w-[min(30rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 " +
+            "rounded-lg border bg-background p-6 shadow-lg outline-none",
           className,
         )}
         {...props}
@@ -27,19 +27,11 @@ export function DialogPopup({ className, children, ...props }: ComponentProps<ty
 }
 
 export function DialogTitle({ className, ...props }: ComponentProps<typeof BaseDialog.Title>) {
-  return (
-    <BaseDialog.Title
-      className={cn("font-sans text-sm font-medium text-(--color-fg-strong)", className)}
-      {...props}
-    />
-  );
+  return <BaseDialog.Title className={cn("text-lg leading-none font-semibold", className)} {...props} />;
 }
 
 export function DialogDescription({ className, ...props }: ComponentProps<typeof BaseDialog.Description>) {
   return (
-    <BaseDialog.Description
-      className={cn("mt-1 font-sans text-xs text-(--color-fg-muted)", className)}
-      {...props}
-    />
+    <BaseDialog.Description className={cn("mt-2 text-sm text-muted-foreground", className)} {...props} />
   );
 }

@@ -5,8 +5,8 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils.ts";
 
 /**
- * Base UI's Select, styled. Used for the backend picker, the Effort control and the model picker
- * below the combobox threshold.
+ * Base UI's Select in shadcn's stock select skin. Used for the backend picker, the Effort control
+ * and the model picker below the combobox threshold.
  *
  * Kept as a Select rather than promoted to a combobox everywhere because a short fixed list is
  * exactly where a native-feeling select wins: it type-to-filters for free and it is the accessible
@@ -24,16 +24,18 @@ export function SelectTrigger({ className, children, ...props }: ComponentProps<
   return (
     <BaseSelect.Trigger
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded-sm border border-(--color-line) bg-(--color-surface-2) " +
-          "px-1.5 font-mono text-2xs text-(--color-fg-strong) hover:border-(--color-line-strong) " +
-          "data-[popup-open]:border-(--color-line-strong)",
+        "flex h-8 w-fit items-center justify-between gap-2 rounded-md border border-input bg-transparent " +
+          "px-3 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none " +
+          "hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] " +
+          "focus-visible:ring-ring/50 data-[popup-open]:border-ring " +
+          "disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
         className,
       )}
       {...props}
     >
       {children}
-      <BaseSelect.Icon className="text-(--color-fg-faint)">
-        <ChevronsUpDown size={10} aria-hidden />
+      <BaseSelect.Icon className="text-muted-foreground">
+        <ChevronsUpDown className="size-4 opacity-50" aria-hidden />
       </BaseSelect.Icon>
     </BaseSelect.Trigger>
   );
@@ -45,8 +47,8 @@ export function SelectPopup({ className, children, ...props }: ComponentProps<ty
       <BaseSelect.Positioner sideOffset={4} align="start" alignItemWithTrigger={false}>
         <BaseSelect.Popup
           className={cn(
-            "max-h-[min(24rem,var(--available-height))] min-w-(--anchor-width) overflow-y-auto rounded-md " +
-              "border border-(--color-line-strong) bg-(--color-overlay) p-1 outline-none",
+            "z-50 max-h-[min(24rem,var(--available-height))] min-w-(--anchor-width) overflow-x-hidden " +
+              "overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none",
             className,
           )}
           {...props}
@@ -62,14 +64,14 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
   return (
     <BaseSelect.Item
       className={cn(
-        "flex cursor-default items-center gap-2 rounded-sm px-2 py-1 font-mono text-xs text-(--color-fg) " +
-          "data-[highlighted]:bg-(--color-surface-2) data-[highlighted]:text-(--color-fg-strong)",
+        "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm " +
+          "outline-hidden select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
         className,
       )}
       {...props}
     >
-      <BaseSelect.ItemIndicator className="w-3 shrink-0 text-(--color-accent)">
-        <Check size={10} aria-hidden />
+      <BaseSelect.ItemIndicator className="size-4 shrink-0">
+        <Check className="size-4" aria-hidden />
       </BaseSelect.ItemIndicator>
       <BaseSelect.ItemText className="truncate">{children}</BaseSelect.ItemText>
     </BaseSelect.Item>
@@ -79,7 +81,7 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
 export function SelectGroupLabel({ className, ...props }: ComponentProps<typeof BaseSelect.GroupLabel>) {
   return (
     <BaseSelect.GroupLabel
-      className={cn("px-2 pt-2 pb-1 font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint)", className)}
+      className={cn("px-2 py-1.5 text-xs text-muted-foreground", className)}
       {...props}
     />
   );

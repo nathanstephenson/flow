@@ -57,11 +57,11 @@ function AttachedPane({
       onFocusCapture={() => dispatch({ type: "focus_pane", role })}
       onMouseDownCapture={() => dispatch({ type: "focus_pane", role })}
       className={cn(
-        "grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-(--color-bg)",
+        "grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-background",
         // A focused pane is bordered rather than tinted: a background change would make the
         // transcript inside it read as a card.
         split && "border",
-        split && (focused ? "border-(--color-line-strong)" : "border-(--color-line)"),
+        split && (focused ? "border-ring" : "border-border"),
         // Nothing here dims a Settled Agent Session. They are de-emphasised in the rail and at full
         // contrast once focused in a pane, because reading one is exactly what focusing it means
         // (ADR 0006).

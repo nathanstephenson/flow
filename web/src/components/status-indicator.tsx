@@ -18,7 +18,7 @@ export function StatusDot({ status, className }: { status: SessionStatus; classN
   return (
     <span
       aria-hidden
-      className={cn("inline-block h-[7px] w-[7px] shrink-0 rounded-full", className)}
+      className={cn("inline-block size-2 shrink-0 rounded-full", className)}
       style={hollow ? { border: `1.5px solid ${color}` } : { backgroundColor: color }}
     />
   );
@@ -26,7 +26,7 @@ export function StatusDot({ status, className }: { status: SessionStatus; classN
 
 export function StatusBadge({ status }: { status: SessionStatus }) {
   return (
-    <Badge tone={statusTone(status)} className="gap-1">
+    <Badge tone={statusTone(status)}>
       <StatusDot status={status} />
       {status}
     </Badge>
@@ -45,7 +45,7 @@ export function RunningHairline({ running }: { running: boolean }) {
   return (
     <div className="h-[2px] w-full overflow-hidden" aria-hidden>
       {running ? (
-        <div className="animate-in slide-in-from-left-full repeat-infinite ease-linear h-full w-2/5 duration-1000 bg-(--color-accent)" />
+        <div className="animate-in slide-in-from-left-full repeat-infinite ease-linear h-full w-2/5 duration-1000 bg-primary" />
       ) : null}
     </div>
   );

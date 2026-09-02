@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils.ts";
 
 /**
  * Base UI's Combobox — the component Radix never had, and the reason the model picker needs no
- * `cmdk`, no Popover scaffolding and no hand-rolled filter.
+ * `cmdk`, no Popover scaffolding and no hand-rolled filter. Skinned as shadcn's Command-in-a-Popover.
  *
  * Its `Group`/`GroupLabel`/`Collection` parts map one-to-one onto the provider-grouped output of
  * `modelChoices()`, and `Input`/`Empty` give the search that a backend offering hundreds of models
@@ -21,8 +21,10 @@ export function ComboboxTrigger({ className, ...props }: ComponentProps<typeof B
   return (
     <BaseCombobox.Trigger
       className={cn(
-        "inline-flex h-6 max-w-56 items-center gap-1 truncate rounded-sm border border-(--color-line) " +
-          "bg-(--color-surface-2) px-1.5 font-mono text-2xs text-(--color-fg-strong) hover:border-(--color-line-strong)",
+        "flex h-8 max-w-56 items-center justify-between gap-2 truncate rounded-md border border-input " +
+          "bg-transparent px-3 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none " +
+          "hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] " +
+          "focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
         className,
       )}
       {...props}
@@ -36,8 +38,8 @@ export function ComboboxPopup({ className, children, ...props }: ComponentProps<
       <BaseCombobox.Positioner sideOffset={4} align="start">
         <BaseCombobox.Popup
           className={cn(
-            "flex max-h-[min(28rem,var(--available-height))] w-72 flex-col rounded-md border " +
-              "border-(--color-line-strong) bg-(--color-overlay) outline-none",
+            "z-50 flex max-h-[min(28rem,var(--available-height))] w-72 flex-col overflow-hidden rounded-md " +
+              "border bg-popover text-popover-foreground shadow-md outline-none",
             className,
           )}
           {...props}
@@ -51,12 +53,12 @@ export function ComboboxPopup({ className, children, ...props }: ComponentProps<
 
 export function ComboboxInput({ className, ...props }: ComponentProps<typeof BaseCombobox.Input>) {
   return (
-    <div className="flex items-center gap-1.5 border-b border-(--color-line) px-2">
-      <Search size={11} className="shrink-0 text-(--color-fg-faint)" aria-hidden />
+    <div className="flex items-center gap-2 border-b px-3">
+      <Search className="size-4 shrink-0 opacity-50" aria-hidden />
       <BaseCombobox.Input
         className={cn(
-          "h-7 w-full bg-transparent font-mono text-xs text-(--color-fg-strong) outline-none " +
-            "placeholder:text-(--color-fg-faint)",
+          "flex h-9 w-full bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground " +
+            "disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
         {...props}
@@ -66,21 +68,21 @@ export function ComboboxInput({ className, ...props }: ComponentProps<typeof Bas
 }
 
 export function ComboboxList({ className, ...props }: ComponentProps<typeof BaseCombobox.List>) {
-  return <BaseCombobox.List className={cn("overflow-y-auto p-1", className)} {...props} />;
+  return <BaseCombobox.List className={cn("overflow-x-hidden overflow-y-auto p-1", className)} {...props} />;
 }
 
 export function ComboboxItem({ className, children, ...props }: ComponentProps<typeof BaseCombobox.Item>) {
   return (
     <BaseCombobox.Item
       className={cn(
-        "flex cursor-default items-center gap-2 rounded-sm px-2 py-1 font-mono text-xs text-(--color-fg) " +
-          "data-[highlighted]:bg-(--color-surface-2) data-[highlighted]:text-(--color-fg-strong)",
+        "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm " +
+          "outline-hidden select-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
         className,
       )}
       {...props}
     >
-      <BaseCombobox.ItemIndicator className="w-3 shrink-0 text-(--color-accent)">
-        <Check size={10} aria-hidden />
+      <BaseCombobox.ItemIndicator className="size-4 shrink-0">
+        <Check className="size-4" aria-hidden />
       </BaseCombobox.ItemIndicator>
       <span className="truncate">{children}</span>
     </BaseCombobox.Item>
@@ -90,7 +92,7 @@ export function ComboboxItem({ className, children, ...props }: ComponentProps<t
 export function ComboboxGroupLabel({ className, ...props }: ComponentProps<typeof BaseCombobox.GroupLabel>) {
   return (
     <BaseCombobox.GroupLabel
-      className={cn("px-2 pt-2 pb-1 font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint)", className)}
+      className={cn("px-2 py-1.5 text-xs text-muted-foreground", className)}
       {...props}
     />
   );
@@ -99,7 +101,7 @@ export function ComboboxGroupLabel({ className, ...props }: ComponentProps<typeo
 export function ComboboxEmpty({ className, ...props }: ComponentProps<typeof BaseCombobox.Empty>) {
   return (
     <BaseCombobox.Empty
-      className={cn("px-2 py-3 text-center font-sans text-xs text-(--color-fg-muted)", className)}
+      className={cn("px-2 py-6 text-center text-sm text-muted-foreground", className)}
       {...props}
     />
   );

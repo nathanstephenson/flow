@@ -59,7 +59,7 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
   }, [ended, run, sending, sessionId, text]);
 
   return (
-    <div className="border-t border-(--color-line) bg-(--color-surface) px-3 py-2">
+    <div className="border-t bg-card px-3 py-3">
       <div className="flex items-end gap-2">
         <textarea
           ref={textarea}
@@ -85,14 +85,19 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
             void send();
           }}
           className={cn(
-            "min-h-7 flex-1 resize-none rounded-sm border border-(--color-line) bg-(--color-inset) px-2 py-1",
-            "font-mono text-base text-(--color-fg-strong) placeholder:text-(--color-fg-faint)",
-            "focus:border-(--color-line-strong) disabled:opacity-60",
+            // Mono, matching the Presentation Transcript: what you type here is rendered back as a
+            // user Entry in mono, and composing a path or a snippet against proportional text only
+            // to watch it reflow on send is a small lie about what you wrote.
+            "min-h-9 flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2",
+            "font-mono text-sm",
+            "shadow-xs transition-[color,box-shadow] outline-none placeholder:font-sans placeholder:text-muted-foreground",
+            "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30",
           )}
         />
 
         {ended ? null : (
-          <Button variant="accent" size="sm" disabled={sending || text.trim() === ""} onClick={() => void send()}>
+          <Button size="sm" disabled={sending || text.trim() === ""} onClick={() => void send()}>
             {sending ? "sending…" : chrome.status === "running" ? "Queue" : "Send"}
           </Button>
         )}
@@ -127,5 +132,5 @@ function SteeringHint({ chrome }: { chrome: Chrome }) {
     return chrome.queueDepth > 0 ? `Sent after the current turn, behind ${chrome.queueDepth}.` : "Enter sends, Shift+Enter for a newline.";
   })();
 
-  return <p className="mt-1 m-0 font-sans text-2xs text-(--color-fg-faint)">{hint}</p>;
+  return <p className="m-0 mt-2 text-xs text-muted-foreground">{hint}</p>;
 }

@@ -40,7 +40,7 @@ export function AgentSessionSidebar(props: AgentSessionSidebarProps) {
   const settled = props.sessions.filter((session) => session.status === "settled");
 
   return (
-    <aside className="grid h-full min-h-0 grid-rows-[auto_1fr_auto] border-r border-(--color-line) bg-(--color-surface)">
+    <aside className="grid h-full min-h-0 grid-rows-[auto_1fr_auto] border-r bg-sidebar text-sidebar-foreground">
       <SidebarHeader scope={props.scope} onNew={props.onNew} />
 
       <div className="transcript-scroller">
@@ -53,7 +53,7 @@ export function AgentSessionSidebar(props: AgentSessionSidebarProps) {
         ) : null}
 
         {props.sessions.length === 0 ? (
-          <p className="px-3 py-4 font-sans text-xs text-(--color-fg-faint)">No Agent Sessions yet.</p>
+          <p className="px-3 py-4 text-sm text-muted-foreground">No Agent Sessions yet.</p>
         ) : null}
       </div>
 
@@ -64,12 +64,12 @@ export function AgentSessionSidebar(props: AgentSessionSidebarProps) {
 
 function SidebarHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
   return (
-    <div className="flex items-center gap-2 border-b border-(--color-line) px-2 py-2">
+    <div className="flex items-center gap-2 border-b px-2 py-2">
       <Tooltip label={scope}>
         <ScopeLabel scope={scope} className="max-w-[13rem]" />
       </Tooltip>
-      <Button variant="accent" size="xs" className="ml-auto" onClick={onNew}>
-        <Plus size={11} aria-hidden />
+      <Button size="sm" className="ml-auto" onClick={onNew}>
+        <Plus aria-hidden />
         New Agent Session
       </Button>
     </div>
@@ -85,9 +85,9 @@ export function ScopeLabel({ scope, className }: { scope: string; className?: st
   const directory = cut <= 0 ? "" : `${scope.slice(0, cut)}/`;
   const basename = cut < 0 ? scope : scope.slice(cut + 1);
   return (
-    <span className={cn("truncate font-mono text-2xs", className)} dir="rtl">
-      <span className="text-(--color-fg-faint)">{directory}</span>
-      <span className="text-(--color-fg-strong)">{basename}</span>
+    <span className={cn("truncate font-mono text-xs", className)} dir="rtl">
+      <span className="text-muted-foreground/70">{directory}</span>
+      <span className="text-foreground">{basename}</span>
     </span>
   );
 }
@@ -132,11 +132,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
       className={cn(
         "group grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 border-l-2 px-2 py-1.5",
         selected
-          ? "border-l-(--color-accent) bg-(--color-surface-2)"
-          : "border-l-transparent hover:bg-(--color-surface-2)",
+          ? "border-l-primary bg-muted"
+          : "border-l-transparent hover:bg-muted",
         // The keyboard cursor is a ring rather than a fill, so it can sit on a row that is also open
         // in a pane without the two signals cancelling each other out.
-        cursored && "outline outline-(--color-line-strong) -outline-offset-1",
+        cursored && "outline outline-ring -outline-offset-1",
       )}
     >
       <StatusDot status={status} />
@@ -148,10 +148,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         className="min-w-0 text-left"
         aria-current={selected ? "true" : undefined}
       >
-        <span className="block truncate font-sans text-xs text-(--color-fg-strong)">
-          {sessionLabel(summary)}
-        </span>
-        <span className="block truncate font-mono text-2xs text-(--color-fg-faint)">
+        <span className="block truncate text-sm text-foreground">{sessionLabel(summary)}</span>
+        <span className="block truncate text-xs text-muted-foreground">
           {summary.backend} · {relativeTime(summary.updatedAt, now)}
         </span>
       </button>
@@ -161,20 +159,20 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
        * cannot reflow the moment a pointer enters the row.
        */}
       <Button
-        variant="quiet"
+        variant="ghost"
         size="icon"
         className="invisible group-focus-within:visible group-hover:visible"
         onClick={() => onSplit(summary.id)}
         aria-label="Open beside"
         title="Open beside"
       >
-        <Columns2 size={11} aria-hidden />
+        <Columns2 aria-hidden />
       </Button>
 
       {canSettle(status) ? (
         <Button
-          variant="quiet"
-          size="xs"
+          variant="ghost"
+          size="sm"
           className="invisible group-focus-within:visible group-hover:visible"
           onClick={() => onSettle(summary.id)}
         >
@@ -182,7 +180,7 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         </Button>
       ) : (
         // Same width, still reserved: hiding the affordance must not move the row.
-        <span className="w-[3.25rem]" aria-hidden />
+        <span className="w-18" aria-hidden />
       )}
     </div>
   );
@@ -196,8 +194,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
  */
 function SettledDisclosure({ count, children }: { count: number; children: ReactNode }) {
   return (
-    <details className="border-t border-(--color-line)">
-      <summary className="cursor-default px-2 py-1.5 font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint) select-none">
+    <details className="border-t">
+      <summary className="cursor-default px-2 py-1.5 text-xs text-muted-foreground select-none">
         Settled · {count}
       </summary>
       {/* Reduced contrast here; full contrast once one of them is focused in a pane. */}
@@ -208,11 +206,11 @@ function SettledDisclosure({ count, children }: { count: number; children: React
 
 function SidebarFooter({ link }: { link: LinkState | undefined }) {
   return (
-    <div className="flex items-center gap-2 border-t border-(--color-line) px-2 py-1.5">
-      <span className="flex items-center gap-1 font-sans text-2xs text-(--color-fg-faint)">
+    <div className="flex items-center gap-2 border-t px-2 py-1.5">
+      <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Kbd>n</Kbd> new
       </span>
-      <span className="flex items-center gap-1 font-sans text-2xs text-(--color-fg-faint)">
+      <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Kbd>/</Kbd> find
       </span>
       <LinkDot link={link} />
@@ -222,7 +220,7 @@ function SidebarFooter({ link }: { link: LinkState | undefined }) {
 
 export function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded-sm border border-(--color-line) bg-(--color-surface-2) px-1 font-mono text-2xs text-(--color-fg-muted)">
+    <kbd className="rounded-sm border bg-muted px-1 font-mono text-xs text-muted-foreground">
       {children}
     </kbd>
   );
@@ -236,14 +234,10 @@ export function Kbd({ children }: { children: ReactNode }) {
 function LinkDot({ link }: { link: LinkState | undefined }) {
   if (link === undefined) return null;
   const color =
-    link === "live"
-      ? "var(--color-ok)"
-      : link === "gone"
-        ? "var(--color-err)"
-        : "var(--color-warn)";
+    link === "live" ? "var(--chart-2)" : link === "gone" ? "var(--destructive)" : "var(--chart-4)";
   return (
-    <span className="ml-auto flex items-center gap-1 font-sans text-2xs text-(--color-fg-faint)">
-      <span aria-hidden className="inline-block h-[6px] w-[6px] rounded-full" style={{ backgroundColor: color }} />
+    <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+      <span aria-hidden className="inline-block size-1.5 rounded-full" style={{ backgroundColor: color }} />
       {link}
     </span>
   );

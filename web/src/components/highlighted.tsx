@@ -16,7 +16,7 @@ export function Highlighted({ text, query }: { text: string; query: string }) {
     <>
       {highlightSegments(text, query).map((segment, index) =>
         segment.match ? (
-          <mark key={index} className="rounded-sm bg-(--color-mark-bg) text-(--color-mark-fg)">
+          <mark key={index} className="rounded-sm bg-chart-4/30 text-foreground">
             {segment.text}
           </mark>
         ) : (

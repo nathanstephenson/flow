@@ -90,11 +90,11 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
           <button
             type="button"
             onClick={() => setShowAll(true)}
-            className="mb-2 flex w-full items-center gap-2 font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint) hover:text-(--color-fg-muted)"
+            className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
           >
-            <span className="h-px flex-1 bg-(--color-line)" aria-hidden />
+            <span className="h-px flex-1 bg-border" aria-hidden />
             {earlier.toLocaleString()} earlier entries · show all
-            <span className="h-px flex-1 bg-(--color-line)" aria-hidden />
+            <span className="h-px flex-1 bg-border" aria-hidden />
           </button>
         ) : null}
 
@@ -103,7 +103,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
         ))}
 
         {visibleKeys.length === 0 ? (
-          <p className="px-1 py-4 font-sans text-xs text-(--color-fg-faint)">
+          <p className="px-1 py-4 text-sm text-muted-foreground">
             {keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
           </p>
         ) : null}
@@ -173,7 +173,7 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="absolute right-3 bottom-2 rounded-sm border border-(--color-line-strong) bg-(--color-overlay) px-2 py-0.5 font-sans text-2xs text-(--color-fg-strong)"
+      className="absolute right-3 bottom-2 rounded-md border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-md"
     >
       jump to latest ↓
     </button>

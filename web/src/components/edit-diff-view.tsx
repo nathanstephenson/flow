@@ -1,6 +1,7 @@
 import type { Entry } from "@client/reduce.ts";
 import { editDiff } from "@client/diff.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { cn } from "@/lib/utils.ts";
 
 /**
  * A file-editing tool call, shown as the change it makes.
@@ -16,7 +17,7 @@ export function EditDiffView({ input, query }: { input: unknown; query: string }
   if (!diff) return null;
 
   return (
-    <div className="overflow-hidden rounded-sm border border-(--color-line) bg-(--color-inset)">
+    <div className="overflow-hidden rounded-md border bg-muted">
       {diff.path === undefined ? null : <PathHeader path={diff.path} />}
       <div className="overflow-x-auto">
         {diff.removed.map((line, index) => (
@@ -34,9 +35,9 @@ export function EditDiffView({ input, query }: { input: unknown; query: string }
 function PathHeader({ path }: { path: string }) {
   const cut = path.lastIndexOf("/");
   return (
-    <p className="m-0 truncate border-b border-(--color-line) px-2 py-1 font-mono text-2xs">
-      <span className="text-(--color-fg-faint)">{cut < 0 ? "" : `${path.slice(0, cut)}/`}</span>
-      <span className="text-(--color-fg-strong)">{cut < 0 ? path : path.slice(cut + 1)}</span>
+    <p className="m-0 truncate border-b px-2 py-1 font-mono text-xs">
+      <span className="text-muted-foreground/70">{cut < 0 ? "" : `${path.slice(0, cut)}/`}</span>
+      <span className="text-foreground">{cut < 0 ? path : path.slice(cut + 1)}</span>
     </p>
   );
 }
@@ -52,14 +53,14 @@ function DiffLine({
   query: string;
   kind: "removed" | "added";
 }) {
-  const removed = kind === "removed";
+  // Two static class strings rather than an inline style, so Tailwind's scanner sees both and the
+  // colours stay tokens. `kind` is known at render time, so nothing here is assembled dynamically.
   return (
     <div
-      className="grid grid-cols-[1.25rem_minmax(0,1fr)] font-mono text-2xs whitespace-pre"
-      style={{
-        backgroundColor: removed ? "var(--color-diff-del-bg)" : "var(--color-diff-add-bg)",
-        color: removed ? "var(--color-diff-del-fg)" : "var(--color-diff-add-fg)",
-      }}
+      className={cn(
+        "grid grid-cols-[1.25rem_minmax(0,1fr)] font-mono text-xs whitespace-pre",
+        kind === "removed" ? "bg-destructive/10 text-destructive" : "bg-chart-2/10 text-chart-2",
+      )}
     >
       <span className="pl-2 select-none" aria-hidden>
         {sign}
@@ -99,8 +100,8 @@ function Payload({ label, value, query }: { label: string; value: unknown; query
 
   return (
     <div className="mt-1.5 first:mt-0">
-      <p className="m-0 mb-0.5 font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint)">{label}</p>
-      <pre className="m-0 max-h-72 overflow-auto rounded-sm border border-(--color-line) bg-(--color-inset) p-2 font-mono text-2xs whitespace-pre-wrap text-(--color-fg) [overflow-wrap:anywhere]">
+      <p className="m-0 mb-1 text-xs text-muted-foreground">{label}</p>
+      <pre className="m-0 max-h-72 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
         {/*
          * A megabyte of tool output split into per-match segments is tens of thousands of DOM nodes
          * on a keystroke. Past the limit the text is still all there and find-in-page still finds it

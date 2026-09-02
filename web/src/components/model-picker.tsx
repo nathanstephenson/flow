@@ -131,7 +131,7 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
         </ComboboxList>
         <ComboboxEmpty>No model matches.</ComboboxEmpty>
         {choices.length > RENDER_LIMIT ? (
-          <p className="border-t border-(--color-line) px-2 py-1 font-sans text-2xs text-(--color-fg-faint)">
+          <p className="border-t px-2 py-1.5 text-xs text-muted-foreground">
             Showing at most {RENDER_LIMIT} matches — keep typing.
           </p>
         ) : null}

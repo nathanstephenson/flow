@@ -36,8 +36,8 @@ export function TranscriptSearchField({
   }, [text, onQueryChange]);
 
   return (
-    <div className="flex items-center gap-1.5 border-b border-(--color-line) bg-(--color-surface) px-3 py-1">
-      <Search size={11} className="shrink-0 text-(--color-fg-faint)" aria-hidden />
+    <div className="flex items-center gap-2 border-b bg-card px-3 py-1">
+      <Search className="size-4 shrink-0 opacity-50" aria-hidden />
       <Input
         ref={inputRef}
         data-transcript-search=""
@@ -51,16 +51,16 @@ export function TranscriptSearchField({
         }}
         placeholder="Find in this Presentation Transcript"
         aria-label="Find in this Presentation Transcript"
-        className="h-6 border-0 bg-transparent px-0 focus:border-0"
+        className="h-8 border-0 bg-transparent px-0 shadow-none dark:bg-transparent focus-visible:border-0 focus-visible:ring-0"
       />
       {text === "" ? null : (
         <button
           type="button"
           onClick={() => setText("")}
           aria-label="Clear"
-          className="shrink-0 text-(--color-fg-faint) hover:text-(--color-fg)"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
         >
-          <X size={11} aria-hidden />
+          <X className="size-4" aria-hidden />
         </button>
       )}
     </div>

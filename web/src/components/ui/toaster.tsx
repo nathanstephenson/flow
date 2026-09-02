@@ -1,8 +1,8 @@
 import { Toast } from "@base-ui/react/toast";
 
 /**
- * Where command errors go. Today they go nowhere: the old client threw them into an unhandled
- * rejection, so a rejected send looked exactly like a slow one.
+ * Where command errors go. Before this they went nowhere: the old client threw them into an
+ * unhandled rejection, so a rejected send looked exactly like a slow one.
  *
  * Built on Base UI's Toast rather than on the `sonner` package that shadcn's `sonner` component
  * wraps. The plan's dependency list does not include `sonner`, and @base-ui/react — already the only
@@ -10,7 +10,7 @@ import { Toast } from "@base-ui/react/toast";
  * is what matters here: the reporter has to be callable from a command dispatcher that is not a
  * component, and a hook cannot be.
  *
- * Bottom right, mono, no icons: a toast in this app is a machine message, not an announcement.
+ * Bottom right, no icons: a toast in this app is a machine message, not an announcement.
  */
 export const toastManager = Toast.createToastManager();
 
@@ -31,17 +31,17 @@ function ToastList() {
         <Toast.Root
           key={item.id}
           toast={item}
-          className="mb-1.5 w-72 rounded-md border border-(--color-line-strong) bg-(--color-overlay) p-2"
+          className="relative mb-2 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-lg"
           style={{
             // A failed command is the case this exists for, so an error toast wears the error hue on
             // its edge rather than on a filled background.
-            borderColor: item.type === "error" ? "var(--color-err)" : undefined,
+            borderColor: item.type === "error" ? "var(--destructive)" : undefined,
           }}
         >
-          <Toast.Title className="font-mono text-xs text-(--color-fg-strong)" />
-          <Toast.Description className="mt-0.5 font-mono text-2xs break-words text-(--color-fg-muted)" />
+          <Toast.Title className="text-sm font-medium" />
+          <Toast.Description className="mt-1 text-sm break-words text-muted-foreground" />
           <Toast.Close
-            className="absolute top-1 right-1 px-1 font-mono text-2xs text-(--color-fg-faint) hover:text-(--color-fg)"
+            className="absolute top-2 right-2 px-1 text-sm text-muted-foreground hover:text-foreground"
             aria-label="Dismiss"
           >
             ×
@@ -56,7 +56,7 @@ export function Toaster() {
   return (
     <Toast.Provider toastManager={toastManager}>
       <Toast.Portal>
-        <Toast.Viewport className="fixed right-3 bottom-3 z-50 flex w-72 flex-col items-end">
+        <Toast.Viewport className="fixed right-4 bottom-4 z-50 flex w-72 flex-col items-end">
           <ToastList />
         </Toast.Viewport>
       </Toast.Portal>

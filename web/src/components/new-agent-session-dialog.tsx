@@ -71,8 +71,9 @@ export function NewAgentSessionDialog({
 
         <div className="mt-4 flex flex-col gap-3">
           <label className="flex flex-col gap-1">
-            <span className="font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint)">Scope</span>
+            <span className="text-sm font-medium">Scope</span>
             <Input
+              className="font-mono"
               value={scope}
               onChange={(event) => setScope(event.target.value)}
               placeholder="/path/to/the/working/directory"
@@ -81,14 +82,14 @@ export function NewAgentSessionDialog({
           </label>
 
           <label className="flex flex-col gap-1">
-            <span className="font-sans text-2xs uppercase tracking-wide text-(--color-fg-faint)">Backend</span>
+            <span className="text-sm font-medium">Backend</span>
             <Select
               value={backend}
               onValueChange={(value) => {
                 if (typeof value === "string") setBackend(value);
               }}
             >
-              <SelectTrigger className="h-7 w-full justify-between px-2 text-xs">
+              <SelectTrigger className="w-full">
                 <SelectValue>{() => backend}</SelectValue>
               </SelectTrigger>
               <SelectPopup>
@@ -108,7 +109,6 @@ export function NewAgentSessionDialog({
           </Button>
           <Button
             ref={create}
-            variant="accent"
             size="sm"
             disabled={creating || scope.trim() === "" || backend === ""}
             onClick={() => void submit()}

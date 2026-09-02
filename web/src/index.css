@@ -1,158 +1,169 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+@custom-variant dark (&:is(.dark *));
+
 /*
- * The Presentation Transcript is a document; the chrome is an instrument.
+ * Stock shadcn/ui theme, unmodified. The tokens, the oklch values, the radius scale and the base
+ * layer are all shadcn's defaults, so a component copied from the docs looks right without being
+ * reinterpreted, and there is no bespoke palette for anyone to learn.
  *
- * That sentence decides everything below. Transcript content gets no cards, no bubbles, no shadows
- * and no alternating backgrounds — 1px lines do the separating, and colour is spent only on encoding
- * state, never on decoration. Dark stays the default because it is the product's existing identity.
- *
- * The dark values are the ten this UI already shipped, kept exactly. What is new is the vocabulary a
- * real design needs on top of them: a well that recedes below the base, an overlay that sits above
- * it, a stronger line for the focused pane, and two extra text weights so a title, a body and a
- * timestamp can differ without reaching for colour.
+ * The only thing this file adds is a mapping (further down) from the states this domain has —
+ * an Agent Session is idle, running, Dormant, Settled or Ended — onto shadcn's own chart tokens.
+ * Those states need five distinguishable hues and shadcn ships exactly five, so the mapping invents
+ * no colour of its own.
  */
 
-@theme {
-  /* No webfonts. Both stacks are the platform's, and the mono one is the one this UI already used. */
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+:root {
+  --radius: 0.625rem;
 
-  /*
-   * Denser than Tailwind's defaults. The transcript stays at the 13px this UI has always used, but
-   * gains leading, because it is read in paragraphs rather than glanced at. Chrome goes smaller than
-   * the transcript on purpose: it should be legible without competing for the eye.
-   */
-  --text-2xs: 0.6875rem;
-  --text-2xs--line-height: 1.45;
-  --text-xs: 0.75rem;
-  --text-xs--line-height: 1.5;
-  --text-sm: 0.8125rem;
-  --text-sm--line-height: 1.55;
-  --text-base: 0.8125rem;
-  --text-base--line-height: 1.65;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
 
-  /* Nothing rounder than the 4px this UI already used. Softer corners read as a consumer app. */
-  --radius-sm: 3px;
-  --radius-md: 4px;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
-/*
- * Dark is the default and lives on :root so it applies with no class at all; .light opts out. Both
- * are also exposed under an explicit .dark so a future toggle can force either way.
- */
-@layer base {
-  :root,
-  .dark {
-    --color-bg: #0d1117;
-    --color-surface: #131922;
-    --color-surface-2: #182029;
-    /* Wells recede *below* the base so tool output and diffs read as inset, not as raised cards. */
-    --color-inset: #0a0f14;
-    --color-overlay: #1b232e;
-    --color-line: #232c38;
-    --color-line-strong: #2f3a49;
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.269 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.371 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
 
-    --color-fg: #c9d3df;
-    --color-fg-strong: #e6edf5;
-    --color-fg-muted: #7c8b9d;
-    --color-fg-faint: #5b6878;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
 
-    --color-accent: #7aa2f7;
-    --color-accent-strong: #a3bdfa;
-    --color-accent-quiet: color-mix(in oklab, #7aa2f7 14%, transparent);
-
-    --color-ok: #7ac794;
-    --color-warn: #d6b16a;
-    --color-err: #e07a7a;
-    /* The model's private reasoning gets its own hue, so it is distinct from chrome metadata
-     * without shouting. Dim grey alone made thinking look like a label. */
-    --color-thinking: #9a8fc7;
-
-    --color-diff-add-fg: #7ac794;
-    --color-diff-add-bg: color-mix(in oklab, #7ac794 10%, transparent);
-    --color-diff-del-fg: #e07a7a;
-    --color-diff-del-bg: color-mix(in oklab, #e07a7a 10%, transparent);
-
-    /* Derived from warn rather than the unrelated olive this UI used, so a search hit belongs to
-     * the same system as everything else. */
-    --color-mark-bg: color-mix(in oklab, #d6b16a 28%, transparent);
-    --color-mark-fg: #f0e6d0;
-
-    --color-ring: color-mix(in oklab, #7aa2f7 60%, transparent);
-  }
-
-  /*
-   * Warm paper rather than white, and not an inversion of the dark set. A long Presentation
-   * Transcript is read, so the page is a shade off-white and the accent is darkened until it holds
-   * contrast against it; a hue that works on #0d1117 does not survive on paper.
-   */
-  .light {
-    --color-bg: #fbfaf8;
-    --color-surface: #f4f2ee;
-    --color-surface-2: #eae7e1;
-    --color-inset: #f0ede7;
-    --color-overlay: #ffffff;
-    --color-line: #dedad2;
-    --color-line-strong: #c9c4ba;
-
-    --color-fg: #23282e;
-    --color-fg-strong: #10141a;
-    --color-fg-muted: #5d6673;
-    --color-fg-faint: #838d9a;
-
-    --color-accent: #2f52c9;
-    --color-accent-strong: #1e3fae;
-    --color-accent-quiet: color-mix(in oklab, #2f52c9 10%, transparent);
-
-    --color-ok: #2f7d4f;
-    --color-warn: #8a6410;
-    --color-err: #b02b2b;
-    --color-thinking: #5d51a0;
-
-    /* Washes read weaker on paper, so both diff tints go up from 10%. */
-    --color-diff-add-fg: #2f7d4f;
-    --color-diff-add-bg: color-mix(in oklab, #2f7d4f 12%, transparent);
-    --color-diff-del-fg: #b02b2b;
-    --color-diff-del-bg: color-mix(in oklab, #b02b2b 12%, transparent);
-
-    --color-mark-bg: color-mix(in oklab, #d6b16a 40%, white);
-    --color-mark-fg: #3a2f10;
-
-    --color-ring: color-mix(in oklab, #2f52c9 55%, transparent);
-  }
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
-/*
- * Status tones. Every one of the five is the hue this UI already used, so the redesign changes the
- * shape of the signal, not its meaning. Nothing outside this file may name a status colour: code
- * goes through statusTone() in src/client/status.ts, which returns one of these token names.
- *
- * `idle` deliberately keeps its own tone rather than borrowing Dormant's. They are different states
- * — idle means a Backend Session is attached and between turns, Dormant means none is running — and
- * CONTEXT.md bans "idle" as a synonym for Dormant precisely because conflating them misleads.
- */
-@layer base {
-  :root,
-  .dark,
-  .light {
-    --color-status-idle: var(--color-ok);
-    --color-status-running: var(--color-accent);
-    --color-status-dormant: var(--color-fg-muted);
-    --color-status-settled: var(--color-warn);
-    /* Terminal, not broken: desaturated toward muted so a filled err stays reserved for an actual
-     * error notice or a failed tool call. */
-    --color-status-ended: color-mix(in oklab, var(--color-err) 70%, var(--color-fg-muted));
-  }
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 @layer base {
   * {
-    box-sizing: border-box;
+    @apply border-border outline-ring/50;
   }
 
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/*
+ * The five states an Agent Session can be in, mapped onto shadcn's chart tokens.
+ *
+ * Nothing outside this file names a status colour: statusTone() in src/client/status.ts returns a
+ * token name and the components look it up here, so the terminal client and the browser cannot
+ * disagree about what Settled looks like.
+ *
+ * `idle` gets its own tone rather than borrowing Dormant's. They are genuinely different — idle
+ * means a Backend Session is attached and between turns, Dormant means none is running at all —
+ * and CONTEXT.md bans "idle" as a synonym for Dormant precisely because conflating them misleads.
+ * Ended is destructive-toned but never filled, since a filled destructive is reserved for an actual
+ * error notice or a failed tool call; Ended is terminal, not broken.
+ */
+@layer base {
+  :root,
+  .dark {
+    --color-status-idle: var(--chart-2);
+    --color-status-running: var(--chart-1);
+    --color-status-dormant: var(--muted-foreground);
+    --color-status-settled: var(--chart-4);
+    --color-status-ended: var(--destructive);
+  }
+}
+
+@layer base {
   html,
   body,
   #root {
@@ -160,27 +171,11 @@
   }
 
   body {
-    margin: 0;
-    background: var(--color-bg);
-    color: var(--color-fg);
-    /* Sans is the chrome default; the transcript opts into mono where content is verbatim. */
-    font-family: var(--font-sans);
-    font-size: var(--text-sm);
-    line-height: var(--text-sm--line-height);
-    /* Relative times and percentages tick without the row reflowing around them. */
+    /* Relative times and context percentages tick in place without the row reflowing round them. */
     font-variant-numeric: tabular-nums;
-    -webkit-font-smoothing: antialiased;
   }
 
-  /* Focus is never invisible and never a browser default. */
-  :focus-visible {
-    outline: 1px solid var(--color-accent);
-    outline-offset: 1px;
-    box-shadow: 0 0 0 3px var(--color-ring);
-  }
-
-  /* The only motion in the app is the running indicator, and it answers the question this UI exists
-   * to answer. Everything else is still, and even that yields to a reduced-motion preference. */
+  /* The only motion is the running indicator, which answers the question this UI exists to answer. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -193,9 +188,9 @@
 }
 
 /*
- * The transcript scroller. A plain overflow container, deliberately, rather than a ScrollArea
- * component: the stick-to-bottom rule owns scrollTop directly, and a component that runs its own
- * scroll handler on every streamed frame would be fighting it for no gain over these two lines.
+ * The Presentation Transcript scroller. A plain overflow container rather than a ScrollArea: the
+ * stick-to-bottom rule owns scrollTop directly, and a component running its own scroll handler on
+ * every streamed frame would fight it for no gain.
  *
  * overflow-anchor is off because the browser's own anchoring competes with an explicit scrollTop
  * write, and scroll-behavior is pinned to auto so the pin cannot animate.
@@ -206,5 +201,4 @@
   scroll-behavior: auto;
   min-height: 0;
   scrollbar-width: thin;
-  scrollbar-color: var(--color-line-strong) transparent;
 }

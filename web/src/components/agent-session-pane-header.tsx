@@ -31,9 +31,10 @@ import { Tooltip } from "@/components/ui/tooltip.tsx";
 /**
  * The instrument half of the pane: what this Agent Session is, and what can be done to it.
  *
- * Sans throughout and smaller than the transcript, so it stays legible without competing with the
- * document beside it. Every value that is verbatim — the Scope, the model id, the token counts — is
- * still mono, because those are machine values a reader compares character by character.
+ * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
+ * competing with the document beside it. Mono survives only where character alignment is functional:
+ * the Scope, the Agent Session id and the token counts, which are machine values a reader compares
+ * character by character.
  *
  * Affordances are hidden rather than disabled when they cannot apply: Settle disappears once an Agent
  * Session is Settled or Ended, Effort disappears for a model with no Effort levels, and abort
@@ -61,9 +62,9 @@ export function AgentSessionPaneHeader({
   const run = useCommand();
 
   return (
-    <div className="bg-(--color-surface)">
-      <div className="flex min-h-9 flex-wrap items-center gap-2 border-b border-(--color-line) px-3 py-1.5">
-        <span className="truncate font-sans text-sm font-medium text-(--color-fg-strong)">{title}</span>
+    <div className="bg-card text-card-foreground">
+      <div className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-2">
+        <span className="truncate text-sm font-medium">{title}</span>
 
         <StatusBadge status={chrome.status} />
         {chrome.backend === undefined ? null : <Badge>{chrome.backend}</Badge>}
@@ -89,7 +90,7 @@ export function AgentSessionPaneHeader({
           {chrome.status === "running" ? (
             <Tooltip label="Abort the current turn — this also discards the Steering Queue">
               <Button
-                variant="quiet"
+                variant="ghost"
                 size="icon"
                 aria-label="Abort the current turn"
                 onClick={() => {
@@ -105,15 +106,15 @@ export function AgentSessionPaneHeader({
                   });
                 }}
               >
-                <Square size={10} aria-hidden />
+                <Square aria-hidden />
               </Button>
             </Tooltip>
           ) : null}
 
           {canSettle(chrome.status) ? (
             <Button
-              variant="quiet"
-              size="xs"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 void run({ type: "settle", sessionId }).then(() => {
                   /*
@@ -131,8 +132,8 @@ export function AgentSessionPaneHeader({
           ) : null}
 
           <Tooltip label={splitOpen ? "Close the split" : "Compare with another Agent Session"}>
-            <Button variant="quiet" size="icon" aria-label="Toggle split" onClick={onToggleSplit}>
-              <Columns2 size={11} aria-hidden />
+            <Button variant="ghost" size="icon" aria-label="Toggle split" onClick={onToggleSplit}>
+              <Columns2 aria-hidden />
             </Button>
           </Tooltip>
 
@@ -140,8 +141,8 @@ export function AgentSessionPaneHeader({
 
           {closable ? (
             <Tooltip label="Close this pane">
-              <Button variant="quiet" size="icon" aria-label="Close this pane" onClick={onClose}>
-                <X size={11} aria-hidden />
+              <Button variant="ghost" size="icon" aria-label="Close this pane" onClick={onClose}>
+                <X aria-hidden />
               </Button>
             </Tooltip>
           ) : null}
@@ -149,7 +150,7 @@ export function AgentSessionPaneHeader({
 
         <div className="flex w-full items-center gap-2">
           <ScopeLabel scope={chrome.scope ?? ""} className="max-w-[28rem]" />
-          <span className="truncate font-mono text-2xs text-(--color-fg-faint)">{sessionId}</span>
+          <span className="truncate font-mono text-xs text-muted-foreground">{sessionId}</span>
         </div>
       </div>
 
@@ -179,16 +180,16 @@ function ContextUsageMeter({ usage }: { usage: Chrome["contextUsage"] }) {
 
   return (
     <span className="flex items-center gap-1.5">
-      <span className="font-mono text-2xs text-(--color-fg-muted)">{label}</span>
+      <span className="font-mono text-xs text-muted-foreground">{label}</span>
       {fraction === undefined ? null : (
-        <span className="inline-block h-1 w-12 overflow-hidden rounded-sm bg-(--color-inset)" aria-hidden>
+        <span className="inline-block h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden>
           <span
             className="block h-full"
             style={{
               width: `${Math.round(fraction * 100)}%`,
               // Colour is spent only on encoding state: the meter goes warn as the window fills.
               backgroundColor:
-                fraction > 0.9 ? "var(--color-err)" : fraction > 0.7 ? "var(--color-warn)" : "var(--color-accent)",
+                fraction > 0.9 ? "var(--destructive)" : fraction > 0.7 ? "var(--chart-4)" : "var(--primary)",
             }}
           />
         </span>
@@ -217,8 +218,8 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="quiet" size="icon" aria-label="More actions">
-              <MoreHorizontal size={12} aria-hidden />
+            <Button variant="ghost" size="icon" aria-label="More actions">
+              <MoreHorizontal aria-hidden />
             </Button>
           }
         />
@@ -235,7 +236,7 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
             <>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                className="text-(--color-err)"
+                className="text-destructive data-[highlighted]:text-destructive"
                 onClick={() => setConfirmEnd(true)}
               >
                 End Agent Session…
@@ -258,11 +259,10 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
             No Backend Session will run and this one will refuse a Revive. Its Presentation Transcript
             stays readable and stays on disk.
           </AlertDialogDescription>
-          <div className="mt-4 flex justify-end gap-2">
-            <AlertDialogClose render={<Button variant="outline" size="sm">Keep it</Button>} />
+          <div className="mt-6 flex justify-end gap-2">
+            <AlertDialogClose render={<Button variant="outline">Keep it</Button>} />
             <Button
-              variant="danger"
-              size="sm"
+              variant="destructive"
               onClick={() => {
                 setConfirmEnd(false);
                 void run({ type: "dispose", sessionId });

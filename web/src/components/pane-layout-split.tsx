@@ -19,7 +19,7 @@ export function PaneLayoutSplit() {
 
   if (layout.mode === "split" && layout.secondary !== undefined) {
     return (
-      <div className="grid min-h-0 grid-cols-2 gap-px bg-(--color-line)">
+      <div className="grid min-h-0 grid-cols-2 gap-px bg-border">
         <AgentSessionPane sessionId={layout.primary} role="primary" />
         <AgentSessionPane sessionId={layout.secondary} role="secondary" />
       </div>
@@ -36,7 +36,7 @@ export function PaneLayoutSplit() {
 export function EmptyPaneLayout() {
   return (
     <div className="flex min-h-0 items-center justify-center">
-      <p className="flex items-center gap-1.5 font-sans text-xs text-(--color-fg-faint)">
+      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
         Select an Agent Session, or press <Kbd>n</Kbd> to start one.
       </p>
     </div>
