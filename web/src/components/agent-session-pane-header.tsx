@@ -6,7 +6,7 @@ import { contextUsageLabel } from "@client/context-usage.ts";
 import { canRevive, canSettle } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
-import { ScopeLabel } from "@/components/agent-session-sidebar.tsx";
+import { ScopeLabel } from "@/components/agent-session-nav.tsx";
 import { EffortPicker, ModelPicker } from "@/components/model-picker.tsx";
 import { RunningHairline, StatusBadge } from "@/components/status-indicator.tsx";
 import {

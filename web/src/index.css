@@ -199,3 +199,30 @@
   min-height: 0;
   scrollbar-width: thin;
 }
+
+/*
+ * The rail follows the cursor while it is being dragged.
+ *
+ * shadcn's Sidebar puts `transition-[width]` on its gap and `transition-[left,right,width]` on its
+ * container, both at 200ms. Those are there for the open/close slide and they are worth keeping for
+ * it — but they animate *every* width change, so a drag spends the whole time chasing an easing
+ * curve two frames behind the pointer. `data-resizing` is set on the provider wrapper for exactly as
+ * long as the pointer is down (web/src/components/rail-resize-handle.tsx).
+ *
+ * A rule here rather than a Tailwind class because the two elements are internal to the component:
+ * `Sidebar`'s className reaches the container only, and the gap has no prop at all.
+ */
+[data-resizing] [data-slot="sidebar-gap"],
+[data-resizing] [data-slot="sidebar-container"] {
+  transition: none;
+}
+
+/*
+ * And for the length of the gesture the whole document is a drag target: the resize cursor holds
+ * even as the pointer crosses the transcript, and nothing selects. Without this a drag across text
+ * selects it, which both looks broken and makes the pointer flicker between cursors.
+ */
+[data-resizing] {
+  cursor: col-resize;
+  user-select: none;
+}

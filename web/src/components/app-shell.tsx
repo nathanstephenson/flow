@@ -1,32 +1,57 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { canSettle } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
-import { useFocusedAgentSession } from "@/focused-agent-session.ts";
 import { useHost } from "@/host.tsx";
+import { useRailWidth } from "@/rail-width.ts";
+import { railWidthValue } from "@/presentation/rail-width.ts";
+import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
-import { AgentSessionSidebar, Kbd } from "@/components/agent-session-sidebar.tsx";
+import { AgentSessionNav, Kbd } from "@/components/agent-session-nav.tsx";
 import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-layer.tsx";
 import { NewAgentSessionDialog } from "@/components/new-agent-session-dialog.tsx";
+import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
+import { SettingsNav } from "@/components/settings-nav.tsx";
+import { SettingsPage } from "@/components/settings-page.tsx";
+import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
 /**
- * The frame: a rail of Agent Sessions, and the focused one's pane.
+ * The frame: one rail, and whatever is beside it.
  *
- * It owns the focused Agent Session — one at a time, mirrored into `location.hash` — and the two
- * pieces of state that are about the *app* rather than about any Agent Session: whether the New
- * Agent Session dialog is open, and where the keyboard cursor is in the rail. Plus the auto-open
- * rule below.
+ * There are two things it can be showing — an Agent Session's pane, or the Settings — and the route
+ * decides which (web/src/route.ts). The rail is the same `Sidebar` either way and swaps only its
+ * contents, so the two views cannot drift into looking like two designs.
+ *
+ * `SidebarProvider` lives here rather than inside the rail, which is what makes that possible: the
+ * width comes from `--sidebar-width` on the provider, so the rail can be dragged wider and hidden
+ * altogether without either the rail or the pane knowing.
+ *
+ * The provider is *controlled* — this owns whether the rail is open — for one reason: ⌘B has to be
+ * resolved by web/src/presentation/bindings.ts like every other key. Upstream binds it with its own
+ * `window` listener inside the component, which would have been a second keyboard listener this app
+ * could neither document nor suppress while a dialog had the keyboard, so that listener is removed
+ * (see the GOODHARNESS note in components/ui/sidebar.tsx).
+ *
+ * Whether the rail is open is deliberately *not* remembered across reloads, though its width is:
+ * reloading into an app with no visible navigation is a bad first frame, and hiding the rail is a
+ * momentary "give me the width" rather than a preference.
+ *
+ * It owns the route, and the two pieces of state that are about the *app* rather than about any
+ * Agent Session: whether the New Agent Session dialog is open, and where the keyboard cursor is in
+ * the rail. Plus the auto-open rule below.
  */
 export function AppShell() {
   const { config } = useHost();
   const { sessions } = useAgentSessions();
-  const [focusedId, focus] = useFocusedAgentSession();
+  const { route, sessionId: focusedId, focus, openSettings, leaveSettings } = useRoute();
   const run = useCommand();
 
   const [newOpen, setNewOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
+  const [railOpen, setRailOpen] = useState(true);
+  const rail = useRailWidth();
 
   /*
    * Which Agent Sessions are showing their Shell.
@@ -61,11 +86,14 @@ export function AppShell() {
    * The Session Host sorts Settled last, so `sessions[0]` is the freshest *active* Agent Session in
    * the normal case and only Settled when every one of them is. Opening a Settled Agent Session
    * unasked would put a finished transcript in front of someone who came to start work.
+   *
+   * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold
+   * load into `#/settings` must not be answered by silently navigating away from them.
    */
   const autoOpened = useRef(false);
   useEffect(() => {
-    if (autoOpened.current) return;
-    if (focusedId !== undefined || window.location.hash.startsWith("#/s/")) {
+    if (autoOpened.current || route.view !== "session") return;
+    if (focusedId !== undefined) {
       autoOpened.current = true;
       return;
     }
@@ -74,7 +102,7 @@ export function AppShell() {
     autoOpened.current = true;
     if (candidate.status === "settled") return;
     focus(candidate.id);
-  }, [sessions, focusedId, focus]);
+  }, [sessions, focusedId, focus, route.view]);
 
   // The cursor addresses the rail as it is rendered, so it cannot point past the end of it.
   useEffect(() => {
@@ -123,6 +151,10 @@ export function AppShell() {
         // there: a shortcut that reports a capability you do not have teaches nothing.
         if (focusedId !== undefined && config.shell) toggleShell(focusedId);
       },
+      "toggle-rail": () => setRailOpen((open) => !open),
+      // `?` now lands somewhere, which is what it was resolving to nothing for.
+      "keyboard-settings": () => openSettings("keyboard"),
+      "leave-settings": leaveSettings,
       "blur-or-abort": () => {
         // Escape with nothing typing means abort — and aborting discards the Steering Queue, so it
         // says what it dropped rather than leaving the reader to notice.
@@ -135,35 +167,94 @@ export function AppShell() {
         });
       },
     }),
-    [chrome, config.shell, cursor, focus, focusInPane, focusedId, run, sessions, settle, toggleShell],
+    [
+      chrome,
+      config.shell,
+      cursor,
+      focus,
+      focusInPane,
+      focusedId,
+      leaveSettings,
+      openSettings,
+      run,
+      sessions,
+      settle,
+      toggleShell,
+    ],
   );
 
-  return (
-    <KeyboardLayer handlers={handlers} modalOpen={newOpen}>
-      <div className="grid h-full min-h-0 grid-cols-[16rem_minmax(0,1fr)]">
-        <AgentSessionSidebar
-          sessions={sessions}
-          focusedId={focusedId}
-          focusedStatus={chrome?.status}
-          cursorId={sessions[cursor]?.id}
-          link={chrome?.link}
-          scope={config.scope}
-          onFocus={focus}
-          onSettle={settle}
-          onNew={() => setNewOpen(true)}
-        />
+  const settings = route.view === "settings";
 
-        {focusedId === undefined ? (
-          <NothingFocused />
-        ) : (
-          <AgentSessionPane
-            sessionId={focusedId}
-            {...(config.shell
-              ? { shell: { open: shellOpen.has(focusedId), onToggle: () => toggleShell(focusedId) } }
-              : {})}
-          />
-        )}
-      </div>
+  return (
+    <KeyboardLayer handlers={handlers} modalOpen={newOpen} view={route.view}>
+      {/* min-h-0 beats upstream's min-h-svh through twMerge: this app is exactly the viewport tall
+          and its scrollers are internal, so a minimum height would push them off the bottom.
+          `style` is spread after upstream's own custom properties, so this is the supported way to
+          override the width it otherwise hardcodes to 16rem. */}
+      <SidebarProvider
+        className="h-full min-h-0"
+        open={railOpen}
+        onOpenChange={setRailOpen}
+        style={{ "--sidebar-width": railWidthValue(rail.width) } as CSSProperties}
+      >
+        <Sidebar
+          collapsible="offcanvas"
+          role="complementary"
+          aria-label={settings ? "Settings" : "Agent Sessions"}
+          className="border-r border-sidebar-border"
+        >
+          {/* Offcanvas rather than icon: these rows are two lines tall and their Settle action hides
+              itself in icon mode, so a 3rem rail of bare status dots would be a worse thing to
+              collapse to than the extra width the pane gains from hiding it outright. */}
+          <RailResizeHandle width={rail.width} onResize={rail.set} onNudge={rail.nudge} />
+
+          {settings ? (
+            <SettingsNav
+              section={route.section}
+              onSelect={openSettings}
+              onLeave={leaveSettings}
+            />
+          ) : (
+            <AgentSessionNav
+              sessions={sessions}
+              focusedId={focusedId}
+              focusedStatus={chrome?.status}
+              cursorId={sessions[cursor]?.id}
+              link={chrome?.link}
+              scope={config.scope}
+              onFocus={focus}
+              onSettle={settle}
+              onNew={() => setNewOpen(true)}
+              onOpenSettings={openSettings}
+            />
+          )}
+        </Sidebar>
+
+        {/* A single-row grid rather than upstream's flex column: the pane inside is itself a grid
+            sized to its row, and a flex parent would need `flex-1` threading down into it. One row
+            of `minmax(0,1fr)` is what the frame's outer grid used to give it, unchanged. */}
+        <SidebarInset className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
+          {/*
+           * The only way back to the rail on a narrow window. Upstream hides the whole rail below
+           * `md` and offers it as a Sheet instead, which takes the resize handle with it — so
+           * without this, collapsing on a small screen would be one-way. Hidden from `md` up, where
+           * the handle itself is the affordance.
+           */}
+          <SidebarTrigger className="absolute top-2 left-2 z-30 md:hidden" />
+          {settings ? (
+            <SettingsPage section={route.section} />
+          ) : focusedId === undefined ? (
+            <NothingFocused />
+          ) : (
+            <AgentSessionPane
+              sessionId={focusedId}
+              {...(config.shell
+                ? { shell: { open: shellOpen.has(focusedId), onToggle: () => toggleShell(focusedId) } }
+                : {})}
+            />
+          )}
+        </SidebarInset>
+      </SidebarProvider>
 
       <NewAgentSessionDialog open={newOpen} onOpenChange={setNewOpen} onCreated={focus} />
     </KeyboardLayer>

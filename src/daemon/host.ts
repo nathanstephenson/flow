@@ -41,8 +41,12 @@ export type SessionHostOptions = {
    * How long a Settled Agent Session survives before it is reaped, in milliseconds. `"never"`
    * disables reaping; omitted means the same, so a host built without a retention policy never
    * deletes anything (ADR 0006).
+   *
+   * A function is read at each sweep rather than copied in once, which is how an edit to the
+   * Settings applies to a daemon that has been up for a week. The daemon passes `ConfigStore`'s
+   * `retention` for exactly that; a literal is the convenience the tests use.
    */
-  retention?: number | "never";
+  retention?: number | "never" | (() => number | "never");
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -50,7 +54,7 @@ export class SessionHost {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly backends = new Map<string, AgentBackend>();
   private readonly store: TranscriptStore | undefined;
-  private readonly retention: number | "never";
+  private readonly retention: number | "never" | (() => number | "never");
   private readonly closedListeners = new Set<(sessionId: string) => void>();
 
   constructor(options: SessionHostOptions = {}) {
@@ -305,7 +309,8 @@ export class SessionHost {
    * Takes `now` so it can be tested without waiting, and returns what it removed.
    */
   reap(now = Date.now()): string[] {
-    const retention = this.retention;
+    // Asked, not remembered: the Settings own this value and it may have changed since startup.
+    const retention = typeof this.retention === "function" ? this.retention() : this.retention;
     if (retention === "never") return [];
 
     const reaped: string[] = [];

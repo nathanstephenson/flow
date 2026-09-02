@@ -1,0 +1,84 @@
+/**
+ * The Settings, as they cross the wire.
+ *
+ * Settings are machine-wide: they live in the Session Host's state root, not in a Scope, so one
+ * value governs every Agent Session on the machine. That is the fact most likely to be got wrong by
+ * someone editing them from a browser window that is showing one Scope, which is why it is said here
+ * and in CONTEXT.md rather than left to be inferred.
+ *
+ * In the protocol rather than beside the daemon because both ends need the same shape: the Session
+ * Host reports `Settings` on /api/config and accepts a `SettingsPatch` on PUT, and the web client
+ * renders the first and sends the second. `src/daemon/config.ts` owns how they are parsed and what
+ * they mean on disk; this file owns only their shape.
+ */
+
+import type { Fonts } from "./fonts.ts";
+
+export type Settings = {
+  retention: {
+    /**
+     * How long a Settled Agent Session survives before it is reaped — a duration like `"1d"`, or
+     * `"never"`.
+     *
+     * A string rather than the milliseconds the reaper actually compares against, because this is a
+     * value a person typed and has to be able to read back. `formatDuration` and `parseDuration` in
+     * src/daemon/config.ts are the two halves of that round trip.
+     */
+    settled: string;
+  };
+  fonts: Fonts;
+};
+
+/**
+ * What a client asks to change. Partial at every level, and merged rather than replacing.
+ *
+ * Each section of the settings page saves on its own, so a whole-document PUT would make one
+ * section's save silently revert another's — and a client that has not been taught about a field
+ * would erase it.
+ */
+export type SettingsPatch = {
+  retention?: { settled?: string };
+  fonts?: { chrome?: string; monospace?: string };
+};
+
+const UNITS: Record<string, number> = {
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
+
+/**
+ * `"90m"`, `"36h"`, `"1d"` — a duration in milliseconds, or undefined if it is not one.
+ *
+ * Here rather than beside the parser that uses it because both ends need it: the Session Host reads
+ * the file with it, and the web client uses it to work out what a window the reader has typed would
+ * reap before they commit to it. `src/daemon/config.ts` cannot be the home — it reads a file, so a
+ * browser cannot import it.
+ */
+export function parseDuration(value: string): number | undefined {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d)\s*$/.exec(value);
+  const amount = match?.[1];
+  const unit = match?.[2];
+  if (!amount || !unit) return undefined;
+  const scale = UNITS[unit];
+  if (scale === undefined) return undefined;
+  return Number(amount) * scale;
+}
+
+/**
+ * The inverse, in the largest unit that divides evenly: 86400000 is `"1d"` and not `"24h"`.
+ *
+ * Retention is stored as milliseconds because that is what the reaper compares against, but a
+ * duration is a thing a person typed and a person has to read it back. Reporting `86400000` on
+ * /api/config would make the field in the browser un-editable without arithmetic, so this exists to
+ * round-trip through `parseDuration` — and `test/settings.test.ts` holds the two to each other.
+ */
+export function formatDuration(ms: number): string {
+  for (const unit of ["d", "h", "m", "s"] as const) {
+    const scale = UNITS[unit] as number;
+    if (ms >= scale && ms % scale === 0) return `${ms / scale}${unit}`;
+  }
+  // Under a second, or not a whole number of any unit: seconds, fractional if it must be.
+  return `${ms / 1000}s`;
+}

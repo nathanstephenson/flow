@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, Plus } from "lucide-react";
+import { ChevronDown, CircleCheck, Plus, Settings } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -9,7 +9,6 @@ import { canSettle } from "@client/status.ts";
 import { StatusDot } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
-  Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -20,7 +19,6 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarProvider,
   SidebarSeparator,
 } from "@/components/ui/sidebar.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -32,8 +30,9 @@ import { useNow } from "@/lib/use-now.ts";
  * time, so the rail carries the state of the rest: a dot, a running state, a queue depth and a
  * relative time per row is enough to *monitor* any number of them without *reading* them.
  *
- * Built on the Sidebar parts in web/src/components/ui/sidebar.tsx, which is a hand-written subset of
- * shadcn's — see that file's header for what is missing and why.
+ * The contents of the rail, not the rail itself: the `SidebarProvider` and `Sidebar` frame live in
+ * the app shell, which swaps this out for the Settings nav. So this component supplies a header, a
+ * content region and a footer and knows nothing about how wide it is or where it sits.
  *
  * **Why a Sidebar and not `Tabs orientation="vertical"`.** Three properties this rail has that a
  * tablist cannot express, and reintroducing tab semantics would break every one of them:
@@ -55,7 +54,7 @@ import { useNow } from "@/lib/use-now.ts";
  * roving `tabIndex`, so twenty Agent Sessions cost one tab stop rather than forty — and to keep DOM
  * focus on the cursor row while the rail has focus.
  */
-export type AgentSessionSidebarProps = {
+export type AgentSessionNavProps = {
   sessions: SessionSummary[];
   /** The Agent Session in the pane. */
   focusedId: string | undefined;
@@ -68,9 +67,10 @@ export type AgentSessionSidebarProps = {
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
   onNew: () => void;
+  onOpenSettings: () => void;
 };
 
-export function AgentSessionSidebar(props: AgentSessionSidebarProps) {
+export function AgentSessionNav(props: AgentSessionNavProps) {
   const now = useNow();
   // The Session Host sorts Settled last, so this partition costs nothing and cannot reorder.
   const active = props.sessions.filter((session) => session.status !== "settled");
@@ -97,50 +97,43 @@ export function AgentSessionSidebar(props: AgentSessionSidebarProps) {
   }, [props.cursorId]);
 
   return (
-    <SidebarProvider>
-      <Sidebar
-        collapsible="none"
-        role="complementary"
-        aria-label="Agent Sessions"
-        className="border-r border-sidebar-border"
-      >
-        <RailHeader scope={props.scope} onNew={props.onNew} />
+    <>
+      <RailHeader scope={props.scope} onNew={props.onNew} />
 
-        {/*
-         * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
-         * they are the only keys this component handles — everything vertical is resolved centrally
-         * so there is one cursor rather than two.
-         */}
-        <SidebarContent ref={list} className="transcript-scroller gap-0" onKeyDown={moveWithinRow}>
-          <SidebarGroup className="p-0">
-            <SidebarGroupContent>
-              <AgentSessionMenu {...props} label="Active Agent Sessions" sessions={active} now={now} />
-            </SidebarGroupContent>
-          </SidebarGroup>
+      {/*
+       * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
+       * they are the only keys this component handles — everything vertical is resolved centrally
+       * so there is one cursor rather than two.
+       */}
+      <SidebarContent ref={list} className="transcript-scroller gap-0" onKeyDown={moveWithinRow}>
+        <SidebarGroup className="p-0">
+          <SidebarGroupContent>
+            <AgentSessionMenu {...props} label="Active Agent Sessions" sessions={active} now={now} />
+          </SidebarGroupContent>
+        </SidebarGroup>
 
-          {settled.length > 0 ? (
-            <>
-              <SidebarSeparator className="mx-0" />
-              <SettledGroup
-                count={settled.length}
-                // The group cannot be collapsed while the keyboard cursor is inside it: collapsing
-                // would strand focus on a row the browser will not focus.
-                open={settledOpen || cursorInSettled}
-                onOpenChange={setSettledOpen}
-              >
-                <AgentSessionMenu {...props} label="Settled Agent Sessions" sessions={settled} now={now} />
-              </SettledGroup>
-            </>
-          ) : null}
+        {settled.length > 0 ? (
+          <>
+            <SidebarSeparator className="mx-0" />
+            <SettledGroup
+              count={settled.length}
+              // The group cannot be collapsed while the keyboard cursor is inside it: collapsing
+              // would strand focus on a row the browser will not focus.
+              open={settledOpen || cursorInSettled}
+              onOpenChange={setSettledOpen}
+            >
+              <AgentSessionMenu {...props} label="Settled Agent Sessions" sessions={settled} now={now} />
+            </SettledGroup>
+          </>
+        ) : null}
 
-          {props.sessions.length === 0 ? (
-            <p className="px-3 py-4 text-sm text-muted-foreground">No Agent Sessions yet.</p>
-          ) : null}
-        </SidebarContent>
+        {props.sessions.length === 0 ? (
+          <p className="px-3 py-4 text-sm text-muted-foreground">No Agent Sessions yet.</p>
+        ) : null}
+      </SidebarContent>
 
-        <RailFooter link={props.link} />
-      </Sidebar>
-    </SidebarProvider>
+      <RailFooter link={props.link} onOpenSettings={props.onOpenSettings} />
+    </>
   );
 }
 
@@ -235,7 +228,7 @@ export function ScopeLabel({ scope, className }: { scope: string; className?: st
   );
 }
 
-type MenuProps = AgentSessionSidebarProps & { sessions: SessionSummary[]; now: number; label: string };
+type MenuProps = AgentSessionNavProps & { sessions: SessionSummary[]; now: number; label: string };
 
 function AgentSessionMenu({ sessions, now, label, ...props }: MenuProps) {
   return (
@@ -268,9 +261,6 @@ type RowProps = {
   onSettle: (sessionId: string) => void;
 };
 
-/** Hidden but reachable: `visibility`, never `display`, so revealing the action cannot reflow the row. */
-const REVEALED_ON_ROW = "invisible group-focus-within/menu-item:visible group-hover/menu-item:visible";
-
 function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, onSettle }: RowProps) {
   /**
    * The roving tabindex, in one expression. Only the cursor row is reachable by `Tab`; its action
@@ -281,7 +271,10 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
   const tabIndex = cursored ? 0 : -1;
 
   return (
-    <SidebarMenuItem className="flex items-center gap-1 pr-1">
+    /* Upstream's own shape, kept: a `relative` item with the action positioned over the row rather
+       than beside it. A flex line here instead would shrink the button to less than the row, and the
+       selection highlight would visibly stop short of the action. */
+    <SidebarMenuItem>
       <SidebarMenuButton
         size="lg"
         isActive={selected}
@@ -291,12 +284,13 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         tabIndex={tabIndex}
         onClick={() => onFocus(summary.id)}
         className={cn(
-          // Full-bleed, and no room reserved on the right: settle sits in the row's flex line rather
-          // than absolutely over its text, so upstream's `pr-8` for an overlaid action is cancelled
-          // back to the button's own padding wherever the row has one.
+          // Full-bleed and full-width, so the highlight reaches both edges of the rail. `pr-8` is
+          // upstream's reservation for an overlaid action — applied unconditionally rather than
+          // through its `group-has-[…menu-action]` guard, because whether a row can be Settled
+          // changes with its status and the title must not reflow when it does.
           // `size="lg"` is h-12, and two lines of 1.25rem + 1rem leave exactly py-1.5 — p-2 would
           // clip both of them against the button's own `overflow-hidden`.
-          "rounded-none py-1.5 group-has-data-[sidebar=menu-action]/menu-item:pr-2",
+          "rounded-none py-1.5 pr-8",
           "border-l-2 border-l-transparent",
           selected && "border-l-primary",
           // The keyboard cursor is a ring rather than a fill, so it can sit on a row that is also
@@ -321,17 +315,27 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
       </SidebarMenuButton>
 
       {/*
-       * An icon rather than the word, because the reserved slot is permanent — the row must not
-       * reflow when `canSettle` flips — and 48px of a 16rem rail spent on a control that is usually
-       * invisible came straight out of the Agent Session's title. The tooltip carries the domain
-       * term, which the icon cannot.
+       * An icon rather than the word, because 48px of a 16rem rail spent on a control that is
+       * usually invisible came straight out of the Agent Session's title. The tooltip carries the
+       * domain term, which the icon cannot.
+       *
+       * `showOnHover` is upstream's own reveal — opacity on hover or focus-within — rather than the
+       * `visibility` this used to hand-roll. Two gains beyond the shorter class list: nothing can
+       * reflow, because the action is positioned over the row rather than in it; and an element at
+       * `opacity: 0` stays focusable, where a `visibility: hidden` one does not, so ArrowRight can
+       * reach Settle without hovering the row first.
+       *
+       * No placeholder when the row cannot be Settled: the button reserves its `pr-8` regardless, so
+       * there is nothing left for an absent action to move.
        */}
       {canSettle(status) ? (
         <Tooltip>
           <TooltipTrigger
             render={
               <SidebarMenuAction
-                className={cn("static size-6 shrink-0", REVEALED_ON_ROW)}
+                showOnHover
+                // No `top-*` here: upstream ships `peer-data-[size=lg]/menu-button:top-2.5` for
+                // exactly this row height, and a plain utility loses to it on specificity anyway.
                 tabIndex={tabIndex}
                 onClick={() => onSettle(summary.id)}
               />
@@ -342,10 +346,7 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           </TooltipTrigger>
           <TooltipContent>Settle</TooltipContent>
         </Tooltip>
-      ) : (
-        // Same width, still reserved: hiding the affordance must not move the row.
-        <span className="size-6 shrink-0" aria-hidden />
-      )}
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -387,9 +388,40 @@ function SettledGroup({
   );
 }
 
-function RailFooter({ link }: { link: LinkState | undefined }) {
+/**
+ * The footer, and the way into the Settings.
+ *
+ * The gear leads the row rather than trailing it: the Settings are the one thing here that is not
+ * about the Agent Sessions above, and the bottom-left of the rail is where every app a reader has
+ * met puts them. The two hints and the link dot keep the rest of the line.
+ */
+function RailFooter({
+  link,
+  onOpenSettings,
+}: {
+  link: LinkState | undefined;
+  onOpenSettings: () => void;
+}) {
   return (
-    <SidebarFooter className="flex-row items-center border-t border-sidebar-border py-1.5">
+    <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              size="icon"
+              variant="ghost"
+              className="-ml-1 size-6 shrink-0"
+              onClick={() => onOpenSettings()}
+            />
+          }
+        >
+          <Settings aria-hidden />
+          {/* Named for what it opens, not for the glyph: this is the only label a reader gets. */}
+          <span className="sr-only">Settings</span>
+        </TooltipTrigger>
+        <TooltipContent>Settings</TooltipContent>
+      </Tooltip>
+
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Kbd>n</Kbd> new
       </span>

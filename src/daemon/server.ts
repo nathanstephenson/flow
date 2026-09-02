@@ -3,7 +3,9 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
 import type { Command } from "../protocol/commands.ts";
-import type { Fonts } from "./config.ts";
+import type { SettingsPatch } from "../protocol/settings.ts";
+import { ConfigError } from "./config.ts";
+import type { ConfigStore } from "./config-store.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
 import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
 import type { EmbeddedAsset } from "../web/assets.ts";
@@ -35,8 +37,12 @@ export type ServeOptions = {
   address?: string;
   /** Omitted means this deployment serves no Shells, and clients are told so via /api/config. */
   shells?: ShellRegistry;
-  /** The typefaces from config.json, passed through to whichever client is doing the drawing. */
-  fonts?: Fonts;
+  /**
+   * The Settings, read through rather than copied in — /api/config reports whatever it holds now,
+   * and PUT /api/config writes through it. Omitted means this deployment has no Settings to serve,
+   * so the clients fall back to the defaults in src/protocol/fonts.ts.
+   */
+  config?: ConfigStore;
 };
 
 export type RunningServer = {
@@ -122,10 +128,16 @@ async function handle(
       // rather than offering one that fails on click — the rule Capabilities already sets for
       // backends, applied to a host-wide facility.
       shell: (await options.shells?.available()) ?? false,
-      // Reported rather than decided by the client: the host owns config.json, and a font is the
+      // Reported rather than decided by the client: the daemon owns config.json, and a font is the
       // one piece of presentation whose right answer depends on the machine (src/daemon/config.ts).
-      ...(options.fonts ? { fonts: options.fonts } : {}),
+      // Spread rather than nested so `fonts` stays where it was on the wire.
+      ...(options.config?.view() ?? {}),
     });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/config") {
+    await handleSettingsUpdate(request, response, options.config);
     return;
   }
 
@@ -183,6 +195,45 @@ async function handle(
   }
 
   send(response, 404, { error: "Not found" });
+}
+
+/**
+ * `PUT /api/config` — merge a patch into the Settings.
+ *
+ * Refuses rather than warns, which is the opposite of how the same values are read off disk. A file
+ * is parsed leniently so a typo cannot stop the daemon starting; a person watching a form has to be
+ * told their value was rejected, because a settings page that reports success and keeps the old
+ * value is worse than one that has no save button at all.
+ *
+ * Retention is not swept here. The next hourly sweep applies it, which is what the UI says, so
+ * saving a shorter window is never itself the thing that deletes a Presentation Transcript.
+ */
+async function handleSettingsUpdate(
+  request: IncomingMessage,
+  response: ServerResponse,
+  config: ConfigStore | undefined,
+): Promise<void> {
+  if (!config) {
+    send(response, 404, { error: "This Session Host serves no Settings" });
+    return;
+  }
+
+  let patch: SettingsPatch;
+  try {
+    patch = JSON.parse(await readBody(request)) as SettingsPatch;
+  } catch {
+    send(response, 400, { error: "expected a JSON object" });
+    return;
+  }
+
+  try {
+    send(response, 200, config.update(patch));
+  } catch (error) {
+    // A rejected value is the client's fault and its message names the field, so it is safe and
+    // useful to pass back. Anything else is ours, and `handle`'s caller turns it into a 500.
+    if (!(error instanceof ConfigError)) throw error;
+    send(response, 400, { error: error.message });
+  }
 }
 
 /**

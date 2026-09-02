@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { registerBackends } from "../backend/registry.ts";
 import { readOrCreateToken } from "../daemon/auth.ts";
-import { loadConfig } from "../daemon/config.ts";
+import { ConfigStore } from "../daemon/config-store.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
@@ -107,10 +107,12 @@ async function startHost(
   address?: string,
 ): Promise<{ running: RunningServer; daemon: Daemon; host: SessionHost }> {
   const root = defaultStateRoot();
-  const { config, warning } = loadConfig(root);
-  if (warning) console.error(`  WARNING: ${warning}`);
+  // One owner of config.json, read through by both the reaper and the HTTP surface, so a Setting
+  // changed from a browser applies to this daemon rather than to the next one.
+  const config = new ConfigStore(root);
+  if (config.warning) console.error(`  WARNING: ${config.warning}`);
 
-  const host = new SessionHost({ store: new TranscriptStore(), retention: config.retention.settled });
+  const host = new SessionHost({ store: new TranscriptStore(), retention: config.retention });
   registerBackends(host);
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
   await host.load();
@@ -127,7 +129,7 @@ async function startHost(
     host,
     token,
     shells,
-    fonts: config.fonts,
+    config,
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),

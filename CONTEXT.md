@@ -82,6 +82,12 @@ populated screen. Lossy by design — it is not a Presentation Transcript, and i
 disk.
 _Avoid_: transcript, history, log, buffer
 
+**Settings**:
+Values the Session Host reads from its state root, governing every Agent Session on the machine
+rather than one Scope. Read leniently and written strictly: a value it cannot use costs only its own
+default on the way up, but one offered by a client is refused.
+_Avoid_: config, preferences, options, profile
+
 **Effort**:
 How hard a model is asked to think on a turn. Declared per model rather than per Agent Session,
 because not every model offers it.

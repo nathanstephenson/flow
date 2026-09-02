@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { isTypingTarget, resolveBinding, type BindingContext, type BindingEvent } from "./bindings.ts";
 
-const idle: BindingContext = { modalOpen: false, typing: false };
+const idle: BindingContext = { modalOpen: false, typing: false, view: "session" };
 
 function press(key: string, held: Partial<BindingEvent> = {}): BindingEvent {
   return { key, ctrlKey: false, metaKey: false, shiftKey: false, repeat: false, ...held };
@@ -24,7 +24,7 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("s"), idle), "settle");
     assert.equal(resolveBinding(press("`"), idle), "shell");
     assert.equal(resolveBinding(press("/"), idle), "search");
-    assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-sheet");
+    assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-settings");
     assert.equal(resolveBinding(press("Escape"), idle), "blur-or-abort");
   });
 
@@ -47,7 +47,7 @@ describe("resolving a keystroke to a binding", () => {
   });
 
   it("says nothing at all while a modal is open", () => {
-    const modal: BindingContext = { modalOpen: true, typing: false };
+    const modal: BindingContext = { modalOpen: true, typing: false, view: "session" };
     // Including Escape: the dialog closes itself, and `s` reaching Settle while someone fills in a
     // New Agent Session dialog would be indefensible.
     assert.equal(resolveBinding(press("Escape"), modal), undefined);
@@ -56,7 +56,7 @@ describe("resolving a keystroke to a binding", () => {
   });
 
   describe("while the reader is typing", () => {
-    const typing: BindingContext = { modalOpen: false, typing: true };
+    const typing: BindingContext = { modalOpen: false, typing: true, view: "session" };
 
     it("passes every letter through to the Composer", () => {
       assert.equal(resolveBinding(press("s"), typing), undefined);
@@ -97,7 +97,7 @@ describe("resolving a keystroke to a binding", () => {
   it("does not toggle the Shell while the reader is typing a backtick", () => {
     // The one binding most likely to be typed rather than pressed: a backtick opens a code fence in
     // the Composer far more often than it wants a terminal.
-    assert.equal(resolveBinding(press("`"), { modalOpen: false, typing: true }), undefined);
+    assert.equal(resolveBinding(press("`"), { modalOpen: false, typing: true, view: "session" }), undefined);
   });
 
   it("has no binding for sending a message or Reviving an Agent Session", () => {
@@ -105,6 +105,43 @@ describe("resolving a keystroke to a binding", () => {
     // ⌘Enter as "send now, interrupting" would be a second Steering Queue in a keybinding (ADR 0002).
     assert.equal(resolveBinding(press("Enter", { metaKey: true }), idle), undefined);
     assert.equal(resolveBinding(press("r"), idle), undefined);
+  });
+  /**
+   * The Settings have no rail cursor, no pane, no Shell and no model, so the keys that address those
+   * resolve to nothing there. Suppressed in the table rather than by omitting handlers in the app
+   * shell, so a key that does nothing is visible as nothing here.
+   */
+  describe("while the Settings are on screen", () => {
+    const settings: BindingContext = { modalOpen: false, typing: false, view: "settings" };
+
+    it("drops every binding that addresses an Agent Session", () => {
+      for (const key of ["j", "k", "ArrowDown", "ArrowUp", "Home", "End", "Enter", "m", "e", "s", "`", "/"]) {
+        assert.equal(resolveBinding(press(key), settings), undefined, key);
+      }
+    });
+
+    it("keeps the three that still mean something", () => {
+      // Starting an Agent Session is reasonable from anywhere, the palette is global, and `?` lands
+      // on a section of the Settings itself.
+      assert.equal(resolveBinding(press("n"), settings), "new-agent-session");
+      assert.equal(resolveBinding(press("k", { metaKey: true }), settings), "command-palette");
+      assert.equal(resolveBinding(press("?", { shiftKey: true }), settings), "keyboard-settings");
+    });
+
+    it("turns Escape into leaving, since there is no turn on screen to abort", () => {
+      assert.equal(resolveBinding(press("Escape"), settings), "leave-settings");
+      assert.equal(resolveBinding(press("Escape"), idle), "blur-or-abort");
+    });
+
+    it("still yields the keyboard to a typing surface", () => {
+      // The Settings are mostly text fields, so this is the case that matters most in them.
+      const typingHere: BindingContext = { ...settings, typing: true };
+      assert.equal(resolveBinding(press("n"), typingHere), undefined);
+      assert.equal(resolveBinding(press("?", { shiftKey: true }), typingHere), undefined);
+      // Escape still leaves the field rather than the page; which of the two it means is the
+      // caller's decision, and KeyboardLayer blurs first when something has focus.
+      assert.equal(resolveBinding(press("Escape"), typingHere), "leave-settings");
+    });
   });
 });
 

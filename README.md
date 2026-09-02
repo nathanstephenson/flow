@@ -226,12 +226,37 @@ All three stay out of the default loop for the same reason: `npm test` should ne
 no network and no bundler, so a fresh clone with no `web/dist` — and an `--omit=dev` install with no
 Vite at all — still runs it green.
 
-### Fonts
+### The rail
 
-Both typefaces are settings, in `<stateRoot>/config.json` beside `retention`:
+Drag its right edge to resize — 180px to 520px, remembered per browser in `localStorage`. Click that
+same edge, or press ⌘B / Ctrl-B, to hide it entirely and give the Presentation Transcript the width.
+The handle takes arrow keys when focused (Shift for a coarser step), because a drag handle that only
+answers to a pointer is unusable without one.
+
+The drag deliberately does not go through React: it writes `--sidebar-width` onto the provider
+wrapper and commits to state once, on release. Routing it through state re-rendered the rail and the
+transcript once per frame, and shadcn's own `transition-[width] duration-200` — which the open/close
+slide needs — made the rail chase the pointer two frames behind. `data-resizing` on the wrapper
+suppresses that transition for the length of the gesture and nothing else.
+
+The width is remembered; whether the rail is open is not. Reloading into an app with no visible
+navigation is a bad first frame, and hiding the rail is a momentary "give me the width" rather than a
+preference — so it is browser state either way and never a Setting, which would make a laptop and a
+desktop fight over one number.
+
+⌘B is what shadcn's Sidebar binds and the muscle memory is worth matching, but it is resolved by
+`web/src/presentation/bindings.ts` like every other key rather than by the component's own `window`
+listener, which is removed. See the GOODHARNESS note in `web/src/components/ui/sidebar.tsx`.
+
+### Settings
+
+Everything configurable lives in one file, `<stateRoot>/config.json`, and is editable from the web
+UI at **Settings** — the gear at the bottom-left of the rail, or `?` for the Keyboard section.
+Settings are machine-wide: they govern every Agent Session on the machine, not one Scope.
 
 ```json
 {
+  "retention": { "settled": "1d" },
   "fonts": {
     "chrome": "'Inter Variable', sans-serif",
     "monospace": "'MesloLGS NF', monospace"
@@ -239,10 +264,25 @@ Both typefaces are settings, in `<stateRoot>/config.json` beside `retention`:
 }
 ```
 
-`chrome` dresses the interface; `monospace` dresses the Shell's terminal and the chrome that has to
-align character by character — Scopes, Agent Session ids, token counts. Either may be omitted and
-keeps its default, and a value that is not a font-family list is refused with a warning on startup
-rather than taken.
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `retention.settled` | How long a Settled Agent Session survives before it is reaped. A duration — `90m`, `36h`, `1d` — or `never`. | `1d` |
+| `fonts.chrome` | The interface typeface: labels, transcript prose, buttons. | `'Inter Variable', sans-serif` |
+| `fonts.monospace` | The Shell's terminal, and the chrome that aligns character by character. | a Nerd Font stack (below) |
+
+Any section may be omitted and keeps its default. The file is read **leniently** and written
+**strictly**, deliberately: a typo on disk costs only its own default and warns on startup, because
+it must not stop the daemon that owns your Presentation Transcripts from starting — whereas a value
+sent from the browser is refused with the field named, because there is someone waiting who can fix
+it. The Session Host reads the file through one owner (`src/daemon/config-store.ts`) rather than
+copying values at startup, so an edit applies to the running daemon: retention takes effect at the
+next hourly sweep, and a typeface immediately.
+
+Shortening `retention.settled` arms a delete. Nothing is removed on save — the sweep does it, within
+the hour — but the Settings page counts the Agent Sessions the new window newly reaches and makes you
+confirm before saving. Only Settled Agent Sessions are ever reaped; an Ended one stays on disk.
+
+#### Fonts
 
 **Set `monospace` to a Nerd Font if your prompt is a Powerline one.** Those separators are Private
 Use Area codepoints — U+E0B0 for the arrow, U+E0A0 for the branch — and no stock system font carries

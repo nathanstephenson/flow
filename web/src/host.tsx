@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
 import type { Connection } from "@client/connection.ts";
+import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
 
@@ -26,9 +27,26 @@ export type HostConfig = {
   shell?: boolean;
   /** The typefaces from config.json. Absent means this host reported none, so the defaults stand. */
   fonts?: Fonts;
+  /**
+   * How long a Settled Agent Session survives, as a duration like `"1d"` or `"never"`. Absent where
+   * this Session Host serves no Settings, which is what the Settings page checks before offering to
+   * edit anything.
+   */
+  retention?: Settings["retention"];
 };
 
-type HostValue = { connection: Connection; config: HostConfig };
+export type HostValue = {
+  connection: Connection;
+  config: HostConfig;
+  /**
+   * Save part of the Settings, and fold the result back into `config` so the app is looking at what
+   * the Session Host now holds rather than at what was typed.
+   *
+   * Rejects with the daemon's own message on a refused value, because that message names the field.
+   * Settings are machine-wide, so this is deliberately not scoped to an Agent Session.
+   */
+  saveSettings: (patch: SettingsPatch) => Promise<Settings>;
+};
 
 const HostContext = createContext<HostValue | undefined>(undefined);
 
@@ -65,10 +83,37 @@ export function HostProvider({ children }: { children: ReactNode }) {
     return () => abort.abort();
   }, []);
 
+  const saveSettings = useCallback(async (patch: SettingsPatch): Promise<Settings> => {
+    const response = await fetch("/api/config", {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const body = (await response.json()) as Settings & { error?: string };
+    // The daemon refuses a bad value rather than warning and keeping the old one, and its message
+    // names the offending field — so it is the message worth showing.
+    if (!response.ok) throw new Error(body.error ?? `Could not save the Settings (${response.status})`);
+
+    // Applied here rather than by the page that saved it: a typeface is the whole document's, and a
+    // page that painted only itself in the new font would be the one place it looked right.
+    applyFonts(body.fonts);
+    setGate((current) =>
+      current.state === "ready"
+        ? { state: "ready", config: { ...current.config, fonts: body.fonts, retention: body.retention } }
+        : current,
+    );
+    return body;
+  }, []);
+
   if (gate.state === "unauthorized") return <Unauthorized />;
   if (gate.state === "loading") return <Waiting />;
 
-  return <HostContext.Provider value={{ connection, config: gate.config }}>{children}</HostContext.Provider>;
+  return (
+    <HostContext.Provider value={{ connection, config: gate.config, saveSettings }}>
+      {children}
+    </HostContext.Provider>
+  );
 }
 
 /**

@@ -15,6 +15,8 @@
  *   muscle memory rather than two.
  */
 
+import type { Route } from "./route.ts";
+
 export type Binding =
   /** Opens the dialog with the defaults prefilled — it does not create anything. */
   | "new-agent-session"
@@ -33,7 +35,40 @@ export type Binding =
   | "settle"
   /** Show or hide the focused Agent Session's Shell. Hiding it does not end it. */
   | "shell"
-  | "keyboard-sheet";
+  /** Show or hide the rail. Its width is remembered; whether it is open is not. */
+  | "toggle-rail"
+  /** Open the Settings at the section listing these bindings. */
+  | "keyboard-settings"
+  /** Leave the Settings for whatever was on screen before them. */
+  | "leave-settings";
+
+/**
+ * Every binding, at runtime.
+ *
+ * `Record<Binding, true>` is what makes this exhaustive: adding a member to the union above without
+ * adding it here is a compile error, which is how `shortcuts.ts` can be held to documenting all of
+ * them. The values carry nothing — only the keys matter.
+ */
+const EVERY_BINDING = {
+  "new-agent-session": true,
+  "command-palette": true,
+  "sidebar-next": true,
+  "sidebar-previous": true,
+  "sidebar-first": true,
+  "sidebar-last": true,
+  "focus-pane": true,
+  "model-picker": true,
+  "effort-picker": true,
+  search: true,
+  "blur-or-abort": true,
+  settle: true,
+  shell: true,
+  "toggle-rail": true,
+  "keyboard-settings": true,
+  "leave-settings": true,
+} satisfies Record<Binding, true>;
+
+export const ALL_BINDINGS = Object.keys(EVERY_BINDING) as Binding[];
 
 /**
  * The parts of a `KeyboardEvent` a binding can depend on. A plain shape rather than the event
@@ -52,9 +87,39 @@ export type BindingContext = {
   modalOpen: boolean;
   /** Focus is on a typing surface — see `isTypingTarget`. */
   typing: boolean;
+  /**
+   * What is on screen. Most of this table addresses the Agent Session rail and the pane, neither of
+   * which exists in the Settings, so it is resolved here rather than by quietly omitting handlers in
+   * the app shell — a key that does nothing should be visible as nothing in the table that owns it.
+   */
+  view: Route["view"];
 };
 
+/**
+ * The bindings that survive in the Settings.
+ *
+ * Everything else addresses an Agent Session — a rail cursor, a pane, a Shell, a model — and the
+ * Settings have none of those. `n` stays because starting an Agent Session is reasonable from
+ * anywhere, and `?` stays because it lands on a section of the Settings itself.
+ */
+const IN_SETTINGS = new Set<Binding>([
+  "new-agent-session",
+  "command-palette",
+  "toggle-rail",
+  "keyboard-settings",
+]);
+
 export function resolveBinding(event: BindingEvent, context: BindingContext): Binding | undefined {
+  const binding = resolveKey(event, context);
+  if (binding === undefined || context.view !== "settings") return binding;
+
+  // Escape means "leave" here rather than "abort a turn": there is no turn on screen to abort, and
+  // leaving is what a reader presses it for in a page they navigated into.
+  if (binding === "blur-or-abort") return "leave-settings";
+  return IN_SETTINGS.has(binding) ? binding : undefined;
+}
+
+function resolveKey(event: BindingEvent, context: BindingContext): Binding | undefined {
   // An open dialog owns the keyboard, Escape included: Base UI closes itself on Escape, and letting
   // `s` through to Settle an Agent Session while someone types a Scope into a dialog is indefensible.
   if (context.modalOpen) return undefined;
@@ -64,6 +129,10 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
   if (event.ctrlKey || event.metaKey) {
     if (event.repeat) return undefined;
     if (event.key === "k" || event.key === "K") return "command-palette";
+    // ⌘B is what shadcn's Sidebar binds, and the muscle memory is worth matching — but it is
+    // resolved here rather than by the component's own window listener, so it can be suppressed
+    // while a dialog owns the keyboard and can be printed in the Settings' Keyboard section.
+    if (event.key === "b" || event.key === "B") return "toggle-rail";
     // Every other chord belongs to the browser. Stealing ⌘F in particular would break find-in-page
     // over the Presentation Transcript, which ADR 0001 defines as the record of what a human saw.
     return undefined;
@@ -118,7 +187,7 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
     case "/":
       return "search";
     case "?":
-      return "keyboard-sheet";
+      return "keyboard-settings";
     default:
       return undefined;
   }
