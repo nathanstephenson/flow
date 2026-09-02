@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "preserve",
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "paths": { "@/*": ["./src/*"], "@client/*": ["../src/client/*"] }
+  },
+  "include": ["src"],
+  // Tests run under `node --test`, not in the browser, so they are checked by
+  // ../tsconfig.presentation.json — which has node types and no DOM. Leaving them here would fail on
+  // `node:test`, and typing them for both would hand browser code node globals it must not have.
+  "exclude": ["src/**/*.test.ts"]
+}

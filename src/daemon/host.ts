@@ -191,7 +191,12 @@ export class SessionHost {
     this.flushBuffered(record);
   }
 
-  async send(sessionId: string, text: string, when: SendWhen = "now"): Promise<void> {
+  /**
+   * `when` is required rather than defaulted. A default of "now" would hand the next caller the one
+   * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
+   * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
+   */
+  async send(sessionId: string, text: string, when: SendWhen): Promise<void> {
     const record = this.record(sessionId);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
     if (!record.session) await this.revive(sessionId);

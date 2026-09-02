@@ -22,6 +22,9 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true
   },
+  // web/ is deliberately absent. The web app's presentation logic still gets checked under these
+  // options — see tsconfig.presentation.json, which extends this file with noEmit — but including it
+  // here would emit dead dist/web/** output, since this program is rootDir: "." with declaration.
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",

@@ -3,7 +3,8 @@ import type { AddressInfo } from "node:net";
 
 import type { Command } from "../protocol/commands.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
-import { APP_JS, DIFF_JS, INDEX_HTML, REDUCER_JS, RELATIVE_TIME_JS, STYLES_CSS } from "../web/assets.generated.ts";
+import type { EmbeddedAsset } from "../web/assets.ts";
+import { ASSETS } from "../web/assets.generated.ts";
 import { tokenMatches } from "./auth.ts";
 import type { SessionHost } from "./host.ts";
 
@@ -74,6 +75,9 @@ async function handle(
     }
     response.writeHead(302, {
       "set-cookie": `goodharness=${presented}; HttpOnly; SameSite=Strict; Path=/`,
+      // Relative on purpose, and load-bearing when the handoff is taken through the Vite dev
+      // server's proxy: an absolute Location would bounce the browser back to the Session Host's own
+      // origin, stranding the cookie there while the app it has to authenticate sits on the other.
       location: "/",
     });
     response.end();
@@ -95,11 +99,12 @@ async function handle(
     return;
   }
 
-  // Assets are served from embedded strings rather than disk, so a single-executable build has
-  // nothing to find at runtime.
-  const asset = ASSETS[url.pathname];
+  // Assets are served from the embedded manifest rather than disk, so a single-executable build has
+  // nothing to find at runtime. The manifest is keyed by the path Vite emitted each file at, so `/`
+  // has to be spelled out as the shell.
+  const asset = ASSETS[url.pathname === "/" ? "/index.html" : url.pathname];
   if (request.method === "GET" && asset) {
-    sendAsset(response, asset.type, asset.body);
+    sendAsset(response, asset);
     return;
   }
 
@@ -116,23 +121,33 @@ async function handle(
     return;
   }
 
+  // An Agent Session is deep-linkable, so an unknown path is the client router's business — except
+  // under /api, where a 404 must stay JSON, and under /assets, where a missing hashed file is a bug
+  // and must not be answered with HTML the browser will try to execute.
+  const shell = ASSETS["/index.html"];
+  if (
+    request.method === "GET" &&
+    shell &&
+    !url.pathname.startsWith("/api/") &&
+    !url.pathname.startsWith("/assets/")
+  ) {
+    sendAsset(response, shell);
+    return;
+  }
+
   send(response, 404, { error: "Not found" });
 }
 
-const ASSETS: Record<string, { type: string; body: string } | undefined> = {
-  "/": { type: "text/html; charset=utf-8", body: INDEX_HTML },
-  "/styles.css": { type: "text/css; charset=utf-8", body: STYLES_CSS },
-  "/app.js": { type: "text/javascript; charset=utf-8", body: APP_JS },
-  "/reduce.js": { type: "text/javascript; charset=utf-8", body: REDUCER_JS },
-  "/diff.js": { type: "text/javascript; charset=utf-8", body: DIFF_JS },
-  "/relative-time.js": { type: "text/javascript; charset=utf-8", body: RELATIVE_TIME_JS },
-};
-
-function sendAsset(response: ServerResponse, type: string, body: string): void {
+function sendAsset(response: ServerResponse, asset: EmbeddedAsset): void {
+  const body = Buffer.from(asset.body, asset.encoding);
   response.writeHead(200, {
-    "content-type": type,
-    "content-length": Buffer.byteLength(body),
-    "cache-control": "no-store",
+    "content-type": asset.type,
+    "content-length": body.byteLength,
+    // Caching an immutable asset forever is safe for a sharper reason than usual: its URL carries
+    // the bundler's content hash, so different content is a different URL by construction and there
+    // is no revalidation path to get wrong. The corollary is that no-store on the shell is doing
+    // real work — a cached shell would pin its reader to an asset hash that no longer exists.
+    "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-store",
   });
   response.end(body);
 }
@@ -151,6 +166,10 @@ function streamEvents(response: ServerResponse, host: SessionHost, sessionId: st
     "cache-control": "no-cache",
     connection: "keep-alive",
   });
+  // writeHead only buffers; Node sends the headers with the first body write. A client resuming at
+  // `since: lastSeq` has nothing to replay, so without this its fetch() would not resolve until the
+  // Agent Session next said something — which for an idle one is never.
+  response.flushHeaders();
 
   const write = (entry: LoggedEvent): void => {
     response.write(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`);

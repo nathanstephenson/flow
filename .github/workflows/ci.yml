@@ -1,0 +1,41 @@
+# The first CI in this repo, added because the web client is now a build artifact.
+#
+# src/web/assets.generated.ts is committed — the Session Host imports it statically, so a fresh clone
+# has to typecheck without anyone running a build. That makes it the one file that can go stale, and
+# staleness is invisible: a bundle built from last week's reducer looks exactly like a current one.
+# The rebuild-and-diff step below is the only check that catches that without a human.
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Not --omit=optional. Rolldown and lightningcss resolve their native bindings through
+      # optional dependencies, and omitting them fails later with an unhelpful "cannot find native
+      # binding" rather than at install time.
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # Rebuild the embedded web assets and fail if the committed module moves. The SOURCE_HASH test
+      # in npm test catches an edit that was never rebuilt; this catches a rebuild that was never
+      # committed, and it is the only step that proves the manifest really is Vite's output.
+      - run: npm run build:assets
+      - run: git diff --exit-code src/web/assets.generated.ts
+
+      # Nothing else exercises the single-executable build, and it is the path that reaches a user.
+      - run: npm run build:binary

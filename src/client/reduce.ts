@@ -23,7 +23,15 @@ export type Entry =
   | { kind: "assistant"; id: string; text: string; final: boolean }
   | { kind: "thinking"; id: string; text: string; final: boolean }
   | { kind: "tool"; id: string; name: string; input: unknown; update?: unknown; result?: unknown; status: ToolStatus }
-  | { kind: "notice"; id: string; level: NoticeLevel; text: string };
+  | { kind: "notice"; id: string; level: NoticeLevel; text: string }
+  /**
+   * Going Dormant, Settling and Reviving are structural facts about an Agent Session's life, not
+   * messages about it — ADR 0003 calls a Revive "a visible marker". Collapsing them into `notice`
+   * meant the meaning was carried only by a text string, so every front-end had to recover it by
+   * sniffing a prefix. Kept distinct, `applyEvent`'s exhaustive switch makes a front-end that has
+   * not thought about markers a compile error.
+   */
+  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived"; text: string };
 
 export type ViewState = {
   status: SessionStatus;
@@ -133,7 +141,7 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         queue: [],
         entries: [
           ...state.entries,
-          { kind: "notice", id: `dormant-${state.entries.length}`, level: "info", text: `Dormant: ${event.reason}` },
+          { kind: "marker", id: `dormant-${state.entries.length}`, marker: "dormant", text: `Dormant: ${event.reason}` },
         ],
       };
 
@@ -144,7 +152,7 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         queue: [],
         entries: [
           ...state.entries,
-          { kind: "notice", id: `settled-${state.entries.length}`, level: "info", text: "Settled" },
+          { kind: "marker", id: `settled-${state.entries.length}`, marker: "settled", text: "Settled" },
         ],
       };
 
@@ -154,7 +162,7 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         status: "idle",
         entries: [
           ...state.entries,
-          { kind: "notice", id: `revived-${event.fromSeq}`, level: "info", text: `Revived from seq ${event.fromSeq}` },
+          { kind: "marker", id: `revived-${event.fromSeq}`, marker: "revived", text: `Revived from seq ${event.fromSeq}` },
         ],
       };
 

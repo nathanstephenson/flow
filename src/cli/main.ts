@@ -221,6 +221,9 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
       return `  · ${entry.name} (${entry.status})`;
     case "notice":
       return `  ! ${entry.level}: ${entry.text}`;
+    case "marker":
+      // A break in the Agent Session's life, not a message about it, so it reads as a rule.
+      return `\n── ${entry.text} ──`;
   }
 }
 

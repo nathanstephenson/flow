@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>GoodHarness</title>
+    <!--
+      Stock shadcn is light-first and switches on a `.dark` class, but GoodHarness is dark today and
+      flipping it to light would be a surprise unrelated to the restyle. So `.dark` is the default,
+      set here rather than at mount so there is no light flash before React runs, and the one thing
+      that turns it off is an explicit `prefers-color-scheme: light`. No switcher, nothing stored.
+
+      `color-scheme` follows the same rule declaratively, so the transcript scrollbar and any native
+      control are painted to match rather than staying light on a dark page.
+    -->
+    <meta name="color-scheme" content="dark light" />
+    <script>
+      if (window.matchMedia("(prefers-color-scheme: light)").matches) {
+        document.documentElement.classList.remove("dark");
+        document.documentElement.style.colorScheme = "light";
+      }
+    </script>
+  </head>
+  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
+</html>

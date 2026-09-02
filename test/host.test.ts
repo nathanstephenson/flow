@@ -115,6 +115,19 @@ describe("SessionHost", () => {
     assert.deepEqual(backend.latest.prompts, ["first", "steer"]);
   });
 
+  it("dispatches an after_turn send straight away after a Revive", async () => {
+    // ADR 0003's one-action Revive: the message that revives must run, not sit in the Steering Queue
+    // with no turn left to release it. Going Dormant resets turnInFlight and revive() leaves it
+    // alone, which is what makes always sending after_turn safe on this path.
+    await host.send(sessionId, "first", "after_turn");
+    await host.shutdown();
+    await host.revive(sessionId);
+    await host.send(sessionId, "carry on", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, ["carry on"]);
+    assert.equal(host.statusOf(sessionId), "running");
+  });
+
   it("disposes the Backend Session and closes the transcript", async () => {
     const session = backend.latest;
     await host.dispose(sessionId);

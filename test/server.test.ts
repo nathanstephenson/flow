@@ -8,7 +8,7 @@ import { FakeBackend } from "../src/backend/fake/index.ts";
 import { readOrCreateToken } from "../src/daemon/auth.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
-import { connect, type Connection } from "../src/client/connection.ts";
+import { connect, type Connection, type LinkState } from "../src/client/connection.ts";
 import { reduceAll } from "../src/client/reduce.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
 
@@ -160,6 +160,37 @@ describe("Session Host transport", () => {
     await waitFor(() => failure !== undefined);
     unsubscribe();
     assert.match(failure?.message ?? "", /404/);
+  });
+
+  it("starts a resumed stream that has nothing to replay", async () => {
+    const sessionId = await client.command<string>({
+      type: "create",
+      scope: "/tmp/scope",
+      backend: "fake",
+    });
+    await client.command({ type: "send", sessionId, text: "hello", when: "now" });
+    backend.latest.say("hi there");
+    backend.latest.completeTurn();
+
+    const all: LoggedEvent[] = [];
+    const unsubscribe = client.subscribe({ sessionId, since: 0, onEntry: (entry) => all.push(entry) });
+    await waitFor(() => all.some((entry) => entry.event.type === "turn_ended"));
+    unsubscribe();
+
+    // Exactly what a reconnect asks for: resume at lastSeq, where log.since() yields nothing. The
+    // stream must still start, or a client would sit connecting until the Agent Session next spoke
+    // — and its silence watchdog would keep reconnecting to a stream that was never the problem.
+    let link: LinkState | undefined;
+    const resumed = client.subscribe({
+      sessionId,
+      since: reduceAll(all).lastSeq,
+      onEntry: () => undefined,
+      onLink: (state) => {
+        link = state;
+      },
+    });
+    await waitFor(() => link === "live");
+    resumed();
   });
 });
 
