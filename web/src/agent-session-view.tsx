@@ -95,33 +95,33 @@ export function useEntry(view: AgentSessionView, key: string): Entry | undefined
 }
 
 /**
- * Chrome for the Agent Sessions that currently have a pane, keyed by id.
+ * The chrome of one Agent Session, for a caller that has no view of its own.
  *
  * This exists to settle an old disagreement rather than to add a feature. `SessionSummary.status`
  * comes from a poll and can be two seconds stale, while `Chrome.status` is live, so after a Settle
- * the sidebar said one thing and the pane another until the next tick. An Agent Session with a pane
- * open already has a view, so the sidebar reads the live status for those and the polled one for the
+ * the rail said one thing and the pane another until the next tick. The focused Agent Session
+ * already has a view, so the rail reads the live status for that one and the polled one for the
  * rest.
  *
- * The ids are joined into the dependency key because an array literal is a new array every render.
+ * The snapshot is stored with the id it was read from, so the render after the focus moves reports
+ * `undefined` rather than the previous Agent Session's status — a stale `running` here would let a
+ * shortcut act on the wrong Agent Session for one frame.
  */
-export function useOpenChrome(ids: readonly string[]): Record<string, Chrome> {
+export function useAgentSessionChrome(sessionId: string | undefined): Chrome | undefined {
   const registry = useRegistry();
-  const [chromes, setChromes] = useState<Record<string, Chrome>>({});
-  const key = ids.join(" ");
+  const [snapshot, setSnapshot] = useState<{ sessionId: string; chrome: Chrome } | undefined>(undefined);
 
   useEffect(() => {
-    const open = key === "" ? [] : key.split(" ");
-    const views = open.map((id) => registry.acquire(id));
-    const read = (): void =>
-      setChromes(Object.fromEntries(views.map((view) => [view.sessionId, view.getChrome()])));
+    if (sessionId === undefined) return;
+    const view = registry.acquire(sessionId);
+    const read = (): void => setSnapshot({ sessionId, chrome: view.getChrome() });
     read();
-    const unsubscribes = views.map((view) => view.subscribeChrome(read));
+    const unsubscribe = view.subscribeChrome(read);
     return () => {
-      for (const unsubscribe of unsubscribes) unsubscribe();
-      for (const id of open) registry.release(id);
+      unsubscribe();
+      registry.release(sessionId);
     };
-  }, [registry, key]);
+  }, [registry, sessionId]);
 
-  return chromes;
+  return snapshot !== undefined && snapshot.sessionId === sessionId ? snapshot.chrome : undefined;
 }

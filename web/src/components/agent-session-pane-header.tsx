@@ -1,4 +1,4 @@
-import { Columns2, MoreHorizontal, Square, X } from "lucide-react";
+import { MoreHorizontal, Square } from "lucide-react";
 import { useState } from "react";
 
 import type { EffortLevel } from "../../../src/protocol/events.ts";
@@ -44,21 +44,9 @@ export type AgentSessionPaneHeaderProps = {
   sessionId: string;
   title: string;
   chrome: Chrome;
-  splitOpen: boolean;
-  closable: boolean;
-  onToggleSplit: () => void;
-  onClose: () => void;
 };
 
-export function AgentSessionPaneHeader({
-  sessionId,
-  title,
-  chrome,
-  splitOpen,
-  closable,
-  onToggleSplit,
-  onClose,
-}: AgentSessionPaneHeaderProps) {
+export function AgentSessionPaneHeader({ sessionId, title, chrome }: AgentSessionPaneHeaderProps) {
   const run = useCommand();
 
   return (
@@ -131,21 +119,7 @@ export function AgentSessionPaneHeader({
             </Button>
           ) : null}
 
-          <Tooltip label={splitOpen ? "Close the split" : "Compare with another Agent Session"}>
-            <Button variant="ghost" size="icon" aria-label="Toggle split" onClick={onToggleSplit}>
-              <Columns2 aria-hidden />
-            </Button>
-          </Tooltip>
-
           <PaneOverflowMenu sessionId={sessionId} chrome={chrome} />
-
-          {closable ? (
-            <Tooltip label="Close this pane">
-              <Button variant="ghost" size="icon" aria-label="Close this pane" onClick={onClose}>
-                <X aria-hidden />
-              </Button>
-            </Tooltip>
-          ) : null}
         </div>
 
         <div className="flex w-full items-center gap-2">

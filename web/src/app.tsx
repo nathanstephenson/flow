@@ -1,7 +1,6 @@
 import { AgentSessionViewProvider } from "@/agent-session-view.tsx";
 import { SessionsProvider } from "@/agent-sessions.tsx";
 import { HostProvider } from "@/host.tsx";
-import { PaneLayoutProvider } from "@/pane-layout.tsx";
 import { AppShell } from "@/components/app-shell.tsx";
 import { Toaster } from "@/components/ui/toaster.tsx";
 import { TooltipProvider } from "@/components/ui/tooltip.tsx";
@@ -22,12 +21,10 @@ export function App() {
     <HostProvider>
       <SessionsProvider>
         <AgentSessionViewProvider>
-          <PaneLayoutProvider>
-            <TooltipProvider>
-              <AppShell />
-              <Toaster />
-            </TooltipProvider>
-          </PaneLayoutProvider>
+          <TooltipProvider>
+            <AppShell />
+            <Toaster />
+          </TooltipProvider>
         </AgentSessionViewProvider>
       </SessionsProvider>
     </HostProvider>

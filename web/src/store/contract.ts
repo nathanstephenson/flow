@@ -45,8 +45,8 @@ export type Chrome = {
  * A live view of one Agent Session's Presentation Transcript.
  *
  * Owned by the registry, not by a component: a store created in a component is disposed by
- * StrictMode's double mount and by every split toggle, and each disposal replays the whole
- * transcript. `subscribe` must be idempotent and must never start the transport — `acquire` does.
+ * StrictMode's double mount and by every switch to another Agent Session, and each disposal replays
+ * the whole transcript. `subscribe` must be idempotent and must never start the transport — `acquire` does.
  */
 export type AgentSessionView = {
   readonly sessionId: string;

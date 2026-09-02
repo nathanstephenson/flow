@@ -7,12 +7,12 @@ import { host } from "./host.ts";
  *
  * Module-level and ref-counted, because a view owned by a component is a view StrictMode's
  * mount→unmount→mount disposes, and every disposal replays the whole Presentation Transcript from
- * seq 0. The same is true of every split toggle and every navigation back to a pane. So: `acquire`
- * starts the transport, `release` only decrements, and the teardown waits out a grace period long
- * enough to cover a remount but short enough that a closed pane stops streaming.
+ * seq 0. The same is true of every look at another Agent Session and back. So: `acquire` starts the
+ * transport, `release` only decrements, and the teardown waits out a grace period long enough to
+ * cover a remount but short enough that an Agent Session nobody is reading stops streaming.
  */
 
-/** Long enough for a remount, a split toggle or a quick look elsewhere and back. */
+/** Long enough for a remount, or a quick look at another Agent Session and back. */
 export const RELEASE_GRACE_MS = 15_000;
 
 /** Deferred work, injected so a test drives the grace period rather than waiting out fifteen seconds. */

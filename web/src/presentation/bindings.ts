@@ -21,6 +21,8 @@ export type Binding =
   | "command-palette"
   | "sidebar-next"
   | "sidebar-previous"
+  | "sidebar-first"
+  | "sidebar-last"
   /** Move focus into the selected Agent Session's pane. */
   | "focus-pane"
   | "model-picker"
@@ -29,7 +31,6 @@ export type Binding =
   /** Blur a typing surface if one has focus, otherwise abort the focused pane's turn. */
   | "blur-or-abort"
   | "settle"
-  | "toggle-split"
   | "keyboard-sheet";
 
 /**
@@ -61,7 +62,6 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
   if (event.ctrlKey || event.metaKey) {
     if (event.repeat) return undefined;
     if (event.key === "k" || event.key === "K") return "command-palette";
-    if (event.key === "\\") return "toggle-split";
     // Every other chord belongs to the browser. Stealing ⌘F in particular would break find-in-page
     // over the Presentation Transcript, which ADR 0001 defines as the record of what a human saw.
     return undefined;
@@ -89,6 +89,15 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
   // Shift is not tested: a shifted letter arrives as an uppercase `key`, so it already fails to
   // match, and `?` arrives as `?` on the layouts that need Shift to produce it.
   switch (event.key) {
+    // Home and End belong to the rail for the same reason `j` and `k` do: the cursor they move is
+    // one piece of state owned by the app shell, and a rail that grew its own cursor for two keys
+    // would be two cursors. They are global rather than scoped to the rail because this table is
+    // resolved from one window listener — no scroller in this app consumes Home or End today, and
+    // `context.typing` has already returned above for anything a caret lives in.
+    case "Home":
+      return "sidebar-first";
+    case "End":
+      return "sidebar-last";
     case "n":
       return "new-agent-session";
     case "Enter":

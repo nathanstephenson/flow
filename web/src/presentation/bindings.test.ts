@@ -16,6 +16,8 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("k"), idle), "sidebar-previous");
     assert.equal(resolveBinding(press("ArrowDown"), idle), "sidebar-next");
     assert.equal(resolveBinding(press("ArrowUp"), idle), "sidebar-previous");
+    assert.equal(resolveBinding(press("Home"), idle), "sidebar-first");
+    assert.equal(resolveBinding(press("End"), idle), "sidebar-last");
     assert.equal(resolveBinding(press("Enter"), idle), "focus-pane");
     assert.equal(resolveBinding(press("m"), idle), "model-picker");
     assert.equal(resolveBinding(press("e"), idle), "effort-picker");
@@ -28,8 +30,6 @@ describe("resolving a keystroke to a binding", () => {
   it("maps ⌘ and Ctrl to the same chords", () => {
     assert.equal(resolveBinding(press("k", { metaKey: true }), idle), "command-palette");
     assert.equal(resolveBinding(press("k", { ctrlKey: true }), idle), "command-palette");
-    assert.equal(resolveBinding(press("\\", { metaKey: true }), idle), "toggle-split");
-    assert.equal(resolveBinding(press("\\", { ctrlKey: true }), idle), "toggle-split");
   });
 
   it("leaves the browser's chords alone", () => {
@@ -64,6 +64,8 @@ describe("resolving a keystroke to a binding", () => {
       assert.equal(resolveBinding(press("j"), typing), undefined);
       assert.equal(resolveBinding(press("Enter"), typing), undefined, "Enter in the Composer sends");
       assert.equal(resolveBinding(press("ArrowDown"), typing), undefined, "arrows move the caret");
+      assert.equal(resolveBinding(press("Home"), typing), undefined, "Home is start-of-line in the Composer");
+      assert.equal(resolveBinding(press("End"), typing), undefined, "End is end-of-line in the Composer");
     });
 
     it("still resolves Escape, which is how a reader leaves the Composer", () => {
@@ -72,7 +74,6 @@ describe("resolving a keystroke to a binding", () => {
 
     it("still resolves the chords, which cannot be typed", () => {
       assert.equal(resolveBinding(press("k", { metaKey: true }), typing), "command-palette");
-      assert.equal(resolveBinding(press("\\", { metaKey: true }), typing), "toggle-split");
     });
   });
 
@@ -86,6 +87,8 @@ describe("resolving a keystroke to a binding", () => {
       assert.equal(resolveBinding(press("s", { repeat: true }), idle), undefined);
       assert.equal(resolveBinding(press("n", { repeat: true }), idle), undefined);
       assert.equal(resolveBinding(press("Enter", { repeat: true }), idle), undefined);
+      // Holding Home would only re-arrive at the row it already reached.
+      assert.equal(resolveBinding(press("Home", { repeat: true }), idle), undefined);
       assert.equal(resolveBinding(press("k", { metaKey: true, repeat: true }), idle), undefined);
     });
   });

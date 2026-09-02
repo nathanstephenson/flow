@@ -184,8 +184,8 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
  * The visible key list.
  *
  * Filtering lives here rather than in the store: the store's job is the reduced, append-only state,
- * and a per-viewer presentation filter is not that — two panes showing one Agent Session may filter
- * differently.
+ * and a per-viewer presentation filter is not that — a query is typed and cleared without anything
+ * having happened to the Presentation Transcript, and the TUI filters the same record its own way.
  *
  * With no query this is the store's own array, so TranscriptView re-renders only when an entry is
  * added. With a query it recomputes on every coalesced tick, which is the cost of a filter that

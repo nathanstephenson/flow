@@ -104,7 +104,7 @@ goodharness serve --port 3000 --address 0.0.0.0   # containers reached via a pub
 
 Several Agent Sessions on screen at once, collapsible tool calls, file edits rendered as diffs,
 per-pane transcript search, provider-grouped model picker, Steering Queue depth and context usage —
-the surface M6 is rebuilding.
+the surface M6 rebuilds, one Agent Session on screen at a time.
 
 The browser ran **the same reducer as the TUI**, not a copy: `src/client/reduce.ts` and
 `src/client/diff.ts` imported only types, so stripping left standalone ESM with no imports — served
@@ -194,13 +194,16 @@ the only one of the three that does not depend on remembering a command. The emb
 from 28 kB to 526 kB — under half a percent of the binary, but comfortably the largest file in the
 tree.
 
-The UI is master–detail: a sidebar of Agent Sessions, one in focus, and an opt-in two-up split where
-M4 opened a pane per Agent Session. Ten modules are shared with the terminal client rather than the
-three the old arrangement allowed, so the model and Effort pickers, the status predicates, transcript
-search and the relative clock are now one implementation each instead of two that had already
-drifted. Styling is stock shadcn/ui on Base UI primitives, with no bespoke palette to learn: the five
-states an Agent Session can be in are mapped onto shadcn's own chart tokens, and monospace is kept
-only where character alignment carries meaning — transcript text, tool output, diffs and Scope paths.
+The UI is master–detail: a sidebar of Agent Sessions and exactly one of them focused in a pane, where
+M4 opened a pane per Agent Session. One at a time is the design rather than a limitation of it — the
+rail carries the state of the others, and a dot, a running state, a queue depth and a relative time
+per row is enough to monitor any number of Agent Sessions without reading them. Ten modules are
+shared with the terminal client rather than the three the old arrangement allowed, so the model and
+Effort pickers, the status predicates, transcript search and the relative clock are now one
+implementation each instead of two that had already drifted. Styling is stock shadcn/ui on Base UI
+primitives, with no bespoke palette to learn: the five states an Agent Session can be in are mapped
+onto shadcn's own chart tokens, and monospace is kept only where character alignment carries meaning
+— transcript text, tool output, diffs and Scope paths.
 
 Nothing automatically proves the shipped bundle renders. The compiler, the module-graph check and the
 hash all prove things about the bundle rather than about the app working, and closing that gap needs

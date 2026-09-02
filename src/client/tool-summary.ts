@@ -7,7 +7,10 @@
  * print a string.
  */
 
-/** About a line in the narrower of two panes. A précis that needs scrolling is not a précis. */
+/**
+ * About a line in a narrow terminal, which is the tighter of the two front-ends. A précis that needs
+ * scrolling is not a précis.
+ */
 const MAX = 60;
 
 type Argument = { key: string; shape: "path" | "text" };
