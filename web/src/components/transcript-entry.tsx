@@ -1,9 +1,11 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 
+import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
+import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -20,8 +22,10 @@ import { cn } from "@/lib/utils.ts";
  * and a 2ch gutter carries one glyph per kind, reusing the vocabulary `src/tui/render.ts` already
  * prints so the two front-ends read the same way.
  *
- * This is the one place that stays monospaced. Everything a model or a tool emits is aligned text —
- * code, paths, tables, tracebacks — and the chrome around it is stock shadcn sans.
+ * What a model writes is markdown, so it is lexed (`src/client/markdown.ts`) and rendered as a
+ * document rather than shown as its own source. Prose is therefore the chrome font, and monospace is
+ * spent only where alignment is the point: a code span, a fenced block, and the tool payloads and
+ * diffs below, which are not prose and never pass through the markdown renderer.
  */
 export type TranscriptEntryProps = { entry: Entry; query: string };
 
@@ -49,11 +53,12 @@ type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
  * and a bubble is the one shape that would make this stop reading as a document.
  */
 function UserEntryView({ entry, query }: { entry: Of<"user">; query: string }) {
+  const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
     <Row gutter=">" gutterClassName="text-primary">
-      <p className="m-0 border-l-2 border-border pl-2 font-mono text-sm font-medium whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
-        <Highlighted text={entry.text} query={query} />
-      </p>
+      <div className="border-l-2 border-border pl-2 font-medium">
+        <Markdown blocks={blocks} query={query} />
+      </div>
     </Row>
   );
 }
@@ -64,17 +69,23 @@ function UserEntryView({ entry, query }: { entry: Of<"user">; query: string }) {
  * UI this replaces had no streaming signal at all.
  */
 function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: string }) {
+  const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
     <Row>
-      <p className="m-0 font-mono text-sm whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
-        <Highlighted text={entry.text} query={query} />
-        {entry.final ? null : (
-          <span className="animate-caret-blink ml-px inline-block w-[1ch] text-primary" aria-hidden>
-            ▍
-          </span>
-        )}
-      </p>
+      <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
     </Row>
+  );
+}
+
+/**
+ * Threaded into the last block of a tree rather than placed after it, so it follows the final
+ * character the model has sent instead of sitting on a line of its own below the text.
+ */
+function StreamingCaret() {
+  return (
+    <span className="animate-caret-blink ml-px inline-block w-[1ch] text-primary" aria-hidden>
+      ▍
+    </span>
   );
 }
 
@@ -86,19 +97,16 @@ function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: s
  */
 function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: string }) {
   const [expanded, setExpanded] = useState(false);
+  const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   const clamped = entry.final && !expanded;
 
   return (
     <Row gutter="·" gutterClassName="text-muted-foreground">
       <div>
-        <p
-          className={cn(
-            "m-0 font-mono text-sm italic whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]",
-            clamped && "line-clamp-3",
-          )}
-        >
-          <Highlighted text={entry.text} query={query} />
-        </p>
+        {/* A height clamp, not `line-clamp`: that needs `display: -webkit-box`, which holds one block. */}
+        <div className={cn("text-muted-foreground italic", clamped && "max-h-[4.5rem] overflow-hidden")}>
+          <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
+        </div>
         {entry.final ? (
           <button
             type="button"
