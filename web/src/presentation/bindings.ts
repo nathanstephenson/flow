@@ -135,8 +135,12 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
     // resolved here rather than by the component's own window listener, so it can be suppressed
     // while a dialog owns the keyboard and can be printed in the Settings' Keyboard section.
     if (event.key === "b" || event.key === "B") return "toggle-rail";
-    // Every other chord belongs to the browser. Stealing ⌘F in particular would break find-in-page
-    // over the Presentation Transcript, which ADR 0001 defines as the record of what a human saw.
+    // ⌘F is taken, and it is the only browser chord this app takes. The Presentation Transcript is
+    // not virtualised precisely so find-in-page can reach all of it (ADR 0001), but find-in-page
+    // cannot search a collapsed Entry or say which Agent Session it is reading — the pane's own
+    // field can, so the key a reader already presses opens that instead. Every other chord is the
+    // browser's.
+    if (event.key === "f" || event.key === "F") return "search";
     return undefined;
   }
 
@@ -189,8 +193,6 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
       return "toggle-bottom-dock";
     case "~":
       return "toggle-right-dock";
-    case "/":
-      return "search";
     case "?":
       return "keyboard-settings";
     default:

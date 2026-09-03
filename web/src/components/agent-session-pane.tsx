@@ -32,17 +32,38 @@ export type AgentSessionPaneProps = {
   sessionId: string;
   /** Absent where the host cannot open a Shell: no content kind exists, so no Dock is offered. */
   docks?: Docks;
+  /**
+   * Whether the transcript search field is on screen. Owned by the app shell because ⌘F is resolved
+   * there with every other key, and the pane remounts per Agent Session.
+   */
+  searchOpen: boolean;
+  onCloseSearch: () => void;
 };
 
-export function AgentSessionPane({ sessionId, docks }: AgentSessionPaneProps) {
+export function AgentSessionPane({ sessionId, docks, searchOpen, onCloseSearch }: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
   // One frame at most: the acquire happens in a layout effect, so this does not reach the screen.
   if (!view) return <div className="min-h-0" />;
-  return <AttachedPane key={sessionId} view={view} sessionId={sessionId} {...(docks ? { docks } : {})} />;
+  return (
+    <AttachedPane
+      key={sessionId}
+      view={view}
+      sessionId={sessionId}
+      searchOpen={searchOpen}
+      onCloseSearch={onCloseSearch}
+      {...(docks ? { docks } : {})}
+    />
+  );
 }
 
-function AttachedPane({ view, sessionId, docks }: { view: AgentSessionView } & AgentSessionPaneProps) {
+function AttachedPane({
+  view,
+  sessionId,
+  docks,
+  searchOpen,
+  onCloseSearch,
+}: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const { sessions } = useAgentSessions();
   const [query, setQuery] = useState("");
@@ -57,14 +78,28 @@ function AttachedPane({ view, sessionId, docks }: { view: AgentSessionView } & A
       data-pane=""
       // `relative` and one row fewer than there are children: the Composer floats over the transcript
       // rather than sitting under it, positioned against this section. It stays *inside* `[data-pane]`
-      // because that is how app-shell.tsx finds the textarea to focus.
-      className="relative grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] bg-background"
+      // because that is how app-shell.tsx finds the textarea to focus. The search field's row is in
+      // the template only while the field is — otherwise the transcript would inherit an `auto` row
+      // and stop being the thing that scrolls.
+      className={cn(
+        "relative grid min-h-0 min-w-0 bg-background",
+        searchOpen ? "grid-rows-[auto_minmax(0,1fr)]" : "grid-rows-[minmax(0,1fr)]",
+      )}
       // Nothing here dims a Settled Agent Session. They are de-emphasised in the rail and at full
       // contrast once focused in the pane, because reading one is exactly what focusing it means
       // (ADR 0006).
       aria-label={`Agent Session ${title}`}
     >
-      <TranscriptSearchField query={query} onQueryChange={setQuery} />
+      {searchOpen ? (
+        <TranscriptSearchField
+          query={query}
+          onQueryChange={setQuery}
+          onClose={() => {
+            setQuery("");
+            onCloseSearch();
+          }}
+        />
+      ) : null}
 
       <TranscriptView view={view} query={query} />
 

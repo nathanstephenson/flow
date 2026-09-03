@@ -64,7 +64,12 @@ export const SHORTCUTS: ShortcutGroup[] = [
         keys: ["~"],
         description: "Show or minimise the right Dock",
       },
-      { binding: "search", keys: ["/"], description: "Find in the Presentation Transcript" },
+      {
+        binding: "search",
+        keys: ["f"],
+        chord: true,
+        description: "Find in the Presentation Transcript — opens the field, Escape closes it",
+      },
       { binding: "model-picker", keys: ["m"], description: "Model picker" },
       { binding: "effort-picker", keys: ["e"], description: "Effort picker" },
       {

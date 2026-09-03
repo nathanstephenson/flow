@@ -24,7 +24,6 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("s"), idle), "settle");
     assert.equal(resolveBinding(press("`"), idle), "toggle-bottom-dock");
     assert.equal(resolveBinding(press("~"), idle), "toggle-right-dock");
-    assert.equal(resolveBinding(press("/"), idle), "search");
     assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-settings");
     assert.equal(resolveBinding(press("Escape"), idle), "blur-or-abort");
   });
@@ -32,12 +31,11 @@ describe("resolving a keystroke to a binding", () => {
   it("maps ⌘ and Ctrl to the same chords", () => {
     assert.equal(resolveBinding(press("k", { metaKey: true }), idle), "command-palette");
     assert.equal(resolveBinding(press("k", { ctrlKey: true }), idle), "command-palette");
+    assert.equal(resolveBinding(press("f", { metaKey: true }), idle), "search");
+    assert.equal(resolveBinding(press("f", { ctrlKey: true }), idle), "search");
   });
 
   it("leaves the browser's chords alone", () => {
-    // ⌘F in particular: find-in-page over the Presentation Transcript is what ADR 0001's record of
-    // what a human saw is for.
-    assert.equal(resolveBinding(press("f", { metaKey: true }), idle), undefined);
     assert.equal(resolveBinding(press("r", { metaKey: true }), idle), undefined);
     assert.equal(resolveBinding(press("s", { metaKey: true }), idle), undefined);
   });
@@ -62,7 +60,6 @@ describe("resolving a keystroke to a binding", () => {
     it("passes every letter through to the Composer", () => {
       assert.equal(resolveBinding(press("s"), typing), undefined);
       assert.equal(resolveBinding(press("n"), typing), undefined);
-      assert.equal(resolveBinding(press("/"), typing), undefined);
       assert.equal(resolveBinding(press("j"), typing), undefined);
       assert.equal(resolveBinding(press("Enter"), typing), undefined, "Enter in the Composer sends");
       assert.equal(resolveBinding(press("ArrowDown"), typing), undefined, "arrows move the caret");
@@ -116,7 +113,7 @@ describe("resolving a keystroke to a binding", () => {
     const settings: BindingContext = { modalOpen: false, typing: false, view: "settings" };
 
     it("drops every binding that addresses an Agent Session", () => {
-      for (const key of ["j", "k", "ArrowDown", "ArrowUp", "Home", "End", "Enter", "m", "e", "s", "`", "/"]) {
+      for (const key of ["j", "k", "ArrowDown", "ArrowUp", "Home", "End", "Enter", "m", "e", "s", "`"]) {
         assert.equal(resolveBinding(press(key), settings), undefined, key);
       }
     });
@@ -126,6 +123,9 @@ describe("resolving a keystroke to a binding", () => {
       // on a section of the Settings itself.
       assert.equal(resolveBinding(press("n"), settings), "new-agent-session");
       assert.equal(resolveBinding(press("k", { metaKey: true }), settings), "command-palette");
+      // ⌘F is not one of them: there is no Presentation Transcript here, so it goes back to being
+      // find-in-page.
+      assert.equal(resolveBinding(press("f", { metaKey: true }), settings), undefined);
       assert.equal(resolveBinding(press("?", { shiftKey: true }), settings), "keyboard-settings");
     });
 

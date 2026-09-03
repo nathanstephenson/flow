@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
 
 import { Input } from "@/components/ui/input.tsx";
@@ -10,20 +10,30 @@ const DEBOUNCE_MS = 120;
  * Find text in this pane's Presentation Transcript.
  *
  * It lowercases before publishing so a keystroke lowercases once rather than once per Entry, which is
- * the convention `src/client/search.ts` asks for. It is *not* a replacement for find-in-page: Cmd-F
- * still works over the whole transcript, which is exactly why nothing here is virtualised.
+ * the convention `src/client/search.ts` asks for.
+ *
+ * It is mounted only while the reader has asked for it — ⌘F, the key they would otherwise have
+ * pressed for find-in-page — so it takes focus on mount rather than waiting to be focused. Nothing
+ * else mounts it, which is what makes that safe. Escape and the cross both mean the same thing:
+ * close, and the pane clears the query as it goes, because a filter left applied under a field that
+ * is no longer on screen is a transcript with Entries missing for no visible reason.
  */
 export function TranscriptSearchField({
   query,
   onQueryChange,
-  inputRef,
+  onClose,
 }: {
   query: string;
   onQueryChange: (query: string) => void;
-  inputRef?: RefObject<HTMLInputElement | null> | undefined;
+  onClose: () => void;
 }) {
   const [text, setText] = useState(query);
   const published = useRef(query);
+  const input = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    input.current?.select();
+  }, []);
 
   useEffect(() => {
     const lowered = text.trim().toLowerCase();
@@ -39,30 +49,25 @@ export function TranscriptSearchField({
     <div className="flex items-center gap-2 border-b bg-card px-3 py-1">
       <Search className="size-4 shrink-0 opacity-50" aria-hidden />
       <Input
-        ref={inputRef}
+        ref={input}
         data-transcript-search=""
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            setText("");
-            event.currentTarget.blur();
-          }
+          if (event.key === "Escape") onClose();
         }}
         placeholder="Find in this Presentation Transcript"
         aria-label="Find in this Presentation Transcript"
         className="h-8 border-0 bg-transparent px-0 shadow-none dark:bg-transparent focus-visible:border-0 focus-visible:ring-0"
       />
-      {text === "" ? null : (
-        <button
-          type="button"
-          onClick={() => setText("")}
-          aria-label="Clear"
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-        >
-          <X className="size-4" aria-hidden />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close search"
+        className="shrink-0 text-muted-foreground hover:text-foreground"
+      >
+        <X className="size-4" aria-hidden />
+      </button>
     </div>
   );
 }

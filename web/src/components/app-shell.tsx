@@ -52,6 +52,15 @@ export function AppShell() {
   const [newOpen, setNewOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [railOpen, setRailOpen] = useState(true);
+  /**
+   * Whether the pane's transcript search field is on screen.
+   *
+   * Up here rather than in the pane because ⌘F is resolved by the one keyboard table like every
+   * other key, and the pane it addresses cannot be reached from a handler by a data attribute while
+   * it is not rendered. It closes when the focus moves, because the field mounted for one Agent
+   * Session would otherwise reappear over another one's transcript and take the focus with it.
+   */
+  const [searchOpen, setSearchOpen] = useState(false);
   const rail = useRailWidth();
 
   /*
@@ -103,6 +112,10 @@ export function AppShell() {
     setCursor((current) => Math.max(0, Math.min(current, sessions.length - 1)));
   }, [sessions.length]);
 
+  useEffect(() => {
+    setSearchOpen(false);
+  }, [focusedId]);
+
   const settle = useCallback(
     (sessionId: string) => {
       void run({ type: "settle", sessionId }).then(() => {
@@ -136,7 +149,18 @@ export function AppShell() {
         if (candidate) focus(candidate.id);
         focusInPane("textarea");
       },
-      search: () => focusInPane("[data-transcript-search]"),
+      // Omitted rather than no-op'd when there is no pane to search: an unhandled binding is not
+      // preventDefault'd, so ⌘F goes back to being find-in-page instead of being swallowed by a
+      // field that has nowhere to appear. The field takes the focus itself on mount, so this only
+      // has to put it back when ⌘F is pressed against one that is already open.
+      ...(focusedId === undefined
+        ? {}
+        : {
+            search: () => {
+              setSearchOpen(true);
+              focusInPane("[data-transcript-search]");
+            },
+          }),
       settle: () => {
         if (focusedId !== undefined && chrome !== undefined && canSettle(chrome.status)) settle(focusedId);
       },
@@ -243,7 +267,12 @@ export function AppShell() {
           ) : focusedId === undefined ? (
             <NothingFocused />
           ) : (
-            <AgentSessionPane sessionId={focusedId} {...(config.shell ? { docks } : {})} />
+            <AgentSessionPane
+              sessionId={focusedId}
+              searchOpen={searchOpen}
+              onCloseSearch={() => setSearchOpen(false)}
+              {...(config.shell ? { docks } : {})}
+            />
           )}
         </SidebarInset>
       </SidebarProvider>
