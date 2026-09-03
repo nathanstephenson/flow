@@ -58,6 +58,7 @@ describe("web assets", () => {
       "src/client/connection.ts",
       "src/client/context-usage.ts",
       "src/client/diff.ts",
+      "src/client/markdown.ts",
       "src/client/model-choices.ts",
       "src/client/reduce.ts",
       "src/client/relative-time.ts",

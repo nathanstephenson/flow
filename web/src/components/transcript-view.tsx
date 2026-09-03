@@ -85,30 +85,40 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
 
   return (
     <div className="relative min-h-0">
+      {/*
+       * The scroller stays full width so its scrollbar sits at the pane's edge; the column inside it
+       * is what carries the measure and centres.
+       *
+       * `text-sm` is load-bearing, not decoration: `ch` is the width of `0` in the element's *own*
+       * font, so the same 136ch resolves ~16% wider at the inherited 16px than at the 14px every
+       * Entry actually renders at. Every child sets its own size, so this only fixes what `ch` means.
+       */}
       <div ref={scroller} className="transcript-scroller h-full px-3 py-2">
-        {earlier > 0 ? (
-          <button
-            type="button"
-            onClick={() => setShowAll(true)}
-            className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <span className="h-px flex-1 bg-border" aria-hidden />
-            {earlier.toLocaleString()} earlier entries · show all
-            <span className="h-px flex-1 bg-border" aria-hidden />
-          </button>
-        ) : null}
+        <div className="mx-auto w-full max-w-[136ch] text-sm">
+          {earlier > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowAll(true)}
+              className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <span className="h-px flex-1 bg-border" aria-hidden />
+              {earlier.toLocaleString()} earlier entries · show all
+              <span className="h-px flex-1 bg-border" aria-hidden />
+            </button>
+          ) : null}
 
-        {windowed.map((key) => (
-          <TranscriptRow key={key} view={view} entryKey={key} query={query} />
-        ))}
+          {windowed.map((key) => (
+            <TranscriptRow key={key} view={view} entryKey={key} query={query} />
+          ))}
 
-        {visibleKeys.length === 0 ? (
-          <p className="px-1 py-4 text-sm text-muted-foreground">
-            {keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
-          </p>
-        ) : null}
+          {visibleKeys.length === 0 ? (
+            <p className="px-1 py-4 text-sm text-muted-foreground">
+              {keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
+            </p>
+          ) : null}
 
-        <StickToBottom view={view} scroller={scroller} pinned={pinned} />
+          <StickToBottom view={view} scroller={scroller} pinned={pinned} />
+        </div>
       </div>
 
       {atBottom ? null : <NewEntriesPill onClick={toBottom} />}
