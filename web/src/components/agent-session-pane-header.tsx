@@ -1,7 +1,7 @@
 import { MoreHorizontal, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 
-import { canRevive, canSettle } from "@client/status.ts";
+import { canRevive } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ScopeLabel } from "@/components/agent-session-nav.tsx";
@@ -25,7 +25,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
-import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 
@@ -34,14 +33,14 @@ import { cn } from "@/lib/utils.ts";
  *
  * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
- * is identity and lifecycle — title, status, backend, Scope, id, the Shell, Settle and the overflow.
+ * is identity and lifecycle — title, status, backend, Scope, id, the Shell and the overflow.
  *
  * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
  * competing with the document beside it. Mono survives only where character alignment is functional:
  * the Scope and the Agent Session id, machine values a reader compares character by character.
  *
- * Affordances are hidden rather than disabled when they cannot apply — Settle disappears once an
- * Agent Session is Settled or Ended. A permanently greyed control teaches nothing.
+ * Affordances are hidden rather than disabled when they cannot apply. A permanently greyed control
+ * teaches nothing.
  */
 export type AgentSessionPaneHeaderProps = {
   sessionId: string;
@@ -52,8 +51,6 @@ export type AgentSessionPaneHeaderProps = {
 };
 
 export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: AgentSessionPaneHeaderProps) {
-  const run = useCommand();
-
   return (
     <div className="bg-card text-card-foreground">
       <div className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-2">
@@ -84,26 +81,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: Agen
                 {shell.open ? "Hide the Shell — it keeps running" : "Open a Shell in this Scope"}
               </TooltipContent>
             </Tooltip>
-          ) : null}
-
-          {canSettle(chrome.status) ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                void run({ type: "settle", sessionId }).then(() => {
-                  /*
-                   * No undo button, deliberately. Undoing a Settle means a Revive, which starts a
-                   * Backend Session and spends money — so the toast states the reversal rather than
-                   * offering to perform it. That sentence is ADR 0006 and ADR 0003 in the UI at no
-                   * cost.
-                   */
-                  toast.info("Settled — the next message Revives it.");
-                });
-              }}
-            >
-              settle
-            </Button>
           ) : null}
 
           <PaneOverflowMenu sessionId={sessionId} chrome={chrome} />
