@@ -223,7 +223,10 @@ class ClaudeSession implements BackendSession {
   private noteBootedModel(booted: string | undefined): void {
     if (!booted) return;
     this.bootedModel = booted;
-    this.announceModel(this.aliasOf.get(booted) ?? booted);
+    // An id `capabilities.models` cannot describe costs the label *and* the Effort levels, so it must
+    // never displace one the list can describe. With nothing announced yet there is nothing to
+    // protect and the raw id still beats silence.
+    this.announceModel(modelInForce(booted, this.aliasOf, this.capabilities.models) ?? this.announced ?? booted);
   }
 
   private announceModel(modelId: string): void {
@@ -424,6 +427,31 @@ export class ClaudeBackend implements AgentBackend {
 }
 
 /** Claude reports one Provider, and per-model effort: haiku carries no supportedEffortLevels. */
+/**
+ * Which model id to announce for the one the SDK just named.
+ *
+ * The picker lists aliases (`opus[1m]`) because that is what `supportedModels()` reports as `value`,
+ * while the init message at the start of every turn names the model in its *resolved* form
+ * (`claude-opus-5`). Announcing the resolved form is not a cosmetic problem: `effortChoices` and the
+ * picker's label both find the model by id in `capabilities.models`, so an id that is not on the list
+ * has no `effortLevels` and no `label` — the Effort control disappears entirely and the model pill
+ * falls back to printing the raw id. That happened one turn into every Agent Session.
+ *
+ * `undefined` means "nothing here worth announcing": the caller keeps what it already had rather than
+ * trading a described model for an undescribed one.
+ */
+export function modelInForce(
+  named: string,
+  aliasOf: ReadonlyMap<string, string>,
+  models: readonly ModelInfo[],
+): string | undefined {
+  const alias = aliasOf.get(named) ?? named;
+  // Before the list arrives there is nothing to match against, and the raw id stands until
+  // loadModels comes back and corrects it.
+  if (models.length === 0) return alias;
+  return models.some((model) => model.id === alias) ? alias : undefined;
+}
+
 export function describeModel(model: SdkModelInfo): ModelInfo {
   return {
     id: model.value,
