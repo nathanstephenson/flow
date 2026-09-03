@@ -185,6 +185,26 @@
 }
 
 /*
+ * The reading measure, and the one column everything in a pane lines up on: the transcript, and the
+ * Composer floating over it.
+ *
+ * An absolute length rather than `ch`, which was the first attempt and was wrong twice. `ch` is the
+ * width of `0` in the element's *own* font, so the same `136ch` resolved to ~1180px on the transcript
+ * (at `text-sm`) and ~1306px on the Composer (at the inherited 16px) — one column, two widths, and a
+ * bug invisible until you saw them stacked. Naming it once here means the two cannot disagree, and
+ * means neither has to carry a font-size it does not otherwise want.
+ *
+ * 56rem is ~118 characters of Inter at 14px. Wider than prose wants, because this document is full of
+ * paths and identifiers that should not wrap, and narrower than the pane, because a full-bleed line
+ * is what made a long answer unreadable in the first place.
+ */
+@utility pane-measure {
+  width: 100%;
+  max-width: 56rem;
+  margin-inline: auto;
+}
+
+/*
  * The Presentation Transcript scroller. A plain overflow container rather than a ScrollArea: the
  * stick-to-bottom rule owns scrollTop directly, and a component running its own scroll handler on
  * every streamed frame would fight it for no gain.
