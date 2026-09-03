@@ -346,10 +346,10 @@ whichever it finds. The defaults live in `src/protocol/fonts.ts`, which is the o
 `web/src/index.css` restates them for the first frame and `test/fonts.test.ts` holds the two
 together.
 
-A Shell — the terminal split the web client can open beside an Agent Session — needs a pty, which is
-a native addon. `npm install` builds it, and where it cannot be loaded the host reports
-`shell: false` on `/api/config` and the web client hides the control rather than offering one that
-breaks. A SEA blob cannot contain a native addon, so the binary from `npm run build:binary` has to
+A Shell — a terminal the web client draws in one tab of a Dock, the tabbed region below an Agent
+Session's transcript or beside it — needs a pty, which is a native addon. `npm install` builds it,
+and where it cannot be loaded the host reports `shell: false` on `/api/config` and the web client
+offers no Docks at all rather than a picker with nothing in it. A SEA blob cannot contain a native addon, so the binary from `npm run build:binary` has to
 find `node-pty` on disk: it will on the machine that built it, and will not once shipped elsewhere,
 where it reports `shell: false` and serves no Shells (ADR 0008).
 

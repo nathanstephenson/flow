@@ -33,8 +33,9 @@ export type Binding =
   /** Blur a typing surface if one has focus, otherwise abort the focused pane's turn. */
   | "blur-or-abort"
   | "settle"
-  /** Show or hide the focused Agent Session's Shell. Hiding it does not end it. */
-  | "shell"
+  /** Show or minimise a Dock. Minimising it does not end the Shells inside it. */
+  | "toggle-bottom-dock"
+  | "toggle-right-dock"
   /** Show or hide the rail. Its width is remembered; whether it is open is not. */
   | "toggle-rail"
   /** Open the Settings at the section listing these bindings. */
@@ -62,7 +63,8 @@ const EVERY_BINDING = {
   search: true,
   "blur-or-abort": true,
   settle: true,
-  shell: true,
+  "toggle-bottom-dock": true,
+  "toggle-right-dock": true,
   "toggle-rail": true,
   "keyboard-settings": true,
   "leave-settings": true,
@@ -98,7 +100,7 @@ export type BindingContext = {
 /**
  * The bindings that survive in the Settings.
  *
- * Everything else addresses an Agent Session — a rail cursor, a pane, a Shell, a model — and the
+ * Everything else addresses an Agent Session — a rail cursor, a pane, a Dock, a model — and the
  * Settings have none of those. `n` stays because starting an Agent Session is reasonable from
  * anywhere, and `?` stays because it lands on a section of the Settings itself.
  */
@@ -179,11 +181,14 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
       return "effort-picker";
     case "s":
       return "settle";
-    // The backtick, because every other terminal toggle a reader has met is on this key. It is safe
-    // as an unmodified binding under the first principle above: showing a Shell spends nothing and
-    // sends nothing, and hiding one does not end it.
+    // The backtick, because every other terminal toggle a reader has met is on this key, and its
+    // shifted twin for the other Dock — one physical key, one finger, two sides. Both are safe as
+    // unmodified bindings under the first principle above: showing a Dock spends nothing and sends
+    // nothing, and minimising one does not end the Shells in it.
     case "`":
-      return "shell";
+      return "toggle-bottom-dock";
+    case "~":
+      return "toggle-right-dock";
     case "/":
       return "search";
     case "?":
@@ -198,21 +203,27 @@ const TYPING_TAGS = new Set(["input", "textarea", "select"]);
 /**
  * Whether focus is somewhere a keystroke is text rather than a command.
  *
- * Taken apart into three primitives so this stays DOM-free, and so the caller cannot pass a target
- * it has not thought about. The predicate the old client used was `target === document.body`, which
- * was too strict in a way that read as flaky rather than as a bug: after clicking any button focus
- * is on that button, not on the body, so every shortcut silently stopped working until the reader
- * clicked the background.
+ * Taken apart into four primitives so this stays DOM-free, and so the caller cannot pass a target it
+ * has not thought about. The predicate the old client used was `target === document.body`, which was
+ * too strict in a way that read as flaky rather than as a bug: after clicking any button focus is on
+ * that button, not on the body, so every shortcut silently stopped working until the reader clicked
+ * the background.
+ *
+ * `inShell` is the fourth, and it is not optional politeness: a Shell draws itself on a canvas and
+ * takes keys through it, so nothing about the element says "text goes here". Without it, typing `s`
+ * at a prompt Settles the Agent Session, and four Shells across two Docks make that a matter of time.
  */
 export function isTypingTarget(
   tagName: string,
   isContentEditable: boolean,
   role: string | undefined,
+  inShell: boolean,
 ): boolean {
   return (
     TYPING_TAGS.has(tagName.toLowerCase()) ||
     isContentEditable ||
     // A custom widget that says it accepts text is taken at its word.
-    role === "textbox"
+    role === "textbox" ||
+    inShell
   );
 }

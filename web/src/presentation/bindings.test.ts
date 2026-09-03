@@ -22,7 +22,8 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("m"), idle), "model-picker");
     assert.equal(resolveBinding(press("e"), idle), "effort-picker");
     assert.equal(resolveBinding(press("s"), idle), "settle");
-    assert.equal(resolveBinding(press("`"), idle), "shell");
+    assert.equal(resolveBinding(press("`"), idle), "toggle-bottom-dock");
+    assert.equal(resolveBinding(press("~"), idle), "toggle-right-dock");
     assert.equal(resolveBinding(press("/"), idle), "search");
     assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-settings");
     assert.equal(resolveBinding(press("Escape"), idle), "blur-or-abort");
@@ -147,18 +148,27 @@ describe("resolving a keystroke to a binding", () => {
 
 describe("recognising a typing surface", () => {
   it("recognises the elements a keystroke is text in", () => {
-    assert.equal(isTypingTarget("input", false, undefined), true);
-    assert.equal(isTypingTarget("TEXTAREA", false, undefined), true);
-    assert.equal(isTypingTarget("select", false, undefined), true);
-    assert.equal(isTypingTarget("div", true, undefined), true);
-    assert.equal(isTypingTarget("div", false, "textbox"), true);
+    assert.equal(isTypingTarget("input", false, undefined, false), true);
+    assert.equal(isTypingTarget("TEXTAREA", false, undefined, false), true);
+    assert.equal(isTypingTarget("select", false, undefined, false), true);
+    assert.equal(isTypingTarget("div", true, undefined, false), true);
+    assert.equal(isTypingTarget("div", false, "textbox", false), true);
+  });
+
+  /**
+   * A Shell paints itself on a canvas, so the element focus lands on says nothing about what a
+   * keystroke means there. Without this, `s` at a prompt Settles the Agent Session.
+   */
+  it("counts a focused Shell, whatever it is drawn on", () => {
+    assert.equal(isTypingTarget("canvas", false, undefined, true), true);
+    assert.equal(isTypingTarget("div", false, undefined, true), true);
   });
 
   it("does not mistake a focused button for one", () => {
     // The old client asked whether the target was document.body, so after clicking any button every
     // shortcut silently stopped working until the reader clicked the background.
-    assert.equal(isTypingTarget("button", false, undefined), false);
-    assert.equal(isTypingTarget("div", false, undefined), false);
-    assert.equal(isTypingTarget("summary", false, "button"), false);
+    assert.equal(isTypingTarget("button", false, undefined, false), false);
+    assert.equal(isTypingTarget("div", false, undefined, false), false);
+    assert.equal(isTypingTarget("summary", false, "button", false), false);
   });
 });

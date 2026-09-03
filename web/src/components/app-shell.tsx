@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { canSettle } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
+import { useDocks } from "@/docks.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
@@ -54,22 +55,15 @@ export function AppShell() {
   const rail = useRailWidth();
 
   /*
-   * Which Agent Sessions are showing their Shell.
+   * The focused Agent Session's Docks.
    *
-   * Client state, and it has to be: whether a Shell is *running* is the host's business, but whether
-   * you are looking at it is not. Closing the pane leaves the Shell alive, so asking the host "is
-   * there a Shell?" would reopen the split on every visit to an Agent Session you had ever used one
-   * in. Held here rather than in the pane because the pane remounts when the focus moves, and a
-   * split that closed itself every time you glanced at another Agent Session would be a bug.
+   * Held here rather than in the pane because the pane remounts when the focus moves, and Docks that
+   * minimised themselves every time you glanced at another Agent Session would be a bug — the same
+   * reason the old Shell split's open-set lived up here. The Agent Session ids are passed in so the
+   * remembered layouts of Reaped Agent Sessions can be forgotten.
    */
-  const [shellOpen, setShellOpen] = useState<ReadonlySet<string>>(() => new Set());
-  const toggleShell = useCallback((sessionId: string) => {
-    setShellOpen((current) => {
-      const next = new Set(current);
-      if (!next.delete(sessionId)) next.add(sessionId);
-      return next;
-    });
-  }, []);
+  const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
+  const docks = useDocks(focusedId, sessionIds);
 
   /**
    * The focused Agent Session's live chrome, which the rail and the shortcuts both read.
@@ -146,10 +140,13 @@ export function AppShell() {
       settle: () => {
         if (focusedId !== undefined && chrome !== undefined && canSettle(chrome.status)) settle(focusedId);
       },
-      shell: () => {
-        // Silently ignored where the host has no pty, for the same reason the button is absent
-        // there: a shortcut that reports a capability you do not have teaches nothing.
-        if (focusedId !== undefined && config.shell) toggleShell(focusedId);
+      // Silently ignored where the host has no pty, for the same reason the buttons are absent
+      // there: a shortcut that reports a capability you do not have teaches nothing.
+      "toggle-bottom-dock": () => {
+        if (focusedId !== undefined && config.shell) docks.dispatch({ type: "toggle", side: "bottom" });
+      },
+      "toggle-right-dock": () => {
+        if (focusedId !== undefined && config.shell) docks.dispatch({ type: "toggle", side: "right" });
       },
       "toggle-rail": () => setRailOpen((open) => !open),
       // `?` now lands somewhere, which is what it was resolving to nothing for.
@@ -171,6 +168,7 @@ export function AppShell() {
       chrome,
       config.shell,
       cursor,
+      docks,
       focus,
       focusInPane,
       focusedId,
@@ -179,7 +177,6 @@ export function AppShell() {
       run,
       sessions,
       settle,
-      toggleShell,
     ],
   );
 
@@ -246,12 +243,7 @@ export function AppShell() {
           ) : focusedId === undefined ? (
             <NothingFocused />
           ) : (
-            <AgentSessionPane
-              sessionId={focusedId}
-              {...(config.shell
-                ? { shell: { open: shellOpen.has(focusedId), onToggle: () => toggleShell(focusedId) } }
-                : {})}
-            />
+            <AgentSessionPane sessionId={focusedId} {...(config.shell ? { docks } : {})} />
           )}
         </SidebarInset>
       </SidebarProvider>
