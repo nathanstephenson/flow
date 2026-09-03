@@ -23,6 +23,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
+import { StreamedMessage } from "./streamed-message.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -142,9 +143,8 @@ class ClaudeSession implements BackendSession {
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
   private effort: EffortLevel | undefined;
-  /** Accumulates streamed text per content-block index so we can emit whole snapshots. */
-  private partial = new Map<number, string>();
-  private partialMessageId: string | undefined;
+  /** The assistant message in flight, which owns the id its partial and finished halves share. */
+  private streamed = new StreamedMessage();
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
@@ -342,33 +342,11 @@ class ClaudeSession implements BackendSession {
         return;
 
       case "assistant": {
-        /*
-         * The id the *partial stream* used, not the one this message reports.
-         *
-         * They come from two different places and nothing makes them agree: `message_start` falls
-         * back to a `randomUUID()` when it carries no id, which can never match `message.id` here.
-         * When they disagree, `upsert` in src/client/reduce.ts is keyed on kind + id, so it appends
-         * rather than replaces and the Presentation Transcript keeps *both* — the partial, forever
-         * unfinalised with its caret still blinking, above an identical finished copy. Preferring
-         * the streamed id makes the final event land on the Entry the stream was already writing.
-         */
-        const id = this.partialMessageId ?? sdkMessage.message.id;
-        const streamedThinking = this.streamedThinking();
-        this.partial.clear();
-        this.partialMessageId = undefined;
-
-        const text = textOf(sdkMessage.message.content);
-        if (text) this.emit({ type: "message", id, text, final: true });
-
-        /*
-         * Reasoning was streamed and then never finalised at all, so a thinking Entry kept `final:
-         * false` for the rest of the Agent Session's life: the caret never stopped blinking and the
-         * clamp in ThinkingEntryView, which is gated on `final`, never engaged. The streamed text is
-         * the fallback for a message whose content carries no thinking block back.
-         */
-        const thinking = thinkingOf(sdkMessage.message.content) || streamedThinking;
-        if (thinking) this.emit({ type: "thinking", id: `${id}-thinking`, text: thinking, final: true });
-
+        // The streamed copy and this one are the same Entry, and StreamedMessage is what guarantees
+        // it. Tool calls stay here: they have nothing to do with the partial-message state.
+        for (const event of this.streamed.finish(sdkMessage.message.id, sdkMessage.message.content)) {
+          this.emit(event);
+        }
         for (const block of sdkMessage.message.content) {
           if (block.type === "tool_use") {
             this.emit({ type: "tool_started", callId: block.id, name: block.name, input: block.input });
@@ -409,55 +387,14 @@ class ClaudeSession implements BackendSession {
 
   private translateStreamEvent(event: StreamEvent): void {
     if (event.type === "message_start") {
-      this.partial.clear();
-      this.partialMessageId = event.message.id ?? randomUUID();
+      this.streamed.start(event.message.id);
       return;
     }
     if (event.type !== "content_block_delta") return;
 
-    const index = event.index;
     const delta = event.delta;
-
-    if (delta.type === "text_delta") {
-      const accumulated = (this.partial.get(index) ?? "") + delta.text;
-      this.partial.set(index, accumulated);
-      // Text keys only. `partial` holds reasoning too, offset above THINKING_KEY, and joining the
-      // whole map appended every thinking block to the visible answer — reasoning that rehearses the
-      // reply reads as the reply saying itself twice.
-      this.emit({
-        type: "message",
-        id: this.partialMessageId ?? "streaming",
-        text: this.joined((key) => key < THINKING_KEY),
-        final: false,
-      });
-      return;
-    }
-
-    if (delta.type === "thinking_delta") {
-      const key = index + THINKING_KEY;
-      this.partial.set(key, (this.partial.get(key) ?? "") + delta.thinking);
-      // Joined, not just this block: a message with more than one reasoning block would otherwise
-      // replace the Entry's text with whichever block was last written to.
-      this.emit({
-        type: "thinking",
-        id: `${this.partialMessageId ?? "streaming"}-thinking`,
-        text: this.streamedThinking(),
-        final: false,
-      });
-    }
-  }
-
-  /** Reasoning accumulated by the stream, for finalising a thinking Entry the SDK reports no block for. */
-  private streamedThinking(): string {
-    return this.joined((key) => key >= THINKING_KEY);
-  }
-
-  private joined(keep: (key: number) => boolean): string {
-    return [...this.partial.entries()]
-      .filter(([key]) => keep(key))
-      .sort(([a], [b]) => a - b)
-      .map(([, value]) => value)
-      .join("");
+    if (delta.type === "text_delta") this.emit(this.streamed.text(event.index, delta.text));
+    else if (delta.type === "thinking_delta") this.emit(this.streamed.thinking(event.index, delta.thinking));
   }
 
   private endTurn(reason: TurnEndReason): void {
@@ -508,26 +445,7 @@ function sdkEffort(effort: EffortLevel | undefined): SdkEffortLevel | undefined 
     : (effort satisfies SdkEffortLevel);
 }
 
-/**
- * Reasoning and text share the SDK's content-block index space, so `partial` offsets thinking above
- * this to hold both in one map without them colliding — and every read of that map has to say which
- * half it wants.
- */
-const THINKING_KEY = 10_000;
 
-function thinkingOf(content: Array<{ type: string; thinking?: string }>): string {
-  return content
-    .filter((block) => block.type === "thinking" && typeof block.thinking === "string")
-    .map((block) => block.thinking ?? "")
-    .join("");
-}
-
-function textOf(content: Array<{ type: string; text?: string }>): string {
-  return content
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text ?? "")
-    .join("");
-}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
