@@ -6,8 +6,7 @@ import { useCommand } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
 import type { DockSide } from "@/presentation/docks.ts";
 import type { Chrome } from "@/store/contract.ts";
-import { ScopeLabel } from "@/components/agent-session-nav.tsx";
-import { RunningHairline, StatusBadge } from "@/components/status-indicator.tsx";
+import { RunningHairline } from "@/components/status-indicator.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,11 +34,15 @@ import { cn } from "@/lib/utils.ts";
  *
  * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
- * is identity and lifecycle — title, status, backend, Scope, id, the Docks and the overflow.
+ * is identity and lifecycle — title, Project, backend, the Docks and the overflow.
+ *
+ * Status is not among them: the rail already draws it for every Agent Session, including this one,
+ * and a second copy over the transcript says nothing the reader cannot already see. The Agent Session
+ * id is not either — it identifies nothing to a human, and the overflow menu copies it on request.
  *
  * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
  * competing with the document beside it. Mono survives only where character alignment is functional:
- * the Scope and the Agent Session id, machine values a reader compares character by character.
+ * the Project name, which is a filesystem name.
  *
  * Affordances are hidden rather than disabled when they cannot apply. A permanently greyed control
  * teaches nothing.
@@ -58,8 +61,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
       <div className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-2">
         <span className="truncate text-sm font-medium">{title}</span>
 
-        <StatusBadge status={chrome.status} />
-        {chrome.backend === undefined ? null : <Badge>{chrome.backend}</Badge>}
         {chrome.queueDepth > 0 ? <SteeringQueueBadge depth={chrome.queueDepth} /> : null}
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -74,8 +75,8 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
         </div>
 
         <div className="flex w-full items-center gap-2">
-          <ScopeLabel scope={chrome.scope ?? ""} className="max-w-[28rem]" />
-          <span className="truncate font-mono text-xs text-muted-foreground">{sessionId}</span>
+          {chrome.backend === undefined ? null : <Badge>{chrome.backend}</Badge>}
+          <span className="truncate font-mono text-xs">{projectName(chrome.scope ?? "")}</span>
         </div>
       </div>
 
@@ -83,6 +84,18 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
       <RunningHairline running={chrome.status === "running"} />
     </div>
   );
+}
+
+/**
+ * The last segment of a Scope — the directory a reader would call the Project.
+ *
+ * The leading directories are dropped rather than dimmed: they are the same for every Agent Session
+ * on this machine, so they cost a line's width to say nothing. A Scope that leaves no segment (`/`,
+ * or a trailing slash) falls back to the Scope verbatim, because an empty header names nothing.
+ */
+function projectName(scope: string): string {
+  const cut = scope.lastIndexOf("/");
+  return (cut < 0 ? scope : scope.slice(cut + 1)) || scope;
 }
 
 /**
