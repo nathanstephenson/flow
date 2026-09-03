@@ -23,6 +23,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
+import { StreamedMessage } from "./streamed-message.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -142,9 +143,8 @@ class ClaudeSession implements BackendSession {
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
   private effort: EffortLevel | undefined;
-  /** Accumulates streamed text per content-block index so we can emit whole snapshots. */
-  private partial = new Map<number, string>();
-  private partialMessageId: string | undefined;
+  /** The assistant message in flight, which owns the id its partial and finished halves share. */
+  private streamed = new StreamedMessage();
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
@@ -223,7 +223,10 @@ class ClaudeSession implements BackendSession {
   private noteBootedModel(booted: string | undefined): void {
     if (!booted) return;
     this.bootedModel = booted;
-    this.announceModel(this.aliasOf.get(booted) ?? booted);
+    // An id `capabilities.models` cannot describe costs the label *and* the Effort levels, so it must
+    // never displace one the list can describe. With nothing announced yet there is nothing to
+    // protect and the raw id still beats silence.
+    this.announceModel(modelInForce(booted, this.aliasOf, this.capabilities.models) ?? this.announced ?? booted);
   }
 
   private announceModel(modelId: string): void {
@@ -342,11 +345,11 @@ class ClaudeSession implements BackendSession {
         return;
 
       case "assistant": {
-        this.partial.clear();
-        this.partialMessageId = undefined;
-        const id = sdkMessage.message.id;
-        const text = textOf(sdkMessage.message.content);
-        if (text) this.emit({ type: "message", id, text, final: true });
+        // The streamed copy and this one are the same Entry, and StreamedMessage is what guarantees
+        // it. Tool calls stay here: they have nothing to do with the partial-message state.
+        for (const event of this.streamed.finish(sdkMessage.message.id, sdkMessage.message.content)) {
+          this.emit(event);
+        }
         for (const block of sdkMessage.message.content) {
           if (block.type === "tool_use") {
             this.emit({ type: "tool_started", callId: block.id, name: block.name, input: block.input });
@@ -387,38 +390,14 @@ class ClaudeSession implements BackendSession {
 
   private translateStreamEvent(event: StreamEvent): void {
     if (event.type === "message_start") {
-      this.partial.clear();
-      this.partialMessageId = event.message.id ?? randomUUID();
+      this.streamed.start(event.message.id);
       return;
     }
     if (event.type !== "content_block_delta") return;
 
-    const index = event.index;
     const delta = event.delta;
-
-    if (delta.type === "text_delta") {
-      const accumulated = (this.partial.get(index) ?? "") + delta.text;
-      this.partial.set(index, accumulated);
-      this.emit({
-        type: "message",
-        id: this.partialMessageId ?? "streaming",
-        text: [...this.partial.entries()].sort(([a], [b]) => a - b).map(([, value]) => value).join(""),
-        final: false,
-      });
-      return;
-    }
-
-    if (delta.type === "thinking_delta") {
-      const key = index + 10_000;
-      const accumulated = (this.partial.get(key) ?? "") + delta.thinking;
-      this.partial.set(key, accumulated);
-      this.emit({
-        type: "thinking",
-        id: `${this.partialMessageId ?? "streaming"}-thinking`,
-        text: accumulated,
-        final: false,
-      });
-    }
+    if (delta.type === "text_delta") this.emit(this.streamed.text(event.index, delta.text));
+    else if (delta.type === "thinking_delta") this.emit(this.streamed.thinking(event.index, delta.thinking));
   }
 
   private endTurn(reason: TurnEndReason): void {
@@ -448,6 +427,31 @@ export class ClaudeBackend implements AgentBackend {
 }
 
 /** Claude reports one Provider, and per-model effort: haiku carries no supportedEffortLevels. */
+/**
+ * Which model id to announce for the one the SDK just named.
+ *
+ * The picker lists aliases (`opus[1m]`) because that is what `supportedModels()` reports as `value`,
+ * while the init message at the start of every turn names the model in its *resolved* form
+ * (`claude-opus-5`). Announcing the resolved form is not a cosmetic problem: `effortChoices` and the
+ * picker's label both find the model by id in `capabilities.models`, so an id that is not on the list
+ * has no `effortLevels` and no `label` — the Effort control disappears entirely and the model pill
+ * falls back to printing the raw id. That happened one turn into every Agent Session.
+ *
+ * `undefined` means "nothing here worth announcing": the caller keeps what it already had rather than
+ * trading a described model for an undescribed one.
+ */
+export function modelInForce(
+  named: string,
+  aliasOf: ReadonlyMap<string, string>,
+  models: readonly ModelInfo[],
+): string | undefined {
+  const alias = aliasOf.get(named) ?? named;
+  // Before the list arrives there is nothing to match against, and the raw id stands until
+  // loadModels comes back and corrects it.
+  if (models.length === 0) return alias;
+  return models.some((model) => model.id === alias) ? alias : undefined;
+}
+
 export function describeModel(model: SdkModelInfo): ModelInfo {
   return {
     id: model.value,
@@ -469,12 +473,7 @@ function sdkEffort(effort: EffortLevel | undefined): SdkEffortLevel | undefined 
     : (effort satisfies SdkEffortLevel);
 }
 
-function textOf(content: Array<{ type: string; text?: string }>): string {
-  return content
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text ?? "")
-    .join("");
-}
+
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
