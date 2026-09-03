@@ -99,9 +99,17 @@ describe("Connection", () => {
 
     await waitFor(() => host.requests.length >= 3);
 
+    /*
+     * The invariant is *where* each reconnect resumes from, not how many happened. The watchdog is a
+     * repeating timer against a 60ms window and waitFor polls every 5ms, so under load the loop can
+     * be delayed past a window and observe four or five requests rather than three — which failed an
+     * assertion spelled `[4, 4]` while the property it was checking still held.
+     */
+    const resumes = host.requests.slice(1).map((request) => request.since);
+    assert.ok(resumes.length >= 2, `expected at least two watchdog reconnects, saw ${resumes.length}`);
     assert.deepEqual(
-      host.requests.slice(1).map((request) => request.since),
-      [4, 4],
+      [...new Set(resumes)],
+      [4],
       "every watchdog reconnect resumes from the same place, and replays nothing",
     );
     assert.deepEqual(view, reduceAll(TRANSCRIPT));

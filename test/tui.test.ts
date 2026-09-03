@@ -274,12 +274,19 @@ describe("TUI over the wire", () => {
     await waitFor(() => output.join("").includes("s to settle"));
 
     stdin.write("s");
-    await waitFor(() => settled.disposed);
+    /*
+     * Wait on the frame, not on `disposed`.
+     *
+     * `disposed` flips when the Session Host tears the Backend Session down, which happens *before*
+     * `session_settled` has crossed the stream, been reduced and been drawn. Waiting on it and then
+     * asserting against `output.at(-1)` races the render, which is what made this test fail roughly
+     * one full-suite run in three — the same lesson the effort test above already records.
+     */
+    await waitFor(() => /settled/.test(output.at(-1) ?? ""));
 
+    assert.equal(settled.disposed, true, "settling disposes the Backend Session");
     // The list stays up: settling is filing something away, not picking what to work on next.
-    const frame = output.at(-1) ?? "";
-    assert.match(frame, /sessions {2}\(enter to switch/, "the session list is still open");
-    assert.match(frame, /settled/);
+    assert.match(output.at(-1) ?? "", /sessions {2}\(enter to switch/, "the session list is still open");
   });
 
   it("edits the input line with backspace", async () => {
