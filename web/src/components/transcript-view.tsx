@@ -86,15 +86,17 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   return (
     <div className="relative min-h-0">
       {/*
-       * The scroller stays full width so its scrollbar sits at the pane's edge; the column inside it
-       * is what carries the measure and centres.
-       *
-       * `text-sm` is load-bearing, not decoration: `ch` is the width of `0` in the element's *own*
-       * font, so the same 136ch resolves ~16% wider at the inherited 16px than at the 14px every
-       * Entry actually renders at. Every child sets its own size, so this only fixes what `ch` means.
+       * The scroller stays full width so its scrollbar sits at the pane's edge; `pane-measure` is the
+       * column inside it, shared with the Composer floating below so the two line up.
        */}
-      <div ref={scroller} className="transcript-scroller h-full px-3 py-2">
-        <div className="mx-auto w-full max-w-[136ch] text-sm">
+      <div
+        ref={scroller}
+        // The Composer floats over this, so the last line of the last message would sit behind it. The
+        // inset is the Composer's measured height; `stick-to-bottom.ts` needs no change, because padding
+        // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
+        className="transcript-scroller h-full px-3 pt-2 pb-[calc(var(--composer-inset,0px)+1.5rem)]"
+      >
+        <div className="pane-measure">
           {earlier > 0 ? (
             <button
               type="button"
@@ -183,7 +185,7 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="absolute right-3 bottom-2 rounded-md border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-md"
+      className="absolute right-3 bottom-[calc(var(--composer-inset,0px)+1.5rem)] rounded-md border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-md"
     >
       jump to latest ↓
     </button>

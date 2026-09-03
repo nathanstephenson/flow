@@ -17,8 +17,10 @@ import { TranscriptView } from "@/components/transcript-view.tsx";
  * passing a `ViewState` down from a parent would put the whole subtree behind one re-render per
  * streamed frame and defeat the three-way split entirely.
  *
- * The grid is `auto auto 1fr auto` with `min-height: 0` on both the pane and the transcript — the
- * classic grid overflow trap, and the reason the transcript can scroll while the composer stays put.
+ * The grid is `auto auto 1fr` with `min-height: 0` on both the pane and the transcript — the classic
+ * grid overflow trap, and the reason the transcript can scroll at all. The Composer is not a row: it
+ * floats against the section and pads the transcript clear of itself by reporting its own height as
+ * `--composer-inset`.
  */
 export type AgentSessionPaneProps = {
   sessionId: string;
@@ -47,7 +49,10 @@ function AttachedPane({ view, sessionId, shell }: { view: AgentSessionView } & A
       // The one pane, found by attribute: it is how a global shortcut moves focus into the Composer
       // or the transcript search without a ref threaded down from the app shell.
       data-pane=""
-      className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-background"
+      // `relative` and one row fewer than there are children: the Composer floats over the transcript
+      // rather than sitting under it, positioned against this section. It stays *inside* `[data-pane]`
+      // because that is how app-shell.tsx finds the textarea to focus.
+      className="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] bg-background"
       // Nothing here dims a Settled Agent Session. They are de-emphasised in the rail and at full
       // contrast once focused in the pane, because reading one is exactly what focusing it means
       // (ADR 0006).

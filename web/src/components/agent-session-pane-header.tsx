@@ -1,13 +1,10 @@
-import { MoreHorizontal, Square, SquareTerminal } from "lucide-react";
+import { MoreHorizontal, SquareTerminal } from "lucide-react";
 import { useState } from "react";
 
-import type { EffortLevel } from "../../../src/protocol/events.ts";
-import { contextUsageLabel } from "@client/context-usage.ts";
 import { canRevive, canSettle } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ScopeLabel } from "@/components/agent-session-nav.tsx";
-import { EffortPicker, ModelPicker } from "@/components/model-picker.tsx";
 import { RunningHairline, StatusBadge } from "@/components/status-indicator.tsx";
 import {
   AlertDialog,
@@ -33,16 +30,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils.ts";
 
 /**
- * The instrument half of the pane: what this Agent Session is, and what can be done to it.
+ * What this Agent Session *is*, and what can be done to it as a whole.
+ *
+ * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
+ * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
+ * is identity and lifecycle — title, status, backend, Scope, id, the Shell, Settle and the overflow.
  *
  * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
  * competing with the document beside it. Mono survives only where character alignment is functional:
- * the Scope, the Agent Session id and the token counts, which are machine values a reader compares
- * character by character.
+ * the Scope and the Agent Session id, machine values a reader compares character by character.
  *
- * Affordances are hidden rather than disabled when they cannot apply: Settle disappears once an Agent
- * Session is Settled or Ended, Effort disappears for a model with no Effort levels, and abort
- * disappears when no turn is running. A permanently greyed control teaches nothing.
+ * Affordances are hidden rather than disabled when they cannot apply — Settle disappears once an
+ * Agent Session is Settled or Ended. A permanently greyed control teaches nothing.
  */
 export type AgentSessionPaneHeaderProps = {
   sessionId: string;
@@ -65,8 +64,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: Agen
         {chrome.queueDepth > 0 ? <SteeringQueueBadge depth={chrome.queueDepth} /> : null}
 
         <div className="ml-auto flex items-center gap-1.5">
-          <ContextUsageMeter usage={chrome.contextUsage} />
-
           {shell ? (
             <Tooltip>
               <TooltipTrigger
@@ -85,52 +82,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: Agen
               </TooltipTrigger>
               <TooltipContent>
                 {shell.open ? "Hide the Shell — it keeps running" : "Open a Shell in this Scope"}
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-
-          <ModelPicker
-            capabilities={chrome.capabilities}
-            model={chrome.model}
-            disabled={chrome.status === "ended"}
-            onSelect={(modelId) => void run({ type: "set_model", sessionId, modelId })}
-          />
-          <EffortPicker
-            capabilities={chrome.capabilities}
-            model={chrome.model}
-            effort={chrome.effort}
-            disabled={chrome.status === "ended"}
-            onSelect={(effort: EffortLevel) => void run({ type: "set_effort", sessionId, effort })}
-          />
-
-          {chrome.status === "running" ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Abort the current turn"
-                    onClick={() => {
-                      const dropped = chrome.queueDepth;
-                      void run({ type: "abort", sessionId }).then(() => {
-                        // Aborting means stop, not stop-then-continue, so the queue goes with it.
-                        // Saying exactly what was discarded is the difference between a stop and a
-                        // surprise.
-                        toast.info(
-                          dropped > 0
-                            ? `aborted · ${dropped} queued message${dropped === 1 ? "" : "s"} discarded`
-                            : "aborted",
-                        );
-                      });
-                    }}
-                  />
-                }
-              >
-                <Square aria-hidden />
-              </TooltipTrigger>
-              <TooltipContent>
-                Abort the current turn — this also discards the Steering Queue
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -182,38 +133,6 @@ function SteeringQueueBadge({ depth }: { depth: number }) {
         Messages the Session Host has accepted and will send after the current turn
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-/**
- * How much of the Conversation Context is spent. The wording comes from the shared label so the TUI
- * and this UI cannot drift on it again — they said `context 12%` and `12% context` for the same
- * numbers.
- */
-function ContextUsageMeter({ usage }: { usage: Chrome["contextUsage"] }) {
-  const label = contextUsageLabel(usage);
-  if (label === undefined) return null;
-  const fraction = usage && usage.window > 0 ? Math.min(1, usage.used / usage.window) : undefined;
-
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="font-mono text-xs text-muted-foreground">{label}</span>
-      {fraction === undefined ? null : (
-        <span className="inline-block h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden>
-          {/*
-           * Two steps, not three. The middle one was `--chart-4`, which rhea renders as a grey the
-           * eye cannot separate from `--primary` on a 6px bar — so it encoded nothing. The bar's
-           * *length* and the percentage beside it carry the value; the only thing worth a colour is
-           * a window about to overflow, which is a real failure ahead and gets `--destructive`.
-           * The width has to stay an inline style: it is a runtime percentage, not a class.
-           */}
-          <span
-            className={cn("block h-full", fraction > 0.9 ? "bg-destructive" : "bg-primary")}
-            style={{ width: `${Math.round(fraction * 100)}%` }}
-          />
-        </span>
-      )}
-    </span>
   );
 }
 
