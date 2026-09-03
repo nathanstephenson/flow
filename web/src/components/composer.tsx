@@ -124,7 +124,10 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
         <textarea
           ref={textarea}
           value={text}
-          rows={1}
+          // Three rows rather than one, so the box looks like somewhere a paragraph goes. It is also
+          // the auto-grow floor: `height: auto` resolves to the rows-based height, and scrollHeight
+          // never reports less than that, so clearing the text returns here rather than to one line.
+          rows={3}
           disabled={ended}
           placeholder={composerPlaceholder(chrome)}
           onChange={(event) => {

@@ -1,3 +1,4 @@
+import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
@@ -177,17 +178,18 @@ function StickToBottom({
 
 /**
  * Offered only when the reader has scrolled away, because that is the only time it means anything.
- * It says "latest" rather than counting: `Entry` carries no seq, so "N new since you looked" is not
- * a number this front end can honestly produce.
+ * The arrow alone carries it: `Entry` carries no seq, so "N new since you looked" is not a number
+ * this front end can honestly produce, which leaves nothing for a label to say that the icon does not.
  */
 function NewEntriesPill({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="absolute right-3 bottom-[calc(var(--composer-inset,0px)+1.5rem)] rounded-md border bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-md"
+      aria-label="Jump to latest"
+      className="-translate-x-1/2 absolute bottom-[calc(var(--composer-inset,0px)+1.5rem)] left-1/2 rounded-full border bg-popover p-2 text-popover-foreground shadow-md transition-colors hover:bg-muted hover:text-foreground"
     >
-      jump to latest ↓
+      <ArrowDown className="size-4" />
     </button>
   );
 }
