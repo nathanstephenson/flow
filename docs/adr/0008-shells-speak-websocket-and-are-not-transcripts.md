@@ -20,8 +20,25 @@ Agent Session — that is how a client finds it, and Settling, Ending or Reaping
 exits it — but it is not identified by one, because an Agent Session may own several. The singular
 path would have had to be broken to admit the second. Its `cwd` is seeded from the Scope and then
 never touched, so a reader may `cd` freely; a Shell that silently followed the Scope would undo
-what they typed. Closing the pane detaches rather than kills, which is what makes a stray click on
-the close button survivable when `npm run dev` is running in it.
+what they typed.
+
+Several is what the client now shows. A Shell is one tab of a **Dock** — the tabbed, resizable,
+minimisable region below the Presentation Transcript or beside it (`web/src/presentation/docks.ts`),
+of which there are two per Agent Session. A Dock's tabs are client state rather than the host's:
+they are reconciled against `GET /api/shells?sessionId=` on arrival at an Agent Session and not
+trusted before that, because a stored Shell id is a corpse after a daemon restart, while deriving
+the tabs from the host outright could not represent a tab whose content nobody has chosen yet. Dead
+tabs are dropped and live Shells no tab claims are adopted, so a Shell opened in a second browser
+window is not invisible in the first.
+
+Closing a tab therefore kills its Shell: `DELETE /api/shells/:id`, at once, with no confirmation.
+This decision used to be the opposite one — closing the pane detached, on the grounds that a stray
+click should be survivable while `npm run dev` is running in it — and tabs are what retired that
+reasoning. A tab is a Shell's only handle, so a tab that merely hid one would leave a pty running
+with nothing on screen pointing at it, and the Shells a reader could not see would soon outnumber
+the ones they could. What survives is minimising the Dock, which closes every socket in it and
+leaves every pty alive: the detach is still there, on the control whose job is hiding rather than
+ending.
 
 Detaching then reattaching to a live pty means the client arrives mid-stream with an empty screen,
 so the host keeps a bounded ring of each Shell's most recent output and replays it on attach. That

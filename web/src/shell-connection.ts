@@ -51,6 +51,19 @@ export async function listShells(sessionId: string): Promise<ShellSummary[]> {
   return (await response.json()) as ShellSummary[];
 }
 
+/**
+ * `DELETE /api/shells/:id` — end a Shell, because its tab closed.
+ *
+ * Best effort by design: the only reasons this fails are a Shell that has already exited and a
+ * daemon that is no longer there, and in both cases the tab is right to be gone (ADR 0008).
+ */
+export async function killShell(shellId: string): Promise<void> {
+  await fetch(`/api/shells/${encodeURIComponent(shellId)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  }).catch(() => undefined);
+}
+
 export function attachShell(shellId: string, handlers: ShellHandlers): ShellConnection {
   // Same origin as everything else, so the HttpOnly cookie rides along on the upgrade request and
   // the strict Origin check passes — an upgrade is an ordinary HTTP request until it is not.

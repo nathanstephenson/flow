@@ -1,8 +1,10 @@
-import { MoreHorizontal, SquareTerminal } from "lucide-react";
+import { MoreHorizontal, PanelBottom, PanelRight } from "lucide-react";
 import { useState } from "react";
 
 import { canRevive } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
+import type { Docks } from "@/docks.ts";
+import type { DockSide } from "@/presentation/docks.ts";
 import type { Chrome } from "@/store/contract.ts";
 import { ScopeLabel } from "@/components/agent-session-nav.tsx";
 import { RunningHairline, StatusBadge } from "@/components/status-indicator.tsx";
@@ -33,7 +35,7 @@ import { cn } from "@/lib/utils.ts";
  *
  * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
- * is identity and lifecycle — title, status, backend, Scope, id, the Shell and the overflow.
+ * is identity and lifecycle — title, status, backend, Scope, id, the Docks and the overflow.
  *
  * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
  * competing with the document beside it. Mono survives only where character alignment is functional:
@@ -46,11 +48,11 @@ export type AgentSessionPaneHeaderProps = {
   sessionId: string;
   title: string;
   chrome: Chrome;
-  /** Absent where the host cannot open a Shell, which is how the control disappears rather than breaks. */
-  shell?: { open: boolean; onToggle: () => void };
+  /** Absent where the host cannot open a Shell, which is how the controls disappear rather than break. */
+  docks?: Docks;
 };
 
-export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: AgentSessionPaneHeaderProps) {
+export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: AgentSessionPaneHeaderProps) {
   return (
     <div className="bg-card text-card-foreground">
       <div className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-2">
@@ -61,26 +63,11 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: Agen
         {chrome.queueDepth > 0 ? <SteeringQueueBadge depth={chrome.queueDepth} /> : null}
 
         <div className="ml-auto flex items-center gap-1.5">
-          {shell ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={shell.open ? "Hide the Shell" : "Open a Shell"}
-                    aria-pressed={shell.open}
-                    className={cn(shell.open && "bg-accent text-accent-foreground")}
-                    onClick={shell.onToggle}
-                  />
-                }
-              >
-                <SquareTerminal aria-hidden />
-              </TooltipTrigger>
-              <TooltipContent>
-                {shell.open ? "Hide the Shell — it keeps running" : "Open a Shell in this Scope"}
-              </TooltipContent>
-            </Tooltip>
+          {docks ? (
+            <>
+              <DockToggle side="bottom" docks={docks} />
+              <DockToggle side="right" docks={docks} />
+            </>
           ) : null}
 
           <PaneOverflowMenu sessionId={sessionId} chrome={chrome} />
@@ -95,6 +82,39 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, shell }: Agen
       {/* Directly under the header, spanning it: the one animation in the app. */}
       <RunningHairline running={chrome.status === "running"} />
     </div>
+  );
+}
+
+/**
+ * Show or minimise one Dock.
+ *
+ * Two buttons rather than one menu: which side a Dock is on is the whole of what distinguishes them,
+ * and that is a thing an icon can say. Minimising is not closing — the Shells inside keep running —
+ * so the copy says so rather than borrowing the word "close" from the tab that does end one.
+ */
+function DockToggle({ side, docks }: { side: DockSide; docks: Docks }) {
+  const open = !docks.layout[side].minimised;
+  const label = side === "bottom" ? "bottom Dock" : "right Dock";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`${open ? "Minimise" : "Open"} the ${label}`}
+            aria-pressed={open}
+            className={cn(open && "bg-accent text-accent-foreground")}
+            onClick={() => docks.dispatch({ type: "toggle", side })}
+          />
+        }
+      >
+        {side === "bottom" ? <PanelBottom aria-hidden /> : <PanelRight aria-hidden />}
+      </TooltipTrigger>
+      <TooltipContent>
+        {open ? `Minimise the ${label} — Shells keep running` : `Open the ${label}`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

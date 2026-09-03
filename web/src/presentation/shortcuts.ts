@@ -54,7 +54,16 @@ export const SHORTCUTS: ShortcutGroup[] = [
     shortcuts: [
       { binding: "new-agent-session", keys: ["n"], description: "New Agent Session — opens the dialog" },
       { binding: "settle", keys: ["s"], description: "Settle the Agent Session on screen" },
-      { binding: "shell", keys: ["`"], description: "Show or hide its Shell — hiding does not end it" },
+      {
+        binding: "toggle-bottom-dock",
+        keys: ["`"],
+        description: "Show or minimise the bottom Dock — minimising does not end its Shells",
+      },
+      {
+        binding: "toggle-right-dock",
+        keys: ["~"],
+        description: "Show or minimise the right Dock",
+      },
       { binding: "search", keys: ["/"], description: "Find in the Presentation Transcript" },
       { binding: "model-picker", keys: ["m"], description: "Model picker" },
       { binding: "effort-picker", keys: ["e"], description: "Effort picker" },

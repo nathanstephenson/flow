@@ -1,24 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { FitAddon, Ghostty, Terminal, type ITheme } from "ghostty-web";
 import wasmUrl from "ghostty-web/ghostty-vt.wasm?url";
-import { X } from "lucide-react";
 
 import { FALLBACK_FONTS, fontsReady } from "@/fonts.ts";
 import { useHost } from "@/host.tsx";
-import { Button } from "@/components/ui/button.tsx";
-import { attachShell, listShells, openShell, type ShellConnection } from "@/shell-connection.ts";
+import { attachShell, killShell, openShell, type ShellConnection } from "@/shell-connection.ts";
 
 /**
  * A Shell, on screen: Ghostty compiled to WASM, fed by a pty in the Session Host.
  *
  * The emulator is a mutable object with its own render loop and its own canvas, so almost nothing
  * here is React state. The bytes never touch a setState — they go from the socket straight into
- * `term.write` — and the two things that *are* state are the ones a human reads rather than types
- * into: whether we are still connecting, and why the screen stopped.
+ * `term.write` — and the one thing that *is* state is the one a human reads rather than types into:
+ * why the screen stopped. That is reported upwards too, because the tabs row says it.
  *
- * Closing this pane unmounts the component, which closes the socket and disposes the emulator. It
- * does not kill the Shell: reopening lists the Agent Session's Shells, finds the one still running,
- * and reattaches to it — which is why `npm run dev` survives a stray click on the close button.
+ * This is the body of one Dock Tab, and the tab decides what it is for. Unmounting — switching tabs,
+ * or minimising the Dock — closes the socket and disposes the emulator without killing the Shell;
+ * remounting reattaches and the Session Host replays the Scrollback. Ending a Shell is `killShell`,
+ * and only closing the tab does that (ADR 0008).
  *
  * The typeface comes from `fonts.monospace` in config.json. It has to be configurable rather than
  * chosen here: a Powerline or Nerd Font prompt draws its separators from the Private Use Area, and
@@ -35,17 +34,44 @@ function loadGhostty(): Promise<Ghostty> {
   return ghostty;
 }
 
-type Status = { state: "connecting" } | { state: "live" } | { state: "gone"; why: string };
+export type ShellStatus = { state: "connecting" } | { state: "live" } | { state: "gone"; why: string };
 
-export function ShellPane({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+export type ShellPaneProps = {
+  sessionId: string;
+  /** Absent means "open one": a tab whose Shell has not been spawned yet. */
+  shellId: string | undefined;
+  /** The Shell now has an id, so the tab can remember which one is its own. */
+  onOpened: (shellId: string) => void;
+  onStatus: (status: ShellStatus) => void;
+};
+
+export function ShellPane({ sessionId, shellId, onOpened, onStatus }: ShellPaneProps) {
   const mount = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<Status>({ state: "connecting" });
+  const [status, setStatus] = useState<ShellStatus>({ state: "connecting" });
   const { config } = useHost();
   const monospace = config.fonts?.monospace ?? FALLBACK_FONTS.monospace;
+
+  /*
+   * Everything the effect needs but must not restart for.
+   *
+   * `shellId` in particular: this component reports the Shell it opened, which changes the prop it
+   * was given, and re-running on that would dispose the terminal it had just built. A tab's Shell
+   * does not change under it otherwise — the tab is keyed by its own id, so a different Shell is a
+   * different component.
+   */
+  const opening = useRef({ shellId, onOpened, onStatus });
+  opening.current = { shellId, onOpened, onStatus };
 
   useEffect(() => {
     const parent = mount.current;
     if (!parent) return;
+
+    // Both the reader and the tabs row are told: the note beside a tab's label is this same status,
+    // and the tabs row is where "exited" belongs now that this body has no header of its own.
+    const report = (next: ShellStatus): void => {
+      setStatus(next);
+      opening.current.onStatus(next);
+    };
 
     // StrictMode mounts, unmounts and mounts again. Everything below is async, so the teardown has
     // to be able to cancel work that has not finished starting yet.
@@ -76,24 +102,32 @@ export function ShellPane({ sessionId, onClose }: { sessionId: string; onClose: 
       fit.fit();
       fit.observeResize();
 
-      let shellId: string;
-      try {
-        // Reattach in preference to opening another: this pane is one Shell's worth of screen, and
-        // the Shell it wants is the one it left running. Opening a second is a feature this pane
-        // does not have yet, which is why the protocol allows several and this does not.
-        const existing = await listShells(sessionId);
-        shellId = existing[0]?.id ?? (await openShell(sessionId, term.cols, term.rows)).id;
-      } catch (error) {
-        if (!cancelled) setStatus({ state: "gone", why: error instanceof Error ? error.message : String(error) });
-        return;
+      let id = opening.current.shellId;
+      if (id === undefined) {
+        try {
+          // Opened here rather than by the tab because the pty is spawned at the size it will be
+          // drawn at, and only this component has measured that.
+          const shell = await openShell(sessionId, term.cols, term.rows);
+          id = shell.id;
+        } catch (error) {
+          if (!cancelled) report({ state: "gone", why: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        if (cancelled) {
+          // Unmounted while the pty was being spawned — a StrictMode remount, or a very quick
+          // minimise. Nothing knows this Shell's id, so nothing could ever close its tab: end it
+          // here rather than leave a pty running with no handle on it.
+          void killShell(id);
+          return;
+        }
+        opening.current.onOpened(id);
       }
-      if (cancelled) return;
 
-      connection = attachShell(shellId, {
+      connection = attachShell(id, {
         output: (bytes) => term?.write(bytes),
-        ready: () => setStatus({ state: "live" }),
-        exit: (code) => setStatus({ state: "gone", why: code === 0 ? "exited" : `exited (${code ?? "signal"})` }),
-        closed: () => setStatus({ state: "gone", why: "disconnected" }),
+        ready: () => report({ state: "live" }),
+        exit: (code) => report({ state: "gone", why: code === 0 ? "exited" : `exited (${code ?? "signal"})` }),
+        closed: () => report({ state: "gone", why: "disconnected" }),
       });
 
       term.onData((data) => connection?.send(data));
@@ -112,38 +146,18 @@ export function ShellPane({ sessionId, onClose }: { sessionId: string; onClose: 
   }, [sessionId, monospace]);
 
   return (
-    <section
-      // Found by attribute for the same reason the Agent Session pane is: a global shortcut moves
-      // focus in here without a ref threaded down from the app shell.
-      data-shell-pane=""
-      className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-t bg-background"
-      aria-label="Shell"
-    >
-      <header className="flex h-9 items-center justify-between border-b px-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">Shell</span>
-          {status.state !== "live" && (
-            <span className="text-xs text-muted-foreground">
-              {status.state === "connecting" ? "connecting…" : status.why}
-            </span>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-6"
-          onClick={onClose}
-          // Says what closing does, because the honest answer is "nothing to your shell" and that
-          // is not what a close button usually means.
-          title="Hide the Shell — it keeps running"
-          aria-label="Hide the Shell"
-        >
-          <X className="size-3.5" />
-        </Button>
-      </header>
-
-      <div ref={mount} className="min-h-0 overflow-hidden" />
-    </section>
+    // Found by attribute: `keyboard-layer.tsx` asks whether focus is inside one of these, because a
+    // keystroke typed at a Shell is text and must not also be a global shortcut.
+    <div data-shell-pane="" className="relative min-h-0 overflow-hidden bg-background" aria-label="Shell">
+      <div ref={mount} className="size-full" />
+      {/* The tabs row carries this too, and deliberately: a reader looking at a stopped screen
+          should not have to look away from it to find out why it stopped. */}
+      {status.state === "live" ? null : (
+        <span className="pointer-events-none absolute top-1 right-2 text-xs text-muted-foreground">
+          {status.state === "connecting" ? "connecting…" : status.why}
+        </span>
+      )}
+    </div>
   );
 }
 

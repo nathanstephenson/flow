@@ -238,11 +238,21 @@
 }
 
 /*
- * And for the length of the gesture the whole document is a drag target: the resize cursor holds
- * even as the pointer crosses the transcript, and nothing selects. Without this a drag across text
+ * And for the length of the gesture the whole region is a drag target: the resize cursor holds even
+ * as the pointer crosses the transcript, and nothing selects. Without this a drag across text
  * selects it, which both looks broken and makes the pointer flicker between cursors.
+ *
+ * The attribute carries the axis, because the bottom Dock's splitter is dragged the other way and a
+ * region insisting on `col-resize` while the pointer moves vertically is worse than no cursor at all.
  */
 [data-resizing] {
-  cursor: col-resize;
   user-select: none;
+}
+
+[data-resizing="col"] {
+  cursor: col-resize;
+}
+
+[data-resizing="row"] {
+  cursor: row-resize;
 }

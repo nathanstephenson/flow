@@ -38,7 +38,14 @@ export function KeyboardLayer({
       const target = event.target as HTMLElement | null;
       const typing =
         target !== null &&
-        isTypingTarget(target.tagName, target.isContentEditable, target.getAttribute("role") ?? undefined);
+        isTypingTarget(
+          target.tagName,
+          target.isContentEditable,
+          target.getAttribute("role") ?? undefined,
+          // A Shell takes its keys through a canvas, so the element itself never looks like a typing
+          // surface. Asking where it *is* instead is the only honest test.
+          target.closest("[data-shell-pane]") !== null,
+        );
 
       const binding = resolveBinding(
         {
