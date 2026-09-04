@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { describeContextUsage } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
+import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
 
@@ -120,5 +122,34 @@ describe("a streamed assistant message and its finished copy", () => {
     const entries = transcript([...first, ...second]);
     assert.equal(entries.length, 2);
     assert.deepEqual(stranded(entries), []);
+  });
+});
+
+/**
+ * What the CLI's context accounting becomes on the wire.
+ *
+ * The regression this guards is the old mapping's `window: 0`, which is the sentinel for "spend but
+ * no budget" — so the meter fell back to a bare token count and drew no bar at all.
+ */
+describe("the Conversation Context reading the Claude adapter reports", () => {
+  it("reports the CLI's occupancy rather than one turn's spend", () => {
+    // `totalTokens` counts the cache reads that are most of a Claude Code session; the turn `usage`
+    // this replaced counted only `input_tokens + output_tokens`.
+    assert.deepEqual(describeContextUsage({ totalTokens: 41_000, maxTokens: 200_000 }), {
+      used: 41_000,
+      window: 200_000,
+    });
+  });
+
+  it("uses the nominal model window as the denominator", () => {
+    // Measured at exactly 200000 on a 200K model, and it is what the CLI divides by for its own
+    // `percentage` — not `autoCompactThreshold`, which is lower and would overstate the fill.
+    const response = { totalTokens: 13_325, maxTokens: 200_000, autoCompactThreshold: 167_000 };
+    assert.equal(describeContextUsage(response).window, 200_000);
+  });
+
+  it("yields a percentage rather than the bare-token sentinel", () => {
+    const usage = describeContextUsage({ totalTokens: 41_000, maxTokens: 200_000 });
+    assert.equal(contextUsageLabel(usage), "context 21%");
   });
 });

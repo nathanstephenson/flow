@@ -66,7 +66,12 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
 
       <ContextUsageMeter usage={chrome.contextUsage} />
 
-      <div className="flex min-w-0 items-center justify-end">
+      {/*
+       * Pinned to the third track rather than auto-placed: the meter renders nothing at all until
+       * the first token count arrives, and an absent element is not an empty column — auto-placement
+       * would put the branch in the middle track and leave it centred.
+       */}
+      <div className="col-start-3 flex min-w-0 items-center justify-end">
         <BranchPicker sessionId={sessionId} chrome={chrome} />
       </div>
     </div>

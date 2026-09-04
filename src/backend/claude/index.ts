@@ -7,6 +7,7 @@ import {
   type ModelInfo as SdkModelInfo,
   type Options,
   type Query,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKUserMessage,
   type SpawnOptions,
@@ -184,6 +185,10 @@ class ClaudeSession implements BackendSession {
     this.stream = query({ prompt: this.inbox, options: queryOptions });
     this.pump = this.consume();
     void this.loadModels();
+    // A meter that only fills once a turn ends reads as "no window" when it is really just early.
+    // Occupancy is already meaningful here: system prompt, tools and memory files are loaded
+    // before anything is sent.
+    void this.reportContextUsage();
   }
 
   /**
@@ -398,14 +403,10 @@ class ClaudeSession implements BackendSession {
         return;
       }
 
-      case "result": {
-        if ("usage" in sdkMessage && sdkMessage.usage) {
-          const used = (sdkMessage.usage.input_tokens ?? 0) + (sdkMessage.usage.output_tokens ?? 0);
-          if (used > 0) this.emit({ type: "context_usage", used, window: 0 });
-        }
+      case "result":
+        void this.reportContextUsage();
         this.endTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
-      }
 
       default:
         return;
@@ -422,6 +423,29 @@ class ClaudeSession implements BackendSession {
     const delta = event.delta;
     if (delta.type === "text_delta") this.emit(this.streamed.text(event.index, delta.text));
     else if (delta.type === "thinking_delta") this.emit(this.streamed.thinking(event.index, delta.thinking));
+  }
+
+  /**
+   * Ask the CLI how much of the Conversation Context is spent.
+   *
+   * Never awaited by its callers: `translate` runs inside the message pump, so awaiting a control
+   * request there would stop us reading the stream until the CLI answered and one hung request
+   * would stall the Agent Session. The meter is chrome, so it may land just after `turn_ended`.
+   *
+   * Silent on rejection rather than emitting a `notice`. Only GOODHARNESS_CLAUDE_PATH and the SEA
+   * build's PATH lookup can reach a CLI the SDK did not ship, and `getContextUsage` is a required
+   * member of `Query` — so an older CLI rejects at runtime with no type warning, and a notice would
+   * repeat every turn to say the meter has nothing to show.
+   */
+  private async reportContextUsage(): Promise<void> {
+    let usage: SDKControlGetContextUsageResponse;
+    try {
+      usage = await this.stream.getContextUsage();
+    } catch {
+      return;
+    }
+    if (this.disposed) return;
+    this.emit({ type: "context_usage", ...describeContextUsage(usage) });
   }
 
   private endTurn(reason: TurnEndReason): void {
@@ -488,6 +512,23 @@ export function describeModel(model: SdkModelInfo): ModelInfo {
     // rather than an answer the SDK is willing to give.
     acceptsImages: true,
   };
+}
+
+/**
+ * What the CLI's own context accounting means in Agent Event terms.
+ *
+ * `totalTokens` is occupancy, not one turn's spend: system prompt, tools, MCP tools, memory files
+ * and the whole message history, cached parts included. The turn `usage` this used to read omitted
+ * the cache reads that are most of a Claude Code session.
+ *
+ * `maxTokens` is the model's nominal window — measured at 200000 exactly on a 200K model, and it is
+ * the denominator the CLI divides by for its own `percentage`. Not `autoCompactThreshold`, which is
+ * the lower compaction trigger and would overstate how full the window is.
+ */
+export function describeContextUsage(
+  usage: Pick<SDKControlGetContextUsageResponse, "totalTokens" | "maxTokens">,
+): { used: number; window: number } {
+  return { used: usage.totalTokens, window: usage.maxTokens };
 }
 
 /**
