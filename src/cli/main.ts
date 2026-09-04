@@ -133,7 +133,10 @@ async function startHost(
   const config = new ConfigStore(root);
   if (config.warning) console.error(`  WARNING: ${config.warning}`);
 
-  const host = new SessionHost({ store: new TranscriptStore(), retention: config.retention });
+  // One store, shared: the Session Host writes Attachments through it and the HTTP surface reads
+  // them back through the same one, so there is no second opinion about where they live.
+  const store = new TranscriptStore();
+  const host = new SessionHost({ store, retention: config.retention });
   registerBackends(host);
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
   await host.load();
@@ -153,6 +156,7 @@ async function startHost(
     token,
     shells,
     config,
+    store,
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),

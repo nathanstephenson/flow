@@ -8,7 +8,7 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
 import type { BackendEvent, Capabilities, EffortLevel, ModelInfo } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
@@ -32,7 +32,15 @@ type AgentMessage = Extract<AgentSessionEvent, { type: "message_start" }>["messa
 
 /** pi calls Effort a thinking level, and its levels are a subset of ours. */
 type ThinkingLevel = AgentSession["thinkingLevel"];
-type PiModel = { id: string; provider?: string; name?: string; reasoning?: boolean; thinkingLevelMap?: object };
+type PiModel = {
+  id: string;
+  provider?: string;
+  name?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: object;
+  /** pi's input modalities for this model — `("text" | "image")[]` in its registry. */
+  input?: readonly string[];
+};
 
 export type PiBackendOptions = {
   /** Tool names pi may use. Omit for pi's defaults; pass [] to disable tools entirely. */
@@ -69,10 +77,17 @@ export class PiSession implements BackendSession {
     return this.sessionDir;
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
     this.turnId = `turn-${++this.messageSeq}`;
     this.emit({ type: "turn_started", turnId: this.turnId });
-    await this.session.prompt(text, { streamingBehavior: "steer" });
+    await this.session.prompt(text, {
+      streamingBehavior: "steer",
+      // pi takes images beside the text rather than interleaved with it, so there is no ordering to
+      // choose here the way there is on Claude's content array.
+      ...(attachments?.length
+        ? { images: attachments.map((a) => ({ type: "image" as const, data: a.data, mimeType: a.mediaType })) }
+        : {}),
+    });
   }
 
   async abort(): Promise<void> {
@@ -317,6 +332,10 @@ function describeModel(model: PiModel): ModelInfo {
     ...(model.provider ? { provider: model.provider } : {}),
     ...(model.name ? { label: model.name } : {}),
     ...(effortLevels.length > 0 ? { effortLevels } : {}),
+    // Read from the registry rather than inferred, and so trustworthy for every entry rather than
+    // only the selected one — unlike the Effort levels above, pi does not make this depend on which
+    // model is in force.
+    ...(model.input?.includes("image") ? { acceptsImages: true as const } : {}),
   };
 }
 

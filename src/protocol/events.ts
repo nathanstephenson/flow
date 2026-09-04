@@ -29,6 +29,18 @@ export type ModelInfo = {
    * levels follow whichever model is selected.
    */
   effortLevels?: EffortLevel[];
+  /**
+   * Set when this model can be shown an Attachment.
+   *
+   * On the model rather than on Capabilities for the reason `effortLevels` is: it is where both SDKs
+   * put it. pi's model registry declares `input: ("text" | "image")[]` per entry, so a session that
+   * can see an image on one model cannot on the next — a per-session flag would start lying the
+   * moment someone switched. Claude's `supportedModels()` reports no such field because every model
+   * it serves can, which its adapter states outright the way it already states `providers`.
+   *
+   * Absent means a client refuses a paste rather than offering one the turn would fail on.
+   */
+  acceptsImages?: true;
 };
 
 /**
@@ -63,7 +75,12 @@ export type AgentEvent =
       worktree?: true;
     }
   | { type: "capabilities_changed"; capabilities: Capabilities }
-  | { type: "user_message"; id: string; text: string }
+  /**
+   * `attachments` are ids, never bytes. A Presentation Transcript is read in full on every load and
+   * replayed on every Revive (ADR 0001), so a line of it carrying megabytes of base64 would make the
+   * record unreadable and unbounded — the bytes live beside it and are fetched when shown.
+   */
+  | { type: "user_message"; id: string; text: string; attachments?: string[] }
   | { type: "turn_started"; turnId: string }
   | { type: "message"; id: string; text: string; final: boolean }
   | { type: "thinking"; id: string; text: string; final: boolean }

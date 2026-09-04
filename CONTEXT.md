@@ -23,6 +23,14 @@ _Avoid_: history, log, messages
 What the model can currently see. Compacted and owned by the backend, not by GoodHarness.
 _Avoid_: history, transcript, memory
 
+**Attachment**:
+A file the human added to a message, held beside the Presentation Transcript and carried into the
+Conversation Context. Images are the only kind carried today. Addressed under the Agent Session it
+was sent to, because it has no life apart from the transcript naming it: it is Reaped with that
+transcript and is never reachable without it.
+_Avoid_: upload, file, blob, paste, and above all **image** — a markdown image in model output is
+already a different thing, and the one kind GoodHarness refuses to fetch (ADR 0012).
+
 **Backend Adapter**:
 The translation of one agent SDK into Agent Events and session commands.
 _Avoid_: driver, provider, runtime, plugin

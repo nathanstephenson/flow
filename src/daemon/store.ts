@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { ATTACHMENT_MEDIA_TYPES, type AttachmentMediaType } from "../protocol/attachments.ts";
 import type { EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 
@@ -12,6 +14,7 @@ import type { SessionStatus } from "../protocol/commands.ts";
  * Layout is one directory per Agent Session:
  *   <root>/sessions/<id>/meta.json        durable facts about the session
  *   <root>/sessions/<id>/transcript.jsonl one LoggedEvent per line, append-only
+ *   <root>/sessions/<id>/attachments/<id> one Attachment's bytes, named by the id the transcript uses
  *
  * Appends are synchronous. A Presentation Transcript's whole value is that its order is the order
  * things happened, and buffering writes to gain throughput on a single local daemon would trade
@@ -87,6 +90,40 @@ export class TranscriptStore {
     const dir = join(this.sessionDir(sessionId), "backend");
     mkdirSync(dir, { recursive: true });
     return dir;
+  }
+
+  /**
+   * Where an Agent Session's Attachments live, beside its transcript rather than in a store of their
+   * own. That siting is what makes them last exactly as long as the record that refers to them:
+   * `deleteSession` already removes the whole directory, so a Reap (ADR 0006) takes them with it and
+   * no attachment can outlive the transcript that is the only thing naming it.
+   */
+  attachmentsDir(sessionId: string): string {
+    return join(this.sessionDir(sessionId), "attachments");
+  }
+
+  /**
+   * Write one Attachment and return the id that names it.
+   *
+   * Stored decoded, so the HTTP route can hand the bytes to an `<img>` without re-reading them
+   * through a decoder — the base64 an SDK wants is rebuilt at dispatch instead, which happens once
+   * per turn where a render happens on every scroll.
+   */
+  writeAttachment(sessionId: string, mediaType: AttachmentMediaType, base64: string): string {
+    const id = `${randomUUID()}.${ATTACHMENT_MEDIA_TYPES[mediaType]}`;
+    const dir = this.attachmentsDir(sessionId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, id), Buffer.from(base64, "base64"));
+    return id;
+  }
+
+  /** One Attachment's bytes, or `undefined` if nothing is stored under that id. */
+  readAttachment(sessionId: string, attachmentId: string): Buffer | undefined {
+    try {
+      return readFileSync(join(this.attachmentsDir(sessionId), attachmentId));
+    } catch {
+      return undefined;
+    }
   }
 
   writeMeta(meta: SessionMeta): void {

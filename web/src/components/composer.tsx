@@ -1,6 +1,8 @@
-import { ArrowUp, Loader2, Square } from "lucide-react";
+import { ArrowUp, Loader2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
+import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
@@ -39,12 +41,21 @@ import { cn } from "@/lib/utils.ts";
 export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
 
   const ended = chrome.status === "ended";
   const running = chrome.status === "running";
+  /*
+   * An unknown model counts as one that cannot, which is the safe direction: this is the *positive*
+   * check the Session Host cannot make — it has no way to name the model in force when nobody
+   * overrode the default — so a paste allowed here on a guess is one nothing downstream will catch.
+   * The window is the moment between opening a session and its first `model_changed`, and a replayed
+   * transcript closes it before anyone can paste into it.
+   */
+  const acceptsImages = chrome.model?.acceptsImages === true;
 
   /*
    * The panel floats over the transcript, so the transcript has to know how tall it is or the last
@@ -68,16 +79,87 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
     };
   }, []);
 
+  /*
+   * Object URLs are the only thing here React cannot clean up for us, so they are released the
+   * moment an attachment leaves the list and on unmount. A leaked one pins the whole image in memory
+   * for the life of the tab, which for a run of pasted screenshots is not a rounding error.
+   */
+  const forget = useCallback((pending: PendingAttachment[]): void => {
+    for (const attachment of pending) URL.revokeObjectURL(attachment.url);
+  }, []);
+
+  /*
+   * The unmount sweep reads a ref rather than closing over the state, and the effect's dependency
+   * list is empty on purpose. An effect depending on `attachments` runs its *previous* cleanup every
+   * time the list changes, so pasting a second image would revoke the first one's URL and leave a
+   * broken thumbnail above the box — which is why this is two effects and not one.
+   */
+  const live = useRef<PendingAttachment[]>([]);
+  useEffect(() => {
+    live.current = attachments;
+  }, [attachments]);
+  useEffect(() => () => forget(live.current), [forget]);
+
+  const paste = useCallback(
+    async (event: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> => {
+      const files = [...event.clipboardData.items]
+        .filter((item) => item.kind === "file")
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+      // Nothing to attach means this was an ordinary text paste, which must keep its default.
+      if (files.length === 0) return;
+      event.preventDefault();
+
+      if (!acceptsImages) {
+        toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
+        return;
+      }
+
+      const verdicts = sortPastedItems(
+        files.map((file) => ({ type: file.type, size: file.size, file })),
+        attachments.length,
+      );
+      for (const refusal of refusalsIn(verdicts)) toast.error(refusalMessage(refusal));
+
+      const accepted = await Promise.all(
+        verdicts
+          .filter((verdict) => verdict.accepted)
+          .map(async (verdict) => ({
+            key: crypto.randomUUID(),
+            mediaType: verdict.mediaType,
+            data: await base64Of(verdict.item.file),
+            url: URL.createObjectURL(verdict.item.file),
+          })),
+      );
+      if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+    },
+    [acceptsImages, attachments.length, chrome.model],
+  );
+
+  const remove = useCallback(
+    (key: string): void => {
+      setAttachments((current) => {
+        forget(current.filter((attachment) => attachment.key === key));
+        return current.filter((attachment) => attachment.key !== key);
+      });
+    },
+    [forget],
+  );
+
   const send = useCallback(async (): Promise<void> => {
     const message = text.trim();
-    if (message === "" || sending || ended) return;
+    // An image with no words is a message — "look at this" is what the paste already said.
+    if ((message === "" && attachments.length === 0) || sending || ended) return;
 
+    const sent = attachments;
     setText("");
+    setAttachments([]);
     setSending(true);
     const result = await run<{ queued?: boolean }>({
       type: "send",
       sessionId,
       text: message,
+      ...(sent.length > 0 ? { attachments: sent.map(outgoing) } : {}),
       /*
        * Always `after_turn`, never `now`.
        *
@@ -92,12 +174,17 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
     });
     setSending(false);
 
-    // Put it back rather than lose it. useCommand has already said what went wrong.
+    // Put it back rather than lose it. useCommand has already said what went wrong. The attachments
+    // go back too, still holding their object URLs — a refused send must not cost someone a
+    // screenshot they can no longer reach, since a clipboard has already moved on.
     if (result === undefined) {
       setText(message);
+      setAttachments((current) => [...sent, ...current]);
       textarea.current?.focus();
+    } else {
+      forget(sent);
     }
-  }, [ended, run, sending, sessionId, text]);
+  }, [attachments, ended, forget, run, sending, sessionId, text]);
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
@@ -137,6 +224,10 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
           * the strip underneath describes what it will do when pressed. Centred rather than pinned
           * to a corner, so it stays beside the text as the box grows.
           */}
+        {attachments.length === 0 ? null : (
+          <AttachmentTray attachments={attachments} onRemove={remove} />
+        )}
+
         <div className="flex items-center gap-1">
           <textarea
             ref={textarea}
@@ -151,6 +242,7 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
              */
             rows={2}
             disabled={ended}
+            onPaste={(event) => void paste(event)}
             placeholder={composerPlaceholder(chrome)}
             onChange={(event) => {
               setText(event.target.value);
@@ -185,13 +277,102 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
             {ended ? null : running ? (
               <AbortButton onAbort={abort} />
             ) : (
-              <SendButton chrome={chrome} sending={sending} disabled={text.trim() === ""} onSend={send} />
+              <SendButton
+                chrome={chrome}
+                sending={sending}
+                disabled={text.trim() === "" && attachments.length === 0}
+                onSend={send}
+              />
             )}
           </div>
         </div>
 
         <TurnStrip sessionId={sessionId} chrome={chrome} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * An Attachment waiting to be sent.
+ *
+ * Holds both the base64 the command needs and an object URL for the thumbnail, rather than deriving
+ * one from the other. A data URL would serve both, but it is the base64 again with a prefix, so
+ * every thumbnail would cost a second copy of the whole image in the DOM.
+ */
+type PendingAttachment = {
+  /** React's key. Not the id the Session Host will mint — that does not exist until this is sent. */
+  key: string;
+  mediaType: IncomingAttachment["mediaType"];
+  data: string;
+  url: string;
+};
+
+function outgoing(attachment: PendingAttachment): IncomingAttachment {
+  return { mediaType: attachment.mediaType, data: attachment.data };
+}
+
+/**
+ * A `File` as base64, without the data-URL prefix.
+ *
+ * Through FileReader rather than `btoa` over the bytes: the `String.fromCharCode(...bytes)` spread
+ * that makes `btoa` usable on an ArrayBuffer overflows the call stack somewhere in the low hundreds
+ * of kilobytes, which every screenshot clears.
+ */
+function base64Of(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.type}`));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * The Attachments this message will carry, above the box rather than below it.
+ *
+ * Above, because everything below the input describes the *next turn* — which model, how hard, how
+ * much room is left — while these are the message itself. Putting them in the `TurnStrip` would file
+ * content among readings.
+ *
+ * Deliberately small. A thumbnail here answers "did the right thing land?" and nothing else; the
+ * transcript is where the image is shown at a size worth looking at.
+ */
+function AttachmentTray({
+  attachments,
+  onRemove,
+}: {
+  attachments: PendingAttachment[];
+  onRemove: (key: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 px-3 pt-3">
+      {attachments.map((attachment) => (
+        <div key={attachment.key} className="group relative">
+          <img
+            src={attachment.url}
+            alt=""
+            className="size-14 rounded-md border border-border object-cover"
+          />
+          <Button
+            variant="secondary"
+            size="icon"
+            aria-label="Remove this attachment"
+            onClick={() => onRemove(attachment.key)}
+            className={cn(
+              "absolute -top-1.5 -right-1.5 size-5 rounded-full shadow",
+              // Shown on hover and on focus — keyboard-only removal must not depend on a pointer
+              // ever being over the thumbnail.
+              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            <X className="size-3" aria-hidden />
+          </Button>
+        </div>
+      ))}
     </div>
   );
 }

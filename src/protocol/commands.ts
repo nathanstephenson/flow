@@ -1,4 +1,5 @@
 /** Commands a client may send to the Session Host. */
+import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel } from "./events.ts";
 import type { Branch } from "./git.ts";
 
@@ -63,7 +64,25 @@ export type Command =
        */
       worktree?: { from: string; branch?: string };
     }
-  | { type: "send"; sessionId: string; text: string; when: SendWhen }
+  | {
+      type: "send";
+      sessionId: string;
+      text: string;
+      when: SendWhen;
+      /**
+       * Attachments to carry with this message, as base64 rather than as ids.
+       *
+       * The bytes ride on the command because there is no upload endpoint to have put them at an id
+       * beforehand — a paste the human never sends should not leave anything behind, and one they do
+       * send should reach the Session Host in the same act. The host writes each one down and mints
+       * the id, which is why `user_message` carries ids and this does not.
+       *
+       * The web client's alone, like `create.worktree.branch` and for the same reason: a terminal
+       * has no clipboard image to paste, so the TUI never sends one and nothing it cannot do is
+       * hidden behind this field.
+       */
+      attachments?: IncomingAttachment[];
+    }
   | { type: "abort"; sessionId: string }
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }

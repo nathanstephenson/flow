@@ -20,7 +20,8 @@ import type { Branch } from "../protocol/git.ts";
 export type ToolStatus = "running" | "complete" | "error";
 
 export type Entry =
-  | { kind: "user"; id: string; text: string }
+  /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
+  | { kind: "user"; id: string; text: string; attachments?: string[] }
   | { kind: "assistant"; id: string; text: string; final: boolean }
   | { kind: "thinking"; id: string; text: string; final: boolean }
   | { kind: "tool"; id: string; name: string; input: unknown; update?: unknown; result?: unknown; status: ToolStatus }
@@ -87,7 +88,15 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
       return { ...state, capabilities: event.capabilities };
 
     case "user_message":
-      return { ...state, entries: upsert(state.entries, { kind: "user", id: event.id, text: event.text }) };
+      return {
+        ...state,
+        entries: upsert(state.entries, {
+          kind: "user",
+          id: event.id,
+          text: event.text,
+          ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
+        }),
+      };
 
     case "turn_started":
       return { ...state, status: "running" };

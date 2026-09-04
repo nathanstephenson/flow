@@ -24,10 +24,18 @@ function stubSession(): Stub {
   let listener: ((event: AgentSessionEvent) => void) | undefined;
   const prompts: Array<{ text: string; options: unknown }> = [];
   const state = { aborted: 0 };
-  // m1 reasons across three levels, m2 not at all — the split every real registry has.
+  // m1 reasons across three levels and can be shown an image, m2 does neither — the split every
+  // real registry has, on both axes.
   const models = [
-    { id: "m1", provider: "anthropic", name: "M1", reasoning: true, thinkingLevelMap: { low: "l", medium: "m", high: "h" } },
-    { id: "m2", provider: "anthropic", name: "M2", reasoning: false },
+    {
+      id: "m1",
+      provider: "anthropic",
+      name: "M1",
+      reasoning: true,
+      thinkingLevelMap: { low: "l", medium: "m", high: "h" },
+      input: ["text", "image"],
+    },
+    { id: "m2", provider: "anthropic", name: "M2", reasoning: false, input: ["text"] },
   ];
   let current = models[0];
   let thinkingLevel: string | undefined = "medium";

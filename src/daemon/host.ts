@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentBackend, BackendSession } from "../backend/types.ts";
+import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
+import {
+  isAttachmentMediaType,
+  mediaTypeOf,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_BASE64_BYTES,
+  type IncomingAttachment,
+} from "../protocol/attachments.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
 import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import type { Branch } from "../protocol/git.ts";
@@ -27,6 +34,9 @@ import type { SessionMeta, TranscriptStore } from "./store.ts";
  */
 export class CommandRefused extends Error {}
 
+/** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
+type QueuedMessage = { text: string; attachments: string[] };
+
 type SessionRecord = {
   id: string;
   scope: string;
@@ -46,7 +56,12 @@ type SessionRecord = {
    * announced on its way up — the model in force, its capabilities.
    */
   buffered: BackendEvent[] | undefined;
-  queue: string[];
+  /**
+   * The Steering Queue (ADR 0002). Holds Attachment *ids* rather than bytes: they are written to
+   * disk when the send arrives, not when it dispatches, so a message that waits out a long turn is
+   * already durable and the queue stays the small thing it was.
+   */
+  queue: QueuedMessage[];
   title: string;
   /**
    * The branch the Scope was on when last looked at, or undefined when it is not a repository.
@@ -331,18 +346,61 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[]): Promise<void> {
     const record = this.record(sessionId);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
     if (!record.session) await this.revive(sessionId);
 
+    // Checked before anything is written, so a refused send leaves no bytes behind.
+    this.refuseUnservableAttachments(record, attachments);
+    const ids = (attachments ?? []).map((attachment) =>
+      this.storeOrThrow().writeAttachment(record.id, attachment.mediaType, attachment.data),
+    );
+
     if (when === "after_turn" && record.turnInFlight) {
-      record.queue.push(text);
-      record.log.append({ type: "queue_changed", pending: [...record.queue] });
+      record.queue.push({ text, attachments: ids });
+      record.log.append({ type: "queue_changed", pending: pendingTexts(record.queue) });
       this.touch(record);
       return;
     }
-    await this.dispatch(record, text);
+    await this.dispatch(record, { text, attachments: ids });
+  }
+
+  /**
+   * Whether this send's Attachments can be carried at all, refused before any are written down.
+   *
+   * Strict about what it *knows* is wrong and lenient about what it cannot know. The count, the
+   * media type and the size are facts about the request, so a client offering one this cannot use is
+   * refused — the rule the Settings already follow. Whether the model accepts an image is a fact
+   * about the backend, and the host cannot always name the model in force: `record.modelId` is
+   * absent whenever nobody overrode the default, which is the common case. So an unidentifiable
+   * model is allowed through rather than blocking every default-model session. The positive check
+   * belongs to the client, which reduces `model_changed` and therefore always knows.
+   */
+  private refuseUnservableAttachments(record: SessionRecord, attachments?: IncomingAttachment[]): void {
+    if (!attachments?.length) return;
+
+    if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      throw new CommandRefused(`At most ${MAX_ATTACHMENTS_PER_MESSAGE} attachments may be sent with one message`);
+    }
+    for (const attachment of attachments) {
+      if (!isAttachmentMediaType(attachment.mediaType)) {
+        throw new CommandRefused(`${attachment.mediaType} is not an attachable media type`);
+      }
+      if (attachment.data.length > MAX_ATTACHMENT_BASE64_BYTES) {
+        throw new CommandRefused(`An attachment may not exceed ${MAX_ATTACHMENT_BASE64_BYTES} base64 bytes`);
+      }
+    }
+
+    const model = record.session?.capabilities.models.find((candidate) => candidate.id === record.modelId);
+    if (model && !model.acceptsImages) {
+      throw new CommandRefused(`${model.label ?? model.id} cannot be shown an attachment`);
+    }
+  }
+
+  private storeOrThrow(): TranscriptStore {
+    if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot hold an attachment");
+    return this.store;
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -589,7 +647,7 @@ export class SessionHost {
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
         });
       case "send":
-        return await this.send(command.sessionId, command.text, command.when);
+        return await this.send(command.sessionId, command.text, command.when, command.attachments);
       case "abort":
         return await this.abort(command.sessionId);
       case "revive":
@@ -636,21 +694,47 @@ export class SessionHost {
     record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
   }
 
-  private async dispatch(record: SessionRecord, text: string): Promise<void> {
+  private async dispatch(record: SessionRecord, message: QueuedMessage): Promise<void> {
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
+    const { text, attachments } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
     const sent = note === undefined ? text : `${note}\n\n${text}`;
 
     record.turnInFlight = true;
     record.status = "running";
-    record.log.append({ type: "user_message", id: randomUUID(), text: sent });
+    record.log.append({
+      type: "user_message",
+      id: randomUUID(),
+      text: sent,
+      ...(attachments.length > 0 ? { attachments } : {}),
+    });
     // Titled from what its owner actually typed, never from `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename
-    // fires only while the title is still the Scope.
+    // fires only while the title is still the Scope. An Attachment never titles anything either, so
+    // a wordless paste falls to firstLine's own "Untitled session" rather than to a filename.
     if (record.title === record.scope) record.title = firstLine(text);
     this.touch(record);
-    await record.session.prompt(sent);
+    await record.session.prompt(sent, this.loadAttachments(record.id, attachments));
+  }
+
+  /**
+   * The bytes for a dispatch, base64 for whichever SDK is about to receive them.
+   *
+   * Read at dispatch rather than held from the send, because a queued message may wait out a long
+   * turn and the disk is where it is already durable. An id whose file has gone is skipped rather
+   * than fatal: it can only mean the session's directory was interfered with, and losing an image
+   * from a turn is a smaller harm than losing the words that came with it.
+   */
+  private loadAttachments(sessionId: string, ids: string[]): PromptAttachment[] | undefined {
+    if (ids.length === 0) return undefined;
+    const loaded: PromptAttachment[] = [];
+    for (const id of ids) {
+      const mediaType = mediaTypeOf(id);
+      const bytes = mediaType ? this.store?.readAttachment(sessionId, id) : undefined;
+      if (mediaType && bytes) loaded.push({ mediaType, data: bytes.toString("base64") });
+    }
+    return loaded.length > 0 ? loaded : undefined;
   }
 
   private flushBuffered(record: SessionRecord): void {
@@ -692,7 +776,7 @@ export class SessionHost {
   private async drain(record: SessionRecord): Promise<void> {
     const next = record.queue.shift();
     if (next === undefined) return;
-    record.log.append({ type: "queue_changed", pending: [...record.queue] });
+    record.log.append({ type: "queue_changed", pending: pendingTexts(record.queue) });
     try {
       await this.dispatch(record, next);
     } catch (error) {
@@ -777,6 +861,18 @@ function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {
     }
   }
   return capabilities;
+}
+
+/**
+ * What `queue_changed` says is waiting.
+ *
+ * Texts only, and deliberately so: `queue_changed` is a Presentation Transcript event, replayed on
+ * every load, and widening its shape so a client could preview a queued message's Attachments would
+ * change a record that is already written. The accepted cost is that a queued paste is not visible
+ * until its turn dispatches, which is one turn of patience for a shape nobody has to migrate.
+ */
+function pendingTexts(queue: QueuedMessage[]): string[] {
+  return queue.map((message) => message.text);
 }
 
 function firstLine(text: string): string {

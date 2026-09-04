@@ -95,8 +95,14 @@ function transcript(view: ViewState, width: number, height: number): string[] {
 
 function entryLines(entry: Entry, width: number): string[] {
   switch (entry.kind) {
-    case "user":
-      return wrap(`> ${entry.text}`, width);
+    case "user": {
+      const lines = wrap(`> ${entry.text}`, width);
+      // A terminal cannot show the image and cannot paste one either, so it says one is there and
+      // stops. Naming the count rather than each id, because an id is a filename this reader has no
+      // use for — what they need to know is that the model saw something they cannot.
+      const count = entry.attachments?.length ?? 0;
+      return count === 0 ? lines : [...lines, clip(`  [${count} image${count === 1 ? "" : "s"}]`, width)];
+    }
     case "assistant":
       return wrap(entry.text, width);
     case "thinking":

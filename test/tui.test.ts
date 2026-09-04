@@ -99,6 +99,22 @@ describe("TUI rendering", () => {
     assert.match(frame, /! just a message/);
   });
 
+  /*
+   * A terminal cannot show the image, so it says one is there. The alternative — printing nothing —
+   * makes a wordless paste look like an empty message the model then answered out of nowhere.
+   */
+  it("says an attachment was sent, since it cannot show one", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "user_message", id: "u1", text: "what is this?", attachments: ["a.png"] }, "2026-01-01T00:00:00Z");
+    log.append({ type: "user_message", id: "u2", text: "and these?", attachments: ["b.png", "c.jpg"] }, "2026-01-01T00:00:00Z");
+    log.append({ type: "user_message", id: "u3", text: "plain" }, "2026-01-01T00:00:00Z");
+
+    const frame = renderFrame(baseUi({ view: reduceAll(log.since(0)) }), { columns: 60, rows: 14 }).join("\n");
+    assert.match(frame, /> what is this\?\n\s+\[1 image\]/);
+    assert.match(frame, /> and these\?\n\s+\[2 images\]/);
+    assert.doesNotMatch(frame, /> plain\n\s+\[\d/);
+  });
+
   it("renders exactly the terminal height, whatever the content", () => {
     const log = new SessionLog("s1");
     for (let index = 0; index < 50; index += 1) {

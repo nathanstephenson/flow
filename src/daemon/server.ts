@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
+import { mediaTypeOf } from "../protocol/attachments.ts";
 import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
@@ -17,6 +18,7 @@ import { gitAvailable, head, isRepository, localBranches, MAX_BRANCHES } from ".
 import { tokenMatches } from "./auth.ts";
 import { CommandRefused, type SessionHost } from "./host.ts";
 import type { ShellRegistry } from "./shell.ts";
+import type { TranscriptStore } from "./store.ts";
 
 /**
  * The Session Host's loopback HTTP surface (ADR 0004).
@@ -47,6 +49,13 @@ export type ServeOptions = {
    * so the clients fall back to the defaults in src/protocol/fonts.ts.
    */
   config?: ConfigStore;
+  /**
+   * Where Attachment bytes are read from. Omitted means this deployment keeps no state, so it has
+   * no Attachments to serve and the route 404s — the same shape of omission `shells` and `config`
+   * already have, and it agrees with the Session Host, which refuses a send carrying one for the
+   * same reason.
+   */
+  store?: TranscriptStore;
 };
 
 export type RunningServer = {
@@ -247,6 +256,21 @@ async function handle(
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
     streamEvents(response, options.host, sessionId, Number(url.searchParams.get("since") ?? 0));
+    return;
+  }
+
+  /**
+   * `GET /api/sessions/:id/attachments/:attachmentId` — the bytes behind an id in a transcript.
+   *
+   * Under the Agent Session rather than in a store of its own, because that is where the bytes live
+   * and an Attachment has no life apart from the transcript naming it. Behind the same bearer check
+   * as everything else, which is what lets the web client render one with a plain `<img src>`: the
+   * token is in an HttpOnly cookie (ADR 0004) and the client is same-origin, so the browser presents
+   * it without the page having to.
+   */
+  const attachmentMatch = /^\/api\/sessions\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && attachmentMatch) {
+    sendAttachment(response, options.store, attachmentMatch[1] ?? "", attachmentMatch[2] ?? "");
     return;
   }
 
@@ -521,6 +545,37 @@ function sendAsset(response: ServerResponse, asset: EmbeddedAsset): void {
     "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-store",
   });
   response.end(body);
+}
+
+/**
+ * One Attachment's bytes.
+ *
+ * `mediaTypeOf` is the only check on the id, and that is deliberate: it accepts a uuid and one of
+ * four extensions and nothing else, so it is simultaneously the content-type lookup and the reason
+ * `../../token` cannot reach `readAttachment`. A second traversal guard would be a second rule able
+ * to drift from this one.
+ *
+ * Cached forever, on the same reasoning as a hashed asset: the bytes at an id never change, because
+ * an id is minted per write and a Presentation Transcript is never rewritten (ADR 0001).
+ */
+function sendAttachment(
+  response: ServerResponse,
+  store: TranscriptStore | undefined,
+  sessionId: string,
+  attachmentId: string,
+): void {
+  const mediaType = mediaTypeOf(attachmentId);
+  const bytes = mediaType && store ? store.readAttachment(sessionId, attachmentId) : undefined;
+  if (!mediaType || !bytes) {
+    send(response, 404, { error: "Not found" });
+    return;
+  }
+  response.writeHead(200, {
+    "content-type": mediaType,
+    "content-length": bytes.byteLength,
+    "cache-control": "private, max-age=31536000, immutable",
+  });
+  response.end(bytes);
 }
 
 function streamEvents(response: ServerResponse, host: SessionHost, sessionId: string, since: number): void {

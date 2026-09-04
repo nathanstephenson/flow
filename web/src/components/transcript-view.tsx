@@ -132,15 +132,17 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
 /**
  * One row, subscribed to its own Entry.
  *
- * The indirection exists so that `TranscriptEntry` can keep its two-prop contract: this component
- * takes the view and the key, reads the Entry, and hands down only `{ entry, query }`.
+ * The indirection exists so that `TranscriptEntry` never takes the view: this component takes it and
+ * the key, reads the Entry, and hands down only what one row needs. `sessionId` is part of that
+ * because an Attachment is addressed under its Agent Session — the id in an Entry names a file, not
+ * a URL, and only the session it belongs to completes one.
  */
 function TranscriptRow({ view, entryKey, query }: { view: AgentSessionView; entryKey: string; query: string }) {
   const entry = useEntry(view, entryKey);
   // A key with no Entry cannot happen while the transcript is append-only, but rendering nothing is
   // the right answer if it ever does.
   if (!entry) return null;
-  return <TranscriptEntry entry={entry} query={query} />;
+  return <TranscriptEntry entry={entry} query={query} sessionId={view.sessionId} />;
 }
 
 /**

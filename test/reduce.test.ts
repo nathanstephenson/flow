@@ -112,6 +112,24 @@ describe("reduce", () => {
     assert.equal(state.status, "idle");
   });
 
+  it("carries a user message's attachment ids onto its Entry", () => {
+    const state = reduceAll(
+      transcript({ type: "user_message", id: "u1", text: "what is this?", attachments: ["a.png", "b.jpg"] }).since(0),
+    );
+    const [entry] = state.entries;
+    assert.equal(entry?.kind, "user");
+    assert.deepEqual(entry?.kind === "user" ? entry.attachments : [], ["a.png", "b.jpg"]);
+  });
+
+  /*
+   * Absent rather than an empty array, so a front-end's `attachments?.length` test is the whole of
+   * the decision and there is no second falsy shape to remember.
+   */
+  it("leaves attachments off an Entry for a message that carried none", () => {
+    const state = reduceAll(transcript({ type: "user_message", id: "u1", text: "hello" }).since(0));
+    assert.equal(state.entries[0]?.kind === "user" && "attachments" in state.entries[0], false);
+  });
+
   it("keeps queue depth in view state", () => {
     const state = reduceAll(transcript({ type: "queue_changed", pending: ["a", "b"] }).since(0));
     assert.deepEqual(state.queue, ["a", "b"]);

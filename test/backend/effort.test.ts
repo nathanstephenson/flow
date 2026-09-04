@@ -43,7 +43,18 @@ describe("Claude model mapping", () => {
       id: "opus[1m]",
       provider: "anthropic",
       label: "Opus (1M context)",
+      acceptsImages: true,
     });
+  });
+
+  /*
+   * Stated by the adapter rather than read from the SDK, which reports nothing about input modality
+   * — so this is the assertion that the claim is made at all. Every model Claude serves can be shown
+   * an image, haiku included, which is why there is no negative case here as there is for effort.
+   */
+  it("declares every model able to be shown an attachment", () => {
+    assert.equal(describeModel(sdkModel({ value: "haiku" })).acceptsImages, true);
+    assert.equal(describeModel(sdkModel({ supportedEffortLevels: [] })).acceptsImages, true);
   });
 
   it("carries per-model effort levels", () => {

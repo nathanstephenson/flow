@@ -13,7 +13,7 @@ import {
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -263,13 +263,13 @@ class ClaudeSession implements BackendSession {
     return this.sdkSessionId || undefined;
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
     if (this.disposed) throw new Error("Backend Session disposed");
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
     this.inbox.push({
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content: userContent(text, attachments) },
       parent_tool_use_id: null,
       session_id: this.sdkSessionId,
     } as SDKUserMessage);
@@ -482,7 +482,37 @@ export function describeModel(model: SdkModelInfo): ModelInfo {
     provider: "anthropic",
     label: model.displayName,
     ...(model.supportedEffortLevels?.length ? { effortLevels: [...model.supportedEffortLevels] } : {}),
+    // Stated rather than read: `supportedModels()` reports effort and fast mode but nothing about
+    // input modality, because every model this SDK serves can be shown an image. Hardcoded the way
+    // `providers` and `compaction` are, and for the same reason — it is a fact about this backend
+    // rather than an answer the SDK is willing to give.
+    acceptsImages: true,
   };
+}
+
+/**
+ * One user turn's content: a plain string when there is nothing but text, and a block array when
+ * there is more.
+ *
+ * The string is kept for the common turn rather than always sending a one-element array, because a
+ * `content` this backend has sent as a string since it was written is not worth re-shaping for a
+ * feature most turns do not use.
+ *
+ * Images lead. The docs prefer image-then-text and it costs nothing to honour here, where the text
+ * is a question *about* what precedes it.
+ */
+export function userContent(
+  text: string,
+  attachments?: PromptAttachment[],
+): SDKUserMessage["message"]["content"] {
+  if (!attachments?.length) return text;
+  return [
+    ...attachments.map((attachment) => ({
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: attachment.mediaType, data: attachment.data },
+    })),
+    { type: "text" as const, text },
+  ];
 }
 
 /** Absent an override, the entry Claude itself calls the default is the model in force. */

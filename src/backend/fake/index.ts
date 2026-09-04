@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
 import type { BackendEvent, Capabilities, EffortLevel } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
 // Two models on purpose: one with an effort control and one without, which is the split every
-// real backend has (Claude's haiku offers no effort) and the one clients must cope with.
+// real backend has (Claude's haiku offers no effort) and the one clients must cope with. The same
+// two carry the Attachment split for the same reason — pi's registry has models that cannot be
+// shown an image, so a client that assumes every model can is a client with a bug nothing here
+// would have caught.
 const FAKE_CAPABILITIES: Capabilities = {
   providers: ["fake"],
   models: [
-    { id: "fake-1", provider: "fake", label: "Fake 1", effortLevels: ["low", "medium", "high"] },
+    { id: "fake-1", provider: "fake", label: "Fake 1", effortLevels: ["low", "medium", "high"], acceptsImages: true },
     { id: "fake-2", provider: "fake", label: "Fake 2" },
   ],
   compaction: false,
@@ -25,6 +28,8 @@ const FAKE_CAPABILITIES: Capabilities = {
 export class FakeSession implements BackendSession {
   readonly capabilities = FAKE_CAPABILITIES;
   readonly prompts: string[] = [];
+  /** Parallel to `prompts`, so a test can assert what reached the backend beside each text. */
+  readonly promptedAttachments: PromptAttachment[][] = [];
   readonly resumedFrom: string | undefined;
   modelId: string;
   effort: EffortLevel | undefined;
@@ -46,8 +51,9 @@ export class FakeSession implements BackendSession {
     return "fake-resume";
   }
 
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
     this.prompts.push(text);
+    this.promptedAttachments.push(attachments ?? []);
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
   }

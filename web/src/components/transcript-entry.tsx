@@ -27,12 +27,12 @@ import { cn } from "@/lib/utils.ts";
  * spent only where alignment is the point: a code span, a fenced block, and the tool payloads and
  * diffs below, which are not prose and never pass through the markdown renderer.
  */
-export type TranscriptEntryProps = { entry: Entry; query: string };
+export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
 
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, query }: TranscriptEntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
-      return <UserEntryView entry={entry} query={query} />;
+      return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
     case "assistant":
       return <AssistantEntryView entry={entry} query={query} />;
     case "thinking":
@@ -52,14 +52,43 @@ type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
  * A left rule and not a background. A filled block behind the human's own words is a chat bubble,
  * and a bubble is the one shape that would make this stop reading as a document.
  */
-function UserEntryView({ entry, query }: { entry: Of<"user">; query: string }) {
+function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: string; sessionId: string }) {
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
     <Row gutter=">" gutterClassName="text-primary">
       <div className="border-l-2 border-border pl-2 font-medium">
+        {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
       </div>
     </Row>
+  );
+}
+
+/**
+ * The Attachments a message carried, above its words — the order the model received them in, and the
+ * order they were composed in.
+ *
+ * **This is not the thing ADR 0012 refuses.** That decision will not fetch an image a *model* named
+ * in its markdown, because a remote image in a transcript is a tracking pixel with extra steps.
+ * These are bytes the Session Host holds, put there by the person reading this, served from its own
+ * origin under the same bearer check as everything else — so a plain `src` works without the page
+ * handling the token, and no third party learns that the transcript was opened.
+ *
+ * Capped in height rather than shown full size: a pasted screenshot is often taller than the pane,
+ * and a transcript where one Entry pushes the rest off the screen has stopped being a document.
+ */
+function Attachments({ ids, sessionId }: { ids: string[]; sessionId: string }) {
+  return (
+    <div className="mb-2 flex flex-wrap gap-2">
+      {ids.map((id) => (
+        <img
+          key={id}
+          src={`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(id)}`}
+          alt=""
+          className="max-h-64 max-w-full rounded-md border border-border"
+        />
+      ))}
+    </div>
   );
 }
 

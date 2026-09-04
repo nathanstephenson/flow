@@ -8,6 +8,7 @@ import { FakeBackend } from "../src/backend/fake/index.ts";
 import { readOrCreateToken } from "../src/daemon/auth.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
+import { TranscriptStore } from "../src/daemon/store.ts";
 import { connect, type Connection, type LinkState } from "../src/client/connection.ts";
 import { reduceAll } from "../src/client/reduce.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
@@ -263,6 +264,101 @@ describe("Session Host transport", () => {
     });
     await waitFor(() => link === "live");
     resumed();
+  });
+});
+
+/**
+ * Serving an Attachment's bytes.
+ *
+ * Its own server because this is the one route that needs a TranscriptStore, and the suite above
+ * deliberately runs a Session Host without one.
+ */
+describe("attachments over the wire", () => {
+  let root: string;
+  let running: RunningServer;
+  let store: TranscriptStore;
+  let token: string;
+  let sessionId: string;
+  let attachmentId: string;
+
+  // A one-pixel PNG, so the bytes served back are a real image rather than a string that happens to
+  // decode. `content-length` and `content-type` are only worth asserting against something true.
+  const pixel =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/gFj0X3TAAAAAElFTkSuQmCC";
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), "goodharness-attach-"));
+    token = readOrCreateToken(root);
+    store = new TranscriptStore(root);
+    const host = new SessionHost({ store });
+    host.registerBackend(new FakeBackend());
+    running = await serve({ host, token, store });
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake", modelId: "fake-1" });
+    attachmentId = store.writeAttachment(sessionId, "image/png", pixel);
+  });
+
+  afterEach(async () => {
+    await running.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const get = async (path: string, headers: Record<string, string> = { authorization: `Bearer ${token}` }) =>
+    await fetch(`${running.url}${path}`, { headers });
+
+  const url = (id: string, session = sessionId) =>
+    `/api/sessions/${encodeURIComponent(session)}/attachments/${encodeURIComponent(id)}`;
+
+  it("serves the bytes with the media type its id names", async () => {
+    const response = await get(url(attachmentId));
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual(bytes, Buffer.from(pixel, "base64"));
+  });
+
+  /*
+   * Cached forever on the same reasoning as a hashed asset: an id is minted per write and a
+   * transcript is never rewritten (ADR 0001), so the bytes at an id cannot change. `private`
+   * because the response went through a bearer check.
+   */
+  it("says the bytes may be cached forever, privately", async () => {
+    const cacheControl = (await get(url(attachmentId))).headers.get("cache-control") ?? "";
+    assert.match(cacheControl, /immutable/);
+    assert.match(cacheControl, /private/);
+  });
+
+  it("refuses an unauthenticated request, like every other route", async () => {
+    const response = await get(url(attachmentId), {});
+    assert.equal(response.status, 401);
+  });
+
+  /*
+   * The id check is the traversal guard: `mediaTypeOf` accepts a uuid and one of four extensions and
+   * nothing else, so a path is refused for the same reason a `.txt` is, and there is no second rule
+   * able to drift from the first.
+   */
+  it("refuses an id that is a path rather than a filename", async () => {
+    for (const bad of ["../../token", "..%2f..%2ftoken", "token", `${attachmentId}.txt`]) {
+      const response = await get(url(bad));
+      assert.equal(response.status, 404, `${bad} must not be served`);
+      assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+    }
+  });
+
+  it("404s a well-formed id with nothing behind it", async () => {
+    const response = await get(url("11111111-1111-4111-8111-111111111111.png"));
+    assert.equal(response.status, 404);
+  });
+
+  /*
+   * An Attachment is addressed under its Agent Session because that is where it lives, so the same
+   * id under a different session is simply not there — the session is part of the address, not a
+   * decoration on it.
+   */
+  it("does not serve one session's attachment from another", async () => {
+    const response = await get(url(attachmentId, "some-other-session"));
+    assert.equal(response.status, 404);
   });
 });
 
