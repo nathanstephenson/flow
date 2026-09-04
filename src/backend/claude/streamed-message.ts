@@ -100,6 +100,35 @@ export class StreamedMessage {
   }
 }
 
+/**
+ * One StreamedMessage per producer, so a Delegation's stream cannot disturb its parent's.
+ *
+ * A single StreamedMessage cannot serve two producers: `start()` clears `parts` and overwrites `id`,
+ * so a Delegation's `message_start` arriving mid-parent-message takes the id the parent's Entry is
+ * already on screen under, and the parent's accumulated text is discarded. That is the same stranded
+ * caret this module exists to prevent, reached by a second writer rather than by a changing id.
+ *
+ * Producers are keyed by the SDK's `parent_tool_use_id`, with `""` for the Agent Session's own model.
+ */
+export class StreamedMessages {
+  private readonly byProducer = new Map<string, StreamedMessage>();
+
+  for(producer: string): StreamedMessage {
+    const existing = this.byProducer.get(producer);
+    if (existing) return existing;
+    const created = new StreamedMessage();
+    this.byProducer.set(producer, created);
+    return created;
+  }
+
+  /** Finishes this producer's message and forgets it, so a producer that never speaks again leaks nothing. */
+  finish(producer: string, reportedId: string, content: readonly ContentBlock[]): BackendEvent[] {
+    const events = this.for(producer).finish(reportedId, content);
+    this.byProducer.delete(producer);
+    return events;
+  }
+}
+
 function blocks(
   content: readonly ContentBlock[],
   type: string,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { describeContextUsage } from "../../src/backend/claude/index.ts";
-import { StreamedMessage, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
+import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
@@ -151,5 +151,51 @@ describe("the Conversation Context reading the Claude adapter reports", () => {
   it("yields a percentage rather than the bare-token sentinel", () => {
     const usage = describeContextUsage({ totalTokens: 41_000, maxTokens: 200_000 });
     assert.equal(contextUsageLabel(usage), "context 21%");
+  });
+});
+
+/**
+ * Two producers streaming into one turn: the Agent Session's own model and a Delegation it spawned.
+ *
+ * The SDK attributes assistant, user and partial messages with `parent_tool_use_id`, so a Delegation's
+ * deltas interleave with its parent's. One StreamedMessage serving both would let the Delegation's
+ * `message_start` take the id the parent's Entry is on screen under — the stranded caret again.
+ */
+describe("a Delegation streaming beside its parent", () => {
+  it("keeps the two messages apart instead of one stealing the other's id", () => {
+    const streams = new StreamedMessages();
+    const events = [
+      streams.for("").text(0, "Spawning a "),
+      // The Delegation opens mid-parent-message. This is the interleaving that used to clear `parts`.
+      streams.for("call_1").text(0, "Reading "),
+      streams.for("").text(0, "subagent."),
+      streams.for("call_1").text(0, "the file."),
+      ...streams.finish("call_1", "msg_child", [textBlock("Reading the file.")]),
+      ...streams.finish("", "msg_parent", [textBlock("Spawning a subagent.")]),
+    ];
+
+    const entries = transcript(events);
+    assert.deepEqual(stranded(entries), [], "no Entry may be left mid-stream once both have finished");
+    const assistants = entries.filter((entry) => entry.kind === "assistant");
+    assert.equal(assistants.length, 2, `expected two Entries, got ${JSON.stringify(entries)}`);
+    assert.deepEqual(
+      assistants.map((entry) => (entry.kind === "assistant" ? entry.text : "")),
+      ["Spawning a subagent.", "Reading the file."],
+      "neither producer's text may be discarded by the other's message_start",
+    );
+  });
+
+  it("forgets a producer once its message has finished", () => {
+    const streams = new StreamedMessages();
+    streams.for("call_1").text(0, "first");
+    streams.finish("call_1", "msg_a", [textBlock("first")]);
+
+    // A second Delegation reusing the callId must start clean, not inherit the first one's parts.
+    const reused = streams.for("call_1");
+    reused.start("msg_b");
+    const entries = transcript([reused.text(0, "second"), ...streams.finish("call_1", "msg_b", [textBlock("second")])]);
+    const assistants = entries.filter((entry) => entry.kind === "assistant");
+    assert.equal(assistants.length, 1);
+    assert.equal(assistants[0]?.kind === "assistant" && assistants[0].text, "second");
   });
 });
