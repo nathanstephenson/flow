@@ -10,10 +10,17 @@
  * scale, the Inter import and the base layer are all upstream's, so a component copied from the docs
  * looks right without being reinterpreted, and there is no bespoke palette for anyone to learn.
  *
- * This file adds nothing to it. It used to map the five states an Agent Session can be in onto the
- * chart tokens, on the assumption that five chart tokens meant five distinguishable hues — but
- * rhea's are all zero-chroma greys, so the mapping produced five dots nobody could tell apart. The
- * status vocabulary is shape and text now; see web/src/components/status-indicator.tsx.
+ * Two tokens are ours, and they are the only ones. The rail's rows had their status word taken away
+ * — the dot is the whole signal there now — which is more than shape alone can carry, so the states
+ * a reader watches for get a hue. It cannot come from the chart tokens: rhea's five are all
+ * zero-chroma greys, which is exactly why an earlier mapping onto them produced five dots nobody
+ * could tell apart. Deliberately pale and deliberately two, so the rail reads as a monochrome list
+ * with something happening in it rather than as a status board. See
+ * web/src/components/status-indicator.tsx for which state wears which.
+ *
+ * Each has a light and a dark value because a pastel that reads on `oklch(0.145 0 0)` disappears on
+ * white. The dark pair are the pastels as such; the light pair carry the same hues at enough chroma
+ * and enough darkness to survive a white background.
  */
 
 :root {
@@ -43,6 +50,9 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+
+  --status-active: oklch(0.66 0.13 245);
+  --status-awaiting: oklch(0.62 0.15 300);
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -80,6 +90,9 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
 
+  --status-active: oklch(0.83 0.08 240);
+  --status-awaiting: oklch(0.79 0.1 300);
+
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -115,6 +128,9 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+
+  --color-status-active: var(--status-active);
+  --color-status-awaiting: var(--status-awaiting);
 
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);

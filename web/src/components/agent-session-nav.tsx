@@ -303,13 +303,18 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm">{sessionLabel(summary)}</span>
           {/*
-           * The status *word*, not just the dot. The dot is `aria-hidden` and now carries only
-           * "is a Backend Session attached" in its shape, so without this a rail row would be the
-           * one place in the app where the state is unreadable — and unreadable to a screen reader
-           * either way.
+           * Backend at one end, age at the other, and no status word between them: the dot's hue and
+           * shape say the state now, and a row that spelled it out as well was spending a third of
+           * its second line agreeing with the dot.
+           *
+           * The dot is `aria-hidden`, so the word it replaced survives here for anyone not looking
+           * at colour. Nothing is lost visually — the two states worth reacting to are the two with
+           * a hue.
            */}
-          <span className="block truncate text-xs text-muted-foreground">
-            {status} · {summary.backend} · {relativeTime(summary.updatedAt, now)}
+          <span className="flex items-baseline gap-2 text-xs text-muted-foreground">
+            <span className="sr-only">{status}</span>
+            <span className="truncate">{summary.backend}</span>
+            <span className="ml-auto shrink-0">{relativeTime(summary.updatedAt, now)}</span>
           </span>
         </span>
       </SidebarMenuButton>
@@ -393,7 +398,11 @@ function SettledGroup({
  *
  * The gear leads the row rather than trailing it: the Settings are the one thing here that is not
  * about the Agent Sessions above, and the bottom-left of the rail is where every app a reader has
- * met puts them. The two hints and the link dot keep the rest of the line.
+ * met puts them. The link dot keeps the far end.
+ *
+ * No keyboard hints. They advertised two keys out of the whole table, one of which (`/`) no longer
+ * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
+ * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
 function RailFooter({
   link,
@@ -422,12 +431,6 @@ function RailFooter({
         <TooltipContent>Settings</TooltipContent>
       </Tooltip>
 
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Kbd>n</Kbd> new
-      </span>
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Kbd>/</Kbd> find
-      </span>
       <LinkDot link={link} />
     </SidebarFooter>
   );
