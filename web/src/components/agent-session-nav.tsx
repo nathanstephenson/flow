@@ -1,10 +1,11 @@
-import { ChevronDown, CircleCheck, Plus, Settings } from "lucide-react";
+import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Plus, Settings } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
 import type { LinkState } from "@client/connection.ts";
 import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
+import { scopeKindLabel } from "@client/scope-kind.ts";
 import { canSettle } from "@client/status.ts";
 import { StatusDot } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -288,9 +289,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           // upstream's reservation for an overlaid action — applied unconditionally rather than
           // through its `group-has-[…menu-action]` guard, because whether a row can be Settled
           // changes with its status and the title must not reflow when it does.
-          // `size="lg"` is h-12, and two lines of 1.25rem + 1rem leave exactly py-1.5 — p-2 would
-          // clip both of them against the button's own `overflow-hidden`.
-          "rounded-none py-1.5 pr-8",
+          // `size="lg"` fixes the height at h-12, which fit the two lines this row had and clips the
+          // third; `h-auto` hands the height back to the content, so a row is as tall as it has
+          // something to say and a Scope that is not a repository stays two lines. p-2 would clip
+          // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
+          "h-auto rounded-none py-1.5 pr-8",
           "border-l-2 border-l-transparent",
           selected && "border-l-primary",
           // The keyboard cursor is a ring rather than a fill, so it can sit on a row that is also
@@ -302,6 +305,7 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         <StatusDot status={status} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm">{sessionLabel(summary)}</span>
+          <ScopeLine summary={summary} />
           {/*
            * Backend at one end, age at the other, and no status word between them: the dot's hue and
            * shape say the state now, and a row that spelled it out as well was spending a third of
@@ -353,6 +357,40 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         </Tooltip>
       ) : null}
     </SidebarMenuItem>
+  );
+}
+
+/**
+ * Where this Agent Session's edits land: which branch, and which of the two checkouts.
+ *
+ * Absent when the Scope is not a repository, which is the same signal the composer's Scope Strip
+ * hides its branch control on — a Project need not be a repository at all (ADR 0011), and a row that
+ * said "no branch" would spend a line saying nothing happened.
+ *
+ * **The icon is the whole of the checkout indicator.** The rail is 16rem, and `scopeKindLabel`'s
+ * words are long enough that "Project checkout" beside a branch name would leave the branch a few
+ * characters — so the distinction is carried by which glyph is drawn, and the word itself goes to
+ * the `sr-only` text, which is also what a reader not looking at shape gets. The composer's Scope
+ * Strip is still the place the two are *explained*; this only distinguishes them.
+ *
+ * Mono, because a branch name is an identifier and this is the same reading as the Project name in
+ * the pane header.
+ */
+function ScopeLine({ summary }: { summary: SessionSummary }) {
+  if (!summary.branch) return null;
+  const Glyph = summary.worktree ? FolderGit2 : GitBranch;
+
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      {/* `size-3!` beats the button's own `[&_svg]:size-4`, which is sized for its action rather
+          than for a line of text-xs. */}
+      <Glyph aria-hidden className="size-3! shrink-0" />
+      <span className="sr-only">
+        {scopeKindLabel(summary)}
+        {summary.branch.detached ? ", detached at" : ""}
+      </span>
+      <span className="truncate font-mono">{summary.branch.name}</span>
+    </span>
   );
 }
 
