@@ -229,6 +229,29 @@ class ClaudeSession implements BackendSession {
     this.announceModel(modelInForce(booted, this.aliasOf, this.capabilities.models) ?? this.announced ?? booted);
   }
 
+  /**
+   * The effort the SDK says it is actually running at.
+   *
+   * This is the *only* place Claude reports it — `initializationResult()` does not carry it, and
+   * `supportedModels()` describes which levels exist rather than which is in force. So a session
+   * nobody has set an effort on stays unreported until its first turn brings this message, which is
+   * why `EffortPicker` has a placeholder to fall back to rather than a value.
+   *
+   * `null` means the model has no effort control, which is a state rather than a failure: haiku
+   * reports it, clients hide the control for such a model, and a level left on file in
+   * `wantedEffort` is restored by `reapplyEffort` on the way back to a model that has one.
+   *
+   * Announced only on a difference, so a turn that changed nothing says nothing — and taken as the
+   * truth when it disagrees with what we asked for, because the SDK clamps and this is it telling
+   * us what it settled on.
+   */
+  private noteBootedEffort(booted: SdkEffortLevel | null | undefined): void {
+    if (booted === undefined || booted === null) return;
+    if (booted === this.effort) return;
+    this.effort = booted;
+    this.emit({ type: "effort_changed", effort: booted });
+  }
+
   private announceModel(modelId: string): void {
     if (modelId === this.announced) return;
     this.announced = modelId;
@@ -337,6 +360,7 @@ class ClaudeSession implements BackendSession {
         if (sdkMessage.subtype === "init") {
           this.sdkSessionId = sdkMessage.session_id;
           this.noteBootedModel(sdkMessage.model);
+          this.noteBootedEffort(sdkMessage.effort);
         }
         return;
 

@@ -2,6 +2,13 @@
 export const KEY = {
   ctrlC: "\u0003",
   ctrlE: "\u0005",
+  /**
+   * Branches.
+   *
+   * `^G` for git rather than the obvious `^B` for branch: `^B` is tmux's default prefix, and this
+   * is a client people run inside tmux.
+   */
+  ctrlG: "\u0007",
   ctrlP: "\u0010",
   ctrlS: "\u0013",
   escape: "\u001b",

@@ -11,6 +11,9 @@ import { serve, type RunningServer } from "../src/daemon/server.ts";
 import { connect, type Connection, type LinkState } from "../src/client/connection.ts";
 import { reduceAll } from "../src/client/reduce.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
+import type { BranchList } from "../src/protocol/git.ts";
+import type { SessionSummary } from "../src/protocol/commands.ts";
+import { repository } from "./git-fixture.ts";
 
 describe("Session Host transport", () => {
   let root: string;
@@ -33,6 +36,75 @@ describe("Session Host transport", () => {
   afterEach(async () => {
     await running.close();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  describe("git over the wire", () => {
+    const get = async (path: string) =>
+      await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
+
+    it("reports whether this build can run git at all", async () => {
+      const config = (await (await get("/api/config")).json()) as { git: boolean };
+      // The `shell` rule, applied to git: a client hides the control rather than offering one that
+      // fails on click.
+      assert.equal(config.git, true);
+    });
+
+    it("lists a repository's branches, and says where it is", async () => {
+      const repo = repository(root, "api", ["feature"]);
+      const response = await get(`/api/branches?scope=${encodeURIComponent(repo)}`);
+
+      assert.equal(response.status, 200);
+      const list = (await response.json()) as BranchList;
+      assert.equal(list.repository, true);
+      assert.equal(list.scope, repo);
+      assert.deepEqual([...list.branches].sort(), ["feature", "main"]);
+      assert.deepEqual(list.head, { name: "main" });
+    });
+
+    // Not a 404: the directory exists, and reporting the state distinguishes "not a repository"
+    // from a typo better than a status code would.
+    it("answers 200 for a directory that is not a repository", async () => {
+      const plain = mkdtempSync(join(tmpdir(), "goodharness-plain-"));
+      const response = await get(`/api/branches?scope=${encodeURIComponent(plain)}`);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { scope: plain, repository: false, branches: [] });
+      rmSync(plain, { recursive: true, force: true });
+    });
+
+    it("refuses a request with no scope", async () => {
+      const response = await get("/api/branches");
+      assert.equal(response.status, 400);
+    });
+
+    /**
+     * A refusal is the caller's to fix, so it must not arrive as a 500.
+     *
+     * This is the first refusal `/api/command` distinguishes from a fault — `revive` on an Ended
+     * session is the same kind of thing and is still a 500, which is a separate change.
+     */
+    it("answers 409, not 500, when an Agent Session's state forbids the command", async () => {
+      const repo = repository(root, "busy", ["feature"]);
+      const id = await host.create({ scope: repo, backend: "fake" });
+      await host.send(id, "get to work", "now");
+
+      const response = await fetch(`${running.url}/api/command`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ type: "switch_branch", sessionId: id, branch: "feature" }),
+      });
+
+      assert.equal(response.status, 409);
+      assert.match(((await response.json()) as { error: string }).error, /is running/);
+    });
+
+    it("carries the branch on the session list, so the rail can name it", async () => {
+      const repo = repository(root, "listed");
+      await host.create({ scope: repo, backend: "fake" });
+
+      const sessions = (await (await get("/api/sessions")).json()) as SessionSummary[];
+      assert.deepEqual(sessions[0]?.branch, { name: "main" });
+    });
   });
 
   it("stores the token 0600, because a client can run arbitrary commands", () => {

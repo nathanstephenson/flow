@@ -184,6 +184,8 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     capabilities: view.capabilities,
     model: view.model,
     effort: view.effort,
+    branch: view.branch,
+    worktree: view.worktree,
     contextUsage: view.contextUsage,
     endedReason: view.endedReason,
     // No lastSeq: it is stamped from the event's own seq on every event, so carrying it here would

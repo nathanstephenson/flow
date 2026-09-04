@@ -2,6 +2,7 @@ import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol
 import { effortChoices, modelChoices, type ModelChoice } from "@client/model-choices.ts";
 import { initialState } from "@client/reduce.ts";
 import { Button } from "@/components/ui/button.tsx";
+import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
 import {
   Combobox,
   ComboboxCollection,
@@ -36,6 +37,13 @@ import {
  */
 const COMBOBOX_THRESHOLD = 30;
 
+/*
+ * All three triggers wear `QUIET_TRIGGER`, because all three sit in the composer's bottom strip
+ * beside the branch and the Conversation Context meter — a row of readings, not a row of pills. The
+ * Combobox's Button becomes `ghost` for the same reason: `outline` draws a border the strip does not
+ * want, and `ghost`'s hover surface is cancelled by the shared class.
+ */
+
 /** Above this many *filtered* matches the list stops mounting rows and says so. */
 const RENDER_LIMIT = 100;
 
@@ -64,7 +72,7 @@ function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
         if (typeof value === "string") onSelect(value);
       }}
     >
-      <SelectTrigger aria-label="Model">
+      <SelectTrigger aria-label="Model" size="sm" className={QUIET_TRIGGER}>
         <SelectValue placeholder="model">{() => modelLabel(model)}</SelectValue>
       </SelectTrigger>
       <SelectContent>
@@ -117,7 +125,10 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
        * Button to render as, or the two halves of this one control (Select under thirty choices,
        * Combobox over) would not look like the same control.
        */}
-      <ComboboxTrigger aria-label="Model" render={<Button variant="outline" />}>
+      <ComboboxTrigger
+        aria-label="Model"
+        render={<Button variant="ghost" size="sm" className={QUIET_TRIGGER} />}
+      >
         <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
       </ComboboxTrigger>
       <ComboboxContent>
@@ -185,8 +196,16 @@ export function EffortPicker({
         if (typeof value === "string") onSelect(value as EffortLevel);
       }}
     >
-      <SelectTrigger aria-label="Effort">
-        <SelectValue placeholder="effort">{() => effort ?? "effort"}</SelectValue>
+      <SelectTrigger aria-label="Effort" size="sm" className={QUIET_TRIGGER}>
+        {/*
+          * "default" rather than the control's own name, which is what it used to show.
+          *
+          * Unset here does not mean the turn will think at no effort — it means the backend never
+          * told us, and it is running at whatever it chose. pi says so from the moment it starts;
+          * Claude reports its level only in the init message that comes with the first turn, so on a
+          * fresh Claude session this stands until you send something, and then fills itself in.
+          */}
+        <SelectValue placeholder="default">{() => effort ?? "default"}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {levels.map((level) => (

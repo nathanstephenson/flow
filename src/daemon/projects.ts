@@ -3,6 +3,10 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import type { DirectoryMatches, Project } from "../protocol/projects.ts";
+// The `.git` test now answers two questions and gives the same answer to both, so it lives with
+// the rest of git (`src/daemon/git.ts`). The rule about a repository being a *leaf* stays here,
+// because it is about this walk rather than about git.
+import { isRepository } from "./git.ts";
 
 /**
  * Finding directories: the Projects that are opted in, the repositories worth suggesting, and the
@@ -118,17 +122,6 @@ function descend(
 
     descend(path, group === undefined ? entry.name : `${group}/${entry.name}`, depth + 1, found, budget);
   }
-}
-
-/**
- * Whether a directory is a repository.
- *
- * `.git` is tested as a path that *exists*, not as a directory: in a linked worktree or a submodule
- * it is a file containing a `gitdir:` pointer, and treating those as non-repositories would descend
- * into them and offer their subdirectories as Projects.
- */
-function isRepository(directory: string): boolean {
-  return statSync(join(directory, ".git"), { throwIfNoEntry: false }) !== undefined;
 }
 
 function isDirectory(path: string): boolean {

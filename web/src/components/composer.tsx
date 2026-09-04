@@ -1,12 +1,10 @@
 import { ArrowUp, Loader2, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { EffortLevel } from "../../../src/protocol/events.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
-import { ContextUsageMeter } from "@/components/context-usage-meter.tsx";
-import { EffortPicker, ModelPicker } from "@/components/model-picker.tsx";
+import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -16,8 +14,18 @@ import { cn } from "@/lib/utils.ts";
  * Where a message goes in, and what the next turn will cost to run.
  *
  * The pane's header says what this Agent Session *is*; this says what the next turn will *do*. That
- * is why the model, the Effort level and the Conversation Context meter live here and not up there —
- * all three are properties of the message about to be sent, not of the Agent Session.
+ * is why the model, the Effort level, the Conversation Context meter and the branch live here and
+ * not up there — every one of them is a property of the message about to be sent rather than of the
+ * Agent Session.
+ *
+ * Two bands, and the split between them is *doing* versus *describing*. The input carries the one
+ * control that acts, so the send button sits beside the text rather than below it. Everything that
+ * merely describes the next turn — which model, how hard, how much room is left, which branch — is
+ * one quiet row underneath (`TurnStrip`), styled as readings rather than as controls.
+ *
+ * The branch took the most getting to. It reads like identity and was in the header first, but what
+ * the control is *for* is the edits this message will cause, which land in that Scope on that
+ * branch — so it belongs with the model, not with the Project name.
  *
  * **Nothing here is optimistic.** No user Entry is added locally: it appears because the Session Host
  * appended it to the Presentation Transcript and it arrived over the stream (ADR 0001). No pending
@@ -121,61 +129,59 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
           "rounded-xl border bg-card/85 shadow-lg backdrop-blur-sm",
         )}
       >
-        <textarea
-          ref={textarea}
-          value={text}
-          // Three rows rather than one, so the box looks like somewhere a paragraph goes. It is also
-          // the auto-grow floor: `height: auto` resolves to the rows-based height, and scrollHeight
-          // never reports less than that, so clearing the text returns here rather than to one line.
-          rows={3}
-          disabled={ended}
-          placeholder={composerPlaceholder(chrome)}
-          onChange={(event) => {
-            setText(event.target.value);
-            // Auto-grow, capped. A composer that can swallow the transcript is not a composer.
-            const element = event.target;
-            element.style.height = "auto";
-            element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
-          }}
-          onKeyDown={(event) => {
+        {/*
+          * The input and its one action, side by side.
+          *
+          * The button gets its own box centred against the input rather than sitting in the row of
+          * settings below, because it is the only thing here that *does* something — everything in
+          * the strip underneath describes what it will do when pressed. Centred rather than pinned
+          * to a corner, so it stays beside the text as the box grows.
+          */}
+        <div className="flex items-center gap-1">
+          <textarea
+            ref={textarea}
+            value={text}
             /*
-             * Enter sends, Shift+Enter is a newline — and a composing IME owns Enter outright. Without
-             * that last check, committing a CJK candidate also sends the message, which is a real bug
-             * and not a theoretical one.
+             * Two rows rather than one, so the box still looks like somewhere a paragraph goes, and
+             * rather than three because the auto-grow below reaches for a third the moment one is
+             * typed — a resting third row is height every pane pays for while empty.
              *
-             * While a turn runs this is the *only* way to reach the Steering Queue, because the
-             * button beside it is Abort. That is why the placeholder says so.
+             * It is also the auto-grow floor: `height: auto` resolves to the rows-based height and
+             * `scrollHeight` never reports less, so clearing the text returns here, not to one line.
              */
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            void send();
-          }}
-          className={cn(
-            // Sans, matching what the message becomes: a user Entry renders as markdown in the chrome
-            // font, and composing against a monospace grid only to watch it reflow on send is a small
-            // lie about what you wrote.
-            "w-full resize-none bg-transparent px-3 pt-3 pb-1 text-sm outline-none",
-            "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
-          )}
-        />
-
-        <div className="flex items-center gap-1.5 px-2 pb-2">
-          <ModelPicker
-            capabilities={chrome.capabilities}
-            model={chrome.model}
+            rows={2}
             disabled={ended}
-            onSelect={(modelId) => void run({ type: "set_model", sessionId, modelId })}
-          />
-          <EffortPicker
-            capabilities={chrome.capabilities}
-            model={chrome.model}
-            effort={chrome.effort}
-            disabled={ended}
-            onSelect={(effort: EffortLevel) => void run({ type: "set_effort", sessionId, effort })}
+            placeholder={composerPlaceholder(chrome)}
+            onChange={(event) => {
+              setText(event.target.value);
+              // Auto-grow, capped. A composer that can swallow the transcript is not a composer.
+              const element = event.target;
+              element.style.height = "auto";
+              element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
+            }}
+            onKeyDown={(event) => {
+              /*
+               * Enter sends, Shift+Enter is a newline — and a composing IME owns Enter outright.
+               * Without that last check, committing a CJK candidate also sends the message, which is
+               * a real bug and not a theoretical one.
+               *
+               * While a turn runs this is the *only* way to reach the Steering Queue, because the
+               * button beside it is Abort. That is why the placeholder says so.
+               */
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              void send();
+            }}
+            className={cn(
+              // Sans, matching what the message becomes: a user Entry renders as markdown in the
+              // chrome font, and composing against a monospace grid only to watch it reflow on send
+              // is a small lie about what you wrote.
+              "min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none",
+              "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+            )}
           />
 
-          <div className="ml-auto flex items-center gap-1.5">
-            <ContextUsageMeter usage={chrome.contextUsage} />
+          <div className="flex shrink-0 items-center pr-2">
             {ended ? null : running ? (
               <AbortButton onAbort={abort} />
             ) : (
@@ -183,6 +189,8 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
             )}
           </div>
         </div>
+
+        <TurnStrip sessionId={sessionId} chrome={chrome} />
       </div>
     </div>
   );

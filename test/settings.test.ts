@@ -376,9 +376,9 @@ describe("a retention change reaches a running host", () => {
     await host.settle(sessionId);
 
     const wellPast = Date.now() + 10 * DAY;
-    assert.deepEqual(host.reap(wellPast), [], "'never' means never");
+    assert.deepEqual(await host.reap(wellPast), [], "'never' means never");
 
     config.update({ retention: { settled: "1h" } });
-    assert.deepEqual(host.reap(wellPast), [sessionId], "the sweep read the new window");
+    assert.deepEqual(await host.reap(wellPast), [sessionId], "the sweep read the new window");
   });
 });

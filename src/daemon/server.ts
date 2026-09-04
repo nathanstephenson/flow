@@ -12,8 +12,10 @@ import { discoverProjects, includedProjects, searchDirectories } from "./project
 import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
 import type { EmbeddedAsset } from "../web/assets.ts";
 import { ASSETS } from "../web/assets.generated.ts";
+import type { BranchList } from "../protocol/git.ts";
+import { gitAvailable, head, isRepository, localBranches, MAX_BRANCHES } from "./git.ts";
 import { tokenMatches } from "./auth.ts";
-import type { SessionHost } from "./host.ts";
+import { CommandRefused, type SessionHost } from "./host.ts";
 import type { ShellRegistry } from "./shell.ts";
 
 /**
@@ -134,6 +136,12 @@ async function handle(
       // rather than offering one that fails on click — the rule Capabilities already sets for
       // backends, applied to a host-wide facility.
       shell: (await options.shells?.available()) ?? false,
+      // Whether this build can run git at all — exactly the question `shell` above asks, and the
+      // same answer: hide the control rather than offer one that fails on click. git is a
+      // documented prerequisite rather than a dependency, so a single-executable build or a bare
+      // container has none, and without this a Scope's `.git` would promise a control that then
+      // fails with ENOENT.
+      git: await gitAvailable(),
       // The two Project lists, disjoint, both derived and both asked fresh on each request.
       //
       // `projectList` is what a client offers: the opted-in Projects, resolved from
@@ -181,6 +189,34 @@ async function handle(
     return;
   }
 
+  /*
+   * `GET /api/branches?scope=…` — the branches a Scope could be switched to.
+   *
+   * Its own endpoint rather than more of `/api/config`, and a query rather than state, for the
+   * reason `/api/directories` is (ADR 0011): the answer changes outside GoodHarness — a `git
+   * branch` in a terminal, a `git fetch` — so there is nothing worth folding into the document
+   * every client polls, and a cache would need a filesystem watcher in order to be more often
+   * wrong.
+   *
+   * Answers for a *Scope* rather than for an Agent Session, because the New Agent Session dialog
+   * has to ask before there is a session to ask about: picking the branch to cut a worktree from
+   * happens first. `head` is reported here as well as on `SessionSummary`, and the two cannot
+   * disagree, because both are `head()` in `src/daemon/git.ts`.
+   *
+   * A Scope that is not a repository is a 200 carrying `repository: false`, not a 404: the
+   * directory exists, and reporting the state distinguishes "not a repository" from a typo better
+   * than a status code would.
+   */
+  if (request.method === "GET" && url.pathname === "/api/branches") {
+    const scope = url.searchParams.get("scope");
+    if (!scope) {
+      send(response, 400, { error: "scope is required" });
+      return;
+    }
+    send(response, 200, await branchList(scope));
+    return;
+  }
+
   if (options.shells && url.pathname === "/api/shells") {
     await handleShellCollection(request, response, url, options.host, options.shells);
     return;
@@ -216,7 +252,17 @@ async function handle(
 
   if (request.method === "POST" && url.pathname === "/api/command") {
     const command = JSON.parse(await readBody(request)) as Command;
-    send(response, 200, { result: (await options.host.execute(command)) ?? null });
+    try {
+      send(response, 200, { result: (await options.host.execute(command)) ?? null });
+    } catch (error) {
+      // A refusal is the caller asking for something this Agent Session cannot do in the state it
+      // is in — a turn in flight, a checkout git itself declined — and its message is the whole of
+      // what is worth showing. Anything else is ours, and `serve`'s catch turns it into a 500. The
+      // same asymmetry as `ConfigError` → 400, at the status `/api/shells` already answers when an
+      // Agent Session's state forbids the request.
+      if (!(error instanceof CommandRefused)) throw error;
+      send(response, 409, { error: error.message });
+    }
     return;
   }
 
@@ -245,6 +291,35 @@ async function handle(
  * same directory — which they are, and a candidate list that offered a Project you already have
  * would be a list that never emptied.
  */
+/**
+ * What `/api/branches` answers.
+ *
+ * The `isRepository` gate comes first so a Scope that is not a repository costs one `statSync` and
+ * spawns nothing — which is most of the calls, since the New Agent Session dialog asks on every
+ * settled keystroke of a free-text Scope field.
+ *
+ * A repository git cannot list is reported as a repository with no branches rather than as no
+ * repository, because those are different things to a reader: the first is a state to explain, and
+ * lying about the second would hide a broken checkout behind a missing control.
+ */
+async function branchList(scope: string): Promise<BranchList> {
+  if (!isRepository(scope) || !(await gitAvailable())) {
+    return { scope, repository: false, branches: [] };
+  }
+
+  const listed = await localBranches(scope);
+  const found = await head(scope);
+  const branches = listed.ok ? listed.value : [];
+
+  return {
+    scope,
+    repository: true,
+    branches: branches.slice(0, MAX_BRANCHES),
+    ...(branches.length > MAX_BRANCHES ? { truncated: true as const } : {}),
+    ...(found.ok ? { head: found.value } : {}),
+  };
+}
+
 function projectLists(config: ConfigStore | undefined): {
   projectList: Project[];
   projectCandidates: Project[];

@@ -69,14 +69,56 @@ export async function runTui(options: TuiOptions): Promise<void> {
     sessions = await options.connection.listSessions();
   };
 
-  const newSession = async (): Promise<void> => {
-    const id = await options.connection.command<string>({
-      type: "create",
-      scope: options.scope,
-      backend: options.backend,
-    });
-    await refreshSessions();
-    attach(id);
+  const newSession = async (worktree?: { from: string }): Promise<void> => {
+    try {
+      const id = await options.connection.command<string>({
+        type: "create",
+        scope: options.scope,
+        backend: options.backend,
+        ...(worktree === undefined ? {} : { worktree }),
+      });
+      await refreshSessions();
+      attach(id);
+    } catch (error) {
+      // A worktree the host would not cut leaves no Agent Session at all, so there is nothing to
+      // attach to and the reason is all there is to say.
+      notice = error instanceof Error ? error.message : "could not start an Agent Session";
+    }
+  };
+
+  /** The Scope of an Agent Session, for asking git about it. */
+  const scopeOf = (sessionId: string | undefined): string | undefined =>
+    sessions.find((session) => session.id === sessionId)?.scope;
+
+  /**
+   * Open the branch list, having asked for it first.
+   *
+   * Asked at the moment it is opened rather than held, because it changes outside GoodHarness — the
+   * same reason `/api/branches` is a query. A Scope that is not a repository opens nothing and says
+   * so, which is this client's version of hiding the control.
+   */
+  const openBranches = async (purpose: "switch" | "cut", scope: string | undefined): Promise<void> => {
+    if (scope === undefined) return;
+    let list;
+    try {
+      list = await options.connection.branches(scope);
+    } catch (error) {
+      notice = error instanceof Error ? error.message : "could not read branches";
+      return;
+    }
+    if (!list.repository) {
+      notice = `${scope} is not a git repository`;
+      return;
+    }
+
+    const head = list.head?.detached ? undefined : list.head?.name;
+    overlay = {
+      kind: "branches",
+      purpose,
+      branches: list.branches,
+      index: Math.max(0, head ? list.branches.indexOf(head) : 0),
+      ...(head === undefined ? {} : { head }),
+    };
   };
 
   if (selected) attach(selected);
@@ -134,6 +176,8 @@ export async function runTui(options: TuiOptions): Promise<void> {
       overlay = { kind: "models", index: 0 };
     } else if (key === KEY.ctrlE) {
       overlay = { kind: "effort", index: Math.max(0, effortChoices(view).indexOf(view.effort ?? "off")) };
+    } else if (key === KEY.ctrlG) {
+      await openBranches("switch", scopeOf(selected));
     } else if (key === KEY.escape) {
       if (selected) await options.connection.command({ type: "abort", sessionId: selected });
     } else if (key === KEY.enter || key === KEY.newline) {
@@ -163,7 +207,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
         ? sessions.length
         : current.kind === "effort"
           ? effortChoices(view).length
-          : modelChoices(view.capabilities).length;
+          : current.kind === "branches"
+            ? current.branches.length
+            : modelChoices(view.capabilities).length;
 
     if (key === KEY.up) {
       overlay = { ...current, index: Math.max(0, current.index - 1) };
@@ -176,6 +222,12 @@ export async function runTui(options: TuiOptions): Promise<void> {
     if (key === "n" && current.kind === "sessions") {
       overlay = { kind: "none" };
       await newSession();
+      return;
+    }
+    if (key === "w" && current.kind === "sessions") {
+      // A worktree needs a branch to be cut from, and the TUI has no text entry outside the prompt
+      // line — so the base is picked from a list, and the new branch's name is derived by the host.
+      await openBranches("cut", options.scope);
       return;
     }
     if (key === "s" && current.kind === "sessions") {
@@ -196,6 +248,28 @@ export async function runTui(options: TuiOptions): Promise<void> {
       const chosen = sessions[current.index];
       overlay = { kind: "none" };
       if (chosen) attach(chosen.id);
+      return;
+    }
+
+    if (current.kind === "branches") {
+      const branch = current.branches[current.index];
+      const { purpose } = current;
+      overlay = { kind: "none" };
+      if (!branch) return;
+
+      if (purpose === "cut") {
+        await newSession({ from: branch });
+        return;
+      }
+      if (!selected) return;
+      try {
+        await options.connection.command({ type: "switch_branch", sessionId: selected, branch });
+        notice = `branch → ${branch}`;
+      } catch (error) {
+        // A refusal carries the reason — a turn in flight, or git's own words about a checkout it
+        // would not make — and it is the whole of what is worth showing.
+        notice = error instanceof Error ? error.message : `could not switch to ${branch}`;
+      }
       return;
     }
 

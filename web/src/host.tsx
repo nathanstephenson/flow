@@ -26,6 +26,12 @@ export type HostConfig = {
    * offered and broken, which is the rule Capabilities already sets for backends.
    */
   shell?: boolean;
+  /**
+   * Whether this host can run git. False where git is not on the machine — it is a documented
+   * prerequisite rather than a dependency, so a single-executable build or a bare container has
+   * none. Same rule as `shell` above: hide the control rather than offer one that fails.
+   */
+  git?: boolean;
   /** The typefaces from config.json. Absent means this host reported none, so the defaults stand. */
   fonts?: Fonts;
   /**

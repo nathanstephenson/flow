@@ -246,3 +246,49 @@ describe("pi adapter mapping", () => {
     return events.filter((event) => event.type === "effort_changed").map((event) => event.effort);
   }
 });
+
+/**
+ * What effort a session reports when nobody has chosen one.
+ *
+ * The bug this closes: effort was only ever announced when it was *set*, so a new Agent Session that
+ * nobody had touched reported none — and the composer's picker fell back to showing its own name
+ * while the backend was in fact running at a real level the whole time.
+ */
+describe("the effort a pi session starts on", () => {
+  let stub: Stub;
+  let events: BackendEvent[];
+
+  beforeEach(() => {
+    stub = stubSession();
+    events = [];
+  });
+
+  it("announces the thinking level pi is already on", () => {
+    const session = new PiSession(stub.session, (event) => events.push(event));
+    session.noteStartingEffort();
+
+    assert.deepEqual(
+      events.filter((event) => event.type === "effort_changed"),
+      [{ type: "effort_changed", effort: "medium" }],
+    );
+  });
+
+  it("says nothing twice, so a second look is not a second event", () => {
+    const session = new PiSession(stub.session, (event) => events.push(event));
+    session.noteStartingEffort();
+    session.noteStartingEffort();
+
+    assert.equal(events.filter((event) => event.type === "effort_changed").length, 1);
+  });
+
+  // m2 does not reason, so pi clears its own thinking level. There is nothing to report, and the
+  // composer hides the control for such a model anyway.
+  it("says nothing at all when the model in force has no levels", async () => {
+    const session = new PiSession(stub.session, (event) => events.push(event));
+    await session.setModel("m2");
+    events.length = 0;
+
+    session.noteStartingEffort();
+    assert.deepEqual(events.filter((event) => event.type === "effort_changed"), []);
+  });
+});

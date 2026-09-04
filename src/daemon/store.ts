@@ -31,6 +31,23 @@ export type SessionMeta = {
   effort?: EffortLevel;
   /** Status as of the last write; on load, anything live becomes Dormant. */
   status: SessionStatus;
+  /**
+   * The worktree this Agent Session's Scope *is*, when the Session Host made it. Absent for a Scope
+   * its owner named, which is every session before worktrees existed and most sessions after.
+   *
+   * Recorded rather than worked out from the Scope's path. Deriving it — "does this Scope sit
+   * beneath `<root>/worktrees`" — would be shorter, and is how `Project.group` is derived, but the
+   * two questions are not alike: a wrong group shows a wrong heading, while a wrong answer here
+   * runs `git worktree remove` on a directory nobody asked us to own. The state root is an
+   * environment variable and can differ between the daemon that created a worktree and the one that
+   * reaps it, and a Scope beneath it can be typed by hand, since `/api/directories` completes paths
+   * anywhere on the machine. So the prefix is both losable and forgeable, while a fact written once
+   * by the code that ran `git worktree add` is neither.
+   *
+   * `repo` cannot be recovered from the path at all — the segment there is the repository's
+   * *basename* — and `branch` is flattened on its way into the path, so both are written down.
+   */
+  worktree?: { path: string; repo: string; branch: string };
 };
 
 export function defaultStateRoot(): string {
@@ -46,6 +63,23 @@ export class TranscriptStore {
 
   sessionDir(sessionId: string): string {
     return join(this.root, "sessions", sessionId);
+  }
+
+  /**
+   * Where host-created worktrees live: `<root>/worktrees/<repo>/<branch>`.
+   *
+   * Beneath the state root so the Session Host plainly owns them — a directory it made and may
+   * later remove must not sit among the ones its owner is curating, and a worktree beside its
+   * repository would be offered as a Candidate, which is the self-growing noise ADR 0011 exists to
+   * prevent. A sibling of `sessions/` rather than a child of one, which is also why
+   * `deleteSession` can never remove a worktree as a side effect.
+   *
+   * Nested by repository so the leading segments read as `repo/branch` to a client showing a
+   * Scope's last two, and so two repositories that both have a `main` do not fight over one
+   * directory.
+   */
+  worktreesRoot(): string {
+    return join(this.root, "worktrees");
   }
 
   /** A directory a Backend Adapter may use for its own session state, beside our transcript. */

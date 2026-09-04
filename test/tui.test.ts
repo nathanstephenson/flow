@@ -14,6 +14,11 @@ import { renderFrame, type UiState } from "../src/tui/render.ts";
 import { KEY } from "../src/tui/keys.ts";
 import { runTui } from "../src/tui/app.ts";
 import type { Capabilities } from "../src/protocol/events.ts";
+import { TranscriptStore } from "../src/daemon/store.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { git, repository } from "./git-fixture.ts";
 
 const CAPABILITIES: Capabilities = {
   providers: ["anthropic", "openai"],
@@ -148,6 +153,79 @@ describe("TUI rendering", () => {
     assert.match(none, /no effort control/);
   });
 
+  it("names the branch beside the identity, not beside the turn", () => {
+    const [header] = renderFrame(
+      baseUi({ view: { ...initialState(), capabilities: CAPABILITIES, branch: { name: "feature/login" } } }),
+      { columns: 80, rows: 10 },
+    );
+    assert.match(header ?? "", /fake · First · feature\/login/);
+  });
+
+  it("names a Worktree Scope, so a reader knows edits are not landing in the Project", () => {
+    const [header] = renderFrame(
+      baseUi({
+        view: {
+          ...initialState(),
+          capabilities: CAPABILITIES,
+          branch: { name: "goodharness/main-2026-09-04" },
+          worktree: true,
+        },
+      }),
+      { columns: 120, rows: 10 },
+    );
+    assert.match(header ?? "", /goodharness\/main-2026-09-04 · Worktree/);
+  });
+
+  // The default case is not worth a line's width in a client with one header line, and the web
+  // client spends a whole strip on it. Both take the word from scopeKindLabel either way.
+  it("spends no width saying a Scope is the Project's own checkout", () => {
+    const [header] = renderFrame(
+      baseUi({ view: { ...initialState(), capabilities: CAPABILITIES, branch: { name: "main" } } }),
+      { columns: 120, rows: 10 },
+    );
+    assert.match(header ?? "", / · main/);
+    assert.doesNotMatch(header ?? "", /checkout/);
+  });
+
+  it("says nothing about a branch when the Scope is not a repository", () => {
+    const [header] = renderFrame(baseUi(), { columns: 80, rows: 10 });
+    assert.doesNotMatch(header ?? "", /branch/);
+  });
+
+  it("marks the branch in force in the picker", () => {
+    const frame = renderFrame(
+      baseUi({
+        overlay: { kind: "branches", index: 0, purpose: "switch", branches: ["main", "feature"], head: "main" },
+      }),
+      { columns: 80, rows: 10 },
+    );
+    assert.match(frame.join("\n"), /> main {2}\(in force\)/);
+    assert.doesNotMatch(frame.join("\n"), /feature {2}\(in force\)/);
+  });
+
+  // One list, two jobs: the rows are identical, so the title is what says which is happening.
+  it("says which job the branch list is doing", () => {
+    const cutting = renderFrame(
+      baseUi({ overlay: { kind: "branches", index: 0, purpose: "cut", branches: ["main"] } }),
+      { columns: 80, rows: 10 },
+    );
+    assert.match(cutting.join("\n"), /cut a worktree from/);
+
+    const switching = renderFrame(
+      baseUi({ overlay: { kind: "branches", index: 0, purpose: "switch", branches: ["main"] } }),
+      { columns: 80, rows: 10 },
+    );
+    assert.match(switching.join("\n"), /enter to switch/);
+  });
+
+  it("says so rather than rendering an empty list where there are no branches", () => {
+    const frame = renderFrame(
+      baseUi({ overlay: { kind: "branches", index: 0, purpose: "switch", branches: [] } }),
+      { columns: 80, rows: 10 },
+    );
+    assert.match(frame.join("\n"), /no branches here/);
+  });
+
   it("keeps the selected model in view in a long list", () => {
     const many: Capabilities = {
       ...CAPABILITIES,
@@ -162,6 +240,115 @@ describe("TUI rendering", () => {
       overlay: { kind: "models", index: 250 },
     });
     assert.match(renderFrame(ui, { columns: 60, rows: 16 }).join("\n"), /Model 250/);
+  });
+});
+
+/**
+ * The TUI against a repository Scope.
+ *
+ * Its own suite because the one above runs on `/tmp/scope`, which is not a repository — and that is
+ * worth keeping, since it is the case where every control here has to be absent rather than broken.
+ */
+describe("TUI branches over the wire", () => {
+  let root: string;
+  let repo: string;
+  let running: RunningServer;
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let stdin: PassThrough;
+  let output: string[];
+  let finished: Promise<void>;
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), "goodharness-tui-git-"));
+    repo = repository(root, "api", ["feature"]);
+    // A commit on `feature` so `--sort=-committerdate` has a defined answer: without it both
+    // branches share one commit date and the list order — and so which row `up` reaches — is
+    // whatever git felt like. `feature` first, `main` second.
+    git(repo, "switch", "--quiet", "feature");
+    writeFileSync(join(repo, "later.txt"), "newer\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "--quiet", "-m", "later");
+    git(repo, "switch", "--quiet", "main");
+    backend = new FakeBackend();
+    host = new SessionHost({ store: new TranscriptStore(root) });
+    host.registerBackend(backend);
+    running = await serve({ host, token: "test-token" });
+
+    stdin = new PassThrough();
+    Object.assign(stdin, { setRawMode: () => undefined, isTTY: true });
+    output = [];
+    const stdout = Object.assign(new PassThrough(), {
+      columns: 100,
+      rows: 24,
+      write: (chunk: string) => {
+        output.push(chunk);
+        return true;
+      },
+    });
+
+    finished = runTui({
+      connection: connect({ url: running.url, token: "test-token" }),
+      scope: repo,
+      backend: "fake",
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream,
+    });
+    await waitFor(() => backend.sessions.length === 1);
+  });
+
+  afterEach(async () => {
+    stdin.write(KEY.ctrlC);
+    await finished;
+    await running.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("lists the branches on ^G and switches on enter", async () => {
+    await waitFor(() => output.join("").includes("main"));
+
+    stdin.write(KEY.ctrlG);
+    await waitFor(() => output.join("").includes("enter to switch, esc to close"));
+    // The cursor opens on the branch in force — `main`, second in a most-recent-first list — so one
+    // step up reaches `feature`.
+    stdin.write(KEY.up);
+    stdin.write(KEY.enter);
+
+    // Waiting on what the host reports, not on git's HEAD: the checkout lands before `switchBranch`
+    // has read back where it ended up, so HEAD moves a subprocess earlier than the record does.
+    await waitFor(() => host.list()[0]?.branch?.name === "feature");
+    assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "feature");
+  });
+
+  it("starts an Agent Session in a worktree from the sessions list", async () => {
+    stdin.write(KEY.ctrlS);
+    await waitFor(() => output.join("").includes("w for new in a worktree"));
+    stdin.write("w");
+    await waitFor(() => output.join("").includes("cut a worktree from"));
+    stdin.write(KEY.enter);
+
+    // Waiting on the branch, not on the session count: an Agent Session is in `list()` from the
+    // moment it is registered, which is before `create` has read back where its Scope sits.
+    await waitFor(() => host.list().some((session) => session.worktree === true && session.branch !== undefined));
+    const cut = host.list().find((session) => session.worktree === true);
+    assert.ok(cut, "the new Agent Session is bound to a worktree");
+    assert.notEqual(cut.scope, repo);
+    assert.match(cut.branch?.name ?? "", /^goodharness\//);
+  });
+
+  // The refusal has to reach the reader, or a switch that did not happen looks like one that did.
+  it("shows the host's refusal when a turn is in flight", async () => {
+    stdin.write("get to work");
+    stdin.write(KEY.enter);
+    await waitFor(() => backend.latest.prompts.length === 1);
+
+    stdin.write(KEY.ctrlG);
+    await waitFor(() => output.join("").includes("enter to switch, esc to close"));
+    stdin.write(KEY.up);
+    stdin.write(KEY.enter);
+
+    await waitFor(() => output.join("").includes("is running"));
+    assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "main");
   });
 });
 

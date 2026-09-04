@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { BackendSession } from "../../src/backend/types.ts";
+import { HOST_OWNED_EVENT_TYPES } from "../../src/protocol/events.ts";
 import type { BackendEvent, ModelInfo } from "../../src/protocol/events.ts";
 
 export type ConformanceTarget = {
@@ -13,7 +14,7 @@ export type ConformanceTarget = {
   runTurn(session: BackendSession, text: string): Promise<void>;
 };
 
-const HOST_OWNED = new Set(["user_message", "queue_changed", "revived", "session_settled", "session_ended"]);
+const HOST_OWNED = new Set<string>(HOST_OWNED_EVENT_TYPES);
 
 /**
  * The Backend Adapter contract. Every adapter runs this same spec unmodified — it is what stops

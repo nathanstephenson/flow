@@ -111,13 +111,26 @@ export class PiSession implements BackendSession {
     this.emit({ type: "effort_changed", effort: this.effort });
   }
 
-  private reapplyEffort(): void {
+  /**
+   * Report the thinking level pi is already on, for a session nobody has chosen one for.
+   *
+   * pi differs from the Claude adapter here, and it is a real difference rather than an oversight in
+   * either: pi exposes `thinkingLevel` as state that can be read at any time, while Claude reports
+   * its effort only in the init message that arrives with the first turn. So a pi session can say
+   * what it is running at from the moment it starts, and a Claude one cannot — each reports what it
+   * is able to, which is the same rule Capabilities sets.
+   */
+  noteStartingEffort(): void {
     const settled = this.session.thinkingLevel as EffortLevel | undefined;
+    if (!settled || settled === this.effort) return;
+    this.effort = settled;
+    this.emit({ type: "effort_changed", effort: settled });
+  }
+
+  private reapplyEffort(): void {
+    // With nothing asked for, whatever pi settled on *is* the answer.
     if (!this.wantedEffort) {
-      if (settled && settled !== this.effort) {
-        this.effort = settled;
-        this.emit({ type: "effort_changed", effort: settled });
-      }
+      this.noteStartingEffort();
       return;
     }
     if (clampEffort(this.wantedEffort, availableEffort(this.session)) === this.effort) return;
@@ -270,7 +283,10 @@ export class PiBackend implements AgentBackend {
       const listed = piSession.capabilities.models.find((model) => model.id === described.id);
       options.emit({ type: "model_changed", model: listed ?? described });
     }
+    // Announced after the model, because which model is in force is what decides whether an effort
+    // level means anything at all.
     if (options.effort) await piSession.setEffort(options.effort);
+    else piSession.noteStartingEffort();
     return piSession;
   }
 }

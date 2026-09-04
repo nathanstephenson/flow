@@ -36,6 +36,12 @@ import { cn } from "@/lib/utils.ts";
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
  * is identity and lifecycle — title, Project, backend, the Docks and the overflow.
  *
+ * The branch is deliberately *not* among them, though it was here first. It reads like identity, but
+ * what the control is for is the edits the next message will cause — so it belongs with the rest of
+ * "what this turn will do", and it lives on the composer's Scope Strip. What stayed behind is the
+ * Project name, which for a Worktree Scope has to be read one path segment further up; see
+ * `projectName`.
+ *
  * Status is not among them: the rail already draws it for every Agent Session, including this one,
  * and a second copy over the transcript says nothing the reader cannot already see. The Agent Session
  * id is not either — it identifies nothing to a human, and the overflow menu copies it on request.
@@ -76,7 +82,9 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
 
         <div className="flex w-full items-center gap-2">
           {chrome.backend === undefined ? null : <Badge>{chrome.backend}</Badge>}
-          <span className="truncate font-mono text-xs">{projectName(chrome.scope ?? "")}</span>
+          <span className="truncate font-mono text-xs">
+            {projectName(chrome.scope ?? "", chrome.worktree)}
+          </span>
         </div>
       </div>
 
@@ -87,15 +95,23 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
 }
 
 /**
- * The last segment of a Scope — the directory a reader would call the Project.
+ * The segment of a Scope a reader would call the Project.
  *
  * The leading directories are dropped rather than dimmed: they are the same for every Agent Session
  * on this machine, so they cost a line's width to say nothing. A Scope that leaves no segment (`/`,
  * or a trailing slash) falls back to the Scope verbatim, because an empty header names nothing.
+ *
+ * **A worktree Scope is the exception, and it is the same rule rather than a new one.** That
+ * premise above — that the leading directories say nothing because they are shared — is false for a
+ * worktree: it ends `<repo>/<branch>`, so its parent is the repository and is the one segment worth
+ * reading, while its basename is the branch the control beside this already names. So the same
+ * question is asked one segment higher up. A flag rather than the repository's name over the wire,
+ * because the name is already here in the Scope.
  */
-function projectName(scope: string): string {
-  const cut = scope.lastIndexOf("/");
-  return (cut < 0 ? scope : scope.slice(cut + 1)) || scope;
+function projectName(scope: string, worktree?: true): string {
+  const path = worktree ? scope.slice(0, Math.max(0, scope.lastIndexOf("/"))) : scope;
+  const cut = path.lastIndexOf("/");
+  return (cut < 0 ? path : path.slice(cut + 1)) || scope;
 }
 
 /**

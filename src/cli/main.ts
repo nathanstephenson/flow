@@ -138,7 +138,9 @@ async function startHost(
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
   await host.load();
   // unref: a one-shot prompt and the tests build a host in-process and must still be able to exit.
-  setInterval(() => host.reap(), SWEEP_INTERVAL_MS).unref();
+  // `void`-ed rather than awaited: the sweep now runs git to decide whether a worktree is safe to
+  // remove, and nothing is waiting on the answer.
+  setInterval(() => void host.reap(), SWEEP_INTERVAL_MS).unref();
 
   // Shells exit with the Agent Session they were opened beside. The host announces the closure and
   // stays ignorant of what listened — it owns Agent Sessions, not the things hanging off them.

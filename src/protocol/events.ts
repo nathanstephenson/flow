@@ -1,3 +1,5 @@
+import type { Branch } from "./git.ts";
+
 /**
  * The Agent Event union — the product boundary. Everything a client renders arrives as one of
  * these, from every Backend Adapter, over the wire.
@@ -46,7 +48,20 @@ export type TurnEndReason = "complete" | "aborted" | "error";
 export type NoticeLevel = "info" | "warn" | "error";
 
 export type AgentEvent =
-  | { type: "session_started"; backend: string; scope: string; capabilities: Capabilities }
+  /**
+   * `worktree` is set when the Scope is one the Session Host cut, rather than a directory its owner
+   * named. Reported here as well as on `SessionSummary` — the same two channels `capabilities`
+   * uses, and for the same reason: a client reducing a transcript needs it without asking, and one
+   * listing sessions needs it without subscribing. Both are `record.worktree`, so they cannot
+   * disagree.
+   */
+  | {
+      type: "session_started";
+      backend: string;
+      scope: string;
+      capabilities: Capabilities;
+      worktree?: true;
+    }
   | { type: "capabilities_changed"; capabilities: Capabilities }
   | { type: "user_message"; id: string; text: string }
   | { type: "turn_started"; turnId: string }
@@ -60,6 +75,7 @@ export type AgentEvent =
   | { type: "context_usage"; used: number; window: number }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
+  | { type: "branch_changed"; branch: Branch }
   | { type: "notice"; level: NoticeLevel; text: string }
   | { type: "session_dormant"; reason: string }
   | { type: "session_settled" }
@@ -70,15 +86,25 @@ export type AgentEventType = AgentEvent["type"];
 
 /**
  * Events the Session Host owns and a Backend Adapter must never emit. The queue lives above the
- * backend (ADR 0002), the host records what the human sent, and revival is a host concern.
+ * backend (ADR 0002), the host records what the human sent, revival is a host concern, and the
+ * branch is moved by the host on the Scope — no SDK is told, and none could report it truthfully.
+ *
+ * A value rather than only a type, because the conformance suite needs the same list at runtime.
+ * It used to hand-copy it and had already fallen a member behind (`session_dormant`), which is a
+ * gap that widens silently every time this union grows: the type would refuse an adapter emitting
+ * one of these, and the suite would not notice an adapter that did.
  */
-export type HostOwnedEventType =
-  | "user_message"
-  | "queue_changed"
-  | "revived"
-  | "session_dormant"
-  | "session_settled"
-  | "session_ended";
+export const HOST_OWNED_EVENT_TYPES = [
+  "user_message",
+  "queue_changed",
+  "revived",
+  "session_dormant",
+  "session_settled",
+  "session_ended",
+  "branch_changed",
+] as const;
+
+export type HostOwnedEventType = (typeof HOST_OWNED_EVENT_TYPES)[number];
 
 export type BackendEvent = Exclude<AgentEvent, { type: HostOwnedEventType }>;
 

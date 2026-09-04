@@ -283,6 +283,8 @@ describe("the Chrome shallow compare", () => {
     capabilities: undefined,
     model: undefined,
     effort: undefined,
+    branch: undefined,
+    worktree: undefined,
     contextUsage: undefined,
     endedReason: undefined,
     queueDepth: 0,

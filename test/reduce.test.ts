@@ -129,3 +129,49 @@ describe("reduce", () => {
     assert.equal(state.lastSeq, SAMPLE.length);
   });
 });
+
+describe("the branch a Scope is on", () => {
+  it("lands on the view state, and is replaced rather than accumulated", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "branch_changed", branch: { name: "main" } },
+        { type: "branch_changed", branch: { name: "feature" } },
+      ).since(0),
+    );
+    assert.deepEqual(state.branch, { name: "feature" });
+  });
+
+  it("carries a detached HEAD as a commit rather than as a branch", () => {
+    const state = reduceAll(
+      transcript({ type: "branch_changed", branch: { name: "a1b2c3d", detached: true } }).since(0),
+    );
+    assert.deepEqual(state.branch, { name: "a1b2c3d", detached: true });
+  });
+
+  // Absent is the signal a front-end hides its control on, so it must not become a falsy branch.
+  it("is absent until something says otherwise", () => {
+    assert.equal(initialState().branch, undefined);
+    const started = reduceAll(
+      transcript({ type: "session_started", backend: "fake", scope: "/tmp", capabilities: CAPS }).since(0),
+    );
+    assert.equal(started.branch, undefined);
+  });
+
+  it("carries whether the Scope is a worktree, so a client can still name the Project", () => {
+    const plain = reduceAll(
+      transcript({ type: "session_started", backend: "fake", scope: "/tmp", capabilities: CAPS }).since(0),
+    );
+    assert.equal(plain.worktree, undefined);
+
+    const cut = reduceAll(
+      transcript({
+        type: "session_started",
+        backend: "fake",
+        scope: "/s/worktrees/api/main-1",
+        capabilities: CAPS,
+        worktree: true,
+      }).since(0),
+    );
+    assert.equal(cut.worktree, true);
+  });
+});

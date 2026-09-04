@@ -7,6 +7,7 @@ import type {
   NoticeLevel,
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
+import type { Branch } from "../protocol/git.ts";
 
 /**
  * The reducer both front-ends share. The TUI and the web UI import this same function, which is
@@ -40,6 +41,15 @@ export type ViewState = {
   capabilities?: Capabilities;
   model?: ModelInfo;
   effort?: EffortLevel;
+  /** Absent when the Scope is not a repository, which is how a front-end hides the control. */
+  branch?: Branch;
+  /**
+   * Set when the Scope is a worktree the Session Host made.
+   *
+   * Carried so a front-end can name the Project: a worktree Scope ends `<repo>/<branch>`, and one
+   * showing only the last segment would name the branch and drop the repository.
+   */
+  worktree?: true;
   entries: Entry[];
   queue: string[];
   contextUsage?: { used: number; window: number };
@@ -65,7 +75,13 @@ export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
 function applyEvent(state: ViewState, event: AgentEvent): ViewState {
   switch (event.type) {
     case "session_started":
-      return { ...state, backend: event.backend, scope: event.scope, capabilities: event.capabilities };
+      return {
+        ...state,
+        backend: event.backend,
+        scope: event.scope,
+        capabilities: event.capabilities,
+        ...(event.worktree === undefined ? {} : { worktree: event.worktree }),
+      };
 
     case "capabilities_changed":
       return { ...state, capabilities: event.capabilities };
@@ -127,6 +143,9 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
 
     case "effort_changed":
       return { ...state, effort: event.effort };
+
+    case "branch_changed":
+      return { ...state, branch: event.branch };
 
     case "notice":
       return {

@@ -77,10 +77,10 @@ describe("settling and reaping", () => {
     const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
     await host.settle(id);
 
-    assert.deepEqual(host.reap(Date.now() + DAY - 1000), [], "still inside the window");
+    assert.deepEqual(await host.reap(Date.now() + DAY - 1000), [], "still inside the window");
     assert.ok(existsSync(store.sessionDir(id)));
 
-    assert.deepEqual(host.reap(Date.now() + DAY + 1000), [id]);
+    assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
     assert.equal(existsSync(store.sessionDir(id)), false, "the session directory is gone");
     assert.deepEqual(host.list(), [], "and it is gone from the rail");
   });
@@ -93,7 +93,7 @@ describe("settling and reaping", () => {
     await host.dispose(ended);
     await host.shutdown();
 
-    assert.deepEqual(host.reap(Date.now() + 365 * DAY), []);
+    assert.deepEqual(await host.reap(Date.now() + 365 * DAY), []);
     for (const id of [idle, dormant, ended]) assert.ok(existsSync(store.sessionDir(id)));
   });
 
@@ -102,7 +102,7 @@ describe("settling and reaping", () => {
     const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
     await host.settle(id);
 
-    assert.deepEqual(host.reap(Date.now() + 365 * DAY), []);
+    assert.deepEqual(await host.reap(Date.now() + 365 * DAY), []);
     assert.ok(existsSync(store.sessionDir(id)));
   });
 
@@ -113,7 +113,7 @@ describe("settling and reaping", () => {
 
     const second = await hostWith(DAY);
     assert.equal(second.host.statusOf(id), "settled");
-    assert.deepEqual(second.host.reap(Date.now() + DAY + 1000), [id]);
+    assert.deepEqual(await second.host.reap(Date.now() + DAY + 1000), [id]);
   });
 
   it("sweeps on load, so a host that was off catches up on the way in", async () => {

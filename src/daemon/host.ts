@@ -3,8 +3,29 @@ import { randomUUID } from "node:crypto";
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
 import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent } from "../protocol/events.ts";
+import type { Branch } from "../protocol/git.ts";
+// `switchBranch` is aliased because this class has a method of that name: the method is the
+// Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
+import {
+  createWorktree,
+  head,
+  isClean,
+  isRepository,
+  removeWorktree,
+  switchBranch as gitSwitchBranch,
+} from "./git.ts";
 import { SessionLog } from "./log.ts";
 import type { SessionMeta, TranscriptStore } from "./store.ts";
+
+/**
+ * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
+ * Scope that is not a repository, a checkout git itself refused.
+ *
+ * Named for its subject the way `ConfigError` is, and its message written to be read by whoever
+ * sent the command. That is the whole distinction it exists to draw: a refusal is the caller's to
+ * fix and is safe to pass back, while anything else is ours and becomes a 500.
+ */
+export class CommandRefused extends Error {}
 
 type SessionRecord = {
   id: string;
@@ -27,6 +48,30 @@ type SessionRecord = {
   buffered: BackendEvent[] | undefined;
   queue: string[];
   title: string;
+  /**
+   * The branch the Scope was on when last looked at, or undefined when it is not a repository.
+   *
+   * Held rather than asked for, because `list()` is synchronous and runs on every `GET
+   * /api/sessions` — asking git there would be one subprocess per session per poll.
+   */
+  branch: Branch | undefined;
+  /**
+   * Bumped every time someone sets out to learn the branch, so a slower answer cannot overwrite a
+   * newer one.
+   *
+   * `refreshBranch` is deliberately `void`ed at the end of a turn, so two can be in flight at once
+   * — and they can resolve out of order, which without this leaves the older reading in place for
+   * good: a switch that raced a turn ending reported the branch it had *left*, until the next turn
+   * happened to correct it.
+   */
+  branchGeneration: number;
+  /** Set when this Scope is a worktree this host made, and so may remove again. */
+  worktree: { path: string; repo: string; branch: string } | undefined;
+  /**
+   * A line held back to ride along with the next message, telling the model the branch moved under
+   * it. See `switchBranch` for why it cannot go through the Steering Queue.
+   */
+  pendingBranchNote: string | undefined;
   capabilities: Capabilities | undefined;
   resumeToken: string | undefined;
   modelId: string | undefined;
@@ -56,6 +101,9 @@ export class SessionHost {
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
   private readonly closedListeners = new Set<(sessionId: string) => void>();
+  private readonly keptListeners = new Set<
+    (kept: { path: string; branch: string; reason: string }) => void
+  >();
 
   constructor(options: SessionHostOptions = {}) {
     this.store = options.store;
@@ -77,6 +125,21 @@ export class SessionHost {
 
   private announceClosed(sessionId: string): void {
     for (const listener of this.closedListeners) listener(sessionId);
+  }
+
+  /**
+   * Notified when a reap left a worktree on disk rather than removing it.
+   *
+   * Only a clean worktree is removed: a branch ref always survives a reap, so no commit is ever
+   * lost, but uncommitted and untracked work would be — and deleting that on a retention timer,
+   * from a sweep nobody is watching, is a second destructive act ADR 0006 does not license.
+   *
+   * An observer rather than a log call, for the reason `onSessionClosed` is one: the host owns
+   * Agent Sessions, not the daemon's stderr.
+   */
+  onWorktreeKept(listener: (kept: { path: string; branch: string; reason: string }) => void): () => void {
+    this.keptListeners.add(listener);
+    return () => this.keptListeners.delete(listener);
   }
 
   registerBackend(backend: AgentBackend): void {
@@ -106,6 +169,8 @@ export class SessionHost {
         updatedAt: record.updatedAt,
         lastSeq: record.log.lastSeq,
         ...(record.capabilities ? { capabilities: record.capabilities } : {}),
+        ...(record.branch ? { branch: record.branch } : {}),
+        ...(record.worktree ? { worktree: true as const } : {}),
       }))
       // Settled Agent Sessions sink to the bottom: they are the ones their owner is done with, and
       // they would otherwise sort to the top, since settling is itself the most recent activity.
@@ -137,6 +202,13 @@ export class SessionHost {
         buffered: undefined,
         queue: [],
         title: meta.title,
+        // Recovered from the transcript rather than by asking git, for the reason capabilities are:
+        // a daemon holding fifty Agent Sessions would otherwise spawn fifty processes on the way up,
+        // to answer a question the next Revive or turn re-asks anyway.
+        branch: branchFrom(entries),
+        branchGeneration: 0,
+        worktree: meta.worktree,
+        pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
@@ -153,7 +225,7 @@ export class SessionHost {
       }
       this.persist(record);
     }
-    this.reap();
+    await this.reap();
   }
 
   async create(options: {
@@ -161,14 +233,21 @@ export class SessionHost {
     backend: string;
     modelId?: string;
     effort?: EffortLevel;
+    /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
+    worktree?: { from: string; branch?: string };
   }): Promise<string> {
     const backend = this.backendFor(options.backend);
+    const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
+    // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
+    // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
+    // that is not there.
+    const scope = worktree?.path ?? options.scope;
     const id = randomUUID();
     const now = new Date().toISOString();
 
     const record: SessionRecord = {
       id,
-      scope: options.scope,
+      scope,
       backendName: backend.name,
       log: this.newLog(id),
       session: undefined,
@@ -176,7 +255,11 @@ export class SessionHost {
       turnInFlight: false,
       buffered: undefined,
       queue: [],
-      title: options.scope,
+      title: scope,
+      branch: undefined,
+      branchGeneration: 0,
+      worktree,
+      pendingBranchNote: undefined,
       capabilities: undefined,
       resumeToken: undefined,
       modelId: options.modelId,
@@ -192,11 +275,39 @@ export class SessionHost {
     record.log.append({
       type: "session_started",
       backend: backend.name,
-      scope: options.scope,
+      scope,
       capabilities: session.capabilities,
+      ...(worktree === undefined ? {} : { worktree: true as const }),
     });
     this.flushBuffered(record);
+    // After session_started, never before: the transcript has to open with it (see `buffered`).
+    await this.refreshBranch(record);
     return id;
+  }
+
+  /**
+   * Create the worktree a `create` asked for.
+   *
+   * Throws rather than returning a failure, because its caller has someone waiting on a session id
+   * and there is nothing partial to hand back: no Agent Session is created at all.
+   */
+  private async cutWorktree(
+    repo: string,
+    options: { from: string; branch?: string },
+  ): Promise<{ path: string; repo: string; branch: string }> {
+    // A host with no state root has nowhere to put a worktree. Said plainly rather than left to
+    // fail as an undefined path, the way an unavailable pty is reported.
+    if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot make a worktree");
+    if (!isRepository(repo)) throw new CommandRefused(`${repo} is not a git repository`);
+
+    const created = await createWorktree({
+      repo,
+      from: options.from,
+      under: this.store.worktreesRoot(),
+      ...(options.branch === undefined ? {} : { branch: options.branch }),
+    });
+    if (!created.ok) throw new CommandRefused(created.failure.message);
+    return { path: created.value.path, repo, branch: created.value.branch };
   }
 
   /** Attach a fresh Backend Session to a Dormant Agent Session, continuing the same transcript. */
@@ -211,6 +322,8 @@ export class SessionHost {
     record.status = "idle";
     record.log.append({ type: "revived", fromSeq });
     this.flushBuffered(record);
+    // A Dormant Agent Session may have sat for a week while its Scope was moved by hand.
+    await this.refreshBranch(record);
   }
 
   /**
@@ -256,6 +369,89 @@ export class SessionHost {
     // Remembered as asked for, not as clamped: a Revive onto a model that can serve it should.
     record.effort = effort;
     this.touch(record);
+  }
+
+  /**
+   * Move this Agent Session's Scope to another branch.
+   *
+   * Refused while running, and running is the only status where it has to be: git would change
+   * files underneath a turn that is reading them, and the model has no way to be told mid-turn.
+   * Idle, Dormant and Settled all have nothing in flight to disturb, so git is asked and whatever
+   * it says is what the caller hears — git already refuses a checkout that would clobber a modified
+   * file, and reimplementing that judgement here would block switches engineers make by hand.
+   *
+   * The refusal lives here rather than in the request handler because `execute` is not the only
+   * door — the one-shot CLI and the tests call this directly — and because only the host holds
+   * `status` without a gap between reading it and acting on it.
+   */
+  async switchBranch(sessionId: string, branch: string): Promise<Branch> {
+    const record = this.record(sessionId);
+    if (record.status === "running") {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is running; abort the turn or wait for it to end before switching branch`,
+      );
+    }
+    if (!isRepository(record.scope)) {
+      throw new CommandRefused(`${record.scope} is not a git repository`);
+    }
+
+    const switched = await gitSwitchBranch(record.scope, branch);
+    if (!switched.ok) throw new CommandRefused(switched.failure.message);
+
+    this.announceBranch(record, switched.value);
+    /*
+     * Held for the next message rather than sent now, and this is not a stylistic choice — the
+     * Steering Queue cannot carry it.
+     *
+     * `send(…, "after_turn")` only queues while a turn is in flight, and a switch is permitted only
+     * when one is *not*, so routing this through `send` would dispatch it immediately as its own
+     * turn: an agent reply nobody asked for, spending tokens. Pushing it onto `queue` instead
+     * strands it, because `drain` runs only when a turn ends and an idle session has no turn to
+     * end — so it would arrive *after* the reader's next message, which is the one order that
+     * defeats the purpose.
+     *
+     * Riding along with the next message costs nothing, arrives before the model acts, and is not
+     * a `user_message` the human never sent — it is part of one they did.
+     */
+    record.pendingBranchNote = `[GoodHarness] This working tree is now on branch ${switched.value.name}. Any files you read earlier may have changed, so re-read before relying on them.`;
+    this.touch(record);
+    return switched.value;
+  }
+
+  /**
+   * Ask git where the Scope is now, and record it if that is news.
+   *
+   * Called where there is reason to believe the answer changed — at create, on Revive, after a
+   * switch, and at the end of a turn. That last one is not optional: tools are pre-approved
+   * (ADR 0004), so the *model* can run `git checkout`, and without it the reported branch would be
+   * a stale claim a reader trusts. Never polled, which is why `SessionSummary.branch` is documented
+   * as the last branch observed rather than a live one.
+   */
+  private async refreshBranch(record: SessionRecord): Promise<void> {
+    if (!isRepository(record.scope)) return;
+    const generation = (record.branchGeneration += 1);
+    const found = await head(record.scope);
+    // A repository git cannot answer about is left as it was: this runs off the critical path, and
+    // there is no reader to tell.
+    if (!found.ok) return;
+    // Something newer has been learned or done while this was in flight, so this answer is already
+    // history. Dropping it is the whole point of the generation.
+    if (record.branchGeneration !== generation) return;
+    this.announceBranch(record, found.value);
+  }
+
+  /**
+   * Record where the Scope is, if that is news.
+   *
+   * Bumps the generation, so an older refresh still in flight cannot land on top of what this says.
+   * A switch is the case that matters: it *knows* the answer, and must outrank any reading taken
+   * before it happened.
+   */
+  private announceBranch(record: SessionRecord, branch: Branch): void {
+    record.branchGeneration += 1;
+    if (record.branch?.name === branch.name && record.branch?.detached === branch.detached) return;
+    record.branch = branch;
+    record.log.append({ type: "branch_changed", branch });
   }
 
   async dispose(sessionId: string, reason = "disposed"): Promise<void> {
@@ -308,7 +504,7 @@ export class SessionHost {
    *
    * Takes `now` so it can be tested without waiting, and returns what it removed.
    */
-  reap(now = Date.now()): string[] {
+  async reap(now = Date.now()): Promise<string[]> {
     // Asked, not remembered: the Settings own this value and it may have changed since startup.
     const retention = typeof this.retention === "function" ? this.retention() : this.retention;
     if (retention === "never") return [];
@@ -320,6 +516,12 @@ export class SessionHost {
       // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
       if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
 
+      // Before deleting the session, so a worktree that cannot be removed leaves its Agent Session
+      // in place to be retried on the next sweep rather than stranding a directory whose owner is
+      // gone. `deleteSession` removes only `<root>/sessions/<id>`, so it can never take a worktree
+      // with it by accident.
+      await this.releaseWorktree(record);
+
       record.log.closeSubscribers();
       this.sessions.delete(record.id);
       this.store?.deleteSession(record.id);
@@ -327,6 +529,38 @@ export class SessionHost {
     }
     for (const sessionId of reaped) this.announceClosed(sessionId);
     return reaped;
+  }
+
+  /**
+   * Remove a reaped session's worktree, but only while it is clean.
+   *
+   * `git worktree remove` never deletes the branch ref or the commits on it, so committed work
+   * survives a reap and is reachable by name afterwards. The only thing at risk is what was never
+   * committed, which is why one `status --porcelain` is the whole safety rule — and why a dirty
+   * worktree is left where it is and announced instead.
+   */
+  private async releaseWorktree(record: SessionRecord): Promise<void> {
+    const worktree = record.worktree;
+    if (!worktree) return;
+
+    const kept = (reason: string) => {
+      for (const listener of this.keptListeners) {
+        listener({ path: worktree.path, branch: worktree.branch, reason });
+      }
+    };
+
+    const clean = await isClean(worktree.path);
+    if (!clean.ok) {
+      kept(clean.failure.message);
+      return;
+    }
+    if (!clean.value) {
+      kept("it has uncommitted changes");
+      return;
+    }
+
+    const removed = await removeWorktree({ repo: worktree.repo, path: worktree.path });
+    if (!removed.ok) kept(removed.failure.message);
   }
 
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
@@ -352,6 +586,7 @@ export class SessionHost {
           backend: command.backend,
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
           ...(command.effort === undefined ? {} : { effort: command.effort }),
+          ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
         });
       case "send":
         return await this.send(command.sessionId, command.text, command.when);
@@ -367,6 +602,8 @@ export class SessionHost {
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
+      case "switch_branch":
+        return await this.switchBranch(command.sessionId, command.branch);
       case "list":
         return this.list();
     }
@@ -401,12 +638,19 @@ export class SessionHost {
 
   private async dispatch(record: SessionRecord, text: string): Promise<void> {
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
+    const note = record.pendingBranchNote;
+    record.pendingBranchNote = undefined;
+    const sent = note === undefined ? text : `${note}\n\n${text}`;
+
     record.turnInFlight = true;
     record.status = "running";
-    record.log.append({ type: "user_message", id: randomUUID(), text });
+    record.log.append({ type: "user_message", id: randomUUID(), text: sent });
+    // Titled from what its owner actually typed, never from `sent`. A switch made before the first
+    // message would otherwise name the Agent Session after the note, and permanently: the rename
+    // fires only while the title is still the Scope.
     if (record.title === record.scope) record.title = firstLine(text);
     this.touch(record);
-    await record.session.prompt(text);
+    await record.session.prompt(sent);
   }
 
   private flushBuffered(record: SessionRecord): void {
@@ -430,6 +674,9 @@ export class SessionHost {
       record.turnInFlight = false;
       record.status = "idle";
       this.captureResumeToken(record);
+      // Tools are pre-approved (ADR 0004), so the model can have run `git checkout` during the turn
+      // it just finished. Off the critical path, and announces only on a difference.
+      void this.refreshBranch(record);
       void this.drain(record);
     }
   }
@@ -491,6 +738,7 @@ export class SessionHost {
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
     };
     this.store.writeMeta(meta);
   }
@@ -508,6 +756,16 @@ function openTurnId(entries: LoggedEvent[]): string | undefined {
 
 function lastEventType(entries: LoggedEvent[]): string | undefined {
   return entries.at(-1)?.event.type;
+}
+
+/** The last branch the transcript recorded, so a restart does not have to ask git again. */
+function branchFrom(entries: LoggedEvent[]): Branch | undefined {
+  let branch: Branch | undefined;
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type === "branch_changed") branch = event.branch;
+  }
+  return branch;
 }
 
 function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {

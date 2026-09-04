@@ -1,4 +1,5 @@
 import type { Command, SessionSummary } from "../protocol/commands.ts";
+import type { BranchList } from "../protocol/git.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
 
 /**
@@ -8,6 +9,14 @@ import type { LoggedEvent } from "../protocol/events.ts";
 export type Connection = {
   command<T = unknown>(command: Command): Promise<T>;
   listSessions(): Promise<SessionSummary[]>;
+  /**
+   * What a Scope could be switched to, or have a worktree cut from.
+   *
+   * Here rather than left to each front-end's own fetch because the TUI has no other way to reach a
+   * GET, and the alternative — making the list a Command — would put a query that changes outside
+   * GoodHarness through the door meant for things that change it.
+   */
+  branches(scope: string): Promise<BranchList>;
   /** Replay from `since`, then follow. Returns an unsubscribe. */
   subscribe(options: SubscribeOptions): () => void;
 };
@@ -77,6 +86,13 @@ export function connect(options: { url: string; token?: string | undefined }): C
       const response = await fetch(`${options.url}/api/sessions`, { headers, ...credentials });
       if (!response.ok) throw new Error(await describe(response));
       return (await response.json()) as SessionSummary[];
+    },
+
+    async branches(scope: string): Promise<BranchList> {
+      const url = `${options.url}/api/branches?scope=${encodeURIComponent(scope)}`;
+      const response = await fetch(url, { headers, ...credentials });
+      if (!response.ok) throw new Error(await describe(response));
+      return (await response.json()) as BranchList;
     },
 
     subscribe({ sessionId, since, onEntry, onError, onLink, silenceMs }: SubscribeOptions): () => void {

@@ -11,6 +11,8 @@ const chrome = (over: Partial<Chrome>): Chrome => ({
   capabilities: undefined,
   model: undefined,
   effort: undefined,
+  branch: undefined,
+  worktree: undefined,
   contextUsage: undefined,
   endedReason: undefined,
   queueDepth: 0,

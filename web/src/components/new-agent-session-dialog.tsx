@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Project } from "../../../src/protocol/projects.ts";
 import { useCommand } from "@/agent-sessions.tsx";
+import { useBranches } from "@/branches.ts";
 import { useHost } from "@/host.tsx";
+import { useSettled } from "@/settled.ts";
 import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -79,6 +81,9 @@ export function NewAgentSessionDialog({
   const [scope, setScope] = useState("");
   const [backend, setBackend] = useState(config.backends[0] ?? "");
   const [creating, setCreating] = useState(false);
+  const [inWorktree, setInWorktree] = useState(false);
+  const [cutFrom, setCutFrom] = useState("");
+  const [failure, setFailure] = useState<string | undefined>(undefined);
   const create = useRef<HTMLButtonElement | null>(null);
   const projectField = useRef<HTMLLabelElement | null>(null);
 
@@ -93,10 +98,32 @@ export function NewAgentSessionDialog({
     if (!open) return;
     setScope(offersProjects ? "" : config.scope);
     setBackend(config.backends[0] ?? "");
+    setInWorktree(false);
+    setCutFrom("");
+    setFailure(undefined);
     // Ask again on the way in, so a repository cloned since the page loaded is in the list. The
     // Session Host walks uncached precisely so that this is worth doing.
     void refresh();
   }, [open]);
+
+  /*
+   * Whether the Scope in the field is a repository, and what could be cut from it.
+   *
+   * Asked rather than known, because the Scope field is free text: a Project picked from the
+   * dropdown might not be a repository (opting in removed that requirement — ADR 0011), and a
+   * hand-typed path inside a monorepo might be. Debounced because this fires as someone types a
+   * path, which is the same reason `/api/directories` is a query.
+   */
+  const settled = useSettled(scope.trim(), 250);
+  const branches = useBranches(settled);
+  useEffect(() => {
+    if (config.git !== false) branches.load();
+  }, [settled]);
+
+  const repository = branches.list?.repository === true;
+  const head = branches.list?.head;
+  // Absent until the answer arrives, so the base branch defaults to wherever the repository is now.
+  const base = cutFrom || (head?.detached ? "" : head?.name) || "";
 
   // Derived, not stored: the Project whose path the field currently holds, or none once it has been
   // hand-edited to somewhere else.
@@ -108,9 +135,22 @@ export function NewAgentSessionDialog({
     setCreating(true);
     // `create` resolves to the new Agent Session's id as a bare string (SessionHost.create), not to
     // an object wrapping it.
-    const created = await run<string>({ type: "create", scope: scope.trim(), backend });
+    setFailure(undefined);
+    const created = await run<string>({
+      type: "create",
+      scope: scope.trim(),
+      backend,
+      // Only when the control was on screen *and* on: a stale toggle from a Scope that has since
+      // been typed over must not cut a worktree nobody asked for.
+      ...(inWorktree && repository && base !== "" ? { worktree: { from: base } } : {}),
+    });
     setCreating(false);
-    if (created === undefined) return;
+    if (created === undefined) {
+      // A create refused by git — a base branch that has gone, a directory in the way — is the one
+      // failure here worth saying out loud, because the dialog stays open and can be corrected.
+      setFailure("The Session Host refused this. Check the branch to cut from.");
+      return;
+    }
     onOpenChange(false);
     onCreated(created);
   };
@@ -242,6 +282,58 @@ export function NewAgentSessionDialog({
             ) : null}
           </label>
 
+          {/*
+            * Offered only where it could work: a Scope that is a repository, on a host that has
+            * git. Hidden otherwise rather than disabled — the same rule the Effort picker follows,
+            * and here it also keeps the dialog from implying that a `notes` Project is broken.
+            */}
+          {repository && config.git !== false ? (
+            <div className="flex flex-col gap-1">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-primary"
+                  checked={inWorktree}
+                  onChange={(event) => setInWorktree(event.target.checked)}
+                />
+                <span className="text-sm font-medium">Start in a new worktree</span>
+              </label>
+              {inWorktree ? (
+                <>
+                  <label className="mt-1 flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground">Cut from</span>
+                    <Select
+                      value={base === "" ? null : base}
+                      onValueChange={(value) => {
+                        if (typeof value === "string") setCutFrom(value);
+                      }}
+                    >
+                      <SelectTrigger aria-label="Cut from" className="font-mono">
+                        <SelectValue placeholder="branch">{() => base}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(branches.list?.branches ?? []).map((name) => (
+                          <SelectItem key={name} value={name} className="font-mono">
+                            {name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <span className="text-xs text-muted-foreground">
+                    A branch is named for you and the worktree is kept by the Session Host. It is
+                    removed when this Agent Session is reaped, but only if nothing is uncommitted.
+                  </span>
+                </>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  Two Agent Sessions in one directory fight over the working tree. A worktree gives
+                  this one its own.
+                </span>
+              )}
+            </div>
+          ) : null}
+
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium">Backend</span>
             <Select
@@ -263,6 +355,8 @@ export function NewAgentSessionDialog({
             </Select>
           </label>
         </div>
+
+        {failure ? <p className="text-xs text-destructive">{failure}</p> : null}
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
