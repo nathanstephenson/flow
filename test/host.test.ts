@@ -55,6 +55,26 @@ describe("SessionHost", () => {
     assert.equal(backend.latest.effort, "high", "a revived session must not silently drop the choice");
   });
 
+  it("revives once when two sends race into a Dormant Agent Session", async () => {
+    await host.shutdown();
+    assert.equal(backend.sessions.length, 1, "precondition: one Backend Session so far");
+
+    await Promise.all([
+      host.send(sessionId, "first", "after_turn"),
+      host.send(sessionId, "second", "after_turn"),
+    ]);
+
+    // Two backends for one Agent Session leaves the loser orphaned but still emitting into this
+    // transcript, and splits the two messages across two Backend Sessions.
+    assert.equal(backend.sessions.length, 2, "a raced revive must not start a second Backend Session");
+    assert.equal(
+      events(host, sessionId).filter((event) => event.type === "revived").length,
+      1,
+      "a raced revive must record one Revive, not two",
+    );
+    assert.deepEqual(backend.latest.prompts, ["first"], "both sends must reach the surviving backend");
+  });
+
   it("holds an 'after_turn' send until the turn ends, then dispatches it", async () => {
     await host.send(sessionId, "first", "now");
     await host.send(sessionId, "second", "after_turn");

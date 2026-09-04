@@ -43,6 +43,14 @@ type SessionRecord = {
   backendName: string;
   log: SessionLog;
   session: BackendSession | undefined;
+  /**
+   * The revive in flight, held so concurrent callers join it instead of starting a second one.
+   * `session` alone cannot guard that: it is only assigned after `startBackendSession` awaits, so
+   * two sends arriving while it is undefined would both pass the check and both spawn a backend —
+   * leaving one orphaned process still emitting into this transcript, and splitting the two
+   * messages across two Backend Sessions.
+   */
+  reviving: Promise<void> | undefined;
   status: SessionStatus;
   /**
    * Set by the host the moment it dispatches, not when the backend reports `turn_started`. A
@@ -212,6 +220,7 @@ export class SessionHost {
         backendName: meta.backend,
         log: this.newLog(meta.id, entries),
         session: undefined,
+        reviving: undefined,
         status: meta.status === "ended" || meta.status === "settled" ? meta.status : "dormant",
         turnInFlight: false,
         buffered: undefined,
@@ -266,6 +275,7 @@ export class SessionHost {
       backendName: backend.name,
       log: this.newLog(id),
       session: undefined,
+      reviving: undefined,
       status: "idle",
       turnInFlight: false,
       buffered: undefined,
@@ -330,7 +340,19 @@ export class SessionHost {
     const record = this.record(sessionId);
     if (record.session) return;
     if (record.status === "ended") throw new Error(`Session ${sessionId} has ended`);
+    if (record.reviving) return await record.reviving;
 
+    const reviving = this.reviveOnce(record);
+    record.reviving = reviving;
+    try {
+      await reviving;
+    } finally {
+      // Cleared even on failure, so a backend that would not start is retried by the next send.
+      record.reviving = undefined;
+    }
+  }
+
+  private async reviveOnce(record: SessionRecord): Promise<void> {
     const fromSeq = record.log.lastSeq;
     record.buffered = [];
     await this.startBackendSession(record);
