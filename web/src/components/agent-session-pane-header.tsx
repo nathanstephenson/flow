@@ -34,7 +34,11 @@ import { cn } from "@/lib/utils.ts";
  *
  * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
- * is identity and lifecycle — title, Project, backend, the Docks and the overflow.
+ * is identity and lifecycle — one line of `<Project> | <title>`, the Docks and the overflow.
+ *
+ * The backend is not among them: the tab already names it, and a second copy costs a row of the
+ * transcript's height to repeat something already on screen. Naming it was what forced this header
+ * onto two rows; one line is the whole of what identity needs.
  *
  * The branch is deliberately *not* among them, though it was here first. It reads like identity, but
  * what the control is for is the edits the next message will cause — so it belongs with the rest of
@@ -64,7 +68,9 @@ export type AgentSessionPaneHeaderProps = {
 export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: AgentSessionPaneHeaderProps) {
   return (
     <div className="bg-card text-card-foreground">
-      <div className="flex min-h-9 flex-wrap items-center gap-2 border-b px-3 py-2">
+      <div className="flex min-h-9 items-center gap-2 border-b px-3 py-2">
+        <span className="shrink-0 font-mono text-xs">{projectName(chrome.scope ?? "", chrome.worktree)}</span>
+        <span className="-my-2 w-px shrink-0 self-stretch bg-border" aria-hidden />
         <span className="truncate text-sm font-medium">{title}</span>
 
         {chrome.queueDepth > 0 ? <SteeringQueueBadge depth={chrome.queueDepth} /> : null}
@@ -78,13 +84,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
           ) : null}
 
           <PaneOverflowMenu sessionId={sessionId} chrome={chrome} />
-        </div>
-
-        <div className="flex w-full items-center gap-2">
-          {chrome.backend === undefined ? null : <Badge>{chrome.backend}</Badge>}
-          <span className="truncate font-mono text-xs">
-            {projectName(chrome.scope ?? "", chrome.worktree)}
-          </span>
         </div>
       </div>
 
