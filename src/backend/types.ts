@@ -1,5 +1,5 @@
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
-import type { BackendEvent, Capabilities, EffortLevel } from "../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel, Spend } from "../protocol/events.ts";
 
 /**
  * One Attachment's bytes on their way to a model.
@@ -22,6 +22,14 @@ export type BackendCreateOptions = {
   resume?: string;
   /** A directory this adapter may keep its own session state in, beside our transcript. */
   stateDir?: string;
+  /**
+   * What this Agent Session had already spent before this Backend Session opened.
+   *
+   * Spend is cumulative for the Agent Session, and a backend can only count its own run: a Revive
+   * starts a fresh one, whose counters begin at zero. Without this the meter drops back to what the
+   * newest Backend Session has spent, which reads as the bill resetting itself.
+   */
+  priorSpend?: Spend;
   emit: (event: BackendEvent) => void;
 };
 

@@ -7,6 +7,7 @@ import type {
   DelegationState,
   DelegationWait,
   EffortLevel,
+  Spend,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
@@ -38,6 +39,8 @@ export class FakeSession implements BackendSession {
   /** Parallel to `prompts`, so a test can assert what reached the backend beside each text. */
   readonly promptedAttachments: PromptAttachment[][] = [];
   readonly resumedFrom: string | undefined;
+  /** What this session was told the Agent Session had already spent, for asserting a Revive. */
+  readonly priorSpend: Spend | undefined;
   /** Every Delegation begun in this session, in the style of `prompts`. */
   readonly delegations: FakeDelegation[] = [];
   modelId: string;
@@ -52,6 +55,7 @@ export class FakeSession implements BackendSession {
     this.emit = options.emit;
     this.modelId = options.modelId ?? "fake-1";
     this.resumedFrom = options.resume;
+    this.priorSpend = options.priorSpend;
     this.emit({ type: "model_changed", model: { id: this.modelId, provider: "fake" } });
     if (options.effort) void this.setEffort(options.effort);
   }
@@ -93,6 +97,11 @@ export class FakeSession implements BackendSession {
   /** Test affordance: emit assistant text for the turn in flight. */
   say(text: string, final = true): void {
     this.emit({ type: "message", id: `msg-${this.prompts.length}`, text, final });
+  }
+
+  /** Test affordance: report Spend, which is how a Revive gets something to carry forward. */
+  reportSpend(spend: Spend): void {
+    this.emit({ type: "context_usage", used: 10, window: 100, spend });
   }
 
   /** Test affordance: emit a complete tool call. */

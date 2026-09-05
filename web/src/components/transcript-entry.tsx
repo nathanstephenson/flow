@@ -4,6 +4,9 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { useDelegationCollapse } from "@/components/delegation-collapse.tsx";
+import { producerKey } from "@/presentation/delegation-tree.ts";
+import { entryKey } from "@/presentation/entry-key.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -30,6 +33,16 @@ import { cn } from "@/lib/utils.ts";
 export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
 
 export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
+  const row = renderEntry({ entry, query, sessionId });
+  const owner = producerKey(entry);
+  if (owner === undefined) return row;
+  // A rule down the left, rather than indentation alone: a subagent's rows are otherwise
+  // indistinguishable from the parent's own at a glance, which is the whole point of attributing
+  // them. Derived from the Entry because TranscriptEntryProps carries no depth, by contract.
+  return <div className="ml-[3ch] border-l border-border/60 pl-[1ch]">{row}</div>;
+});
+
+function renderEntry({ entry, query, sessionId }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -46,7 +59,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
     case "marker":
       return <TranscriptMarker entry={entry} />;
   }
-});
+}
 
 type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
 
@@ -213,6 +226,11 @@ function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query:
   const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
   const live = entry.status === "running" || entry.status === "waiting";
 
+  const collapse = useDelegationCollapse();
+  const key = entryKey(entry);
+  const hidden = collapse.isCollapsed(key);
+  const members = collapse.members(key);
+
   return (
     <div className="py-0.5 pl-[4ch]">
       <details
@@ -228,6 +246,24 @@ function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query:
             <span className="truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
           )}
           {live ? <span className="ml-auto shrink-0 text-xs text-muted-foreground">{status}…</span> : null}
+          {members > 0 ? (
+            <button
+              type="button"
+              // Stops the click reaching <summary>, which would toggle the card's own disclosure
+              // instead of the rows below it — two different things behind one gesture.
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                collapse.toggle(key);
+              }}
+              className={cn(
+                "shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground",
+                live ? "" : "ml-auto",
+              )}
+            >
+              {hidden ? `show ${members} row${members === 1 ? "" : "s"}` : `hide ${members} row${members === 1 ? "" : "s"}`}
+            </button>
+          ) : null}
         </summary>
 
         <div className="border-t p-3 text-sm">

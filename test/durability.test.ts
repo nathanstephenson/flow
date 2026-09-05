@@ -108,6 +108,25 @@ describe("durability and revive", () => {
     assert.equal(delegation?.kind === "delegation" && delegation.status, "complete");
   });
 
+  it("carries Spend across a Revive rather than starting the bill again", async () => {
+    // A backend counts only its own run, so a Revive hands the next one what came before. Restored
+    // from the transcript, because on a restart nothing was ever in memory.
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    first.backend.latest.reportSpend({
+      tokens: 1_000,
+      cached: 400,
+      costUSD: 2,
+      models: [{ id: "claude-opus-5", tokens: 1_000, cached: 400, costUSD: 2 }],
+    });
+
+    const second = await freshHost();
+    await second.host.revive(id);
+    const handed = second.backend.latest.priorSpend;
+    assert.equal(handed?.tokens, 1_000, "the reviving Backend Session must be told what came before");
+    assert.equal(handed?.costUSD, 2);
+  });
+
   it("revives on demand, continuing the same transcript behind a marker", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

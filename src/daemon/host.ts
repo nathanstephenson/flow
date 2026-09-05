@@ -9,7 +9,7 @@ import {
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
-import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent } from "../protocol/events.ts";
+import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent, Spend } from "../protocol/events.ts";
 import type { Branch } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
@@ -96,6 +96,14 @@ type SessionRecord = {
    */
   pendingBranchNote: string | undefined;
   capabilities: Capabilities | undefined;
+  /**
+   * Everything this Agent Session has spent, carried across Backend Sessions.
+   *
+   * Held on the record and restored from the transcript on load, because a backend counts only its
+   * own run: a Revive opens a new one whose counters start at zero, and the meter would drop back
+   * to that — the bill appearing to reset itself.
+   */
+  spend: Spend | undefined;
   resumeToken: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
@@ -234,6 +242,7 @@ export class SessionHost {
         worktree: meta.worktree,
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
+        spend: spendFrom(entries),
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
         effort: meta.effort,
@@ -286,6 +295,7 @@ export class SessionHost {
       worktree,
       pendingBranchNote: undefined,
       capabilities: undefined,
+      spend: undefined,
       resumeToken: undefined,
       modelId: options.modelId,
       effort: options.effort,
@@ -699,6 +709,7 @@ export class SessionHost {
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
+      ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
     });
     record.session = session;
@@ -792,6 +803,10 @@ export class SessionHost {
 
     record.log.append(event);
     this.touch(record);
+
+    // Kept current so a Revive can hand the running total back to the next Backend Session, which
+    // counts only its own run.
+    if (event.type === "context_usage" && event.spend) record.spend = event.spend;
 
     if (event.type === "turn_ended") {
       record.turnInFlight = false;
@@ -907,6 +922,16 @@ function openDelegations(entries: LoggedEvent[]): { delegationId: string; name: 
     else open.delete(event.delegationId);
   }
   return [...open].map(([delegationId, name]) => ({ delegationId, name }));
+}
+
+/** What the transcript last reported this Agent Session had spent, across every Backend Session. */
+function spendFrom(entries: LoggedEvent[]): Spend | undefined {
+  let spend: Spend | undefined;
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type === "context_usage" && event.spend) spend = event.spend;
+  }
+  return spend;
 }
 
 function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {
