@@ -55,6 +55,25 @@ export type Capabilities = {
   fork: boolean;
 };
 
+/**
+ * What one model cost an Agent Session so far. A Delegation runs under its own entry, which is the
+ * only place its tokens are reported at all.
+ *
+ * `id` is the model as a reader would name it (`claude-haiku-4-5`), not the versioned key the
+ * backend arrived at it by. `cached` is the read-from-cache share of `tokens` — billed, but at a
+ * fraction of the rate, and on a long session the majority of the count.
+ */
+export type ModelSpend = { id: string; tokens: number; cached: number; costUSD: number };
+
+/**
+ * Everything billed for an Agent Session so far.
+ *
+ * Cumulative, not per-turn: the backend reports a running total, so a client replaces this reading
+ * rather than adding to it. `tokens` and `cached` are sums over `models`, carried rather than
+ * derived so a client that shows only the total does not have to know how to add one up.
+ */
+export type Spend = { tokens: number; cached: number; costUSD: number; models: ModelSpend[] };
+
 export type TurnEndReason = "complete" | "aborted" | "error";
 
 export type NoticeLevel = "info" | "warn" | "error";
@@ -89,7 +108,15 @@ export type AgentEvent =
   | { type: "tool_ended"; callId: string; result: unknown; isError: boolean }
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[] }
-  | { type: "context_usage"; used: number; window: number }
+  /**
+   * `used`/`window` are occupancy: how full the Conversation Context is, and so what the next turn
+   * has room to do. `spend` is a different measure — everything billed for this Agent Session so
+   * far, across every model, **including Delegations**, whose own conversations never enter the
+   * Conversation Context and so are invisible to `used`.
+   *
+   * Optional because only a backend that reports per-model usage can supply it.
+   */
+  | { type: "context_usage"; used: number; window: number; spend?: Spend }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "branch_changed"; branch: Branch }

@@ -20,11 +20,14 @@ import type {
   Capabilities,
   EffortLevel,
   ModelInfo,
+  ModelSpend,
+  Spend,
   TurnEndReason,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
-import { StreamedMessage } from "./streamed-message.ts";
+import { Delegations } from "./delegations.ts";
+import { StreamedMessages } from "./streamed-message.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -111,6 +114,22 @@ function isSingleExecutable(): boolean {
   return sea?.isSea?.() ?? false;
 }
 
+/**
+ * The tool whose call spawns a Delegation, and whose result returns it.
+ *
+ * `Agent`, not `Task`: the CLI emits `tool_use` with name `Agent`, and the subagent's own tool calls
+ * carry that call's id as their `parent_tool_use_id`.
+ */
+const DELEGATION_TOOL = "Agent";
+
+/**
+ * Who produced an SDK message: the callId of the spawning tool call, or `""` for the Agent Session's
+ * own model. A string rather than `string | undefined` so it can key a Map without a sentinel.
+ */
+function producerOf(sdkMessage: { parent_tool_use_id?: string | null }): string {
+  return sdkMessage.parent_tool_use_id ?? "";
+}
+
 const DEFAULT_ALLOWED_TOOLS = [
   "Read",
   "Write",
@@ -122,6 +141,15 @@ const DEFAULT_ALLOWED_TOOLS = [
   "WebSearch",
   "TodoWrite",
   "NotebookEdit",
+  // Without this a session that reaches plan mode can never leave it: the deny message ends
+  // "Continue without it", so the model proceeds read-only instead of surfacing the refusal, and
+  // every edit for the rest of the session fails for a reason it cannot name.
+  "ExitPlanMode",
+  "Skill",
+  // Spawns a Delegation. A Delegation's own conversation never enters this session's Conversation
+  // Context — only the call and the summary it returns do — so the context meter stays accurate;
+  // what it cannot show is what the Delegation spent, which is a different measure.
+  "Agent",
 ];
 
 class ClaudeSession implements BackendSession {
@@ -144,8 +172,12 @@ class ClaudeSession implements BackendSession {
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
   private effort: EffortLevel | undefined;
-  /** The assistant message in flight, which owns the id its partial and finished halves share. */
-  private streamed = new StreamedMessage();
+  /** The assistant message in flight, per producer. See StreamedMessages for why it is not one. */
+  private readonly streamed = new StreamedMessages();
+  /** Delegations open in this turn, and any turn end waiting on them. */
+  private readonly delegations = new Delegations();
+  /** Everything billed so far, across every model. Undefined until the first turn reports it. */
+  private spend: Spend | undefined;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
@@ -370,17 +402,18 @@ class ClaudeSession implements BackendSession {
         return;
 
       case "stream_event":
-        this.translateStreamEvent(sdkMessage.event);
+        this.translateStreamEvent(sdkMessage.event, producerOf(sdkMessage));
         return;
 
       case "assistant": {
         // The streamed copy and this one are the same Entry, and StreamedMessage is what guarantees
         // it. Tool calls stay here: they have nothing to do with the partial-message state.
-        for (const event of this.streamed.finish(sdkMessage.message.id, sdkMessage.message.content)) {
-          this.emit(event);
-        }
+        const producer = producerOf(sdkMessage);
+        const finished = this.streamed.finish(producer, sdkMessage.message.id, sdkMessage.message.content);
+        for (const event of finished) this.emit(event);
         for (const block of sdkMessage.message.content) {
           if (block.type === "tool_use") {
+            if (block.name === DELEGATION_TOOL) this.delegations.spawn(block.id);
             this.emit({ type: "tool_started", callId: block.id, name: block.name, input: block.input });
           }
         }
@@ -398,14 +431,17 @@ class ClaudeSession implements BackendSession {
               result: block.content ?? "",
               isError: block.is_error === true,
             });
+            this.closeDelegation(block.tool_use_id);
           }
         }
         return;
       }
 
       case "result":
+        // Read before the meter is asked for, so the two land on the client as one event.
+        this.spend = describeSpend(sdkMessage);
         void this.reportContextUsage();
-        this.endTurn(sdkMessage.subtype === "success" ? "complete" : "error");
+        this.finishTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
 
       default:
@@ -413,16 +449,17 @@ class ClaudeSession implements BackendSession {
     }
   }
 
-  private translateStreamEvent(event: StreamEvent): void {
+  private translateStreamEvent(event: StreamEvent, producer: string): void {
+    const streamed = this.streamed.for(producer);
     if (event.type === "message_start") {
-      this.streamed.start(event.message.id);
+      streamed.start(event.message.id);
       return;
     }
     if (event.type !== "content_block_delta") return;
 
     const delta = event.delta;
-    if (delta.type === "text_delta") this.emit(this.streamed.text(event.index, delta.text));
-    else if (delta.type === "thinking_delta") this.emit(this.streamed.thinking(event.index, delta.thinking));
+    if (delta.type === "text_delta") this.emit(streamed.text(event.index, delta.text));
+    else if (delta.type === "thinking_delta") this.emit(streamed.thinking(event.index, delta.thinking));
   }
 
   /**
@@ -445,11 +482,34 @@ class ClaudeSession implements BackendSession {
       return;
     }
     if (this.disposed) return;
-    this.emit({ type: "context_usage", ...describeContextUsage(usage) });
+    this.emit({
+      type: "context_usage",
+      ...describeContextUsage(usage),
+      ...(this.spend === undefined ? {} : { spend: this.spend }),
+    });
+  }
+
+  /**
+   * End the turn a `result` reports, unless a Delegation is still open — see Delegations for why a
+   * result cannot be attributed to one.
+   *
+   * Only this path defers. The pump's error path calls `endTurn` directly, because a stream that has
+   * failed will never deliver the `tool_result` that would release a held end.
+   */
+  private finishTurn(reason: TurnEndReason): void {
+    if (this.delegations.hold(reason)) return;
+    this.endTurn(reason);
+  }
+
+  private closeDelegation(callId: string): void {
+    const released = this.delegations.returned(callId);
+    if (released) this.endTurn(released);
   }
 
   private endTurn(reason: TurnEndReason): void {
     const turnId = this.turnId;
+    // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
+    this.delegations.clear();
     if (!turnId) return;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });
@@ -525,6 +585,57 @@ export function describeModel(model: SdkModelInfo): ModelInfo {
  * the denominator the CLI divides by for its own `percentage`. Not `autoCompactThreshold`, which is
  * the lower compaction trigger and would overstate how full the window is.
  */
+/** One model's slice of a session's spend, as the SDK reports it on a `result`. */
+type SdkModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUSD: number;
+  canonicalModel?: string;
+};
+
+/**
+ * Everything billed for this Agent Session so far, per model.
+ *
+ * `modelUsage` is keyed by model and is cumulative for the session, so it is read rather than
+ * accumulated — and because a Delegation runs under its own model entry, its spend is already in
+ * here. That is the whole reason this exists: `getContextUsage` reports occupancy, and a
+ * Delegation's conversation never occupies the parent's Conversation Context.
+ *
+ * Cache reads are counted in `tokens` and reported again in `cached`. They are billed, and on a long
+ * session they are most of the count — so a total that omitted them would match no invoice, and a
+ * total that hid them would overstate what the session actually cost to produce.
+ *
+ * Keyed by `canonicalModel` where the backend gives one, so the reading says `claude-haiku-4-5`
+ * rather than `claude-haiku-4-5-20251001` — and so two versioned keys of one model add up.
+ */
+export function describeSpend(result: { modelUsage?: Record<string, SdkModelUsage> }): Spend | undefined {
+  const usage = result.modelUsage;
+  if (!usage) return undefined;
+
+  const byModel = new Map<string, ModelSpend>();
+  for (const [key, model] of Object.entries(usage)) {
+    const id = model.canonicalModel ?? key;
+    const running = byModel.get(id) ?? { id, tokens: 0, cached: 0, costUSD: 0 };
+    running.tokens +=
+      model.inputTokens + model.outputTokens + model.cacheReadInputTokens + model.cacheCreationInputTokens;
+    running.cached += model.cacheReadInputTokens;
+    running.costUSD += model.costUSD;
+    byModel.set(id, running);
+  }
+
+  // Costliest first: the reading is about where the money went, and a Delegation on a cheap model
+  // should not push the model that did the work down the list.
+  const models = [...byModel.values()].sort((a, b) => b.costUSD - a.costUSD);
+  return {
+    tokens: models.reduce((total, model) => total + model.tokens, 0),
+    cached: models.reduce((total, model) => total + model.cached, 0),
+    costUSD: models.reduce((total, model) => total + model.costUSD, 0),
+    models,
+  };
+}
+
 export function describeContextUsage(
   usage: Pick<SDKControlGetContextUsageResponse, "totalTokens" | "maxTokens">,
 ): { used: number; window: number } {

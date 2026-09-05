@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { describeContextUsage } from "../../src/backend/claude/index.ts";
-import { StreamedMessage, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
+import { describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
+import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
@@ -151,5 +151,110 @@ describe("the Conversation Context reading the Claude adapter reports", () => {
   it("yields a percentage rather than the bare-token sentinel", () => {
     const usage = describeContextUsage({ totalTokens: 41_000, maxTokens: 200_000 });
     assert.equal(contextUsageLabel(usage), "context 21%");
+  });
+});
+
+/**
+ * Two producers streaming into one turn: the Agent Session's own model and a Delegation it spawned.
+ *
+ * The SDK attributes assistant, user and partial messages with `parent_tool_use_id`, so a Delegation's
+ * deltas interleave with its parent's. One StreamedMessage serving both would let the Delegation's
+ * `message_start` take the id the parent's Entry is on screen under — the stranded caret again.
+ */
+describe("a Delegation streaming beside its parent", () => {
+  it("keeps the two messages apart instead of one stealing the other's id", () => {
+    const streams = new StreamedMessages();
+    const events = [
+      streams.for("").text(0, "Spawning a "),
+      // The Delegation opens mid-parent-message. This is the interleaving that used to clear `parts`.
+      streams.for("call_1").text(0, "Reading "),
+      streams.for("").text(0, "subagent."),
+      streams.for("call_1").text(0, "the file."),
+      ...streams.finish("call_1", "msg_child", [textBlock("Reading the file.")]),
+      ...streams.finish("", "msg_parent", [textBlock("Spawning a subagent.")]),
+    ];
+
+    const entries = transcript(events);
+    assert.deepEqual(stranded(entries), [], "no Entry may be left mid-stream once both have finished");
+    const assistants = entries.filter((entry) => entry.kind === "assistant");
+    assert.equal(assistants.length, 2, `expected two Entries, got ${JSON.stringify(entries)}`);
+    assert.deepEqual(
+      assistants.map((entry) => (entry.kind === "assistant" ? entry.text : "")),
+      ["Spawning a subagent.", "Reading the file."],
+      "neither producer's text may be discarded by the other's message_start",
+    );
+  });
+
+  it("forgets a producer once its message has finished", () => {
+    const streams = new StreamedMessages();
+    streams.for("call_1").text(0, "first");
+    streams.finish("call_1", "msg_a", [textBlock("first")]);
+
+    // A second Delegation reusing the callId must start clean, not inherit the first one's parts.
+    const reused = streams.for("call_1");
+    reused.start("msg_b");
+    const entries = transcript([reused.text(0, "second"), ...streams.finish("call_1", "msg_b", [textBlock("second")])]);
+    const assistants = entries.filter((entry) => entry.kind === "assistant");
+    assert.equal(assistants.length, 1);
+    assert.equal(assistants[0]?.kind === "assistant" && assistants[0].text, "second");
+  });
+});
+
+/**
+ * Spend, as distinct from occupancy. `modelUsage` is cumulative for the session and keyed by model,
+ * and a Delegation runs under its own model entry — so its tokens are already counted here, which is
+ * the only place they appear at all. getContextUsage reports the parent's occupancy, and a
+ * Delegation's conversation never occupies it.
+ */
+describe("everything billed for an Agent Session", () => {
+  const model = (over: Record<string, number | string> = {}) => ({
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    costUSD: 0,
+    ...over,
+  });
+
+  it("counts a Delegation's model beside the parent's, costliest first", () => {
+    const spend = describeSpend({
+      modelUsage: {
+        "claude-haiku-4-5-20251001": model({ inputTokens: 897, outputTokens: 10, costUSD: 0.000947, canonicalModel: "claude-haiku-4-5" }),
+        "claude-opus-5[1m]": model({ inputTokens: 10, outputTokens: 434, cacheReadInputTokens: 94_457, costUSD: 0.2346, canonicalModel: "claude-opus-5" }),
+      },
+    });
+    assert.equal(spend?.tokens, 897 + 10 + 10 + 434 + 94_457);
+    assert.equal(spend?.cached, 94_457, "the cache share is reported apart from the total");
+    assert.deepEqual(spend?.models.map((m) => m.id), ["claude-opus-5", "claude-haiku-4-5"]);
+  });
+
+  it("names a model as a reader would, not by the version it arrived at it by", () => {
+    const spend = describeSpend({
+      modelUsage: { "claude-haiku-4-5-20251001": model({ inputTokens: 5, canonicalModel: "claude-haiku-4-5" }) },
+    });
+    assert.equal(spend?.models[0]?.id, "claude-haiku-4-5");
+  });
+
+  it("adds two versioned keys of one model together", () => {
+    // Two dated keys of the same canonical model must not read as two models on the breakdown.
+    const spend = describeSpend({
+      modelUsage: {
+        "claude-opus-5-20260101": model({ inputTokens: 100, costUSD: 1, canonicalModel: "claude-opus-5" }),
+        "claude-opus-5[1m]": model({ inputTokens: 50, costUSD: 2, canonicalModel: "claude-opus-5" }),
+      },
+    });
+    assert.equal(spend?.models.length, 1);
+    assert.equal(spend?.models[0]?.tokens, 150);
+    assert.equal(spend?.models[0]?.costUSD, 3);
+  });
+
+  it("falls back to the reported key when no canonical name is given", () => {
+    const spend = describeSpend({ modelUsage: { "some-model": model({ inputTokens: 5 }) } });
+    assert.equal(spend?.models[0]?.id, "some-model");
+  });
+
+  it("says nothing when the backend reports no per-model usage", () => {
+    // Undefined rather than zero: a zero would render as "Spent 0 tokens", which reads as free.
+    assert.equal(describeSpend({}), undefined);
   });
 });

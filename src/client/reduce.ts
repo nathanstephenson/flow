@@ -5,6 +5,7 @@ import type {
   LoggedEvent,
   ModelInfo,
   NoticeLevel,
+  Spend,
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 import type { Branch } from "../protocol/git.ts";
@@ -53,7 +54,7 @@ export type ViewState = {
   worktree?: true;
   entries: Entry[];
   queue: string[];
-  contextUsage?: { used: number; window: number };
+  contextUsage?: { used: number; window: number; spend?: Spend };
   endedReason?: string;
   lastSeq: number;
 };
@@ -145,7 +146,14 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
       return { ...state, queue: [...event.pending] };
 
     case "context_usage":
-      return { ...state, contextUsage: { used: event.used, window: event.window } };
+      return {
+        ...state,
+        contextUsage: {
+          used: event.used,
+          window: event.window,
+          ...(event.spend === undefined ? {} : { spend: event.spend }),
+        },
+      };
 
     case "model_changed":
       return { ...state, model: event.model };

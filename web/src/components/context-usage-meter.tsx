@@ -40,7 +40,17 @@ export function ContextUsageMeter({ usage }: { usage: Chrome["contextUsage"] }) 
             carried the other half is gone, so the reading survives here. */}
         <span className="sr-only">{contextUsageLabel(usage)}</span>
       </TooltipTrigger>
-      <TooltipContent>{detail}</TooltipContent>
+      <TooltipContent>
+        {/* A two-column grid so the values line up: Spent sits under Context, not beside it. */}
+        <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+          {detail.map((row) => (
+            <span key={row.label} className="contents">
+              <span className={cn("text-muted-foreground", row.model && "pl-3 font-mono text-xs")}>{row.label}</span>
+              <span className={cn("text-right tabular-nums", row.model && "text-xs")}>{row.value}</span>
+            </span>
+          ))}
+        </span>
+      </TooltipContent>
     </Tooltip>
   );
 }
