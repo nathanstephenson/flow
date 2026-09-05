@@ -109,6 +109,9 @@ function entryLines(entry: Entry, width: number): string[] {
       return wrap(`· ${entry.text}`, width);
     case "tool":
       return [clip(`  [${entry.status}] ${entry.name}`, width)];
+    case "delegation":
+      // Indented past a tool call: a Delegation is what one of those is doing, not another of them.
+      return [clip(`    ⤷ [${entry.waitingOn ?? entry.status}] ${entry.name}`, width)];
     case "notice":
       return wrap(`! ${entry.text}`, width);
     case "marker":

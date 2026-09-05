@@ -1,10 +1,12 @@
 import type {
   AgentEvent,
   Capabilities,
+  DelegationWait,
   EffortLevel,
   LoggedEvent,
   ModelInfo,
   NoticeLevel,
+  Producer,
   Spend,
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
@@ -20,12 +22,39 @@ import type { Branch } from "../protocol/git.ts";
 
 export type ToolStatus = "running" | "complete" | "error";
 
+/** Flattened from DelegationState, so an Entry stays a flat record like every other one. */
+export type DelegationStatus = "running" | "waiting" | "complete" | "aborted" | "error";
+
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   | { kind: "user"; id: string; text: string; attachments?: string[] }
-  | { kind: "assistant"; id: string; text: string; final: boolean }
-  | { kind: "thinking"; id: string; text: string; final: boolean }
-  | { kind: "tool"; id: string; name: string; input: unknown; update?: unknown; result?: unknown; status: ToolStatus }
+  | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer }
+  | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      input: unknown;
+      update?: unknown;
+      result?: unknown;
+      status: ToolStatus;
+      producer?: Producer;
+    }
+  /**
+   * One Delegation (ADR 0015). `id` is the spawning tool call's id, so this Entry and the `tool`
+   * Entry beside it are two views of one thing: the tool row is what the parent asked for, and this
+   * is what the subagent is doing about it. Two Entries rather than fields on one because `upsert`
+   * is keyed on kind and id, and the two arrive from different events at different rates.
+   */
+  | {
+      kind: "delegation";
+      id: string;
+      name: string;
+      description?: string;
+      status: DelegationStatus;
+      waitingOn?: DelegationWait;
+      producer?: Producer;
+    }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
   /**
    * Going Dormant, Settling and Reviving are structural facts about an Agent Session's life, not
@@ -105,13 +134,25 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
     case "message":
       return {
         ...state,
-        entries: upsert(state.entries, { kind: "assistant", id: event.id, text: event.text, final: event.final }),
+        entries: upsert(state.entries, {
+          kind: "assistant",
+          id: event.id,
+          text: event.text,
+          final: event.final,
+          ...producerOf(event),
+        }),
       };
 
     case "thinking":
       return {
         ...state,
-        entries: upsert(state.entries, { kind: "thinking", id: event.id, text: event.text, final: event.final }),
+        entries: upsert(state.entries, {
+          kind: "thinking",
+          id: event.id,
+          text: event.text,
+          final: event.final,
+          ...producerOf(event),
+        }),
       };
 
     case "tool_started":
@@ -123,6 +164,7 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
           name: event.name,
           input: event.input,
           status: "running",
+          ...producerOf(event),
         }),
       };
 
@@ -137,6 +179,21 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
           result: event.result,
           status: event.isError ? "error" : "complete",
         })),
+      };
+
+    case "delegation":
+      return {
+        ...state,
+        entries: upsert(state.entries, {
+          kind: "delegation",
+          id: event.delegationId,
+          name: event.name,
+          ...(event.description === undefined ? {} : { description: event.description }),
+          status: event.state,
+          // Only ever set alongside "waiting", so a Delegation that resumes drops it rather than
+          // carrying a stale object it is no longer waiting on.
+          ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
+        }),
       };
 
     case "turn_ended":
@@ -205,6 +262,11 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
     case "session_ended":
       return { ...state, status: "ended", endedReason: event.reason };
   }
+}
+
+/** Spread onto an Entry, so an unattributed event does not carry an explicit `producer: undefined`. */
+function producerOf(event: { producer?: Producer }): { producer?: Producer } {
+  return event.producer === undefined ? {} : { producer: event.producer };
 }
 
 /** Upsert by id — the snapshot semantics the event union is built on. */

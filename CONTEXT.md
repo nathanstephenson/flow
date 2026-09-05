@@ -15,6 +15,20 @@ The SDK's ephemeral session serving an Agent Session, holding the Conversation C
 Session may be served by several Backend Sessions over its life.
 _Avoid_: session, process, connection
 
+**Delegation**:
+One unit of work a model handed to a subagent, wholly inside one turn of one Backend Session.
+Identified by the tool call that spawned it, so it is addressable without a new id space. It owns no
+Presentation Transcript, is never Revived, and cannot outlive the turn — a Delegation left running by
+an unclean shutdown is closed as aborted, the way a torn turn is. Its conversation never enters the
+parent's Conversation Context, so it costs Spend without costing occupancy.
+_Avoid_: subagent session, child session, sub-session, task, sidechain
+
+**Spend**:
+Everything billed for an Agent Session so far, across every model, Delegations included. Distinct
+from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
+fraction of a window, and a session routinely bills many times what its window holds.
+_Avoid_: usage, cost, tokens, context
+
 **Presentation Transcript**:
 The append-only, sequence-numbered record of what a human saw. Never rewritten, never compacted.
 _Avoid_: history, log, messages

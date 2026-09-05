@@ -39,6 +39,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return <ThinkingEntryView entry={entry} query={query} />;
     case "tool":
       return <ToolCallEntryView entry={entry} query={query} />;
+    case "delegation":
+      return <DelegationEntryView entry={entry} query={query} />;
     case "notice":
       return <NoticeEntryView entry={entry} query={query} />;
     case "marker":
@@ -192,6 +194,54 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
       </details>
     </div>
   );
+}
+
+/**
+ * One Delegation: what a subagent was asked to do, and how far it has got (ADR 0015).
+ *
+ * The same species of thing as a tool call — bounded, and a record of work that happened elsewhere —
+ * so it takes the same card shape rather than inventing a second one. It sits deeper than a tool
+ * call because it is what one of those is doing, and the indent is derived from the Entry rather
+ * than passed in: TranscriptEntryProps is `{ entry, query, sessionId }` and nothing else, by
+ * contract, so a parent cannot hand a child row its depth.
+ *
+ * Waiting states name what is being waited on. "Waiting" alone is a spinner with extra steps.
+ */
+function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query: string }) {
+  const [toggled, setToggled] = useState<boolean | undefined>(undefined);
+  const open = toggled ?? entry.status === "error";
+  const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
+  const live = entry.status === "running" || entry.status === "waiting";
+
+  return (
+    <div className="py-0.5 pl-[4ch]">
+      <details
+        open={open}
+        onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
+        className="rounded-lg border bg-card text-card-foreground"
+      >
+        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
+          <ToolStatusDot status={entry.status === "waiting" ? "running" : delegationDot(entry.status)} />
+          <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
+          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+          {entry.description === undefined ? null : (
+            <span className="truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
+          )}
+          {live ? <span className="ml-auto shrink-0 text-xs text-muted-foreground">{status}…</span> : null}
+        </summary>
+
+        <div className="border-t p-3 text-sm">
+          <Highlighted text={entry.description ?? "No brief was recorded for this Delegation."} query={query} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/** Aborted is a stop, not a failure: only an error earns the one coloured token. */
+function delegationDot(status: Of<"delegation">["status"]): "running" | "complete" | "error" {
+  if (status === "error") return "error";
+  return status === "running" ? "running" : "complete";
 }
 
 /**

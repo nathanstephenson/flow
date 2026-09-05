@@ -17,6 +17,7 @@ const FAKE_CAPABILITIES: Capabilities = {
   ],
   compaction: false,
   fork: false,
+  delegation: true,
 };
 
 /**
