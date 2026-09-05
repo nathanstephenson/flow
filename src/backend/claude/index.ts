@@ -20,6 +20,8 @@ import type {
   Capabilities,
   EffortLevel,
   ModelInfo,
+  ModelSpend,
+  Spend,
   TurnEndReason,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
@@ -174,6 +176,8 @@ class ClaudeSession implements BackendSession {
   private readonly streamed = new StreamedMessages();
   /** Delegations open in this turn, and any turn end waiting on them. */
   private readonly delegations = new Delegations();
+  /** Everything billed so far, across every model. Undefined until the first turn reports it. */
+  private spend: Spend | undefined;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
@@ -434,6 +438,8 @@ class ClaudeSession implements BackendSession {
       }
 
       case "result":
+        // Read before the meter is asked for, so the two land on the client as one event.
+        this.spend = describeSpend(sdkMessage);
         void this.reportContextUsage();
         this.finishTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
@@ -476,7 +482,11 @@ class ClaudeSession implements BackendSession {
       return;
     }
     if (this.disposed) return;
-    this.emit({ type: "context_usage", ...describeContextUsage(usage) });
+    this.emit({
+      type: "context_usage",
+      ...describeContextUsage(usage),
+      ...(this.spend === undefined ? {} : { spend: this.spend }),
+    });
   }
 
   /**
@@ -575,6 +585,57 @@ export function describeModel(model: SdkModelInfo): ModelInfo {
  * the denominator the CLI divides by for its own `percentage`. Not `autoCompactThreshold`, which is
  * the lower compaction trigger and would overstate how full the window is.
  */
+/** One model's slice of a session's spend, as the SDK reports it on a `result`. */
+type SdkModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUSD: number;
+  canonicalModel?: string;
+};
+
+/**
+ * Everything billed for this Agent Session so far, per model.
+ *
+ * `modelUsage` is keyed by model and is cumulative for the session, so it is read rather than
+ * accumulated — and because a Delegation runs under its own model entry, its spend is already in
+ * here. That is the whole reason this exists: `getContextUsage` reports occupancy, and a
+ * Delegation's conversation never occupies the parent's Conversation Context.
+ *
+ * Cache reads are counted in `tokens` and reported again in `cached`. They are billed, and on a long
+ * session they are most of the count — so a total that omitted them would match no invoice, and a
+ * total that hid them would overstate what the session actually cost to produce.
+ *
+ * Keyed by `canonicalModel` where the backend gives one, so the reading says `claude-haiku-4-5`
+ * rather than `claude-haiku-4-5-20251001` — and so two versioned keys of one model add up.
+ */
+export function describeSpend(result: { modelUsage?: Record<string, SdkModelUsage> }): Spend | undefined {
+  const usage = result.modelUsage;
+  if (!usage) return undefined;
+
+  const byModel = new Map<string, ModelSpend>();
+  for (const [key, model] of Object.entries(usage)) {
+    const id = model.canonicalModel ?? key;
+    const running = byModel.get(id) ?? { id, tokens: 0, cached: 0, costUSD: 0 };
+    running.tokens +=
+      model.inputTokens + model.outputTokens + model.cacheReadInputTokens + model.cacheCreationInputTokens;
+    running.cached += model.cacheReadInputTokens;
+    running.costUSD += model.costUSD;
+    byModel.set(id, running);
+  }
+
+  // Costliest first: the reading is about where the money went, and a Delegation on a cheap model
+  // should not push the model that did the work down the list.
+  const models = [...byModel.values()].sort((a, b) => b.costUSD - a.costUSD);
+  return {
+    tokens: models.reduce((total, model) => total + model.tokens, 0),
+    cached: models.reduce((total, model) => total + model.cached, 0),
+    costUSD: models.reduce((total, model) => total + model.costUSD, 0),
+    models,
+  };
+}
+
 export function describeContextUsage(
   usage: Pick<SDKControlGetContextUsageResponse, "totalTokens" | "maxTokens">,
 ): { used: number; window: number } {

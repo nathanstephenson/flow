@@ -21,12 +21,51 @@ export function contextUsageLabel(usage: ViewState["contextUsage"]): string | un
  * prints `contextUsageLabel`'s percentage, and the same `used / window` stated twice is the drift
  * this file exists to prevent.
  *
+ * Rows rather than one string because the two readings are not the same measure and must not read as
+ * one sentence: Context is how full the window is, Spent is every token billed across every model,
+ * Delegations included. Spent is routinely the larger number and says nothing about running out of
+ * room — printing them adjacent without labels invited exactly that confusion.
+ *
  * Returns undefined with no window, matching `contextUsageLabel`'s "nothing honest to say".
  */
-export function contextUsageDetail(usage: ViewState["contextUsage"]): string | undefined {
+export type UsageRow = { label: string; value: string; /** A per-model line, for indenting. */ model?: true };
+
+export function contextUsageDetail(usage: ViewState["contextUsage"]): UsageRow[] | undefined {
   if (!usage || usage.window <= 0) return undefined;
-  const { used, window } = usage;
-  return `${Math.round((used / window) * 100)}% · ${compactTokens(used)}/${compactTokens(window)} tokens`;
+  const { used, window, spend } = usage;
+  const rows: UsageRow[] = [
+    {
+      label: "Context",
+      value: `${Math.round((used / window) * 100)}% · ${compactTokens(used)}/${compactTokens(window)} tokens`,
+    },
+  ];
+  // Absent whenever the backend cannot report it, rather than shown as a zero that reads as "free".
+  if (!spend) return rows;
+
+  rows.push({ label: "Spent", value: `${compactTokens(spend.tokens)} tokens · ${money(spend.costUSD)}` });
+  // Stated as a share of the total, because the bare figure invites reading it as extra spend on top
+  // rather than as the majority of what is already counted above.
+  rows.push({ label: "Cache reads", value: `${compactTokens(spend.cached)} of ${compactTokens(spend.tokens)}` });
+
+  // One model is what `Spent` already says, so the breakdown earns its space only when it splits.
+  // Two or more means a Delegation ran on its own model, which is the case worth seeing.
+  if (spend.models.length > 1) {
+    for (const model of spend.models) {
+      rows.push({ label: model.id, value: `${compactTokens(model.tokens)} · ${money(model.costUSD)}`, model: true });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Enough places to stay honest at both ends: a Delegation on a cheap model can cost a tenth of a
+ * cent, and rounding that to `$0.00` would report free work. Anything at or above a cent reads in
+ * the two places money is normally written.
+ */
+function money(usd: number): string {
+  if (usd >= 0.01) return `$${usd.toFixed(2)}`;
+  if (usd === 0) return "$0.00";
+  return `$${usd.toFixed(4)}`;
 }
 
 /** Hand-rolled rather than `Intl`, to match `relativeTime` and to read the same in a terminal. */
