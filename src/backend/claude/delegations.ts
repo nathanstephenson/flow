@@ -3,11 +3,10 @@ import type { TurnEndReason } from "../../protocol/events.ts";
 /**
  * The Delegations open in one turn, and the turn end held back while any of them is.
  *
- * `SDKResultMessage` carries no `parent_tool_use_id` (verified at SDK 0.3.247 — see
- * spikes/.claude-union-probe.ts), so a `result` emitted for a subagent cannot be told apart from the
- * one that ends the turn. Ending on the first would clear `turnInFlight` in the Session Host, and the
- * Steering Queue would dispatch the next message into a turn that is still running — two messages in
- * one turn, which reads as the agent ignoring the first.
+ * `SDKResultMessage` carries no `parent_tool_use_id` at SDK 0.3.247, so a `result` emitted for a
+ * subagent cannot be told apart from the one that ends the turn. Ending on the first would clear
+ * `turnInFlight` in the Session Host, and the Steering Queue would dispatch the next message into a
+ * turn that is still running — two messages in one turn, which reads as the agent ignoring the first.
  *
  * Its own module rather than three fields on ClaudeSession because that session cannot be constructed
  * without spawning a Claude process, so none of this would be reachable from a test there — the same

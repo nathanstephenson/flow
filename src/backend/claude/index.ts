@@ -115,8 +115,8 @@ function isSingleExecutable(): boolean {
 /**
  * The tool whose call spawns a Delegation, and whose result returns it.
  *
- * `Agent`, not `Task` — verified against the CLI in spikes/delegation-context-probe.ts, which
- * observed `tool_use name=Agent` with the subagent's own tool calls attributed to its callId.
+ * `Agent`, not `Task`: the CLI emits `tool_use` with name `Agent`, and the subagent's own tool calls
+ * carry that call's id as their `parent_tool_use_id`.
  */
 const DELEGATION_TOOL = "Agent";
 
