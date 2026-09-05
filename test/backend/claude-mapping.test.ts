@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { briefOf, describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
+import { addSpend, briefOf, describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
@@ -288,5 +288,56 @@ describe("what the Agent tool says a Delegation is", () => {
 
   it("omits a description that is not a string rather than printing one", () => {
     assert.deepEqual(briefOf({ subagent_type: "Explore", description: 42 }), { name: "Explore" });
+  });
+});
+
+/**
+ * Spend is cumulative for the Agent Session, not the Backend Session. A backend counts only its own
+ * `query()` run, and a Revive opens a fresh one whose counters start at zero — so the two readings
+ * are added, never replaced. Without this the meter drops back to whatever the newest Backend
+ * Session has spent, which reads as the bill resetting itself.
+ */
+describe("spend carried across a Revive", () => {
+  const before = {
+    tokens: 100,
+    cached: 60,
+    costUSD: 1,
+    models: [{ id: "claude-opus-5", tokens: 100, cached: 60, costUSD: 1 }],
+  };
+
+  it("adds the new Backend Session's reading to what came before", () => {
+    const after = {
+      tokens: 30,
+      cached: 10,
+      costUSD: 0.5,
+      models: [{ id: "claude-opus-5", tokens: 30, cached: 10, costUSD: 0.5 }],
+    };
+    const total = addSpend(before, after);
+    assert.equal(total?.tokens, 130);
+    assert.equal(total?.cached, 70);
+    assert.equal(total?.costUSD, 1.5);
+    assert.equal(total?.models.length, 1, "one model billed twice is still one model");
+    assert.equal(total?.models[0]?.tokens, 130);
+  });
+
+  it("keeps a model that only the later session used", () => {
+    const after = {
+      tokens: 5,
+      cached: 0,
+      costUSD: 0.01,
+      models: [{ id: "claude-haiku-4-5", tokens: 5, cached: 0, costUSD: 0.01 }],
+    };
+    const total = addSpend(before, after);
+    assert.deepEqual(total?.models.map((model) => model.id), ["claude-opus-5", "claude-haiku-4-5"]);
+    assert.equal(total?.tokens, 105);
+  });
+
+  it("is whichever side exists when only one does", () => {
+    assert.equal(addSpend(undefined, before), before, "a first Backend Session has nothing to add to");
+    assert.equal(addSpend(before, undefined), before, "a Revive that has billed nothing yet still reports");
+  });
+
+  it("says nothing when neither side does", () => {
+    assert.equal(addSpend(undefined, undefined), undefined);
   });
 });

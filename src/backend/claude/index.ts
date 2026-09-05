@@ -197,13 +197,23 @@ class ClaudeSession implements BackendSession {
   private readonly streamed = new StreamedMessages();
   /** Delegations open in this turn, and any turn end waiting on them. */
   private readonly delegations = new Delegations();
-  /** Everything billed so far, across every model. Undefined until the first turn reports it. */
+  /**
+   * Everything this Agent Session has spent, across every model and every Backend Session.
+   *
+   * Seeded from what it had spent before this one opened, because `modelUsage` counts only this
+   * `query()` run: on a Revive its counters start at zero, and reporting that alone would read as
+   * the bill resetting itself.
+   */
   private spend: Spend | undefined;
+  private readonly priorSpend: Spend | undefined;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.emit = options.emit;
     this.modelId = options.modelId;
     this.wantedEffort = options.effort;
+    this.priorSpend = options.priorSpend;
+    // Reported before this run has billed anything, so a Revive does not blank the meter it inherits.
+    this.spend = options.priorSpend;
 
     const allowed = backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     const startingEffort = sdkEffort(options.effort);
@@ -480,7 +490,7 @@ class ClaudeSession implements BackendSession {
 
       case "result":
         // Read before the meter is asked for, so the two land on the client as one event.
-        this.spend = describeSpend(sdkMessage);
+        this.spend = addSpend(this.priorSpend, describeSpend(sdkMessage));
         void this.reportContextUsage();
         this.finishTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
@@ -651,6 +661,32 @@ type SdkModelUsage = {
  * Keyed by `canonicalModel` where the backend gives one, so the reading says `claude-haiku-4-5`
  * rather than `claude-haiku-4-5-20251001` — and so two versioned keys of one model add up.
  */
+/**
+ * Two readings of Spend added together, per model.
+ *
+ * Addition rather than replacement because each Backend Session reports only its own run: a Revive's
+ * numbers are a continuation of the Agent Session's bill, not a correction to it.
+ */
+export function addSpend(before: Spend | undefined, after: Spend | undefined): Spend | undefined {
+  if (!before) return after;
+  if (!after) return before;
+  const byModel = new Map<string, ModelSpend>();
+  for (const model of [...before.models, ...after.models]) {
+    const running = byModel.get(model.id) ?? { id: model.id, tokens: 0, cached: 0, costUSD: 0 };
+    running.tokens += model.tokens;
+    running.cached += model.cached;
+    running.costUSD += model.costUSD;
+    byModel.set(model.id, running);
+  }
+  const models = [...byModel.values()].sort((a, b) => b.costUSD - a.costUSD);
+  return {
+    tokens: before.tokens + after.tokens,
+    cached: before.cached + after.cached,
+    costUSD: before.costUSD + after.costUSD,
+    models,
+  };
+}
+
 export function describeSpend(result: { modelUsage?: Record<string, SdkModelUsage> }): Spend | undefined {
   const usage = result.modelUsage;
   if (!usage) return undefined;
