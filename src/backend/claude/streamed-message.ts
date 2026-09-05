@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { BackendEvent } from "../../protocol/events.ts";
+import type { BackendEvent, Producer } from "../../protocol/events.ts";
 
 /**
  * One assistant message as it arrives: deltas first, then the finished copy, as Agent Events.
@@ -31,6 +31,16 @@ const THINKING_KEY = 10_000;
 export class StreamedMessage {
   private parts = new Map<number, string>();
   private id: string | undefined;
+  /**
+   * Spread onto every event this emits. Held here rather than applied by the caller so a message
+   * cannot be emitted unattributed by a path that forgot: the producer is fixed for this message's
+   * whole life, which is exactly the lifetime of this object.
+   */
+  private readonly attribution: { producer?: Producer };
+
+  constructor(producer?: Producer) {
+    this.attribution = producer === undefined ? {} : { producer };
+  }
 
   /** `message_start`. The SDK does not always carry an id, so one is minted rather than left absent. */
   start(id: string | undefined): void {
@@ -40,7 +50,13 @@ export class StreamedMessage {
 
   text(index: number, delta: string): BackendEvent {
     this.parts.set(index, (this.parts.get(index) ?? "") + delta);
-    return { type: "message", id: this.key(), text: this.join((key) => key < THINKING_KEY), final: false };
+    return {
+      type: "message",
+      id: this.key(),
+      text: this.join((key) => key < THINKING_KEY),
+      final: false,
+      ...this.attribution,
+    };
   }
 
   /**
@@ -50,7 +66,7 @@ export class StreamedMessage {
   thinking(index: number, delta: string): BackendEvent {
     const key = index + THINKING_KEY;
     this.parts.set(key, (this.parts.get(key) ?? "") + delta);
-    return { type: "thinking", id: `${this.key()}-thinking`, text: this.reasoning(), final: false };
+    return { type: "thinking", id: `${this.key()}-thinking`, text: this.reasoning(), final: false, ...this.attribution };
   }
 
   /**
@@ -69,11 +85,11 @@ export class StreamedMessage {
 
     const events: BackendEvent[] = [];
     const text = blocks(content, "text", (block) => block.text);
-    if (text) events.push({ type: "message", id, text, final: true });
+    if (text) events.push({ type: "message", id, text, final: true, ...this.attribution });
 
     // The streamed text is the fallback for a message the SDK reports no thinking block back for.
     const thinking = blocks(content, "thinking", (block) => block.thinking) || streamed;
-    if (thinking) events.push({ type: "thinking", id: `${id}-thinking`, text: thinking, final: true });
+    if (thinking) events.push({ type: "thinking", id: `${id}-thinking`, text: thinking, final: true, ...this.attribution });
     return events;
   }
 
@@ -116,7 +132,7 @@ export class StreamedMessages {
   for(producer: string): StreamedMessage {
     const existing = this.byProducer.get(producer);
     if (existing) return existing;
-    const created = new StreamedMessage();
+    const created = new StreamedMessage(producer === "" ? undefined : { delegationId: producer });
     this.byProducer.set(producer, created);
     return created;
   }

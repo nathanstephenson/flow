@@ -21,12 +21,13 @@ import type {
   EffortLevel,
   ModelInfo,
   ModelSpend,
+  Producer,
   Spend,
   TurnEndReason,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
-import { Delegations } from "./delegations.ts";
+import { Delegations, type DelegationBrief } from "./delegations.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
@@ -128,6 +129,26 @@ const DELEGATION_TOOL = "Agent";
  */
 function producerOf(sdkMessage: { parent_tool_use_id?: string | null }): string {
   return sdkMessage.parent_tool_use_id ?? "";
+}
+
+/** Spread onto an event, so an unattributed one carries no explicit `producer: undefined`. */
+function attribution(producer: string): { producer?: Producer } {
+  return producer === "" ? {} : { producer: { delegationId: producer } };
+}
+
+/**
+ * What a Delegation is called and was asked to do, read off the spawning tool call.
+ *
+ * `subagent_type` is the subagent's declared identity (`Explore`) and `description` the one-line
+ * brief; the full `prompt` is deliberately not carried, being the whole instruction rather than
+ * something a transcript row can show. Falls back to the tool name so a client always has something
+ * to print, which is what the protocol promises.
+ */
+export function briefOf(input: unknown): DelegationBrief {
+  const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown };
+  const name = typeof fields.subagent_type === "string" ? fields.subagent_type : DELEGATION_TOOL;
+  const description = typeof fields.description === "string" ? fields.description : undefined;
+  return description === undefined ? { name } : { name, description };
 }
 
 const DEFAULT_ALLOWED_TOOLS = [
@@ -412,10 +433,18 @@ class ClaudeSession implements BackendSession {
         const finished = this.streamed.finish(producer, sdkMessage.message.id, sdkMessage.message.content);
         for (const event of finished) this.emit(event);
         for (const block of sdkMessage.message.content) {
-          if (block.type === "tool_use") {
-            if (block.name === DELEGATION_TOOL) this.delegations.spawn(block.id);
-            this.emit({ type: "tool_started", callId: block.id, name: block.name, input: block.input });
-          }
+          if (block.type !== "tool_use") continue;
+          this.emit({
+            type: "tool_started",
+            callId: block.id,
+            name: block.name,
+            input: block.input,
+            ...attribution(producer),
+          });
+          if (block.name !== DELEGATION_TOOL) continue;
+          const brief = briefOf(block.input);
+          this.delegations.spawn(block.id, brief);
+          this.emit({ type: "delegation", delegationId: block.id, ...brief, state: "running" });
         }
         return;
       }
@@ -425,12 +454,24 @@ class ClaudeSession implements BackendSession {
         if (typeof content === "string") return;
         for (const block of content) {
           if (block.type === "tool_result") {
+            const isError = block.is_error === true;
             this.emit({
               type: "tool_ended",
               callId: block.tool_use_id,
               result: block.content ?? "",
-              isError: block.is_error === true,
+              isError,
+              ...attribution(producerOf(sdkMessage)),
             });
+            // Before closeDelegation, which forgets the brief this snapshot needs.
+            const brief = this.delegations.describe(block.tool_use_id);
+            if (brief) {
+              this.emit({
+                type: "delegation",
+                delegationId: block.tool_use_id,
+                ...brief,
+                state: isError ? "error" : "complete",
+              });
+            }
             this.closeDelegation(block.tool_use_id);
           }
         }

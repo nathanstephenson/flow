@@ -164,3 +164,75 @@ describe("SessionHost", () => {
     assert.equal(typesOf(host, sessionId).length, before);
   });
 });
+
+/**
+ * A Delegation cannot outlive the turn that spawned it (ADR 0015). One still running when the turn
+ * is gone renders on a Revive as a subagent working forever, with a spinner nothing will stop — so
+ * the Session Host closes it wherever it closes a torn turn.
+ */
+describe("a Delegation the turn left behind", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  const delegationStates = (): string[] =>
+    events(host, sessionId)
+      .filter((event) => event.type === "delegation")
+      .map((event) => (event.type === "delegation" ? event.state : ""));
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    await host.send(sessionId, "go", "now");
+  });
+
+  it("is aborted when the Agent Session Settles", async () => {
+    backend.latest.beginDelegation("explorer");
+    await host.settle(sessionId);
+
+    assert.deepEqual(delegationStates(), ["running", "aborted"]);
+    // Before session_settled, the same ordering rule the synthetic turn_ended follows: a state
+    // arriving after the Settle would reduce the pane back out of it.
+    const types = typesOf(host, sessionId);
+    assert.ok(types.lastIndexOf("delegation") < types.indexOf("session_settled"));
+  });
+
+  it("is aborted when the host shuts down", async () => {
+    backend.latest.beginDelegation("explorer");
+    await host.shutdown();
+
+    assert.deepEqual(delegationStates(), ["running", "aborted"]);
+    const types = typesOf(host, sessionId);
+    assert.ok(types.lastIndexOf("delegation") < types.indexOf("session_dormant"));
+  });
+
+  it("leaves a Delegation that finished on its own alone", async () => {
+    const delegation = backend.latest.beginDelegation("explorer");
+    delegation.finish("complete");
+    await host.shutdown();
+
+    assert.deepEqual(delegationStates(), ["running", "complete"], "no second terminal state");
+  });
+
+  it("closes each of several open Delegations", async () => {
+    backend.latest.beginDelegation("one");
+    const two = backend.latest.beginDelegation("two");
+    backend.latest.beginDelegation("three");
+    two.finish("complete");
+    await host.shutdown();
+
+    const aborted = events(host, sessionId).filter(
+      (event) => event.type === "delegation" && event.state === "aborted",
+    );
+    assert.equal(aborted.length, 2, "the one that finished must not be closed again");
+  });
+
+  it("closes a Delegation that was waiting, not only one that was running", async () => {
+    backend.latest.beginDelegation("explorer").wait("permission");
+    await host.shutdown();
+
+    assert.deepEqual(delegationStates(), ["running", "waiting", "aborted"]);
+  });
+});

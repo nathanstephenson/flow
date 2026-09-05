@@ -80,6 +80,34 @@ describe("durability and revive", () => {
     assert.equal(ended[0]?.event.type === "turn_ended" ? ended[0].event.reason : "", "aborted");
   });
 
+  it("closes a Delegation torn by an unclean shutdown", async () => {
+    // The case nothing in memory can cover: the Delegation was open when the process vanished, so
+    // the only record it existed is the transcript. Left alone, a Revive shows a subagent running
+    // forever with a spinner nothing will stop.
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    first.backend.latest.beginDelegation("explorer", "read package.json");
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const delegation = state.entries.find((entry) => entry.kind === "delegation");
+    assert.equal(delegation?.kind === "delegation" && delegation.status, "aborted");
+    assert.equal(state.entries.filter((entry) => entry.kind === "delegation").length, 1);
+  });
+
+  it("leaves a Delegation that finished before the crash alone", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    first.backend.latest.beginDelegation("explorer").finish("complete");
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const delegation = state.entries.find((entry) => entry.kind === "delegation");
+    assert.equal(delegation?.kind === "delegation" && delegation.status, "complete");
+  });
+
   it("revives on demand, continuing the same transcript behind a marker", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

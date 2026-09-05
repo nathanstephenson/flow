@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
-import type { BackendEvent, Capabilities, EffortLevel } from "../../protocol/events.ts";
+import type {
+  BackendEvent,
+  Capabilities,
+  DelegationState,
+  DelegationWait,
+  EffortLevel,
+} from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
 // Two models on purpose: one with an effort control and one without, which is the split every
@@ -32,6 +38,8 @@ export class FakeSession implements BackendSession {
   /** Parallel to `prompts`, so a test can assert what reached the backend beside each text. */
   readonly promptedAttachments: PromptAttachment[][] = [];
   readonly resumedFrom: string | undefined;
+  /** Every Delegation begun in this session, in the style of `prompts`. */
+  readonly delegations: FakeDelegation[] = [];
   modelId: string;
   effort: EffortLevel | undefined;
   disposed = false;
@@ -101,6 +109,107 @@ export class FakeSession implements BackendSession {
     const turnId = this.turnId;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });
+  }
+
+  /**
+   * Test affordance: begin a Delegation, and get a handle whose emissions are attributed to it.
+   *
+   * The only way a test can produce an interleaved parent-and-child stream, which is the case that
+   * breaks anything assuming one producer per turn. Emits the spawning `tool_started` as well as the
+   * first snapshot, because ADR 0015 has the two share an id and a Delegation whose tool call never
+   * appeared would be a shape no real backend can produce.
+   *
+   * `completeTurn` deliberately does not close an open Delegation: leaving one running is the
+   * torn-Delegation fixture, and the Session Host is what has to cope with it.
+   */
+  beginDelegation(name: string, description?: string): FakeDelegation {
+    const delegationId = randomUUID();
+    const delegation = new FakeDelegation(delegationId, name, description, this.emit);
+    this.delegations.push(delegation);
+    this.emit({ type: "tool_started", callId: delegationId, name: "Agent", input: { name, description } });
+    delegation.snapshot({ state: "running" });
+    return delegation;
+  }
+}
+
+/**
+ * One Delegation under test. Every emission carries `producer`, so a test can interleave a parent's
+ * stream with a child's and assert neither takes the other's Entry.
+ */
+export class FakeDelegation {
+  readonly delegationId: string;
+  readonly name: string;
+  readonly description: string | undefined;
+  finished = false;
+
+  private readonly emit: (event: BackendEvent) => void;
+  /** Bumped when a message finalises, so a partial and its finished half share one id. */
+  private messageIndex = 0;
+
+  constructor(
+    delegationId: string,
+    name: string,
+    description: string | undefined,
+    emit: (event: BackendEvent) => void,
+  ) {
+    this.delegationId = delegationId;
+    this.name = name;
+    this.description = description;
+    this.emit = emit;
+  }
+
+  /**
+   * Attributed assistant text. The id is stable until the message finalises, because a partial and
+   * its finished half landing on different ids is the stranded-caret bug — a shape no real adapter
+   * may produce, so the double must not either.
+   */
+  say(text: string, final = true): void {
+    this.emit({
+      type: "message",
+      id: `${this.delegationId}-msg-${this.messageIndex}`,
+      text,
+      final,
+      producer: { delegationId: this.delegationId },
+    });
+    if (final) this.messageIndex += 1;
+  }
+
+  /** An attributed tool call — the subagent's Read, not the parent's. */
+  useTool(name: string, input: unknown, result: unknown, isError = false): string {
+    const callId = randomUUID();
+    const producer = { delegationId: this.delegationId };
+    this.emit({ type: "tool_started", callId, name, input, producer });
+    this.emit({ type: "tool_ended", callId, result, isError, producer });
+    return callId;
+  }
+
+  /** Move to waiting, naming what is being waited on. Snapshot semantics: callable repeatedly. */
+  wait(on: DelegationWait): void {
+    this.snapshot({ state: "waiting", on });
+  }
+
+  /** Back to running from waiting, without ending. */
+  resume(): void {
+    this.snapshot({ state: "running" });
+  }
+
+  finish(reason: "complete" | "aborted" | "error" = "complete"): void {
+    if (this.finished) return;
+    this.finished = true;
+    this.snapshot({ state: reason });
+    // The tool result is what returns a Delegation, the same way a real backend closes one.
+    this.emit({ type: "tool_ended", callId: this.delegationId, result: `${this.name} finished`, isError: reason === "error" });
+  }
+
+  /** @internal — used by FakeSession to emit the opening snapshot. */
+  snapshot(state: DelegationState): void {
+    this.emit({
+      type: "delegation",
+      delegationId: this.delegationId,
+      name: this.name,
+      ...(this.description === undefined ? {} : { description: this.description }),
+      ...state,
+    });
   }
 }
 

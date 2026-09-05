@@ -98,6 +98,97 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /**
+     * Gated on `capabilities.delegation`, the way the Effort assertions gate on
+     * `effortLevels.length`: an adapter that does not report Delegations is not a broken one, and
+     * these must skip rather than fail for it.
+     */
+    it("pairs every Delegation with a terminal snapshot before the turn ends", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.delegation) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const terminal = new Set(["complete", "aborted", "error"]);
+        const open = new Set<string>();
+        for (const event of events) {
+          if (event.type !== "delegation") continue;
+          if (terminal.has(event.state)) open.delete(event.delegationId);
+          else open.add(event.delegationId);
+        }
+        assert.deepEqual([...open], [], "a Delegation left open outlives the turn that spawned it");
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("attributes every producer to a Delegation it declared", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.delegation) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const declared = new Set(
+          events.filter((event) => event.type === "delegation").map((event) => event.delegationId),
+        );
+        const attributed = events
+          .map((event) => ("producer" in event ? event.producer?.delegationId : undefined))
+          .filter((id): id is string => id !== undefined);
+        for (const id of attributed) {
+          assert.ok(declared.has(id), `event attributed to ${id}, which no delegation event declared`);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("gives a Delegation the id of the tool call that spawned it", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.delegation) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const calls = new Set(events.filter((event) => event.type === "tool_started").map((event) => event.callId));
+        for (const event of events) {
+          if (event.type !== "delegation") continue;
+          assert.ok(
+            calls.has(event.delegationId),
+            `delegation ${event.delegationId} shares no id with any tool call (ADR 0015)`,
+          );
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("names a Delegation on every snapshot, so a client always has something to print", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.delegation) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        for (const event of events) {
+          if (event.type !== "delegation") continue;
+          assert.ok(event.name.length > 0, "a snapshot is the whole state, so it always carries a name");
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("reports no Delegation unless it declared the capability", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (session.capabilities.delegation) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const seen = events.filter((event) => event.type === "delegation");
+        assert.deepEqual(seen, [], "an adapter that says it cannot report Delegations must not");
+      } finally {
+        await dispose();
+      }
+    });
+
     it("declares Effort per model, never as an empty list", async () => {
       const { session, dispose } = await start(target);
       try {
