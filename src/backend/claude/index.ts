@@ -112,8 +112,13 @@ function isSingleExecutable(): boolean {
   return sea?.isSea?.() ?? false;
 }
 
-/** The tool whose call spawns a Delegation, and whose result returns it. */
-const DELEGATION_TOOL = "Task";
+/**
+ * The tool whose call spawns a Delegation, and whose result returns it.
+ *
+ * `Agent`, not `Task` — verified against the CLI in spikes/delegation-context-probe.ts, which
+ * observed `tool_use name=Agent` with the subagent's own tool calls attributed to its callId.
+ */
+const DELEGATION_TOOL = "Agent";
 
 /**
  * Who produced an SDK message: the callId of the spawning tool call, or `""` for the Agent Session's
@@ -139,9 +144,10 @@ const DEFAULT_ALLOWED_TOOLS = [
   // every edit for the rest of the session fails for a reason it cannot name.
   "ExitPlanMode",
   "Skill",
-  // Spawns a Delegation. Note that getContextUsage reports the parent's occupancy only, so the
-  // context meter under-reports by whatever the Delegations burned until it aggregates them.
-  "Task",
+  // Spawns a Delegation. A Delegation's own conversation never enters this session's Conversation
+  // Context — only the call and the summary it returns do — so the context meter stays accurate;
+  // what it cannot show is what the Delegation spent, which is a different measure.
+  "Agent",
 ];
 
 class ClaudeSession implements BackendSession {
