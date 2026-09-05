@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
+import { briefOf, describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
@@ -256,5 +256,37 @@ describe("everything billed for an Agent Session", () => {
   it("says nothing when the backend reports no per-model usage", () => {
     // Undefined rather than zero: a zero would render as "Spent 0 tokens", which reads as free.
     assert.equal(describeSpend({}), undefined);
+  });
+});
+
+/**
+ * The brief read off a real `Agent` call. The shape is what the CLI actually sends: `subagent_type`
+ * is the declared identity, `description` the one-line brief, and `prompt` the full instruction —
+ * which is deliberately not carried, being far too long for a transcript row.
+ */
+describe("what the Agent tool says a Delegation is", () => {
+  it("names it by its subagent type", () => {
+    assert.deepEqual(
+      briefOf({
+        description: "Read package.json name",
+        prompt: "Read package.json in the current working directory and report...",
+        subagent_type: "Explore",
+        run_in_background: false,
+      }),
+      { name: "Explore", description: "Read package.json name" },
+    );
+  });
+
+  it("falls back to the tool's own name, so a client always has something to print", () => {
+    assert.deepEqual(briefOf({ prompt: "do a thing" }), { name: "Agent" });
+  });
+
+  it("does not fall over on an input that is not an object", () => {
+    assert.deepEqual(briefOf(undefined), { name: "Agent" });
+    assert.deepEqual(briefOf("nonsense"), { name: "Agent" });
+  });
+
+  it("omits a description that is not a string rather than printing one", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore", description: 42 }), { name: "Explore" });
   });
 });

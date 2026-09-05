@@ -1,5 +1,8 @@
 import type { TurnEndReason } from "../../protocol/events.ts";
 
+/** What a Delegation was called and asked to do, as the spawning tool call reported it. */
+export type DelegationBrief = { name: string; description?: string };
+
 /**
  * The Delegations open in one turn, and the turn end held back while any of them is.
  *
@@ -13,11 +16,20 @@ import type { TurnEndReason } from "../../protocol/events.ts";
  * reason StreamedMessage lives apart.
  */
 export class Delegations {
-  private readonly open = new Set<string>();
+  private readonly open = new Map<string, DelegationBrief>();
   private held: TurnEndReason | undefined;
 
-  spawn(callId: string): void {
-    this.open.add(callId);
+  spawn(callId: string, brief: DelegationBrief): void {
+    this.open.set(callId, brief);
+  }
+
+  /**
+   * What a still-open Delegation was called and asked to do, or undefined for a tool call that is
+   * not one. A snapshot carries the whole state including the name, so the terminal one emitted when
+   * a Delegation returns needs this back — the returning `tool_result` carries only an id.
+   */
+  describe(callId: string): DelegationBrief | undefined {
+    return this.open.get(callId);
   }
 
   /**
