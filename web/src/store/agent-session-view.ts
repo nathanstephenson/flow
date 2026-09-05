@@ -84,12 +84,16 @@ export function createAgentSessionView(
       // Length alone decides whether the key list changed, and that is sound only because the
       // Presentation Transcript is append-only (ADR 0001): `upsert` replaces an entry in place or
       // appends (reduce.ts:169-172), `patchTool` replaces in place (reduce.ts:184-185), and notices
-      // and markers append. Nothing is ever reordered or removed, so an unchanged length means an
+      // and markers append. A `delegation` snapshot upserts by id, so a Delegation's whole life —
+      // running, waiting, and its terminal state — adds exactly one entry however many snapshots it
+      // takes. Nothing is ever reordered or removed, so an unchanged length means an
       // unchanged key list — which is what lets getKeys() hand back the same array while an
       // assistant snapshot grows twenty times a second, and so what keeps TranscriptView out of the
       // streaming path entirely. If reduce ever learns to remove, filter or sort entries, this is
       // the line that breaks, and it breaks quietly, as a key list that no longer matches the
       // transcript. Anything that changes the shape of the transcript has to change this too.
+      // Collapsing a Delegation does not: it filters the *key* list in TranscriptView and leaves
+      // `entries` alone, which is exactly why ADR 0015 requires it to work that way.
       if (next.entries.length !== keys.length) keysStale = true;
       transcriptDirty = true;
       notify();
