@@ -29,6 +29,7 @@ const CAPABILITIES: Capabilities = {
   ],
   compaction: true,
   fork: false,
+  delegation: false,
 };
 
 function baseUi(overrides: Partial<UiState> = {}): UiState {

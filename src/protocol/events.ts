@@ -53,6 +53,12 @@ export type Capabilities = {
   models: ModelInfo[];
   compaction: boolean;
   fork: boolean;
+  /**
+   * Set when this Backend Adapter reports Delegations. False is not "this backend has no subagents"
+   * but "this backend does not tell us about them" — the distinction `effortLevels` draws for a
+   * model with no Effort. A client hides the affordance rather than showing an empty tree.
+   */
+  delegation: boolean;
 };
 
 /**
@@ -75,6 +81,39 @@ export type ModelSpend = { id: string; tokens: number; cached: number; costUSD: 
 export type Spend = { tokens: number; cached: number; costUSD: number; models: ModelSpend[] };
 
 export type TurnEndReason = "complete" | "aborted" | "error";
+
+/**
+ * Who produced an event within a turn.
+ *
+ * Absent means the Agent Session's own model, which is the overwhelmingly common case and the reason
+ * this is optional rather than a required `"self" | Delegation`: every event written before this
+ * existed reduces identically, so no Presentation Transcript needs migrating — and ADR 0001 forbids
+ * rewriting one anyway.
+ *
+ * `delegationId` is the callId of the tool call that spawned the Delegation (ADR 0015), so this and
+ * the `tool` Entry a reader can already see address the same thing.
+ */
+export type Producer = { delegationId: string };
+
+/** What a waiting Delegation is waiting on. A variant, so the type refuses a wait with no object. */
+export type DelegationWait =
+  /** The Provider is not answering — a rate limit, or a retry in flight. */
+  | "provider"
+  /** A Delegation of its own has not come back. */
+  | "child"
+  /** A human has not yet answered a Permission Prompt. */
+  | "permission";
+
+/**
+ * A Delegation's whole state, as a snapshot (ADR 0015).
+ *
+ * The terminal states reuse TurnEndReason's three words verbatim: a Delegation ends the way a turn
+ * does, and inventing a second vocabulary for the same three outcomes is how two front-ends drift.
+ */
+export type DelegationState =
+  | { state: "running" }
+  | { state: "waiting"; on: DelegationWait }
+  | { state: TurnEndReason };
 
 export type NoticeLevel = "info" | "warn" | "error";
 
@@ -101,11 +140,27 @@ export type AgentEvent =
    */
   | { type: "user_message"; id: string; text: string; attachments?: string[] }
   | { type: "turn_started"; turnId: string }
-  | { type: "message"; id: string; text: string; final: boolean }
-  | { type: "thinking"; id: string; text: string; final: boolean }
-  | { type: "tool_started"; callId: string; name: string; input: unknown }
-  | { type: "tool_updated"; callId: string; update: unknown }
-  | { type: "tool_ended"; callId: string; result: unknown; isError: boolean }
+  /**
+   * `producer` on these five is what attributes a Delegation's work to it (ADR 0015). Absent means
+   * the Agent Session's own model. Deliberately not on `turn_started`/`turn_ended` — a Delegation is
+   * not a turn and does not end one — nor on `notice`, which is GoodHarness talking, not a model.
+   */
+  | { type: "message"; id: string; text: string; final: boolean; producer?: Producer }
+  | { type: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
+  | { type: "tool_started"; callId: string; name: string; input: unknown; producer?: Producer }
+  | { type: "tool_updated"; callId: string; update: unknown; producer?: Producer }
+  | { type: "tool_ended"; callId: string; result: unknown; isError: boolean; producer?: Producer }
+  /**
+   * One Delegation, wholly (ADR 0015). `delegationId` is the callId of the spawning tool call, so
+   * this and the `tool_started` beside it address the same thing.
+   *
+   * `name` is the subagent's declared identity where a backend reports one and the tool name where
+   * it does not, so a client always has something to print. `description` is the brief it was given.
+   *
+   * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
+   * `since: N` holds a lifecycle it can complete.
+   */
+  | ({ type: "delegation"; delegationId: string; name: string; description?: string } & DelegationState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[] }
   /**

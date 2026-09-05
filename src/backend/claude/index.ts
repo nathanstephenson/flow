@@ -153,7 +153,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, delegation: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;

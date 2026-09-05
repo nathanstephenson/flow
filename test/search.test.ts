@@ -138,3 +138,31 @@ describe("highlighting the matched runs", () => {
     assert.deepEqual(highlightSegments(text, "stanbul"), [{ text, match: false }]);
   });
 });
+
+/**
+ * A Delegation has no `text`, so the haystack's early return had to learn about it. This one fails
+ * silently rather than loudly if it regresses: searching for a subagent by name would simply stop
+ * matching, with nothing to say it had.
+ */
+describe("searching for a Delegation", () => {
+  it("matches on the subagent's name", () => {
+    const entry: Entry = { kind: "delegation", id: "call_1", name: "explorer", status: "running" };
+    assert.equal(entryHaystack(entry).includes("explorer"), true);
+  });
+
+  it("matches on the brief it was given", () => {
+    const entry: Entry = {
+      kind: "delegation",
+      id: "call_1",
+      name: "explorer",
+      description: "read package.json",
+      status: "complete",
+    };
+    assert.equal(entryHaystack(entry).includes("package.json"), true);
+  });
+
+  it("does not throw on a Delegation with no brief", () => {
+    const entry: Entry = { kind: "delegation", id: "call_1", name: "explorer", status: "complete" };
+    assert.equal(entryHaystack(entry), "explorer");
+  });
+});
