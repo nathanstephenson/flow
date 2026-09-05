@@ -569,6 +569,7 @@ export class SessionHost {
     // Close a turn we are interrupting before recording the Settle. Leaving it open would let the
     // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
     // the rail would say settled while the pane said idle.
+    this.closeOpenDelegations(record, record.log.since(0));
     const openTurn = openTurnId(record.log.since(0));
     if (openTurn) record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
     record.log.append({ type: "session_settled" });
@@ -653,6 +654,7 @@ export class SessionHost {
       record.queue.length = 0;
       record.turnInFlight = false;
       await session.dispose();
+      this.closeOpenDelegations(record, record.log.since(0));
       record.log.append({ type: "session_dormant", reason: "host shutdown" });
       this.persist(record);
     }
@@ -711,9 +713,24 @@ export class SessionHost {
    * rewriting the turn that never finished.
    */
   private closeTornTurn(record: SessionRecord, entries: LoggedEvent[]): void {
+    this.closeOpenDelegations(record, entries);
     const openTurn = openTurnId(entries);
     if (!openTurn) return;
     record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
+  }
+
+  /**
+   * Close every Delegation the transcript still has running.
+   *
+   * A Delegation cannot outlive the turn that spawned it (ADR 0015), so one still running when the
+   * turn is gone is a record of something that will never finish — on a Revive it renders as a
+   * subagent working forever, with a spinner nothing will ever stop. Aborted for the same reason a
+   * torn turn is: the work stopped, and nobody can say whether it had succeeded.
+   */
+  private closeOpenDelegations(record: SessionRecord, entries: LoggedEvent[]): void {
+    for (const open of openDelegations(entries)) {
+      record.log.append({ type: "delegation", ...open, state: "aborted" });
+    }
   }
 
   private async dispatch(record: SessionRecord, message: QueuedMessage): Promise<void> {
@@ -872,6 +889,24 @@ function branchFrom(entries: LoggedEvent[]): Branch | undefined {
     if (event.type === "branch_changed") branch = event.branch;
   }
   return branch;
+}
+
+/**
+ * Delegations the transcript last saw running or waiting.
+ *
+ * Derived rather than held on the record, in the style of `branchFrom` and `capabilitiesFrom`: a
+ * Delegation belongs to a turn of a Backend Session, and the host outlives both. Reading it back
+ * from the transcript is also what makes the restart path work at all — nothing was in memory.
+ */
+function openDelegations(entries: LoggedEvent[]): { delegationId: string; name: string }[] {
+  const open = new Map<string, string>();
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type !== "delegation") continue;
+    if (event.state === "running" || event.state === "waiting") open.set(event.delegationId, event.name);
+    else open.delete(event.delegationId);
+  }
+  return [...open].map(([delegationId, name]) => ({ delegationId, name }));
 }
 
 function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {
