@@ -16,6 +16,7 @@ import {
   selectSubagent,
   setActive,
   setSize,
+  subagentsSide,
   tabLabel,
   toggleMinimised,
   type Dock,
@@ -394,5 +395,52 @@ describe("opening one Subagent from the transcript", () => {
     const second = fillWithSubagents(first, "t1", "subagent:bbb");
     assert.deepEqual(second.tabs[0]?.content, { kind: "subagents", subagentId: "subagent:bbb" });
     assert.equal(second.tabs.length, 1, "retargeting must not add a tab");
+  });
+});
+
+/**
+ * Which Dock the Subagents open in.
+ *
+ * A reader who put the Agents tab in the bottom Dock and then clicks a Subagent in the transcript
+ * should be taken to the tab they already have, not handed a second copy on the right.
+ */
+describe("finding an existing Agents tab", () => {
+  const agentsIn = (side: "bottom" | "right") => {
+    const layout = defaultLayout();
+    return { ...layout, [side]: fillWithSubagents(addTab(layout[side], "t1"), "t1") };
+  };
+
+  it("finds one in the right Dock", () => {
+    assert.equal(subagentsSide(agentsIn("right")), "right");
+  });
+
+  it("finds one in the bottom Dock", () => {
+    assert.equal(subagentsSide(agentsIn("bottom")), "bottom");
+  });
+
+  it("says nothing when neither Dock has one", () => {
+    assert.equal(subagentsSide(defaultLayout()), undefined);
+  });
+
+  it("ignores a Shell tab", () => {
+    const layout = defaultLayout();
+    const withShell = { ...layout, bottom: fillWithShell(addTab(layout.bottom, "s1"), "s1") };
+    assert.equal(subagentsSide(withShell), undefined);
+  });
+
+  it("settles on the right when both Docks have one", () => {
+    // Either would serve the reader; a rule beats a coin, and it keeps the choice reproducible.
+    const layout = defaultLayout();
+    const both = {
+      bottom: fillWithSubagents(addTab(layout.bottom, "b1"), "b1"),
+      right: fillWithSubagents(addTab(layout.right, "r1"), "r1"),
+    };
+    assert.equal(subagentsSide(both), "right");
+  });
+
+  it("finds a minimised Dock's tab, so the Subagents are not duplicated to reach them", () => {
+    const layout = agentsIn("bottom");
+    assert.equal(layout.bottom.minimised, true, "precondition: the Dock starts minimised");
+    assert.equal(subagentsSide(layout), "bottom");
   });
 });

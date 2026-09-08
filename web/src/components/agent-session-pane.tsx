@@ -108,13 +108,12 @@ function AttachedPane({
 
       {/*
         * The transcript only mentions that a Subagent ran; the Docks are where its work lives, and
-        * this pane is the thing that knows both. Same destination as the Composer's strip, but
-        * carrying which Subagent was asked for, so a click lands on that one rather than the list.
+        * this pane is the thing that knows both. Same destination as the Composer's strip — an
+        * existing Agents tab in either Dock, else a new one on the right — but carrying which
+        * Subagent was asked for, so a click lands on that one rather than the list.
         */}
       <SubagentOpenProvider
-        value={(subagentKey) =>
-          docks.dispatch({ type: "open-subagents", side: "right", subagentId: subagentKey })
-        }
+        value={(subagentKey) => docks.dispatch({ type: "open-subagents", subagentId: subagentKey })}
       >
         <TranscriptView view={view} query={query} />
       </SubagentOpenProvider>
@@ -122,9 +121,10 @@ function AttachedPane({
       <Composer
         sessionId={sessionId}
         chrome={chrome}
-        // The right Dock, opened rather than toggled: a reader clicking "2 agents running" while it
-        // happens to be open would otherwise close the thing they asked to see.
-        onShowSubagents={() => docks.dispatch({ type: "open-subagents", side: "right" })}
+        // No side named: whichever Dock already shows the Subagents wins, so a reader who keeps
+        // them in the bottom Dock is not handed a second copy on the right. Opened rather than
+        // toggled, or a click on "2 agents running" would close the thing it asked to see.
+        onShowSubagents={() => docks.dispatch({ type: "open-subagents" })}
       />
     </section>
   );

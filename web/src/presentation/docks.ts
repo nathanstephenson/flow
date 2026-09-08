@@ -107,6 +107,18 @@ export function fillWithSubagents(dock: Dock, tabId: string, subagentId?: string
   return fill(dock, tabId, subagentId === undefined ? { kind: "subagents" } : { kind: "subagents", subagentId });
 }
 
+/**
+ * Which Dock already has an Agents tab, if either does.
+ *
+ * Asked before opening one, so a reader who put the Subagents in the bottom Dock is sent there
+ * rather than getting a second copy on the right. The right Dock is checked first only to settle
+ * the case where both have one — a reader with two is served by either, and a rule beats a coin.
+ */
+export function subagentsSide(layout: DockLayout): DockSide | undefined {
+  const sides: DockSide[] = ["right", "bottom"];
+  return sides.find((side) => layout[side].tabs.some((tab) => tab.content?.kind === "subagents"));
+}
+
 /** Drill into one Subagent, or back to the list when `subagentId` is absent. */
 export function selectSubagent(dock: Dock, tabId: string, subagentId?: string): Dock {
   return {
