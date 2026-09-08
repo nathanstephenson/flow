@@ -11,6 +11,7 @@ import type {
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 import type { Branch } from "../protocol/git.ts";
+import { compactTokens } from "./context-usage.ts";
 
 /**
  * The reducer both front-ends share. The TUI and the web UI import this same function, which is
@@ -76,8 +77,12 @@ export type Entry =
    * meant the meaning was carried only by a text string, so every front-end had to recover it by
    * sniffing a prefix. Kept distinct, `applyEvent`'s exhaustive switch makes a front-end that has
    * not thought about markers a compile error.
+   *
+   * Compaction joins them for the same reason and one more: it is the only one of the four that is
+   * a fact about the Conversation Context rather than the Agent Session, and a reader needs to tell
+   * "the model was given a summary of what it had read" apart from "this session stopped".
    */
-  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived"; text: string };
+  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted"; text: string };
 
 export type ViewState = {
   status: SessionStatus;
@@ -288,6 +293,20 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
       };
 
+    case "compacted":
+      return {
+        ...state,
+        entries: [
+          ...state.entries,
+          {
+            kind: "marker",
+            id: `compacted-${state.entries.length}`,
+            marker: "compacted",
+            text: compactedLabel(event.trigger, event.before, event.after),
+          },
+        ],
+      };
+
     case "session_dormant":
       return {
         ...state,
@@ -323,6 +342,22 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "session_ended":
       return { ...state, status: "ended", endedReason: event.reason };
   }
+}
+
+/**
+ * What a compaction marker says.
+ *
+ * The before-and-after is the whole point of showing it: "Compacted" alone tells a reader something
+ * happened without telling them what it bought, and the number they are watching — occupancy — is
+ * about to drop for a reason nothing else in the transcript explains. A backend that does not report
+ * what it ended at gets the honest half rather than a fabricated arrow.
+ *
+ * Automatic is the case that needs naming, because it is the one nobody asked for.
+ */
+function compactedLabel(trigger: "auto" | "manual", before: number, after: number | undefined): string {
+  const how = trigger === "auto" ? "Compacted automatically" : "Compacted";
+  if (after === undefined) return `${how}, from ${compactTokens(before)} tokens`;
+  return `${how}, ${compactTokens(before)} → ${compactTokens(after)} tokens`;
 }
 
 /** Spread onto an Entry, so an unattributed event does not carry an explicit `producer: undefined`. */

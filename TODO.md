@@ -51,12 +51,10 @@ Touches `src/client/reduce.ts` on the streaming hot path, so measure before and 
 This repo tests pure modules only; there is no component harness. So `SubagentsPane`, the Composer's
 Subagent strip, the Agents row and `SubagentEntryView` are verified by running them and nothing else.
 
-Worse, `TranscriptEntry`'s switch returns `undefined` for an unhandled `Entry` kind rather than
-failing to compile — so a missing case renders nothing, with no error anywhere. `reduce.ts`, the TUI
-and the CLI all make that a compile error; this one file does not.
-
-The cheap half is worth doing on its own: make that switch exhaustive. A harness (jsdom and a
-rendering library) is the larger question.
+The cheap half of this is done: `TranscriptEntry`'s switch is exhaustive now, so a missing `Entry`
+kind is a compile error rather than a row that renders nothing. It caught the compaction marker's
+missing tone on the first build. A harness (jsdom and a rendering library) is the larger question,
+and it is what the components above still want.
 
 ## Sort the Agents list by its own timestamps
 

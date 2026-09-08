@@ -220,10 +220,28 @@ export class PiSession implements BackendSession {
         }
         return;
 
+      /*
+       * pi reports compaction as a start/end pair, but only the end is translated: the Claude
+       * adapter has a single boundary message and nothing else, so emitting a start here would give
+       * one backend two transcript rows per compaction and the other one. `compaction_start` is
+       * left to fall through `default` for that reason, not by oversight.
+       *
+       * A compaction that aborted or is about to be retried did not happen yet, so it says nothing —
+       * the same rule `agent_end` applies to `willRetry` above.
+       */
       case "compaction_end":
         if (event.errorMessage) {
           this.emit({ type: "notice", level: "error", text: event.errorMessage });
         }
+        if (event.aborted || event.willRetry || !event.result) return;
+        // pi counts what it started from and never what it ended at, so `after` goes unreported
+        // rather than guessed. Only "manual" is somebody asking; a threshold and an overflow are
+        // both pi deciding on its own.
+        this.emit({
+          type: "compacted",
+          trigger: event.reason === "manual" ? "manual" : "auto",
+          before: event.result.tokensBefore,
+        });
         return;
 
       default:

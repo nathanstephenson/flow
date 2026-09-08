@@ -68,8 +68,14 @@ function money(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
-/** Hand-rolled rather than `Intl`, to match `relativeTime` and to read the same in a terminal. */
-function compactTokens(count: number): string {
+/**
+ * Hand-rolled rather than `Intl`, to match `relativeTime` and to read the same in a terminal.
+ *
+ * Exported for `reduce.ts`, which writes the same token counts into a compaction marker's label. The
+ * import goes that way and not this one at runtime: this module takes only `ViewState`, as a type,
+ * so there is no cycle to worry about.
+ */
+export function compactTokens(count: number): string {
   if (count >= 1_000_000) return `${Math.round(count / 100_000) / 10}M`;
   if (count >= 1_000) return `${Math.round(count / 1_000)}k`;
   return `${count}`;

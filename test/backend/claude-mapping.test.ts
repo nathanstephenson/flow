@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { addSpend, briefOf, describeContextUsage, describeSpend } from "../../src/backend/claude/index.ts";
+import {
+  addSpend,
+  briefOf,
+  describeCompaction,
+  describeContextUsage,
+  describeSpend,
+} from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
 import { reduceAll, type Entry } from "../../src/client/reduce.ts";
@@ -339,5 +345,50 @@ describe("spend carried across a Revive", () => {
 
   it("says nothing when neither side does", () => {
     assert.equal(addSpend(undefined, undefined), undefined);
+  });
+});
+
+/**
+ * The SDK's compaction boundary, and what a reader ends up seeing.
+ *
+ * Asserted through the reducer as well as on the event, because the marker's wording is the whole
+ * feature: the number a reader is watching is about to fall, and this row is the only thing that
+ * says why.
+ */
+describe("a compaction boundary", () => {
+  it("carries both ends when the SDK reports both", () => {
+    assert.deepEqual(describeCompaction({ trigger: "auto", pre_tokens: 84_000, post_tokens: 22_000 }), {
+      type: "compacted",
+      trigger: "auto",
+      before: 84_000,
+      after: 22_000,
+    });
+  });
+
+  // Omitted rather than defaulted: `after: 0` would read as the conversation having been discarded.
+  it("omits the far end when the SDK does not report it", () => {
+    const event = describeCompaction({ trigger: "manual", pre_tokens: 84_000, post_tokens: undefined });
+    assert.deepEqual(event, { type: "compacted", trigger: "manual", before: 84_000 });
+    assert.ok(!("after" in event));
+  });
+
+  it("reaches the transcript as a marker, not a notice", () => {
+    const entries = transcript([describeCompaction({ trigger: "auto", pre_tokens: 84_000, post_tokens: 22_000 })]);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.kind, "marker");
+    assert.equal(entries[0]?.kind === "marker" && entries[0].marker, "compacted");
+  });
+
+  // Automatic is the case that needs naming, because it is the one nobody asked for.
+  it("says so when nobody asked for it", () => {
+    const said = (trigger: "auto" | "manual", post: number | undefined) => {
+      const [entry] = transcript([describeCompaction({ trigger, pre_tokens: 84_000, post_tokens: post })]);
+      return entry?.kind === "marker" ? entry.text : "";
+    };
+
+    assert.equal(said("auto", 22_000), "Compacted automatically, 84k → 22k tokens");
+    assert.equal(said("manual", 22_000), "Compacted, 84k → 22k tokens");
+    assert.equal(said("auto", undefined), "Compacted automatically, from 84k tokens");
   });
 });

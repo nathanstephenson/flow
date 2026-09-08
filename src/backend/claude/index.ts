@@ -429,6 +429,10 @@ class ClaudeSession implements BackendSession {
           this.sdkSessionId = sdkMessage.session_id;
           this.noteBootedModel(sdkMessage.model);
           this.noteBootedEffort(sdkMessage.effort);
+          return;
+        }
+        if (sdkMessage.subtype === "compact_boundary") {
+          this.emit(describeCompaction(sdkMessage.compact_metadata));
         }
         return;
 
@@ -717,6 +721,33 @@ export function describeContextUsage(
   usage: Pick<SDKControlGetContextUsageResponse, "totalTokens" | "maxTokens">,
 ): { used: number; window: number } {
   return { used: usage.totalTokens, window: usage.maxTokens };
+}
+
+/**
+ * The SDK's compaction boundary as the event a transcript records.
+ *
+ * The SDK compacts the Conversation Context on its own once the window fills, and until this
+ * existed it did so silently — occupancy fell by two thirds between one turn and the next with
+ * nothing to explain it. `trigger` is the SDK's own word for whether anyone asked, and it is kept
+ * verbatim because both halves of it mean here exactly what they mean there.
+ *
+ * `post_tokens` is optional upstream, so `after` is omitted rather than defaulted: a compaction
+ * reported as ending at zero tokens would read as having thrown the conversation away.
+ */
+type CompactBoundary = Extract<SDKMessage, { type: "system"; subtype: "compact_boundary" }>["compact_metadata"];
+
+export function describeCompaction(
+  // `post_tokens` is widened to accept an explicit undefined as well as an absent key, which
+  // `exactOptionalPropertyTypes` otherwise keeps apart. A caller reading it off a message it did not
+  // build should not have to care which of the two it has.
+  metadata: Pick<CompactBoundary, "trigger" | "pre_tokens"> & { post_tokens?: number | undefined },
+): Extract<BackendEvent, { type: "compacted" }> {
+  return {
+    type: "compacted",
+    trigger: metadata.trigger,
+    before: metadata.pre_tokens,
+    ...(metadata.post_tokens === undefined ? {} : { after: metadata.post_tokens }),
+  };
 }
 
 /**

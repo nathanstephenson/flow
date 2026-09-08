@@ -256,6 +256,84 @@ describe("pi adapter mapping", () => {
 });
 
 /**
+ * Compaction is the one thing a backend does to the Conversation Context that a reader would
+ * otherwise only infer from occupancy falling. pi reports it as a start/end pair with three reasons
+ * and four ways of not having happened, and all of them arrive on the same event.
+ */
+describe("pi compaction", () => {
+  let stub: Stub;
+  let events: BackendEvent[];
+  let session: PiSession;
+
+  beforeEach(() => {
+    stub = stubSession();
+    events = [];
+    session = new PiSession(stub.session, (event) => events.push(event));
+    void session;
+  });
+
+  const ended = (over: Record<string, unknown>) =>
+    stub.fire({
+      type: "compaction_end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
+      result: { summary: "…", firstKeptEntryId: "e7", tokensBefore: 84_000 },
+      ...over,
+    } as unknown as AgentSessionEvent);
+
+  const compactions = () => events.filter((event) => event.type === "compacted");
+
+  it("reports what it started from, and does not invent what it ended at", () => {
+    ended({});
+    assert.deepEqual(compactions(), [{ type: "compacted", trigger: "auto", before: 84_000 }]);
+  });
+
+  // pi's three reasons collapse to two triggers: only one of them is somebody asking.
+  it("calls a threshold and an overflow automatic, and only manual manual", () => {
+    ended({ reason: "threshold" });
+    ended({ reason: "overflow" });
+    ended({ reason: "manual" });
+
+    assert.deepEqual(
+      compactions().map((event) => (event.type === "compacted" ? event.trigger : "")),
+      ["auto", "auto", "manual"],
+    );
+  });
+
+  it("says nothing about a compaction that aborted", () => {
+    ended({ aborted: true });
+    assert.deepEqual(compactions(), []);
+  });
+
+  // The same rule agent_end applies: pi is about to go again, so nothing has happened yet.
+  it("waits while pi intends to retry", () => {
+    ended({ willRetry: true });
+    assert.deepEqual(compactions(), []);
+
+    ended({});
+    assert.equal(compactions().length, 1);
+  });
+
+  it("raises a failure as a notice and no marker", () => {
+    ended({ errorMessage: "context window exhausted", result: undefined });
+
+    assert.deepEqual(compactions(), []);
+    assert.deepEqual(
+      events.filter((event) => event.type === "notice"),
+      [{ type: "notice", level: "error", text: "context window exhausted" }],
+    );
+  });
+
+  // Two rows for one compaction is what translating both halves would give, and the Claude adapter
+  // has only a boundary to report. See the comment on `compaction_end` in the adapter.
+  it("ignores compaction_start, so one compaction is one row in both backends", () => {
+    stub.fire({ type: "compaction_start", reason: "threshold" } as unknown as AgentSessionEvent);
+    assert.deepEqual(events, []);
+  });
+});
+
+/**
  * What effort a session reports when nobody has chosen one.
  *
  * The bug this closes: effort was only ever announced when it was *set*, so a new Agent Session that

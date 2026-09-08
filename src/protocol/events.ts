@@ -172,6 +172,22 @@ export type AgentEvent =
    * Optional because only a backend that reports per-model usage can supply it.
    */
   | { type: "context_usage"; used: number; window: number; spend?: Spend }
+  /**
+   * The Conversation Context was compacted — the backend replaced part of what the model can see
+   * with a summary of it.
+   *
+   * Not host-owned: compaction is the backend's, and GoodHarness only reports it (ADR 0001 —
+   * `Conversation Context` is "compacted and owned by the backend"). Nothing here touches the
+   * Presentation Transcript, which is why this is the only trace of it a reader ever gets. Until
+   * this event existed the whole thing happened invisibly, and a session's `used` would simply fall
+   * by two thirds between one turn and the next with nothing to explain it.
+   *
+   * `trigger` separates the compaction a backend ran on its own from one a human asked for, because
+   * they answer different questions: automatic means the window filled up, manual means somebody
+   * decided it should. `after` is optional because a backend that reports the boundary need not
+   * report what it cost — pi says only that it finished.
+   */
+  | { type: "compacted"; trigger: "auto" | "manual"; before: number; after?: number }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "branch_changed"; branch: Branch }
