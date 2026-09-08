@@ -9,7 +9,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
-import type { BackendEvent, Capabilities, EffortLevel, ModelInfo } from "../../protocol/events.ts";
+import type {
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  ModelInfo,
+  Skill,
+  TurnEndReason,
+} from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
 /**
@@ -56,6 +63,12 @@ export class PiSession implements BackendSession {
   private readonly sessionDir: string | undefined;
 
   private turnId: string | undefined;
+  /**
+   * The turn a *requested* compaction opened, kept apart from `turnId` because pi compacts on its
+   * own initiative too — and an automatic one runs inside a turn that is already open. Set only by
+   * `compact`, so `compaction_end` can tell whose turn it is ending, if anyone's.
+   */
+  private compactionTurnId: string | undefined;
   private aborting = false;
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
@@ -110,6 +123,67 @@ export class PiSession implements BackendSession {
   async setEffort(effort: EffortLevel): Promise<void> {
     this.wantedEffort = effort;
     this.applyEffort(effort);
+  }
+
+  /**
+   * pi compacts first-class, so this is the whole implementation: it reports through
+   * `compaction_end`, which `translate` already turns into a `compacted`.
+   *
+   * Not awaited to completion on purpose. pi resolves this when the summary exists, which is a model
+   * call away, and the host's caller is an HTTP request that should not be held open for it — the
+   * events are how anyone finds out either way. A failure still reaches the transcript, because pi
+   * puts it on `compaction_end.errorMessage` rather than throwing.
+   *
+   * The turn is opened *here* rather than on `compaction_start`, because that event fires for pi's
+   * automatic compactions as well — and those happen inside a turn that is already open. Only the
+   * ones somebody asked for occupy a session of their own, and `compactionTurnId` is what tells the
+   * two apart when the end arrives.
+   */
+  async compact(instructions?: string): Promise<void> {
+    const turnId = `compaction-${++this.messageSeq}`;
+    this.compactionTurnId = turnId;
+    this.emit({ type: "turn_started", turnId });
+    // A rejection here would never reach `compaction_end`, and a turn left open pins the session in
+    // `running` forever — refusing every later send and every later compaction.
+    void this.session.compact(instructions).catch((error: unknown) => {
+      this.emit({
+        type: "notice",
+        level: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      this.endCompactionTurn("error");
+    });
+  }
+
+  /** Ends the turn a requested compaction opened, and does nothing for one pi started itself. */
+  private endCompactionTurn(reason: TurnEndReason): void {
+    const turnId = this.compactionTurnId;
+    if (!turnId) return;
+    this.compactionTurnId = undefined;
+    this.emit({ type: "turn_ended", turnId, reason });
+  }
+
+  /**
+   * pi splits what Claude calls a Skill in two: a `Skill` is a capability the model may invoke, and a
+   * `PromptTemplate` is a named prompt a human triggers. Both are offered here, because from the
+   * composer they are the same act — type a name, get a prompt — and only the second has an
+   * `argumentHint` to carry.
+   *
+   * Reloaded first, for the reason the Claude adapter rescans: a human who has just written one
+   * opens the menu expecting to find it.
+   */
+  async skills(): Promise<Skill[]> {
+    await this.session.resourceLoader.reload();
+    const { skills } = this.session.resourceLoader.getSkills();
+    const { prompts } = this.session.resourceLoader.getPrompts();
+    return [
+      ...skills.map((skill) => ({ name: skill.name, description: skill.description })),
+      ...prompts.map((prompt) => ({
+        name: prompt.name,
+        description: prompt.description,
+        ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
+      })),
+    ];
   }
 
   private applyEffort(wanted: EffortLevel): void {
@@ -220,10 +294,43 @@ export class PiSession implements BackendSession {
         }
         return;
 
+      /*
+       * The start drives the chrome, never a transcript row — which is why it is translated now and
+       * was not before. One compaction is still one row in both backends, because that row is
+       * `compacted` and it comes from the end.
+       *
+       * pi announces its own compactions before they begin, so this fires for automatic ones too.
+       * The Claude SDK reports only the boundary after the fact, so there the same state means "a
+       * human asked and it has not come back". Each says what it can see.
+       */
+      case "compaction_start":
+        this.emit({ type: "compacting", active: true });
+        return;
+
+      /*
+       * A compaction that aborted or is about to be retried did not happen yet, so it records
+       * nothing — the same rule `agent_end` applies to `willRetry` above. It still has to stop
+       * saying it is working, so the state is cleared before any of that is decided.
+       */
       case "compaction_end":
+        this.emit({ type: "compacting", active: false });
         if (event.errorMessage) {
           this.emit({ type: "notice", level: "error", text: event.errorMessage });
         }
+        if (event.willRetry) return;
+        // pi counts what it started from and never what it ended at, so `after` goes unreported
+        // rather than guessed. Only "manual" is somebody asking; a threshold and an overflow are
+        // both pi deciding on its own.
+        if (!event.aborted && event.result) {
+          this.emit({
+            type: "compacted",
+            trigger: event.reason === "manual" ? "manual" : "auto",
+            before: event.result.tokensBefore,
+          });
+        }
+        // Last, so the marker lands while the turn is still open — `turn_ended` is what returns the
+        // session to idle and lets the Steering Queue drain behind it.
+        this.endCompactionTurn(event.aborted ? "aborted" : event.errorMessage ? "error" : "complete");
         return;
 
       default:

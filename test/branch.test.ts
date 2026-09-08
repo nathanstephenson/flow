@@ -128,7 +128,9 @@ describe("branches", () => {
         .flatMap((entry) => (entry.event.type === "user_message" ? [entry.event.text] : []));
       assert.equal(said.length, 1, "one message, not two");
       assert.match(said[0] ?? "", /now on branch feature/);
-      assert.match(said[0] ?? "", /carry on$/);
+      // The human's words lead. A backend expands a Skill only when its name is the first thing in
+      // the message, so a note in front of them would stop `/tdd` being a Skill at all.
+      assert.match(said[0] ?? "", /^carry on\n/);
       // And the model was handed the same text the transcript shows.
       assert.equal(backend.latest.prompts.at(-1), said[0]);
     });

@@ -47,6 +47,17 @@ export function KeyboardLayer({
           target.closest("[data-shell-pane]") !== null,
         );
 
+      /*
+       * A handler closer to the element has already dealt with this.
+       *
+       * CodeMirror calls `preventDefault` when one of its keymaps takes a key, and the composer's
+       * `/` menu binds Enter, Tab, the arrows and Escape while it is open. Without this the menu
+       * would close on Escape *and* the composer would blur, because this listener is on `window`
+       * and sees every key the page did not stop. The alternative was `stopPropagation` at each of
+       * those call sites, which is the same rule written once per handler instead of once here.
+       */
+      if (event.defaultPrevented) return;
+
       const binding = resolveBinding(
         {
           key: event.key,

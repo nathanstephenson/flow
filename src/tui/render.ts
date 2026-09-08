@@ -81,10 +81,18 @@ function header(ui: UiState, width: number): string {
 function status(ui: UiState, width: number): string {
   const parts: string[] = [];
   if (ui.view.queue.length > 0) parts.push(`${ui.view.queue.length} queued`);
-  const context = contextUsageLabel(ui.view.contextUsage);
-  if (context) parts.push(context);
+  // Ahead of the reading it is about to change, and in place of it: a percentage that has not moved
+  // yet is the thing someone asking for a compaction is staring at.
+  if (ui.view.compacting) parts.push("compacting…");
+  else {
+    const context = contextUsageLabel(ui.view.contextUsage);
+    if (context) parts.push(context);
+  }
   if (ui.notice) parts.push(ui.notice);
-  parts.push("^S sessions  ^P models  ^E effort  ^G branches  esc abort  ^C quit");
+  // `^K` is listed only where it can be served, on the same rule the web client hides the menu item:
+  // an affordance a backend cannot honour is worse than no affordance at all.
+  const compact = ui.view.capabilities?.compaction ? "  ^K compact" : "";
+  parts.push(`^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`);
   return clip(parts.join("  ·  "), width);
 }
 

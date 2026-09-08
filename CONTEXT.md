@@ -48,6 +48,26 @@ transcript and is never reachable without it.
 _Avoid_: upload, file, blob, paste, and above all **image** — a markdown image in model output is
 already a different thing, and the one kind GoodHarness refuses to fetch (ADR 0012).
 
+**Command**:
+Something a human triggers by name from the composer and **GoodHarness itself performs** — compacting
+the Conversation Context today. Never reaches a model and is the whole of the message it appears in,
+so it enters no Presentation Transcript as a user turn. It does **occupy the Agent Session** while it
+runs, and shows as a turn: a Command may spend money and hold the backend for minutes, and the
+Steering Queue can only order what comes next if it knows the session is busy.
+_Note_: `Command` in `src/protocol/commands.ts` is the wider union of every client→host message,
+`send` and `create` included, and only some of its members are typeable. When both are in play, say
+"a typed Command" for this one.
+_Avoid_: slash command, action, tool — **tool** especially, which is what a model calls.
+
+**Skill**:
+A named prompt the **backend** expands when a message begins with it — `/tdd`, `/code-review`. Unlike
+a Command it is ordinary text all the way down: it enters the Presentation Transcript and the
+Conversation Context as the user turn it is, and may carry arguments after the name. A fact about the
+Scope rather than the Agent Session, read off disk on request and never written down, because it is
+stale the moment someone edits the file behind it.
+_Avoid_: command, prompt template, macro; and note the two backends disagree underneath — pi splits
+this into a Skill and a PromptTemplate, and the adapter offers both as Skills.
+
 **Backend Adapter**:
 The translation of one agent SDK into Agent Events and session commands.
 _Avoid_: driver, provider, runtime, plugin

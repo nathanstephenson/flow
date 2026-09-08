@@ -1,11 +1,15 @@
 import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
 import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentation/composer-hint.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
+import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
+import { ComposerMenu } from "@/components/composer-menu.tsx";
+import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
+import type { Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
@@ -35,8 +39,8 @@ import { cn } from "@/lib/utils.ts";
  * `Chrome.queueDepth` and from nothing else (ADR 0002).
  *
  * The honest cost of that is a gap between Enter and the message appearing on a slow send, and it is
- * paid *on the composer* rather than by faking the transcript: the textarea clears at once, the
- * button spins, and a rejection puts the text back and says why.
+ * paid *on the composer* rather than by faking the transcript: the input clears at once, the button
+ * spins, and a rejection puts the text back and says why.
  */
 export function Composer({
   sessionId,
@@ -53,8 +57,13 @@ export function Composer({
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [sending, setSending] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
+  // `undefined` until the first fetch answers, which is not the same as "none": one is a menu still
+  // looking and the other is a menu with nothing to offer, and they have to read differently.
+  const [skills, setSkills] = useState<Skill[] | undefined>(undefined);
+  const [query, setQuery] = useState<string | undefined>(undefined);
+  const [highlighted, setHighlighted] = useState(0);
 
   const ended = chrome.status === "ended";
   const running = chrome.status === "running";
@@ -71,7 +80,7 @@ export function Composer({
    * The panel floats over the transcript, so the transcript has to know how tall it is or the last
    * line of every message ends up behind it. Written straight onto the DOM as a custom property
    * rather than held in React state — the same `style.setProperty` idiom web/src/fonts.ts uses —
-   * because a textarea growing by one row must not re-render the transcript to say so.
+   * because the input growing by one row must not re-render the transcript to say so.
    */
   useEffect(() => {
     const element = panel.current;
@@ -110,19 +119,17 @@ export function Composer({
   }, [attachments]);
   useEffect(() => () => forget(live.current), [forget]);
 
+  /*
+   * Returns synchronously whether the paste was ours, because that is what decides whether the
+   * editor inserts anything — a promise resolves long after the event has been let through. The
+   * files themselves are read and attached afterwards. Filtering the clipboard for files is the
+   * editor's job now, so this is handed the ones it found.
+   */
   const paste = useCallback(
-    async (event: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> => {
-      const files = [...event.clipboardData.items]
-        .filter((item) => item.kind === "file")
-        .map((item) => item.getAsFile())
-        .filter((file): file is File => file !== null);
-      // Nothing to attach means this was an ordinary text paste, which must keep its default.
-      if (files.length === 0) return;
-      event.preventDefault();
-
+    (files: File[]): boolean => {
       if (!acceptsImages) {
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
-        return;
+        return true;
       }
 
       const verdicts = sortPastedItems(
@@ -131,7 +138,7 @@ export function Composer({
       );
       for (const refusal of refusalsIn(verdicts)) toast.error(refusalMessage(refusal));
 
-      const accepted = await Promise.all(
+      void Promise.all(
         verdicts
           .filter((verdict) => verdict.accepted)
           .map(async (verdict) => ({
@@ -140,11 +147,53 @@ export function Composer({
             data: await base64Of(verdict.item.file),
             url: URL.createObjectURL(verdict.item.file),
           })),
-      );
-      if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+      ).then((accepted) => {
+        if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+      });
+      return true;
     },
     [acceptsImages, attachments.length, chrome.model],
   );
+
+  const catalogue = useMemo(
+    () => triggerables(chrome.capabilities?.compaction, skills ?? []),
+    [chrome.capabilities?.compaction, skills],
+  );
+  const items = useMemo(
+    () => (query === undefined ? [] : matching(catalogue, query)),
+    [catalogue, query],
+  );
+  /*
+   * Open is the *query*, not the items.
+   *
+   * It used to be the items, which meant `/` did nothing at all until a round trip came back — and
+   * did nothing *ever* if it came back empty. A menu that is invisible when it cannot answer is
+   * indistinguishable from one that was never built, which is precisely the report this fixed.
+   */
+  const menuOpen = query !== undefined;
+
+  /*
+   * Fetched when the menu first opens, not on mount and not on every keystroke.
+   *
+   * Reading a Skill directory is a disk listing behind an HTTP round trip, and most sessions never
+   * press `/` at all — so paying for it on mount would be paying for it in every pane, forever, to
+   * answer a question nobody asked. Re-fetched whenever the menu opens from closed, because the
+   * whole point of asking the backend rather than caching is that someone may have just written one.
+   */
+  useEffect(() => {
+    if (query === undefined) return;
+    let live = true;
+    void run<Skill[]>({ type: "list_skills", sessionId }).then((found) => {
+      // `?? []` and not `if (found)`: a host that cannot answer this command at all replies with
+      // null and a 200, so a truthiness check left the menu saying "Looking for Skills…" forever
+      // rather than admitting it had none. An empty answer is still an answer.
+      if (live) setSkills(found ?? []);
+    });
+    return () => {
+      live = false;
+    };
+    // Deliberately not `query`: this fires when the menu opens, not as it filters.
+  }, [query === undefined, run, sessionId]);
 
   const remove = useCallback(
     (key: string): void => {
@@ -156,10 +205,32 @@ export function Composer({
     [forget],
   );
 
-  const send = useCallback(async (): Promise<void> => {
-    const message = text.trim();
+  /*
+   * `override` is what lets Enter complete a name and send it in one keystroke: `setText` has not
+   * settled by the time this runs, so the completed message is handed in rather than read back out
+   * of state that is still a render behind.
+   */
+  const send = useCallback(async (override?: string): Promise<void> => {
+    const message = (override ?? text).trim();
     // An image with no words is a message — "look at this" is what the paste already said.
     if ((message === "" && attachments.length === 0) || sending || ended) return;
+
+    /*
+     * A Command is not a message, so it does not become one.
+     *
+     * This is the whole of the difference the blue pill stands for: nothing is appended to the
+     * Presentation Transcript, no turn is started, no model is asked anything. Whatever follows the
+     * name is the instruction — `/compact keep the API decisions` — and Attachments are left where
+     * they are, since a Command has nowhere to carry them and losing a screenshot to one would be
+     * the same theft a refused send is careful to avoid.
+     */
+    const command = triggeredBy(message, catalogue);
+    if (command?.kind === "command") {
+      const instructions = message.slice(command.name.length + 1).trim();
+      setText("");
+      await run({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+      return;
+    }
 
     const sent = attachments;
     setText("");
@@ -190,11 +261,71 @@ export function Composer({
     if (result === undefined) {
       setText(message);
       setAttachments((current) => [...sent, ...current]);
-      textarea.current?.focus();
+      input.current?.focus();
     } else {
       forget(sent);
     }
-  }, [attachments, ended, forget, run, sending, sessionId, text]);
+  }, [attachments, catalogue, ended, forget, run, sending, sessionId, text]);
+
+  /**
+   * Put the highlighted name in the box.
+   *
+   * `andSend` is the difference between the two keys that pick from this menu, and it is the whole
+   * reason there are two. Tab completes and leaves the caret after the name, which is what someone
+   * reaching for `/code-review [<pr#>]` wants — its arguments are the point. Enter takes the name
+   * as the whole message and goes, which is what someone reaching for `/tdd` wants, and having to
+   * press Enter twice for that would be a keystroke spent on nothing.
+   */
+  const choose = useCallback(
+    (item: (typeof catalogue)[number], andSend = false): void => {
+      const filled = completed(text, item.name);
+      setQuery(undefined);
+      if (andSend) {
+        void send(filled.text);
+        return;
+      }
+      setText(filled.text);
+      input.current?.replace(filled.text, filled.caret);
+      input.current?.focus();
+    },
+    [send, text],
+  );
+
+  /*
+   * The caret decides whether the menu is open, so it arrives with the text. Reset to the first item
+   * on every change: after filtering, the third of five is a different thing than it was, and
+   * keeping the index would leave the highlight on whatever happened to land there.
+   */
+  const onChange = useCallback((next: string, caret: number): void => {
+    setText(next);
+    setQuery(menuQuery(next, caret));
+    setHighlighted(0);
+  }, []);
+
+  /*
+   * `active` is the *rendered* list rather than the query, which is what makes an unrecognised name
+   * fall back to being text. Type `/zzz` and nothing matches, so the menu is not open, so Enter is
+   * an ordinary send — no special case for it anywhere, and none needed.
+   */
+  const menuKeys = useMemo(() => {
+    const pick = (andSend: boolean) => (): boolean => {
+      const picked = items[highlighted];
+      if (!picked) return false;
+      choose(picked, andSend);
+      return true;
+    };
+    return {
+      active: menuOpen,
+      // Guarded, because an open menu can legitimately have nothing in it and `% 0` is NaN.
+      move: (delta: number) =>
+        setHighlighted((current) =>
+          items.length === 0 ? 0 : (current + delta + items.length) % items.length,
+        ),
+      complete: pick(false),
+      submit: pick(true),
+      dismiss: () => setQuery(undefined),
+    };
+  }, [choose, highlighted, items, menuOpen]);
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
@@ -245,53 +376,40 @@ export function Composer({
           */}
         <SubagentStrip chrome={chrome} onShow={onShowSubagents} />
 
+        {/*
+          * Above the Attachments and the input both, so the panel grows upward into the transcript
+          * rather than pushing the box someone is typing in down the screen. It is inside the
+          * measured element, so `--composer-inset` accounts for it as it opens and closes.
+          */}
+        <ComposerMenu
+          open={menuOpen}
+          items={items}
+          loading={skills === undefined}
+          highlighted={highlighted}
+          onChoose={choose}
+          onHighlight={setHighlighted}
+        />
+
         {attachments.length === 0 ? null : (
           <AttachmentTray attachments={attachments} onRemove={remove} />
         )}
 
         <div className="flex items-center gap-1">
-          <textarea
-            ref={textarea}
+          {/*
+            * Enter sends and Shift+Enter is a newline, which is the editor's business now rather
+            * than this component's. While a turn runs Enter is the *only* way to reach the Steering
+            * Queue, because the button beside it is Abort — which is why the placeholder says so.
+            */}
+          <ComposerInput
             value={text}
-            /*
-             * Two rows rather than one, so the box still looks like somewhere a paragraph goes, and
-             * rather than three because the auto-grow below reaches for a third the moment one is
-             * typed — a resting third row is height every pane pays for while empty.
-             *
-             * It is also the auto-grow floor: `height: auto` resolves to the rows-based height and
-             * `scrollHeight` never reports less, so clearing the text returns here, not to one line.
-             */
-            rows={2}
-            disabled={ended}
-            onPaste={(event) => void paste(event)}
             placeholder={composerPlaceholder(chrome)}
-            onChange={(event) => {
-              setText(event.target.value);
-              // Auto-grow, capped. A composer that can swallow the transcript is not a composer.
-              const element = event.target;
-              element.style.height = "auto";
-              element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
-            }}
-            onKeyDown={(event) => {
-              /*
-               * Enter sends, Shift+Enter is a newline — and a composing IME owns Enter outright.
-               * Without that last check, committing a CJK candidate also sends the message, which is
-               * a real bug and not a theoretical one.
-               *
-               * While a turn runs this is the *only* way to reach the Steering Queue, because the
-               * button beside it is Abort. That is why the placeholder says so.
-               */
-              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              void send();
-            }}
-            className={cn(
-              // Sans, matching what the message becomes: a user Entry renders as markdown in the
-              // chrome font, and composing against a monospace grid only to watch it reflow on send
-              // is a small lie about what you wrote.
-              "min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none",
-              "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
-            )}
+            disabled={ended}
+            catalogue={catalogue}
+            menu={menuKeys}
+            handle={input}
+            onChange={onChange}
+            onSubmit={() => void send()}
+            onPasteFiles={paste}
           />
 
           <div className="flex shrink-0 items-center pr-2">

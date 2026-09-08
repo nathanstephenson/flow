@@ -54,6 +54,17 @@
   --status-active: oklch(0.66 0.13 245);
   --status-awaiting: oklch(0.62 0.15 300);
 
+  /*
+   * The composer's two triggers. Same two hues the status dots spend, deliberately: this palette has
+   * one blue and one purple and inventing a third accent would be inventing a third meaning. Named
+   * apart from them so that re-tuning a status dot does not silently move a pill, because the two say
+   * different things — a dot means "look at this", a pill means "this is not an ordinary message".
+   *
+   * Command is the blue, Skill the purple, matching the order they appear in the menu.
+   */
+  --trigger-command: oklch(0.66 0.13 245);
+  --trigger-skill: oklch(0.62 0.15 300);
+
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -92,6 +103,8 @@
 
   --status-active: oklch(0.83 0.08 240);
   --status-awaiting: oklch(0.79 0.1 300);
+  --trigger-command: oklch(0.83 0.08 240);
+  --trigger-skill: oklch(0.79 0.1 300);
 
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
@@ -131,6 +144,8 @@
 
   --color-status-active: var(--status-active);
   --color-status-awaiting: var(--status-awaiting);
+  --color-trigger-command: var(--trigger-command);
+  --color-trigger-skill: var(--trigger-skill);
 
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);

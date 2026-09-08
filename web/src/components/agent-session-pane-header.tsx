@@ -168,9 +168,13 @@ function SteeringQueueBadge({ depth }: { depth: number }) {
  * for one act is how a confirm dialog gets born, and it must never fire on mount or on focus, because
  * a Revive silently spends money and edits files.
  *
- * Compaction and fork are declared on `Capabilities` but there is no `Command` for either, so they
- * are not offered at all rather than offered and broken. The slot is here when the protocol grows
- * them, and the rule when it does is the Effort rule: hide what this Agent Session cannot serve.
+ * Compaction is offered here now that the protocol has a `Command` for it, on the rule this slot was
+ * reserved under: hide what this Agent Session cannot serve. A Dormant or Settled session is offered
+ * it too — the host Revives for a compaction the way it does for a message (ADR 0003), and a session
+ * parked at 90% occupancy is the one most worth compacting before it is picked up again. Only Ended
+ * is hidden, which is the one state with no Conversation Context to reach.
+ *
+ * Fork is still declared on `Capabilities` with no `Command` behind it, and so is still not offered.
  */
 function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
@@ -195,6 +199,21 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
           {canRevive(chrome.status) ? (
             <DropdownMenuItem onClick={() => void run({ type: "revive", sessionId })}>
               Revive this Agent Session
+            </DropdownMenuItem>
+          ) : null}
+          {/*
+            * Everything but `running` and `ended`, which are the two the host refuses: a turn in
+            * flight is still writing to the context that would be summarised, and an Ended session
+            * has none. Stated here as a hidden item rather than left to come back as a 409.
+            *
+            * A Dormant one says so, because it Revives — and a Revive spends money and edits files
+            * (ADR 0003), which is not something a menu item should do without saying it will.
+            */}
+          {chrome.capabilities?.compaction && chrome.status !== "running" && chrome.status !== "ended" ? (
+            <DropdownMenuItem onClick={() => void run({ type: "compact", sessionId })}>
+              {canRevive(chrome.status)
+                ? "Revive and compact the Conversation Context"
+                : "Compact the Conversation Context"}
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem onClick={() => void navigator.clipboard?.writeText(sessionId)}>

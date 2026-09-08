@@ -26,6 +26,19 @@ export function composerPlaceholder(chrome: Chrome): string {
       ? "This Agent Session has Ended. It will not Revive."
       : `Ended: ${chrome.endedReason}. It will not Revive.`;
   }
+  /*
+   * Before the status cases, and named rather than left as a generic "running".
+   *
+   * A compaction takes minutes and produces nothing to read while it works, so a composer that says
+   * only "Enter queues it after the current turn" leaves someone who just asked for one wondering
+   * which turn that is. This is the report that a compaction had no visible indicator: it had one,
+   * a pulsing bar, and a pulsing bar does not answer "did my keystroke do anything".
+   */
+  if (chrome.compacting) {
+    return chrome.queueDepth > 0
+      ? `Compacting the Conversation Context… — Enter queues it behind ${chrome.queueDepth}`
+      : "Compacting the Conversation Context… — Enter queues your message until it is done";
+  }
   if (canRevive(chrome.status)) return "Message… — this Revives the Agent Session";
   if (chrome.status === "running") {
     return chrome.queueDepth > 0

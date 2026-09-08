@@ -122,6 +122,99 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /**
+     * The flag and the method must agree, because the host gates on the flag alone and every client
+     * hides its control on the flag alone. An adapter declaring `compaction` without a `compact` is
+     * a control that throws a TypeError the first time anyone uses it.
+     */
+    it("backs a declared compaction with a method, and an undeclared one with neither", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        assert.equal(
+          typeof session.compact === "function",
+          session.capabilities.compaction,
+          "capabilities.compaction and BackendSession.compact must say the same thing",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * A compaction occupies the session, and it is never the model talking.
+     *
+     * Two halves, and they used to be one. The reply must not read as the model: the Claude SDK has
+     * no `compact()`, so the adapter asks by putting `/compact` down the prompt channel, and the
+     * CLI's answer comes back as an ordinary `assistant` message — left alone, "Not enough messages
+     * to compact." appears in the Presentation Transcript as something the model said.
+     *
+     * **But it must read as a turn**, which is the half this asserted backwards. The reasoning was
+     * that a local command is not billed and that a turn would leave the Steering Queue believing
+     * the session busy. One session's transcript falsified both: summarising billed $3.85 and held
+     * the backend for three minutes, during which "not busy" was the false belief — so a message
+     * typed meanwhile was pushed into the backend ahead of the compaction, and a second request
+     * sailed past the host's refusal. Occupancy is the fact every one of those depends on.
+     *
+     * An empty Conversation Context has nothing to compact, which is the point: this asserts the
+     * shape of the exchange, not that a summary was produced.
+     */
+    it("occupies the session for a compaction, without it reading as the model talking", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.compact) return;
+        await session.compact();
+
+        const started = events.filter((event) => event.type === "turn_started");
+        assert.equal(started.length, 1, "the session is occupied before `compact` returns");
+
+        // Polled rather than slept: a turn left open pins the session in `running` forever, so what
+        // matters is that it closes at all, not how long an adapter's backend took to say so.
+        const ended = await waitFor(events, (event) => event.type === "turn_ended", 60_000);
+        assert.ok(ended, "a compaction that never ends its turn refuses every later message");
+        assert.equal(
+          ended.type === "turn_ended" ? ended.turnId : undefined,
+          started[0]?.type === "turn_started" ? started[0].turnId : "",
+          "it ends the turn it opened",
+        );
+
+        assert.deepEqual(
+          events.filter((event) => event.type === "message"),
+          [],
+          "a local command's reply is not an assistant message",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * Skills only — never the backend's own built-in commands.
+     *
+     * The Claude CLI answers `supportedCommands()` with 52 entries, of which 18 are Skills and the
+     * rest are its own controls: `/model`, `/clear`, `/config`, `/compact`. Offering those in the
+     * composer would be a second way to change state the Session Host already owns and can disagree
+     * with — a `/model` there would move the backend without the host, the picker, or the transcript
+     * ever hearing about it.
+     */
+    it("offers Skills and none of the backend's own controls", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        if (!session.skills) return;
+        const skills = await session.skills();
+
+        for (const skill of skills) {
+          assert.ok(skill.name.length > 0, "a Skill with no name cannot be typed");
+          assert.ok(!skill.name.startsWith("/"), "the name is the name, not the keystroke that finds it");
+        }
+        const offered = new Set(skills.map((skill) => skill.name));
+        for (const control of ["model", "clear", "compact", "config", "effort", "rename"]) {
+          assert.ok(!offered.has(control), `${control} is the backend's own control, not a Skill`);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it("attributes every producer to a Subagent it declared", async () => {
       const { session, events, dispose } = await start(target);
       try {
@@ -269,6 +362,21 @@ async function models(session: BackendSession, timeoutMs = 15_000): Promise<Mode
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return session.capabilities.models;
+}
+
+/** The first event matching `match`, or undefined if none arrives before the deadline. */
+async function waitFor(
+  events: BackendEvent[],
+  match: (event: BackendEvent) => boolean,
+  timeoutMs: number,
+): Promise<BackendEvent | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = events.find(match);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return events.find(match);
 }
 
 /** Adapters announce the model in force with model_changed as the session opens. */

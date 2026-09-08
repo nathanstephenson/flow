@@ -289,6 +289,7 @@ describe("the Chrome shallow compare", () => {
     endedReason: undefined,
     queueDepth: 0,
     activeSubagents: 0,
+    compacting: false,
     link: "live" as const,
   };
 

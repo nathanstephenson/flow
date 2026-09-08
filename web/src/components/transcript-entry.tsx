@@ -47,6 +47,18 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return <NoticeEntryView entry={entry} query={query} />;
     case "marker":
       return <TranscriptMarker entry={entry} />;
+    default: {
+      // An Entry kind this file has not thought about is a compile error here, not a row that
+      // renders nothing. `reduce.ts`, the TUI and the CLI already fail this way; this file did not,
+      // which made a missing case invisible in the one front-end that shows it.
+      //
+      // Unreachable at runtime, and returning null rather than throwing for that reason. `Entry` is
+      // built in memory by the reducer this bundle ships with, so unlike a durable `AgentEvent`
+      // there is no older-client-newer-daemon skew for it to survive.
+      const unhandled: never = entry;
+      void unhandled;
+      return null;
+    }
   }
 });
 
@@ -309,10 +321,13 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
  * precisely so no front-end has to sniff a string prefix to find out what happened.
  */
 const MARKER_TONE: Record<Of<"marker">["marker"], string> = {
-  // A Revive is the one of the three that *started* something, so it is the one at full contrast.
+  // A Revive is the one that *started* something, so it is the one at full contrast.
   revived: "text-primary",
   settled: "text-muted-foreground",
   dormant: "text-muted-foreground",
+  // Receded with the other two: compaction is something a reader wants to be able to find later,
+  // not something to interrupt them with. It is also the only marker that can appear mid-turn.
+  compacted: "text-muted-foreground",
 };
 
 function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {

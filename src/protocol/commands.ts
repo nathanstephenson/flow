@@ -95,4 +95,31 @@ export type Command =
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
   | { type: "switch_branch"; sessionId: string; branch: string }
+  /**
+   * Compact the Conversation Context now, rather than waiting for the backend to do it when the
+   * window fills.
+   *
+   * A command of its own rather than a `/compact` a human types into `send`, because the Session
+   * Host does not treat message text as a string it must preserve byte for byte: `dispatch` may add
+   * a branch-change note to it, and `userContent` moves it behind any Attachments. A command hidden
+   * in that payload would work until the turn someone switched branch, and then silently become a
+   * paid turn asking the model about the word "/compact" — recorded forever in an append-only
+   * transcript, and titling the Agent Session if it were the first message.
+   *
+   * It still *occupies* the session the way a send does, because it spends money and holds the
+   * backend for minutes. That is the host's `turnInFlight`, set here as `dispatch` sets it.
+   *
+   * `instructions` steer what the summary keeps. Both backends take them; neither requires them.
+   */
+  | { type: "compact"; sessionId: string; instructions?: string }
+  /**
+   * The Skills this Agent Session's Scope offers, for the composer's menu.
+   *
+   * A fetch and not an event, and nothing about it is ever written down. Skills are read off disk
+   * and change whenever someone edits a file, so a copy carried on `Capabilities` would be embedded
+   * in `session_started` — a line of an append-only transcript, stale from the first edit and stale
+   * in every session at once. It is also only ever wanted after a deliberate keystroke, which is the
+   * difference between this and the model list: nobody sees a Skill without asking for one.
+   */
+  | { type: "list_skills"; sessionId: string }
   | { type: "list" };

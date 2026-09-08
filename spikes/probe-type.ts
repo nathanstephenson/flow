@@ -5,6 +5,12 @@
  * this is how the SDK event unions and option bags in this repo were verified rather than guessed.
  *
  *   node --experimental-strip-types spikes/probe-type.ts '<type expression>' [propertyFilterRegex]
+ *
+ * Both SDKs are in scope as `pi` and `claude`, so a type expression can name either:
+ *
+ *   … 'pi.AgentSessionEvent' 'compact'
+ *   … 'claude.Query'
+ *   … 'Extract<claude.SDKMessage, {subtype:"compact_boundary"}>'
  */
 import ts from "typescript";
 import { writeFileSync } from "node:fs";
@@ -14,7 +20,12 @@ const target = process.argv[2] ?? "AgentSessionEvent";
 const filter = process.argv[3];
 writeFileSync(
   entry,
-  `import type * as pi from "@earendil-works/pi-coding-agent";\nexport declare const probe: ${target};\n`,
+  [
+    `import type * as pi from "@earendil-works/pi-coding-agent";`,
+    `import type * as claude from "@anthropic-ai/claude-agent-sdk";`,
+    `export declare const probe: ${target};`,
+    ``,
+  ].join("\n"),
 );
 
 const program = ts.createProgram([entry], {

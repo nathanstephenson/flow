@@ -7,8 +7,13 @@ export const KEY = {
    *
    * `^G` for git rather than the obvious `^B` for branch: `^B` is tmux's default prefix, and this
    * is a client people run inside tmux.
+   *
+   * `^K` compacts the Conversation Context. A chord and not an unmodified key for the reason the
+   * web client keeps its Revive one click inside a menu: it asks the backend to summarise, and that
+   * spends tokens.
    */
   ctrlG: "\u0007",
+  ctrlK: "\u000b",
   ctrlP: "\u0010",
   ctrlS: "\u0013",
   escape: "\u001b",

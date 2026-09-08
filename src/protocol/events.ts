@@ -44,6 +44,23 @@ export type ModelInfo = {
 };
 
 /**
+ * One Skill: a named prompt a backend expands when a message begins with it.
+ *
+ * A fact about the Scope, not about the Agent Session, which is why it is fetched rather than
+ * carried on `Capabilities` or written into a transcript. The list is read from disk — a `skills/`
+ * directory, a `.claude/commands` file — and is stale the moment someone edits one, so a copy
+ * embedded in an append-only record would be wrong forever and wrong for every session at once.
+ *
+ * `argumentHint` is the backend's own summary of what may follow the name. Optional because most
+ * take nothing, and an empty string is not the same as no hint at all.
+ */
+export type Skill = {
+  name: string;
+  description: string;
+  argumentHint?: string;
+};
+
+/**
  * What a Backend Adapter can be asked to do, declared per Agent Session. Clients hide controls a
  * backend cannot serve rather than breaking on them. `providers` is what distinguishes the two
  * backends in practice: Claude reports one, pi reports several.
@@ -172,6 +189,39 @@ export type AgentEvent =
    * Optional because only a backend that reports per-model usage can supply it.
    */
   | { type: "context_usage"; used: number; window: number; spend?: Spend }
+  /**
+   * The Conversation Context was compacted — the backend replaced part of what the model can see
+   * with a summary of it.
+   *
+   * Not host-owned: compaction is the backend's, and GoodHarness only reports it (ADR 0001 —
+   * `Conversation Context` is "compacted and owned by the backend"). Nothing here touches the
+   * Presentation Transcript, which is why this is the only trace of it a reader ever gets. Until
+   * this event existed the whole thing happened invisibly, and a session's `used` would simply fall
+   * by two thirds between one turn and the next with nothing to explain it.
+   *
+   * `trigger` separates the compaction a backend ran on its own from one a human asked for, because
+   * they answer different questions: automatic means the window filled up, manual means somebody
+   * decided it should. `after` is optional because a backend that reports the boundary need not
+   * report what it cost — pi says only that it finished.
+   */
+  | { type: "compacted"; trigger: "auto" | "manual"; before: number; after?: number }
+  /**
+   * A compaction is in flight, or has stopped being.
+   *
+   * Separate from `compacted` because they answer different questions and arrive at different times.
+   * `compacted` is the record of one that landed, and it is a row a reader can scroll back to.
+   * This is a state that lasts while the backend summarises — which is a model call, and long enough
+   * that without it someone who asked for a compaction watches nothing happen and asks again.
+   *
+   * Not a row, then, and never rendered as one: it drives the chrome, the way `queue_changed` does.
+   * `active: false` arrives whatever the outcome, including one that failed or compacted nothing,
+   * because the alternative is a spinner nobody can stop.
+   *
+   * Each backend reports what it can see. pi announces its own compactions before they start, so it
+   * says so for automatic ones too; the Claude SDK reports only the boundary after the fact, so
+   * there it means "a human asked for this and it has not come back yet".
+   */
+  | { type: "compacting"; active: boolean }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "branch_changed"; branch: Branch }

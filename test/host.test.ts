@@ -236,3 +236,158 @@ describe("a Subagent the turn left behind", () => {
     assert.deepEqual(subagentStates(), ["running", "waiting", "aborted"]);
   });
 });
+
+/**
+ * Compaction, and the three states the host refuses it in.
+ *
+ * Each refusal is a case where compacting would be a lie rather than a failure, so each is asserted
+ * on its own — and on the transcript staying untouched, because a refused command must leave no
+ * bytes behind in an append-only record.
+ */
+describe("compacting a Conversation Context", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend({ compaction: true });
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+  it("asks the backend, and carries instructions when there are any", async () => {
+    await host.compact(sessionId);
+    await host.compact(sessionId, "keep the API decisions");
+
+    assert.deepEqual(backend.latest.compactions, [undefined, "keep the API decisions"]);
+  });
+
+  // No `user_message`: compaction is not something anyone said, and ADR 0001 puts the act itself in
+  // the backend. The turn around it is the backend's own work being declared, not a record of the
+  // request — and it is what makes the session occupied while it runs.
+  it("opens a turn and writes no message of its own", async () => {
+    const before = typesOf(host, sessionId).length;
+    await host.compact(sessionId);
+
+    assert.deepEqual(typesOf(host, sessionId).slice(before), ["turn_started", "compacted", "turn_ended"]);
+  });
+
+  /*
+   * The bug this test exists for.
+   *
+   * A compaction spends money and holds the backend for minutes, and it used to say so to nobody:
+   * `turnInFlight` stayed false, so a message typed during one was dispatched straight into the
+   * backend ahead of it instead of queueing, and a second `/compact` sailed past the refusal below.
+   * Both are the same missing fact.
+   */
+  it("occupies the session while it runs, so a message queues behind it", async () => {
+    backend.latest.holdCompaction = true;
+    await host.compact(sessionId);
+
+    await host.send(sessionId, "hello", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, [], "the message waited rather than jumping the queue");
+    assert.ok(typesOf(host, sessionId).includes("queue_changed"), "it is in the Steering Queue");
+  });
+
+  it("refuses a second compaction while the first is still running", async () => {
+    backend.latest.holdCompaction = true;
+    await host.compact(sessionId);
+
+    await assert.rejects(() => host.compact(sessionId), /running/);
+    assert.deepEqual(backend.latest.compactions, [undefined], "only the first was asked for");
+  });
+
+  it("refuses while a turn is in flight, rather than queueing behind it", async () => {
+    await host.send(sessionId, "hello", "now");
+    const before = typesOf(host, sessionId).length;
+
+    await assert.rejects(() => host.compact(sessionId), /running/);
+    assert.equal(typesOf(host, sessionId).length, before, "a refusal leaves no bytes behind");
+    assert.deepEqual(backend.latest.compactions, []);
+  });
+
+  /*
+   * A Revive restores the conversation from its resume token rather than summarising it, so what
+   * gets compacted here is the real thing — and a session parked at 90% occupancy is the one most
+   * worth compacting before it is picked up again. Same rule as `send` (ADR 0003).
+   */
+  it("Revives a Dormant session rather than refusing it", async () => {
+    await host.shutdown();
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "dormant");
+
+    await host.compact(sessionId);
+
+    assert.deepEqual(backend.latest.compactions, [undefined]);
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "idle");
+    assert.ok(typesOf(host, sessionId).includes("revived"), "the Revive is on the record");
+  });
+
+  // The one state with no Conversation Context to reach, and a refusal rather than a 500.
+  it("refuses an Ended session", async () => {
+    await host.dispose(sessionId);
+
+    await assert.rejects(() => host.compact(sessionId), /has Ended/);
+  });
+
+  it("refuses a backend that does not declare compaction", async () => {
+    const plain = new FakeBackend();
+    const other = new SessionHost();
+    other.registerBackend(plain);
+    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+
+    await assert.rejects(() => other.compact(id), /cannot compact/);
+    assert.deepEqual(plain.latest.compactions, [], "the method exists; the flag is what gates it");
+  });
+});
+
+/**
+ * The Skill catalogue.
+ *
+ * Every case that cannot be answered properly answers with an empty list, which is the opposite of
+ * how `compact` behaves and deliberately so: a refusal is right for an act with consequences and
+ * wrong for a menu somebody opened with a keystroke.
+ */
+describe("listing the Skills an Agent Session offers", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+  it("answers with what the backend reports, argument hints and all", async () => {
+    assert.deepEqual(await host.listSkills(sessionId), [
+      { name: "tdd", description: "Red, green, refactor" },
+      { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+    ]);
+  });
+
+  // Opening a menu is not a reason to start a Backend Session and spend money (ADR 0003).
+  it("answers empty for a Dormant session rather than Reviving it", async () => {
+    await host.shutdown();
+
+    assert.deepEqual(await host.listSkills(sessionId), []);
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "dormant");
+  });
+
+  it("answers empty when the backend cannot read its own Skills", async () => {
+    backend.latest.skills = async () => {
+      throw new Error("skills directory is unreadable");
+    };
+
+    assert.deepEqual(await host.listSkills(sessionId), []);
+  });
+
+  it("writes nothing down, so a menu is not activity on the transcript", async () => {
+    const before = typesOf(host, sessionId).length;
+    await host.listSkills(sessionId);
+
+    assert.equal(typesOf(host, sessionId).length, before);
+  });
+});

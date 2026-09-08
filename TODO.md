@@ -51,12 +51,27 @@ Touches `src/client/reduce.ts` on the streaming hot path, so measure before and 
 This repo tests pure modules only; there is no component harness. So `SubagentsPane`, the Composer's
 Subagent strip, the Agents row and `SubagentEntryView` are verified by running them and nothing else.
 
-Worse, `TranscriptEntry`'s switch returns `undefined` for an unhandled `Entry` kind rather than
-failing to compile — so a missing case renders nothing, with no error anywhere. `reduce.ts`, the TUI
-and the CLI all make that a compile error; this one file does not.
+The cheap half of this is done: `TranscriptEntry`'s switch is exhaustive now, so a missing `Entry`
+kind is a compile error rather than a row that renders nothing. It caught the compaction marker's
+missing tone on the first build. A harness (jsdom and a rendering library) is the larger question,
+and it is what the components above still want.
 
-The cheap half is worth doing on its own: make that switch exhaustive. A harness (jsdom and a
-rendering library) is the larger question.
+`ComposerInput` is now the sharpest case for one, and it has already made the argument itself: it
+shipped with its placeholder installed both directly and in a compartment, so reconfiguring it drew
+a second placeholder over the first. Typecheck, the build and 681 tests all passed; a person looking
+at the box found it. Everything else it carries fails the same way — a composing IME owning Enter, an
+image paste being consumed rather than inserted, a controlled value pushed back into an uncontrolled
+editor without resetting the selection mid-word, `[data-composer-input]` staying findable for
+`focus-pane`.
+
+The cheap half of *that* is now done too. `EditorState.create` needs no DOM, so
+`composer-extensions.test.ts` builds the real editor headlessly and asserts on facets: that the
+menu's keymap is the first group CodeMirror consults, and that exactly one placeholder is installed
+before and after a reconfigure. Both were verified to fail when the original bugs are put back.
+
+What is still uncovered is everything needing layout, focus or a real key event — the IME guard, the
+paste path, the pill's appearance, the height cap. That is the harness, and it is still the larger
+question.
 
 ## Sort the Agents list by its own timestamps
 

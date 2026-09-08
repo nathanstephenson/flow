@@ -9,7 +9,15 @@ import {
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
-import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent, Spend } from "../protocol/events.ts";
+import type {
+  AgentEvent,
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  LoggedEvent,
+  Skill,
+  Spend,
+} from "../protocol/events.ts";
 import type { Branch } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
@@ -462,6 +470,92 @@ export class SessionHost {
   }
 
   /**
+   * Compact this Agent Session's Conversation Context now.
+   *
+   * **A Dormant or Settled session Revives first**, the way `send` does (ADR 0003: resuming work is
+   * one action). This used to refuse, on the reasoning that a Revive rebuilds a Conversation Context
+   * only to summarise what it just rebuilt. That was simply wrong — a Revive *restores* the
+   * conversation from its resume token, it does not summarise it — and the case for allowing it is
+   * a good one: a session parked at 90% occupancy is exactly the one worth compacting, and before
+   * resuming is the best moment, because nothing is waiting on the turn it makes room for.
+   *
+   * Two refusals are left, and each is a state where compacting would be a lie rather than a
+   * failure.
+   *
+   * **A turn in flight.** The backend is mid-conversation and would be summarising a context it is
+   * still writing to. Queueing it instead was rejected: `abort` discards the queue wholesale, so a
+   * compaction would vanish with a cancelled turn and nobody would be told which of the two they
+   * had lost. This now also refuses a *second* compaction, because a compaction is a turn.
+   *
+   * **A backend that cannot.** Checked on `capabilities.compaction` rather than on whether the
+   * method exists, so an adapter cannot half-declare itself — the flag is what clients hide the
+   * control on, and the two must agree.
+   *
+   * **The session is occupied for the duration**, exactly as `dispatch` occupies it. A compaction
+   * spends money and holds the backend for minutes, and while it did not say so the Steering Queue
+   * believed the session idle — so a message typed during one was pushed into the backend's inbox
+   * ahead of the compaction instead of queueing behind it, and a second `/compact` sailed past the
+   * refusal above. `turn_ended` from the adapter releases it and drains the queue, the same path
+   * every other turn takes.
+   *
+   * No `user_message` is written. Compaction is not something anyone said, and the turn it opens is
+   * the backend's own work; what a reader sees is the `compacted` the adapter emits when it lands.
+   */
+  async compact(sessionId: string, instructions?: string): Promise<void> {
+    const record = this.record(sessionId);
+    // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
+    // something it should be told plainly.
+    if (record.status === "ended") {
+      throw new CommandRefused(`Agent Session ${sessionId} has Ended; it has no Conversation Context`);
+    }
+    if (!record.session) await this.revive(sessionId);
+
+    const session = record.session;
+    if (!session) {
+      throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session to compact`);
+    }
+    if (record.turnInFlight) {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is running; abort the turn or wait for it to end before compacting`,
+      );
+    }
+    if (!session.capabilities.compaction || !session.compact) {
+      throw new CommandRefused(`${record.backendName} cannot compact a Conversation Context`);
+    }
+
+    // Set here rather than left to the adapter's `turn_started`, because that is how `dispatch`
+    // occupies a session too: the host's own flag is what `send` consults, and it must be true
+    // before this returns or the very next request races it.
+    record.turnInFlight = true;
+    record.status = "running";
+    await session.compact(instructions);
+    this.touch(record);
+  }
+
+  /**
+   * The Skills this Agent Session can be sent.
+   *
+   * Answers with an empty list in every case it cannot answer properly — no Backend Session, an
+   * adapter with no notion of Skills, a backend that threw while reading its own disk. This is the
+   * opposite of `compact`'s three refusals, and deliberately: a refusal is right for an act with
+   * consequences and wrong for a menu. Opening one on a Dormant session must not Revive it, and must
+   * not put a red toast in front of someone who pressed `/` — an empty menu says "nothing to offer
+   * here" perfectly well.
+   *
+   * Nothing is written down, and `touch` is not called: reading a menu is not activity on an Agent
+   * Session, and letting it postpone a Reap would mean an idle browser tab kept sessions alive.
+   */
+  async listSkills(sessionId: string): Promise<Skill[]> {
+    const session = this.record(sessionId).session;
+    if (!session?.skills) return [];
+    try {
+      return await session.skills();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Move this Agent Session's Scope to another branch.
    *
    * Refused while running, and running is the only status where it has to be: git would change
@@ -696,6 +790,10 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
+      case "compact":
+        return await this.compact(command.sessionId, command.instructions);
+      case "list_skills":
+        return await this.listSkills(command.sessionId);
       case "list":
         return this.list();
     }
@@ -749,7 +847,16 @@ export class SessionHost {
     const { text, attachments } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
-    const sent = note === undefined ? text : `${note}\n\n${text}`;
+    /*
+     * After the human's words, not before them.
+     *
+     * A backend expands a Skill the human picked — `/tdd`, `/code-review` — only when the name is at
+     * the very start of the message, and a note prepended here moves it off that first character. It
+     * worked until the turn after someone switched branch, and then quietly became an ordinary
+     * message asking the model about the word "/tdd". Ordering within one message is not what makes
+     * the note work: it arrives before the model acts either way.
+     */
+    const sent = note === undefined ? text : `${text}\n\n${note}`;
 
     record.turnInFlight = true;
     record.status = "running";

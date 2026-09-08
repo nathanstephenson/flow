@@ -1,5 +1,5 @@
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
-import type { BackendEvent, Capabilities, EffortLevel, Spend } from "../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel, Skill, Spend } from "../protocol/events.ts";
 
 /**
  * One Attachment's bytes on their way to a model.
@@ -55,6 +55,34 @@ export interface BackendSession {
    * nearest one it can serve and reports what it settled on with `effort_changed`.
    */
   setEffort(effort: EffortLevel): Promise<void>;
+  /**
+   * Compact the Conversation Context now.
+   *
+   * Optional, and paired with `capabilities.compaction`: an adapter that cannot serve one omits the
+   * method and declares `false`, and clients hide the control rather than offering something that
+   * breaks. Present-but-declared-false is not a state worth having, so the host checks the flag and
+   * never the method.
+   *
+   * Reports through events like everything else — a `compacted` when it lands, a `notice` when it
+   * does not. The promise resolving means the request was made, not that the summary exists.
+   *
+   * **Opens a turn and closes it**, exactly as `prompt` does: `turn_started` before this returns,
+   * `turn_ended` whatever the outcome. A compaction is a model call that runs for minutes, and the
+   * Steering Queue orders the messages behind it on that pair alone. An adapter that opens one and
+   * never closes it pins the Agent Session in `running` and refuses everything sent afterwards.
+   */
+  compact?(instructions?: string): Promise<void>;
+  /**
+   * The Skills this Agent Session's Scope offers.
+   *
+   * Asked each time rather than cached, because the answer is a directory listing and a human who
+   * has just written a Skill expects to find it without restarting anything. An adapter that has no
+   * notion of them omits this, and the composer offers none.
+   *
+   * Only Skills — never the backend's own built-in commands. A CLI's `/model`, `/clear` or `/config`
+   * would be a second way to change state the Session Host already owns, able to disagree with it.
+   */
+  skills?(): Promise<Skill[]>;
   dispose(): Promise<void>;
 }
 

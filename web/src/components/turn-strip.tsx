@@ -64,7 +64,7 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
         />
       </div>
 
-      <ContextUsageMeter usage={chrome.contextUsage} />
+      <ContextUsageMeter usage={chrome.contextUsage} compacting={chrome.compacting} />
 
       {/*
        * Pinned to the third track rather than auto-placed: the meter renders nothing at all until
