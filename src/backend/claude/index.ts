@@ -27,7 +27,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
-import { Delegations, type DelegationBrief } from "./delegations.ts";
+import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
@@ -116,12 +116,12 @@ function isSingleExecutable(): boolean {
 }
 
 /**
- * The tool whose call spawns a Delegation, and whose result returns it.
+ * The tool whose call spawns a Subagent, and whose result returns it.
  *
  * `Agent`, not `Task`: the CLI emits `tool_use` with name `Agent`, and the subagent's own tool calls
  * carry that call's id as their `parent_tool_use_id`.
  */
-const DELEGATION_TOOL = "Agent";
+const SUBAGENT_TOOL = "Agent";
 
 /**
  * Who produced an SDK message: the callId of the spawning tool call, or `""` for the Agent Session's
@@ -133,20 +133,20 @@ function producerOf(sdkMessage: { parent_tool_use_id?: string | null }): string 
 
 /** Spread onto an event, so an unattributed one carries no explicit `producer: undefined`. */
 function attribution(producer: string): { producer?: Producer } {
-  return producer === "" ? {} : { producer: { delegationId: producer } };
+  return producer === "" ? {} : { producer: { subagentId: producer } };
 }
 
 /**
- * What a Delegation is called and was asked to do, read off the spawning tool call.
+ * What a Subagent is called and was asked to do, read off the spawning tool call.
  *
  * `subagent_type` is the subagent's declared identity (`Explore`) and `description` the one-line
  * brief; the full `prompt` is deliberately not carried, being the whole instruction rather than
  * something a transcript row can show. Falls back to the tool name so a client always has something
  * to print, which is what the protocol promises.
  */
-export function briefOf(input: unknown): DelegationBrief {
+export function briefOf(input: unknown): SubagentBrief {
   const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown };
-  const name = typeof fields.subagent_type === "string" ? fields.subagent_type : DELEGATION_TOOL;
+  const name = typeof fields.subagent_type === "string" ? fields.subagent_type : SUBAGENT_TOOL;
   const description = typeof fields.description === "string" ? fields.description : undefined;
   return description === undefined ? { name } : { name, description };
 }
@@ -167,14 +167,14 @@ const DEFAULT_ALLOWED_TOOLS = [
   // every edit for the rest of the session fails for a reason it cannot name.
   "ExitPlanMode",
   "Skill",
-  // Spawns a Delegation. A Delegation's own conversation never enters this session's Conversation
+  // Spawns a Subagent. A Subagent's own conversation never enters this session's Conversation
   // Context — only the call and the summary it returns do — so the context meter stays accurate;
-  // what it cannot show is what the Delegation spent, which is a different measure.
+  // what it cannot show is what the Subagent spent, which is a different measure.
   "Agent",
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, delegation: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -195,8 +195,8 @@ class ClaudeSession implements BackendSession {
   private effort: EffortLevel | undefined;
   /** The assistant message in flight, per producer. See StreamedMessages for why it is not one. */
   private readonly streamed = new StreamedMessages();
-  /** Delegations open in this turn, and any turn end waiting on them. */
-  private readonly delegations = new Delegations();
+  /** Subagents open in this turn, and any turn end waiting on them. */
+  private readonly subagents = new Subagents();
   /**
    * Everything this Agent Session has spent, across every model and every Backend Session.
    *
@@ -451,10 +451,10 @@ class ClaudeSession implements BackendSession {
             input: block.input,
             ...attribution(producer),
           });
-          if (block.name !== DELEGATION_TOOL) continue;
+          if (block.name !== SUBAGENT_TOOL) continue;
           const brief = briefOf(block.input);
-          this.delegations.spawn(block.id, brief);
-          this.emit({ type: "delegation", delegationId: block.id, ...brief, state: "running" });
+          this.subagents.spawn(block.id, brief);
+          this.emit({ type: "subagent", subagentId: block.id, ...brief, state: "running" });
         }
         return;
       }
@@ -472,17 +472,17 @@ class ClaudeSession implements BackendSession {
               isError,
               ...attribution(producerOf(sdkMessage)),
             });
-            // Before closeDelegation, which forgets the brief this snapshot needs.
-            const brief = this.delegations.describe(block.tool_use_id);
+            // Before closeSubagent, which forgets the brief this snapshot needs.
+            const brief = this.subagents.describe(block.tool_use_id);
             if (brief) {
               this.emit({
-                type: "delegation",
-                delegationId: block.tool_use_id,
+                type: "subagent",
+                subagentId: block.tool_use_id,
                 ...brief,
                 state: isError ? "error" : "complete",
               });
             }
-            this.closeDelegation(block.tool_use_id);
+            this.closeSubagent(block.tool_use_id);
           }
         }
         return;
@@ -541,26 +541,26 @@ class ClaudeSession implements BackendSession {
   }
 
   /**
-   * End the turn a `result` reports, unless a Delegation is still open — see Delegations for why a
+   * End the turn a `result` reports, unless a Subagent is still open — see Subagents for why a
    * result cannot be attributed to one.
    *
    * Only this path defers. The pump's error path calls `endTurn` directly, because a stream that has
    * failed will never deliver the `tool_result` that would release a held end.
    */
   private finishTurn(reason: TurnEndReason): void {
-    if (this.delegations.hold(reason)) return;
+    if (this.subagents.hold(reason)) return;
     this.endTurn(reason);
   }
 
-  private closeDelegation(callId: string): void {
-    const released = this.delegations.returned(callId);
+  private closeSubagent(callId: string): void {
+    const released = this.subagents.returned(callId);
     if (released) this.endTurn(released);
   }
 
   private endTurn(reason: TurnEndReason): void {
     const turnId = this.turnId;
     // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
-    this.delegations.clear();
+    this.subagents.clear();
     if (!turnId) return;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });
@@ -650,9 +650,9 @@ type SdkModelUsage = {
  * Everything billed for this Agent Session so far, per model.
  *
  * `modelUsage` is keyed by model and is cumulative for the session, so it is read rather than
- * accumulated — and because a Delegation runs under its own model entry, its spend is already in
+ * accumulated — and because a Subagent runs under its own model entry, its spend is already in
  * here. That is the whole reason this exists: `getContextUsage` reports occupancy, and a
- * Delegation's conversation never occupies the parent's Conversation Context.
+ * Subagent's conversation never occupies the parent's Conversation Context.
  *
  * Cache reads are counted in `tokens` and reported again in `cached`. They are billed, and on a long
  * session they are most of the count — so a total that omitted them would match no invoice, and a
@@ -702,7 +702,7 @@ export function describeSpend(result: { modelUsage?: Record<string, SdkModelUsag
     byModel.set(id, running);
   }
 
-  // Costliest first: the reading is about where the money went, and a Delegation on a cheap model
+  // Costliest first: the reading is about where the money went, and a Subagent on a cheap model
   // should not push the model that did the work down the list.
   const models = [...byModel.values()].sort((a, b) => b.costUSD - a.costUSD);
   return {

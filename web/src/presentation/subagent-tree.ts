@@ -1,10 +1,10 @@
 import type { Entry } from "../../../src/client/reduce.ts";
 
 /**
- * Which rows belong to a Delegation, and which of them to draw.
+ * Which rows belong to a Subagent, and which of them to draw.
  *
  * Grouping is a rendering concern (ADR 0015): the Presentation Transcript stays one flat,
- * append-only list ordered by `seq`, and a Delegation's work is recognised here by the `producer`
+ * append-only list ordered by `seq`, and a Subagent's work is recognised here by the `producer`
  * its events already carry. Collapsing therefore filters **keys**, never `entries` — filtering the
  * entry list would break the length heuristic in `agent-session-view.ts`, quietly.
  *
@@ -12,20 +12,20 @@ import type { Entry } from "../../../src/client/reduce.ts";
  * rather than growing a second one that disagrees about what belongs to what.
  */
 
-/** The key of the Entry a Delegation's own row uses, given the id its members are attributed to. */
-export function delegationKey(delegationId: string): string {
-  return `delegation:${delegationId}`;
+/** The key of the Entry a Subagent's own row uses, given the id its members are attributed to. */
+export function subagentKey(subagentId: string): string {
+  return `subagent:${subagentId}`;
 }
 
-/** The Delegation a row belongs to, or undefined for the Agent Session's own work. */
+/** The Subagent a row belongs to, or undefined for the Agent Session's own work. */
 export function producerKey(entry: Entry): string | undefined {
-  return "producer" in entry && entry.producer ? delegationKey(entry.producer.delegationId) : undefined;
+  return "producer" in entry && entry.producer ? subagentKey(entry.producer.subagentId) : undefined;
 }
 
 /**
- * Rows to draw, with the members of every collapsed Delegation removed.
+ * Rows to draw, with the members of every collapsed Subagent removed.
  *
- * A Delegation's own row always survives — collapsing hides what a subagent did, not that it ran,
+ * A Subagent's own row always survives — collapsing hides what a subagent did, not that it ran,
  * and a collapse that could hide its own control would be a row nobody can get back.
  *
  * Order is preserved exactly. Members are dropped, never moved: a subagent's rows sit where they
@@ -46,26 +46,26 @@ export function visibleKeys(
 }
 
 /**
- * How many rows a Delegation is holding, so its own row can say what collapsing would hide.
+ * How many rows a Subagent is holding, so its own row can say what collapsing would hide.
  *
  * Counted over the unfiltered key list, because the count has to stay the same once the rows it
- * counts have been filtered away — otherwise a collapsed Delegation reports zero.
+ * counts have been filtered away — otherwise a collapsed Subagent reports zero.
  */
 export function memberCount(
   keys: readonly string[],
   getEntry: (key: string) => Entry | undefined,
-  delegation: string,
+  subagent: string,
 ): number {
   let count = 0;
   for (const key of keys) {
     const entry = getEntry(key);
-    if (entry && producerKey(entry) === delegation) count += 1;
+    if (entry && producerKey(entry) === subagent) count += 1;
   }
   return count;
 }
 
-/** Every Delegation with at least one row of its own, in the order they first appear. */
-export function delegationsWithMembers(
+/** Every Subagent with at least one row of its own, in the order they first appear. */
+export function subagentsWithMembers(
   keys: readonly string[],
   getEntry: (key: string) => Entry | undefined,
 ): string[] {

@@ -52,7 +52,7 @@ const started: AgentEvent = {
   type: "session_started",
   backend: "fake",
   scope: "/tmp/scope",
-  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, delegation: false },
+  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, subagents: false },
 };
 
 describe("an Agent Session view", () => {

@@ -4,8 +4,8 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
-import { useDelegationCollapse } from "@/components/delegation-collapse.tsx";
-import { producerKey } from "@/presentation/delegation-tree.ts";
+import { useSubagentCollapse } from "@/components/subagent-collapse.tsx";
+import { producerKey } from "@/presentation/subagent-tree.ts";
 import { entryKey } from "@/presentation/entry-key.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
@@ -52,8 +52,8 @@ function renderEntry({ entry, query, sessionId }: TranscriptEntryProps) {
       return <ThinkingEntryView entry={entry} query={query} />;
     case "tool":
       return <ToolCallEntryView entry={entry} query={query} />;
-    case "delegation":
-      return <DelegationEntryView entry={entry} query={query} />;
+    case "subagent":
+      return <SubagentEntryView entry={entry} query={query} />;
     case "notice":
       return <NoticeEntryView entry={entry} query={query} />;
     case "marker":
@@ -210,7 +210,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 }
 
 /**
- * One Delegation: what a subagent was asked to do, and how far it has got (ADR 0015).
+ * One Subagent: what a subagent was asked to do, and how far it has got (ADR 0015).
  *
  * The same species of thing as a tool call — bounded, and a record of work that happened elsewhere —
  * so it takes the same card shape rather than inventing a second one. It sits deeper than a tool
@@ -220,13 +220,13 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
  *
  * Waiting states name what is being waited on. "Waiting" alone is a spinner with extra steps.
  */
-function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query: string }) {
+function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: string }) {
   const [toggled, setToggled] = useState<boolean | undefined>(undefined);
   const open = toggled ?? entry.status === "error";
   const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
   const live = entry.status === "running" || entry.status === "waiting";
 
-  const collapse = useDelegationCollapse();
+  const collapse = useSubagentCollapse();
   const key = entryKey(entry);
   const hidden = collapse.isCollapsed(key);
   const members = collapse.members(key);
@@ -239,7 +239,7 @@ function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query:
         className="rounded-lg border bg-card text-card-foreground"
       >
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <ToolStatusDot status={entry.status === "waiting" ? "running" : delegationDot(entry.status)} />
+          <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
           <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
           <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
           {entry.description === undefined ? null : (
@@ -267,7 +267,7 @@ function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query:
         </summary>
 
         <div className="border-t p-3 text-sm">
-          <Highlighted text={entry.description ?? "No brief was recorded for this Delegation."} query={query} />
+          <Highlighted text={entry.description ?? "No brief was recorded for this Subagent."} query={query} />
         </div>
       </details>
     </div>
@@ -275,7 +275,7 @@ function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query:
 }
 
 /** Aborted is a stop, not a failure: only an error earns the one coloured token. */
-function delegationDot(status: Of<"delegation">["status"]): "running" | "complete" | "error" {
+function subagentDot(status: Of<"subagent">["status"]): "running" | "complete" | "error" {
   if (status === "error") return "error";
   return status === "running" ? "running" : "complete";
 }

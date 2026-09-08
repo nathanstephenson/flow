@@ -117,10 +117,10 @@ export class StreamedMessage {
 }
 
 /**
- * One StreamedMessage per producer, so a Delegation's stream cannot disturb its parent's.
+ * One StreamedMessage per producer, so a Subagent's stream cannot disturb its parent's.
  *
  * A single StreamedMessage cannot serve two producers: `start()` clears `parts` and overwrites `id`,
- * so a Delegation's `message_start` arriving mid-parent-message takes the id the parent's Entry is
+ * so a Subagent's `message_start` arriving mid-parent-message takes the id the parent's Entry is
  * already on screen under, and the parent's accumulated text is discarded. That is the same stranded
  * caret this module exists to prevent, reached by a second writer rather than by a changing id.
  *
@@ -132,7 +132,7 @@ export class StreamedMessages {
   for(producer: string): StreamedMessage {
     const existing = this.byProducer.get(producer);
     if (existing) return existing;
-    const created = new StreamedMessage(producer === "" ? undefined : { delegationId: producer });
+    const created = new StreamedMessage(producer === "" ? undefined : { subagentId: producer });
     this.byProducer.set(producer, created);
     return created;
   }

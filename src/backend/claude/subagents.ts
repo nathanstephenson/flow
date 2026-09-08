@@ -1,10 +1,10 @@
 import type { TurnEndReason } from "../../protocol/events.ts";
 
-/** What a Delegation was called and asked to do, as the spawning tool call reported it. */
-export type DelegationBrief = { name: string; description?: string };
+/** What a Subagent was called and asked to do, as the spawning tool call reported it. */
+export type SubagentBrief = { name: string; description?: string };
 
 /**
- * The Delegations open in one turn, and the turn end held back while any of them is.
+ * The Subagents open in one turn, and the turn end held back while any of them is.
  *
  * `SDKResultMessage` carries no `parent_tool_use_id` at SDK 0.3.247, so a `result` emitted for a
  * subagent cannot be told apart from the one that ends the turn. Ending on the first would clear
@@ -15,26 +15,26 @@ export type DelegationBrief = { name: string; description?: string };
  * without spawning a Claude process, so none of this would be reachable from a test there — the same
  * reason StreamedMessage lives apart.
  */
-export class Delegations {
-  private readonly open = new Map<string, DelegationBrief>();
+export class Subagents {
+  private readonly open = new Map<string, SubagentBrief>();
   private held: TurnEndReason | undefined;
 
-  spawn(callId: string, brief: DelegationBrief): void {
+  spawn(callId: string, brief: SubagentBrief): void {
     this.open.set(callId, brief);
   }
 
   /**
-   * What a still-open Delegation was called and asked to do, or undefined for a tool call that is
+   * What a still-open Subagent was called and asked to do, or undefined for a tool call that is
    * not one. A snapshot carries the whole state including the name, so the terminal one emitted when
-   * a Delegation returns needs this back — the returning `tool_result` carries only an id.
+   * a Subagent returns needs this back — the returning `tool_result` carries only an id.
    */
-  describe(callId: string): DelegationBrief | undefined {
+  describe(callId: string): SubagentBrief | undefined {
     return this.open.get(callId);
   }
 
   /**
-   * Record that a Delegation returned. Answers with the turn end that was waiting on it, and only
-   * when it was the last one open — so a turn with three Delegations ends once, after the third.
+   * Record that a Subagent returned. Answers with the turn end that was waiting on it, and only
+   * when it was the last one open — so a turn with three Subagents ends once, after the third.
    */
   returned(callId: string): TurnEndReason | undefined {
     if (!this.open.delete(callId)) return undefined;
@@ -45,7 +45,7 @@ export class Delegations {
   }
 
   /**
-   * Offer a turn end. True when it was held because a Delegation is still open, false when the caller
+   * Offer a turn end. True when it was held because a Subagent is still open, false when the caller
    * should end the turn now.
    */
   hold(reason: TurnEndReason): boolean {

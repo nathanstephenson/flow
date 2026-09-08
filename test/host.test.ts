@@ -166,19 +166,19 @@ describe("SessionHost", () => {
 });
 
 /**
- * A Delegation cannot outlive the turn that spawned it (ADR 0015). One still running when the turn
+ * A Subagent cannot outlive the turn that spawned it (ADR 0015). One still running when the turn
  * is gone renders on a Revive as a subagent working forever, with a spinner nothing will stop — so
  * the Session Host closes it wherever it closes a torn turn.
  */
-describe("a Delegation the turn left behind", () => {
+describe("a Subagent the turn left behind", () => {
   let backend: FakeBackend;
   let host: SessionHost;
   let sessionId: string;
 
-  const delegationStates = (): string[] =>
+  const subagentStates = (): string[] =>
     events(host, sessionId)
-      .filter((event) => event.type === "delegation")
-      .map((event) => (event.type === "delegation" ? event.state : ""));
+      .filter((event) => event.type === "subagent")
+      .map((event) => (event.type === "subagent" ? event.state : ""));
 
   beforeEach(async () => {
     backend = new FakeBackend();
@@ -189,50 +189,50 @@ describe("a Delegation the turn left behind", () => {
   });
 
   it("is aborted when the Agent Session Settles", async () => {
-    backend.latest.beginDelegation("explorer");
+    backend.latest.beginSubagent("explorer");
     await host.settle(sessionId);
 
-    assert.deepEqual(delegationStates(), ["running", "aborted"]);
+    assert.deepEqual(subagentStates(), ["running", "aborted"]);
     // Before session_settled, the same ordering rule the synthetic turn_ended follows: a state
     // arriving after the Settle would reduce the pane back out of it.
     const types = typesOf(host, sessionId);
-    assert.ok(types.lastIndexOf("delegation") < types.indexOf("session_settled"));
+    assert.ok(types.lastIndexOf("subagent") < types.indexOf("session_settled"));
   });
 
   it("is aborted when the host shuts down", async () => {
-    backend.latest.beginDelegation("explorer");
+    backend.latest.beginSubagent("explorer");
     await host.shutdown();
 
-    assert.deepEqual(delegationStates(), ["running", "aborted"]);
+    assert.deepEqual(subagentStates(), ["running", "aborted"]);
     const types = typesOf(host, sessionId);
-    assert.ok(types.lastIndexOf("delegation") < types.indexOf("session_dormant"));
+    assert.ok(types.lastIndexOf("subagent") < types.indexOf("session_dormant"));
   });
 
-  it("leaves a Delegation that finished on its own alone", async () => {
-    const delegation = backend.latest.beginDelegation("explorer");
-    delegation.finish("complete");
+  it("leaves a Subagent that finished on its own alone", async () => {
+    const subagent = backend.latest.beginSubagent("explorer");
+    subagent.finish("complete");
     await host.shutdown();
 
-    assert.deepEqual(delegationStates(), ["running", "complete"], "no second terminal state");
+    assert.deepEqual(subagentStates(), ["running", "complete"], "no second terminal state");
   });
 
-  it("closes each of several open Delegations", async () => {
-    backend.latest.beginDelegation("one");
-    const two = backend.latest.beginDelegation("two");
-    backend.latest.beginDelegation("three");
+  it("closes each of several open Subagents", async () => {
+    backend.latest.beginSubagent("one");
+    const two = backend.latest.beginSubagent("two");
+    backend.latest.beginSubagent("three");
     two.finish("complete");
     await host.shutdown();
 
     const aborted = events(host, sessionId).filter(
-      (event) => event.type === "delegation" && event.state === "aborted",
+      (event) => event.type === "subagent" && event.state === "aborted",
     );
     assert.equal(aborted.length, 2, "the one that finished must not be closed again");
   });
 
-  it("closes a Delegation that was waiting, not only one that was running", async () => {
-    backend.latest.beginDelegation("explorer").wait("permission");
+  it("closes a Subagent that was waiting, not only one that was running", async () => {
+    backend.latest.beginSubagent("explorer").wait("permission");
     await host.shutdown();
 
-    assert.deepEqual(delegationStates(), ["running", "waiting", "aborted"]);
+    assert.deepEqual(subagentStates(), ["running", "waiting", "aborted"]);
   });
 });

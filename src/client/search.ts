@@ -20,11 +20,11 @@ import type { Entry } from "./reduce.ts";
  * the path was on screen in the rendered diff, because it is in `input.file_path`. The arguments are
  * the half of a tool call a reader is most likely to remember, so they are in the haystack.
  *
- * A Delegation has no `text` at all, so the early return had to learn about it: what a reader
+ * A Subagent has no `text` at all, so the early return had to learn about it: what a reader
  * remembers of one is what it was called and what it was asked to do.
  */
 export function entryHaystack(entry: Entry): string {
-  if (entry.kind === "delegation") {
+  if (entry.kind === "subagent") {
     return [entry.name, entry.description].filter((part) => part !== undefined && part !== "").join("\n");
   }
   if (entry.kind !== "tool") return entry.text;

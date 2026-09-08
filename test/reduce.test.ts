@@ -5,7 +5,7 @@ import { initialState, reduceAll, type Entry, type ViewState } from "../src/clie
 import { SessionLog } from "../src/daemon/log.ts";
 import type { AgentEvent, LoggedEvent } from "../src/protocol/events.ts";
 
-const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, delegation: false };
+const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false };
 
 function transcript(...events: AgentEvent[]): SessionLog {
   const log = new SessionLog("s1");
@@ -195,13 +195,13 @@ describe("the branch a Scope is on", () => {
 });
 
 /**
- * A Delegation reduces to a flat, top-level Entry beside the tool call that spawned it (ADR 0015).
+ * A Subagent reduces to a flat, top-level Entry beside the tool call that spawned it (ADR 0015).
  *
  * The invariant these protect is `entries.length`: `web/src/store/agent-session-view.ts` decides the
- * key list changed by length alone, sound only while the transcript is append-only. A Delegation's
+ * key list changed by length alone, sound only while the transcript is append-only. A Subagent's
  * whole life must therefore add exactly one Entry, however many snapshots it takes to get there.
  */
-describe("a Delegation in the Presentation Transcript", () => {
+describe("a Subagent in the Presentation Transcript", () => {
   const at = (seq: number, event: AgentEvent): LoggedEvent => ({ seq, sessionId: "s1", at: "", event });
 
   const lifecycle = (...states: AgentEvent[]): ViewState =>
@@ -209,55 +209,55 @@ describe("a Delegation in the Presentation Transcript", () => {
 
   it("collapses every snapshot into one Entry", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "waiting", on: "provider" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "complete" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "waiting", on: "provider" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "complete" },
     );
 
     assert.equal(view.entries.length, 1, "the length heuristic in the web store depends on this");
     const entry = view.entries[0];
-    assert.equal(entry?.kind === "delegation" && entry.status, "complete");
+    assert.equal(entry?.kind === "subagent" && entry.status, "complete");
   });
 
   it("drops waitingOn once it is no longer waiting", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "waiting", on: "permission" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "waiting", on: "permission" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
     );
     const entry = view.entries[0];
-    assert.equal(entry?.kind === "delegation" && entry.waitingOn, undefined, "a stale wait is a lie");
+    assert.equal(entry?.kind === "subagent" && entry.waitingOn, undefined, "a stale wait is a lie");
   });
 
   it("sits beside the tool call it shares an id with, not inside it", () => {
     const view = lifecycle(
       { type: "tool_started", callId: "call_1", name: "Agent", input: {} },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
     );
-    assert.deepEqual(view.entries.map((entry: Entry) => entry.kind), ["tool", "delegation"]);
+    assert.deepEqual(view.entries.map((entry: Entry) => entry.kind), ["tool", "subagent"]);
     assert.deepEqual(view.entries.map((entry: Entry) => entry.id), ["call_1", "call_1"]);
   });
 
-  it("attributes a Delegation's message to it, at the top level", () => {
+  it("attributes a Subagent's message to it, at the top level", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "message", id: "m1", text: "reading", final: true, producer: { delegationId: "call_1" } },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "message", id: "m1", text: "reading", final: true, producer: { subagentId: "call_1" } },
       { type: "message", id: "m2", text: "parent", final: true },
     );
 
-    assert.deepEqual(view.entries.map((entry) => entry.kind), ["delegation", "assistant", "assistant"]);
+    assert.deepEqual(view.entries.map((entry) => entry.kind), ["subagent", "assistant", "assistant"]);
     const child = view.entries[1];
     const parent = view.entries[2];
-    assert.deepEqual(child?.kind === "assistant" && child.producer, { delegationId: "call_1" });
+    assert.deepEqual(child?.kind === "assistant" && child.producer, { subagentId: "call_1" });
     assert.equal(parent?.kind === "assistant" && parent.producer, undefined);
   });
 
-  it("keeps a parent and a Delegation streaming at once from stealing each other's text", () => {
+  it("keeps a parent and a Subagent streaming at once from stealing each other's text", () => {
     const view = lifecycle(
       { type: "message", id: "m1", text: "parent par", final: false },
-      { type: "message", id: "m2", text: "child ", final: false, producer: { delegationId: "call_1" } },
+      { type: "message", id: "m2", text: "child ", final: false, producer: { subagentId: "call_1" } },
       { type: "message", id: "m1", text: "parent partial", final: true },
-      { type: "message", id: "m2", text: "child done", final: true, producer: { delegationId: "call_1" } },
+      { type: "message", id: "m2", text: "child done", final: true, producer: { subagentId: "call_1" } },
     );
     assert.deepEqual(
       view.entries.map((entry) => (entry.kind === "assistant" ? entry.text : "")),

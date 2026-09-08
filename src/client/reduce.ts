@@ -1,13 +1,13 @@
 import type {
   AgentEvent,
   Capabilities,
-  DelegationWait,
   EffortLevel,
   LoggedEvent,
   ModelInfo,
   NoticeLevel,
   Producer,
   Spend,
+  SubagentWait,
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 import type { Branch } from "../protocol/git.ts";
@@ -22,8 +22,8 @@ import type { Branch } from "../protocol/git.ts";
 
 export type ToolStatus = "running" | "complete" | "error";
 
-/** Flattened from DelegationState, so an Entry stays a flat record like every other one. */
-export type DelegationStatus = "running" | "waiting" | "complete" | "aborted" | "error";
+/** Flattened from SubagentState, so an Entry stays a flat record like every other one. */
+export type SubagentStatus = "running" | "waiting" | "complete" | "aborted" | "error";
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
@@ -41,18 +41,18 @@ export type Entry =
       producer?: Producer;
     }
   /**
-   * One Delegation (ADR 0015). `id` is the spawning tool call's id, so this Entry and the `tool`
+   * One Subagent (ADR 0015). `id` is the spawning tool call's id, so this Entry and the `tool`
    * Entry beside it are two views of one thing: the tool row is what the parent asked for, and this
    * is what the subagent is doing about it. Two Entries rather than fields on one because `upsert`
    * is keyed on kind and id, and the two arrive from different events at different rates.
    */
   | {
-      kind: "delegation";
+      kind: "subagent";
       id: string;
       name: string;
       description?: string;
-      status: DelegationStatus;
-      waitingOn?: DelegationWait;
+      status: SubagentStatus;
+      waitingOn?: SubagentWait;
       producer?: Producer;
     }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
@@ -181,16 +181,16 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         })),
       };
 
-    case "delegation":
+    case "subagent":
       return {
         ...state,
         entries: upsert(state.entries, {
-          kind: "delegation",
-          id: event.delegationId,
+          kind: "subagent",
+          id: event.subagentId,
           name: event.name,
           ...(event.description === undefined ? {} : { description: event.description }),
           status: event.state,
-          // Only ever set alongside "waiting", so a Delegation that resumes drops it rather than
+          // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.
           ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
         }),

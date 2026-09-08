@@ -6,8 +6,8 @@ import { isPinned } from "@/presentation/stick-to-bottom.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
-import { DelegationCollapseProvider, type DelegationCollapse } from "@/components/delegation-collapse.tsx";
-import { memberCount, visibleKeys } from "@/presentation/delegation-tree.ts";
+import { SubagentCollapseProvider, type SubagentCollapse } from "@/components/subagent-collapse.tsx";
+import { memberCount, visibleKeys } from "@/presentation/subagent-tree.ts";
 
 /**
  * The Presentation Transcript, as a document.
@@ -29,17 +29,17 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   const matching = useFilteredKeys(view, keys, query);
 
   // Collapse filters keys, never entries (ADR 0015). Applied after search and before the tail
-  // window, so a collapsed Delegation's rows do not consume the window they are not drawn in.
+  // window, so a collapsed Subagent's rows do not consume the window they are not drawn in.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const getEntry = useCallback((key: string) => view.getEntry(key), [view]);
-  const collapse = useMemo<DelegationCollapse>(
+  const collapse = useMemo<SubagentCollapse>(
     () => ({
-      isCollapsed: (delegation) => collapsed.has(delegation),
-      members: (delegation) => memberCount(keys, getEntry, delegation),
-      toggle: (delegation) =>
+      isCollapsed: (subagent) => collapsed.has(subagent),
+      members: (subagent) => memberCount(keys, getEntry, subagent),
+      toggle: (subagent) =>
         setCollapsed((current) => {
           const next = new Set(current);
-          if (!next.delete(delegation)) next.add(delegation);
+          if (!next.delete(subagent)) next.add(subagent);
           return next;
         }),
     }),
@@ -131,11 +131,11 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
             </button>
           ) : null}
 
-          <DelegationCollapseProvider value={collapse}>
+          <SubagentCollapseProvider value={collapse}>
             {windowed.map((key) => (
               <TranscriptRow key={key} view={view} entryKey={key} query={query} />
             ))}
-          </DelegationCollapseProvider>
+          </SubagentCollapseProvider>
 
           {shown.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">

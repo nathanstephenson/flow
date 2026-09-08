@@ -34,7 +34,7 @@ describe("the Conversation Context reading spelled out in full", () => {
   });
 
   /**
-   * Spend is everything billed across every model, Delegations included — a different measure from
+   * Spend is everything billed across every model, Subagents included — a different measure from
    * occupancy, routinely larger, and saying nothing about running out of room.
    */
   const spend = {
@@ -63,8 +63,8 @@ describe("the Conversation Context reading spelled out in full", () => {
     ]);
   });
 
-  it("keeps a sub-cent Delegation from rounding away to nothing", () => {
-    // $0.000947 as "$0.00" would report a Delegation as free work.
+  it("keeps a sub-cent Subagent from rounding away to nothing", () => {
+    // $0.000947 as "$0.00" would report a Subagent as free work.
     const rows = contextUsageDetail({ used: 1, window: 200_000, spend });
     assert.equal(rows?.find((row) => row.label === "claude-haiku-4-5")?.value.endsWith("$0.0009"), true);
   });
@@ -77,7 +77,7 @@ describe("the Conversation Context reading spelled out in full", () => {
 
   it("shows a Spent larger than the window without complaint", () => {
     // The case that proves the two are different measures: a session can bill far more than the
-    // window holds, because a Delegation's tokens are billed and never occupy the parent's context.
+    // window holds, because a Subagent's tokens are billed and never occupy the parent's context.
     const big = { ...spend, tokens: 3_400_000 };
     const rows = contextUsageDetail({ used: 41_000, window: 200_000, spend: big });
     assert.equal(rows?.find((row) => row.label === "Spent")?.value.startsWith("3.4M"), true);

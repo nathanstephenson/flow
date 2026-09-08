@@ -23,7 +23,7 @@ export function contextUsageLabel(usage: ViewState["contextUsage"]): string | un
  *
  * Rows rather than one string because the two readings are not the same measure and must not read as
  * one sentence: Context is how full the window is, Spent is every token billed across every model,
- * Delegations included. Spent is routinely the larger number and says nothing about running out of
+ * Subagents included. Spent is routinely the larger number and says nothing about running out of
  * room — printing them adjacent without labels invited exactly that confusion.
  *
  * Returns undefined with no window, matching `contextUsageLabel`'s "nothing honest to say".
@@ -48,7 +48,7 @@ export function contextUsageDetail(usage: ViewState["contextUsage"]): UsageRow[]
   rows.push({ label: "Cache reads", value: `${compactTokens(spend.cached)} of ${compactTokens(spend.tokens)}` });
 
   // One model is what `Spent` already says, so the breakdown earns its space only when it splits.
-  // Two or more means a Delegation ran on its own model, which is the case worth seeing.
+  // Two or more means a Subagent ran on its own model, which is the case worth seeing.
   if (spend.models.length > 1) {
     for (const model of spend.models) {
       rows.push({ label: model.id, value: `${compactTokens(model.tokens)} · ${money(model.costUSD)}`, model: true });
@@ -58,7 +58,7 @@ export function contextUsageDetail(usage: ViewState["contextUsage"]): UsageRow[]
 }
 
 /**
- * Enough places to stay honest at both ends: a Delegation on a cheap model can cost a tenth of a
+ * Enough places to stay honest at both ends: a Subagent on a cheap model can cost a tenth of a
  * cent, and rounding that to `$0.00` would report free work. Anything at or above a cent reads in
  * the two places money is normally written.
  */

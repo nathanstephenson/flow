@@ -4,10 +4,10 @@ import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachme
 import type {
   BackendEvent,
   Capabilities,
-  DelegationState,
-  DelegationWait,
   EffortLevel,
   Spend,
+  SubagentState,
+  SubagentWait,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
@@ -24,7 +24,7 @@ const FAKE_CAPABILITIES: Capabilities = {
   ],
   compaction: false,
   fork: false,
-  delegation: true,
+  subagents: true,
 };
 
 /**
@@ -41,8 +41,8 @@ export class FakeSession implements BackendSession {
   readonly resumedFrom: string | undefined;
   /** What this session was told the Agent Session had already spent, for asserting a Revive. */
   readonly priorSpend: Spend | undefined;
-  /** Every Delegation begun in this session, in the style of `prompts`. */
-  readonly delegations: FakeDelegation[] = [];
+  /** Every Subagent begun in this session, in the style of `prompts`. */
+  readonly subagents: FakeSubagent[] = [];
   modelId: string;
   effort: EffortLevel | undefined;
   disposed = false;
@@ -121,32 +121,32 @@ export class FakeSession implements BackendSession {
   }
 
   /**
-   * Test affordance: begin a Delegation, and get a handle whose emissions are attributed to it.
+   * Test affordance: begin a Subagent, and get a handle whose emissions are attributed to it.
    *
    * The only way a test can produce an interleaved parent-and-child stream, which is the case that
    * breaks anything assuming one producer per turn. Emits the spawning `tool_started` as well as the
-   * first snapshot, because ADR 0015 has the two share an id and a Delegation whose tool call never
+   * first snapshot, because ADR 0015 has the two share an id and a Subagent whose tool call never
    * appeared would be a shape no real backend can produce.
    *
-   * `completeTurn` deliberately does not close an open Delegation: leaving one running is the
-   * torn-Delegation fixture, and the Session Host is what has to cope with it.
+   * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
+   * torn-Subagent fixture, and the Session Host is what has to cope with it.
    */
-  beginDelegation(name: string, description?: string): FakeDelegation {
-    const delegationId = randomUUID();
-    const delegation = new FakeDelegation(delegationId, name, description, this.emit);
-    this.delegations.push(delegation);
-    this.emit({ type: "tool_started", callId: delegationId, name: "Agent", input: { name, description } });
-    delegation.snapshot({ state: "running" });
-    return delegation;
+  beginSubagent(name: string, description?: string): FakeSubagent {
+    const subagentId = randomUUID();
+    const subagent = new FakeSubagent(subagentId, name, description, this.emit);
+    this.subagents.push(subagent);
+    this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description } });
+    subagent.snapshot({ state: "running" });
+    return subagent;
   }
 }
 
 /**
- * One Delegation under test. Every emission carries `producer`, so a test can interleave a parent's
+ * One Subagent under test. Every emission carries `producer`, so a test can interleave a parent's
  * stream with a child's and assert neither takes the other's Entry.
  */
-export class FakeDelegation {
-  readonly delegationId: string;
+export class FakeSubagent {
+  readonly subagentId: string;
   readonly name: string;
   readonly description: string | undefined;
   finished = false;
@@ -156,12 +156,12 @@ export class FakeDelegation {
   private messageIndex = 0;
 
   constructor(
-    delegationId: string,
+    subagentId: string,
     name: string,
     description: string | undefined,
     emit: (event: BackendEvent) => void,
   ) {
-    this.delegationId = delegationId;
+    this.subagentId = subagentId;
     this.name = name;
     this.description = description;
     this.emit = emit;
@@ -175,10 +175,10 @@ export class FakeDelegation {
   say(text: string, final = true): void {
     this.emit({
       type: "message",
-      id: `${this.delegationId}-msg-${this.messageIndex}`,
+      id: `${this.subagentId}-msg-${this.messageIndex}`,
       text,
       final,
-      producer: { delegationId: this.delegationId },
+      producer: { subagentId: this.subagentId },
     });
     if (final) this.messageIndex += 1;
   }
@@ -186,14 +186,14 @@ export class FakeDelegation {
   /** An attributed tool call — the subagent's Read, not the parent's. */
   useTool(name: string, input: unknown, result: unknown, isError = false): string {
     const callId = randomUUID();
-    const producer = { delegationId: this.delegationId };
+    const producer = { subagentId: this.subagentId };
     this.emit({ type: "tool_started", callId, name, input, producer });
     this.emit({ type: "tool_ended", callId, result, isError, producer });
     return callId;
   }
 
   /** Move to waiting, naming what is being waited on. Snapshot semantics: callable repeatedly. */
-  wait(on: DelegationWait): void {
+  wait(on: SubagentWait): void {
     this.snapshot({ state: "waiting", on });
   }
 
@@ -206,15 +206,15 @@ export class FakeDelegation {
     if (this.finished) return;
     this.finished = true;
     this.snapshot({ state: reason });
-    // The tool result is what returns a Delegation, the same way a real backend closes one.
-    this.emit({ type: "tool_ended", callId: this.delegationId, result: `${this.name} finished`, isError: reason === "error" });
+    // The tool result is what returns a Subagent, the same way a real backend closes one.
+    this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error" });
   }
 
   /** @internal — used by FakeSession to emit the opening snapshot. */
-  snapshot(state: DelegationState): void {
+  snapshot(state: SubagentState): void {
     this.emit({
-      type: "delegation",
-      delegationId: this.delegationId,
+      type: "subagent",
+      subagentId: this.subagentId,
       name: this.name,
       ...(this.description === undefined ? {} : { description: this.description }),
       ...state,

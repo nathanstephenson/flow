@@ -18,7 +18,7 @@ const EVENTS: AgentEvent[] = [
     type: "session_started",
     backend: "fake",
     scope: "/tmp/scope",
-    capabilities: { providers: [], models: [], compaction: false, fork: false, delegation: false },
+    capabilities: { providers: [], models: [], compaction: false, fork: false, subagents: false },
   },
   { type: "user_message", id: "u1", text: "hello" },
   { type: "notice", level: "warn", text: "the backend hiccupped" },
