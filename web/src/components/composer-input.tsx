@@ -1,20 +1,17 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { defineLanguageFacet, HighlightStyle, Language, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import { tags } from "@lezer/highlight";
-import { parser as markdownParser } from "@lezer/markdown";
-import { Compartment, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
-import {
-  Decoration,
-  EditorView,
-  keymap,
-  placeholder as placeholderExtension,
-  ViewPlugin,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
+import { Compartment, EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 
-import { leadingToken, triggeredBy, type Triggerable } from "@/presentation/composer-menu.ts";
+import {
+  composerExtensions,
+  editableFor,
+  hintFor,
+  setCatalogue,
+  type MenuKeys,
+} from "@/components/composer-extensions.ts";
+import type { Triggerable } from "@/presentation/composer-menu.ts";
+
+export type { MenuKeys };
 
 /**
  * The Composer's text box.
@@ -48,189 +45,6 @@ export type ComposerInputHandle = {
    */
   replace: (text: string, caret: number) => void;
 };
-
-/**
- * What the open menu wants from the keys the editor would otherwise take.
- *
- * Handed in rather than owned here, because which item is highlighted is the menu's business and
- * the menu is React's. Both pickers return whether they took the key, so an empty menu still sends.
- *
- * Two of them, because completing and sending are different intentions. `complete` is Tab: it puts
- * the name in the box and leaves the caret after it, for a Skill whose arguments are the point.
- * `submit` is Enter: the name is the whole message, so it goes.
- */
-export type MenuKeys = {
-  active: boolean;
-  move: (delta: number) => void;
-  complete: () => boolean;
-  submit: () => boolean;
-  dismiss: () => void;
-};
-
-/** The catalogue the pill decoration resolves names against. Replaced, never mutated. */
-const setCatalogue = StateEffect.define<Triggerable[]>();
-
-const catalogueField = StateField.define<Triggerable[]>({
-  create: () => [],
-  update(current, transaction) {
-    for (const effect of transaction.effects) if (effect.is(setCatalogue)) return effect.value;
-    return current;
-  },
-});
-
-/**
- * The pill under a leading `/name` that GoodHarness or the backend will actually act on.
- *
- * Derived from the text rather than remembered from a menu choice, and that is the point: someone
- * who types `/tdd` from memory gets the same pill as someone who picked it from the list, because
- * the backend will treat the two identically. A pill that appeared only for menu picks would be
- * telling one of those two people something false.
- *
- * Deriving is safe here in a way it would not be in the Session Host or a Backend Adapter. The pill
- * *is* the feedback — it appears under the name before Enter is pressed, and one backspace takes it
- * away again — so nothing is decided invisibly. What the host must never do is guess at meaning
- * nobody can see.
- *
- * A mark and not an atomic widget, so the text stays text: the caret still moves through it, and
- * backspace still edits it into something ordinary.
- */
-const pillField = StateField.define<DecorationSet>({
-  create: (state) => pillsFor(state),
-  update: (current, transaction) =>
-    transaction.docChanged || transaction.effects.some((effect) => effect.is(setCatalogue))
-      ? pillsFor(transaction.state)
-      : current.map(transaction.changes),
-  provide: (field) => EditorView.decorations.from(field),
-});
-
-function pillsFor(state: EditorState): DecorationSet {
-  const text = state.doc.toString();
-  const found = triggeredBy(text, state.field(catalogueField));
-  const token = leadingToken(text);
-  if (!found || !token) return Decoration.none;
-  return Decoration.set([
-    Decoration.mark({ class: found.kind === "command" ? "gh-pill-command" : "gh-pill-skill" }).range(0, token.to),
-  ]);
-}
-
-/**
- * Markdown as it will look once sent, rather than as its own source.
- *
- * The first attempt styled the source and left every marker visible, on the argument that a composer
- * showing something other than what it will send is lying. That was the wrong reading of ADR 0012.
- * What that decision refuses is *withholding structure while it forms* — it renders a streamed
- * message live, asterisks and all, precisely so the shape appears as it arrives. A composer that
- * shows `` `ok` `` as backticks when the transcript will show a monospace chip is failing the same
- * test from the other side: two renderings of one string, disagreeing.
- *
- * So the markers are hidden and the content is styled to match `web/src/components/markdown.tsx`
- * exactly, with one rule keeping it honest: **the markers come back whenever the caret is inside the
- * construct.** Nothing is ever hidden from someone editing it, and nothing has to be guessed at to
- * put it back — move into the word and the backticks are there.
- *
- * Inline constructs only for now. Headings, quotes, lists and fences are still styled as source,
- * because hiding a `#` means committing to a heading's size in a box that must not reflow while
- * someone types in it, and that is a separate decision from this one.
- *
- * This is a second markdown implementation in the repo, and worth being explicit about. `marked`
- * lexes what a *model wrote* into the token tree both front-ends render; Lezer parses what a *human
- * is typing*. They answer different questions and never meet: nothing here produces a token tree,
- * and nothing in the transcript consults this. Sharing one would have meant reconstructing character
- * offsets marked does not carry — its blockquote and list children are lexed against de-quoted and
- * de-indented text, and its table cells carry no position at all.
- */
-const MARKDOWN_STYLE = HighlightStyle.define([
-  { tag: tags.heading, fontWeight: "600" },
-  { tag: tags.strong, fontWeight: "600" },
-  { tag: tags.emphasis, fontStyle: "italic" },
-  { tag: tags.strikethrough, textDecoration: "line-through", color: "var(--muted-foreground)" },
-  { tag: tags.link, color: "var(--trigger-command)" },
-  { tag: tags.url, color: "var(--trigger-command)" },
-  // Block markers stay visible, so they stay dimmed: the words lead, the syntax recedes.
-  { tag: tags.processingInstruction, color: "var(--muted-foreground)" },
-  { tag: tags.meta, color: "var(--muted-foreground)" },
-  { tag: tags.quote, color: "var(--muted-foreground)" },
-  { tag: tags.list, color: "var(--muted-foreground)" },
-]);
-
-/**
- * The marker nodes that stop being shown once the caret leaves the construct they belong to.
- *
- * Only ever the punctuation — a `CodeMark` is a backtick, an `EmphasisMark` an asterisk. The text
- * between them is never touched, so nothing can hide a character somebody wrote.
- */
-const HIDEABLE_MARKS = new Set(["CodeMark", "EmphasisMark", "StrikethroughMark"]);
-
-/** The constructs whose content is styled to match what the transcript will render. */
-const STYLED_CONTENT: Record<string, string> = { InlineCode: "gh-md-code" };
-
-/**
- * Hide the markers, style the content, and put the markers back under the caret.
- *
- * A ViewPlugin rather than a StateField because it has to react to the *selection* as well as the
- * document: moving the caret into a code span changes what is shown without changing a character.
- */
-const livePreview = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-
-    constructor(view: EditorView) {
-      this.decorations = previewFor(view);
-    }
-
-    update(update: ViewUpdate): void {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
-        this.decorations = previewFor(update.view);
-      }
-    }
-  },
-  { decorations: (plugin) => plugin.decorations },
-);
-
-function previewFor(view: EditorView): DecorationSet {
-  const found: Range<Decoration>[] = [];
-  const caret = view.state.selection.main;
-
-  syntaxTree(view.state).iterate({
-    enter: (node) => {
-      const style = STYLED_CONTENT[node.name];
-      if (style) found.push(Decoration.mark({ class: style }).range(node.from, node.to));
-      if (!HIDEABLE_MARKS.has(node.name)) return;
-
-      /*
-       * Measured against the *construct*, not the marker: a caret anywhere in `` `ok` `` reveals both
-       * backticks, so they appear and disappear as a pair. Revealing only the one being touched
-       * would shift the text sideways twice on the way through a word.
-       */
-      const construct = node.node.parent;
-      if (!construct) return;
-      const editing = caret.from <= construct.to && caret.to >= construct.from;
-      if (!editing) found.push(Decoration.replace({}).range(node.from, node.to));
-    },
-  });
-
-  return Decoration.set(found, true);
-}
-
-/**
- * The markdown grammar, wired up from `@lezer/markdown` rather than through
- * `@codemirror/lang-markdown`.
- *
- * The wrapper package statically imports `@codemirror/lang-html`, to parse HTML embedded in
- * markdown, and it costs 60kB gzipped that this box has no use for — nobody writes an HTML block
- * into a chat message, and if they do it is text either way. Going through `Language` directly skips
- * it: `MarkdownParser` is a `@lezer/common` `Parser` like any other, so nothing here is a
- * workaround. It also means no fenced code block opens the door to a nested grammar, which is the
- * other half of what that package is for.
- */
-const MARKDOWN = new Language(defineLanguageFacet(), markdownParser, [], "markdown");
-
-function stop(event: KeyboardEvent): void {
-  event.preventDefault();
-  // The global keyboard layer listens on `window`, and Escape while typing means "blur this". With
-  // the menu open Escape means "close the menu", so the event must not reach it.
-  event.stopPropagation();
-}
 
 export function ComposerInput({
   value,
@@ -281,107 +95,16 @@ export function ComposerInput({
     const editor = new EditorView({
       parent,
       state: EditorState.create({
-        extensions: [
-          history(),
-          keymap.of([
-            {
-              key: "Enter",
-              run: (target) => {
-                /*
-                 * A composing IME owns Enter outright. Without this, committing a CJK candidate also
-                 * sends the message — a real bug and not a theoretical one, which is why the textarea
-                 * this replaces checked `nativeEvent.isComposing` and why the check had to be earned
-                 * again here rather than assumed.
-                 */
-                if (target.composing) return false;
-                latest.current.onSubmit();
-                return true;
-              },
-            },
-          ]),
-          // Below the Enter binding, so a newline is what Enter does only when the above declines.
-          keymap.of([...defaultKeymap, ...historyKeymap]),
-          EditorView.lineWrapping,
-          MARKDOWN,
-          syntaxHighlighting(MARKDOWN_STYLE),
-          livePreview,
-          catalogueField,
-          pillField,
-          EditorView.updateListener.of((update) => {
-            // Selection too, not only the document: the menu closes when the caret leaves the name,
-            // and an arrow key moves the caret without changing a character.
-            if (!update.docChanged && !update.selectionSet) return;
-            latest.current.onChange(update.state.doc.toString(), update.state.selection.main.head);
-          }),
-          /*
-           * `Prec.highest`, and this is the whole reason the menu's keys work at all.
-           *
-           * CodeMirror resolves handlers by precedence, and within one precedence that is the
-           * order they appear in this array. This sits below both keymaps above, so unraised the
-           * Enter binding fired first and sent the message, `defaultKeymap` moved the caret on the
-           * arrows, and Escape simplified the selection. The menu saw none of them — it opened,
-           * and then ignored every key pressed at it.
-           */
-          Prec.highest(
-            EditorView.domEventHandlers({
-              /*
-               * Only while the menu is open. These are the editor's own keys — Enter, Tab, the
-               * arrows, Escape — borrowed for as long as there is a list in front of the person
-               * pressing them, and handed straight back when there is not.
-               */
-              keydown: (event, target) => {
-                const open = latest.current.menu;
-                if (!open.active) return false;
-                if (event.key === "Escape") {
-                  open.dismiss();
-                  stop(event);
-                  return true;
-                }
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                  open.move(event.key === "ArrowDown" ? 1 : -1);
-                  stop(event);
-                  return true;
-                }
-                /*
-                 * Tab completes without sending, which is the only reason it is worth taking a key
-                 * the browser uses for focus: a Skill with arguments needs the name settled and the
-                 * caret left after it. Shift+Tab is left alone, so tabbing *backwards* out of the
-                 * composer still works while the menu is open.
-                 */
-                if (event.key === "Tab" && !event.shiftKey && open.complete()) {
-                  stop(event);
-                  return true;
-                }
-                // Shift+Enter is a newline even here, and a composing IME still owns Enter outright.
-                if (event.key === "Enter" && !event.shiftKey && !target.composing && open.submit()) {
-                  stop(event);
-                  return true;
-                }
-                return false;
-              },
-            }),
-          ),
-          EditorView.domEventHandlers({
-            paste: (event) => {
-              const files = [...(event.clipboardData?.items ?? [])]
-                .filter((item) => item.kind === "file")
-                .map((item) => item.getAsFile())
-                .filter((file): file is File => file !== null);
-              // Nothing to attach means an ordinary text paste, which must keep CodeMirror's default.
-              if (files.length === 0) return false;
-              return latest.current.onPasteFiles(files);
-            },
-          }),
-          // What `focusInPane` finds. The selector used to be `textarea`, which this element is not.
-          EditorView.contentAttributes.of({ "data-composer-input": "" }),
-          THEME,
-          editable.of(editableFor(disabled)),
-          // The placeholder lives in the compartment and nowhere else. It was also installed
-          // directly here, which is not a duplicate that replaces itself: reconfiguring the
-          // compartment added a second placeholder beside the first, and both rendered — one
-          // sentence printed over the other.
-          hint.of(placeholderExtension(placeholder)),
-        ],
+        extensions: composerExtensions({
+          placeholder,
+          disabled,
+          editable,
+          hint,
+          menu: () => latest.current.menu,
+          onSubmit: () => latest.current.onSubmit(),
+          onChange: (text, caret) => latest.current.onChange(text, caret),
+          onPasteFiles: (files) => latest.current.onPasteFiles(files),
+        }),
       }),
     });
     view.current = editor;
@@ -426,84 +149,8 @@ export function ComposerInput({
   // a Dormant session, or queue behind a running turn. It changes with the status, so it cannot be
   // baked into the initial state.
   useEffect(() => {
-    view.current?.dispatch({ effects: hint.reconfigure(placeholderExtension(placeholder)) });
+    view.current?.dispatch({ effects: hint.reconfigure(hintFor(placeholder)) });
   }, [placeholder, hint]);
 
   return <div ref={host} className="min-w-0 flex-1" />;
 }
-
-function editableFor(disabled: boolean): Extension {
-  return [EditorView.editable.of(!disabled), EditorState.readOnly.of(disabled)];
-}
-
-/**
- * CodeMirror ships its own StyleModule, so these cannot be Tailwind classes on the wrapper — the
- * rules they have to beat are on `.cm-content` and `.cm-scroller` themselves.
- *
- * Sans, matching what the message becomes: a user Entry renders as markdown in the chrome font, and
- * composing against a monospace grid only to watch it reflow on send is a small lie about what you
- * wrote. CodeMirror's default is monospace, so this is a correction rather than a preference.
- *
- * The height rules are the textarea's `rows={2}` and its capped auto-grow, restated. A floor of two
- * rows so the box still looks like somewhere a paragraph goes, and a cap because a composer that can
- * swallow the transcript is not a composer. CodeMirror grows on its own between them, which is the
- * one piece of this that got simpler.
- */
-const THEME = EditorView.theme({
-  "&": {
-    fontSize: "0.875rem",
-    color: "var(--foreground)",
-    backgroundColor: "transparent",
-  },
-  "&.cm-focused": { outline: "none" },
-  ".cm-content": {
-    fontFamily: "inherit",
-    padding: "0.5rem 0.75rem",
-    minHeight: "3.25rem",
-    caretColor: "var(--foreground)",
-  },
-  ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.5", maxHeight: "200px" },
-  ".cm-line": { padding: "0" },
-  ".cm-placeholder": { color: "var(--muted-foreground)" },
-  // The textarea showed this through `disabled:opacity-50`; `readOnly` has no such pseudo-class.
-  "&:not(.cm-focused) .cm-content[contenteditable='false']": { opacity: "0.5", cursor: "not-allowed" },
-  /*
-   * Two colours because they are two different things, not for decoration. Blue is a Command:
-   * GoodHarness performs it, and it never reaches a model. Purple is a Skill: the backend expands it,
-   * and it goes as the message it already is. Someone about to press Enter can tell which of those
-   * is about to happen without having learned the difference first.
-   *
-   * Set as backgrounds on an inline run, so the pill wraps with the text rather than being a box the
-   * line has to make room for.
-   */
-  ".gh-pill-command, .gh-pill-skill": {
-    borderRadius: "0.375rem",
-    padding: "0.05rem 0.2rem",
-    fontWeight: "500",
-  },
-  ".gh-pill-command": {
-    backgroundColor: "color-mix(in oklab, var(--trigger-command) 18%, transparent)",
-    color: "var(--trigger-command)",
-  },
-  ".gh-pill-skill": {
-    backgroundColor: "color-mix(in oklab, var(--trigger-skill) 18%, transparent)",
-    color: "var(--trigger-skill)",
-  },
-  /*
-   * The transcript's code span, copied rather than approximated — `markdown.tsx` renders
-   * `rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]`, and anything close-but-different here
-   * would be the same disagreement in a smaller font. These two want to move together; if that one
-   * changes, this one has to.
-   */
-  ".gh-md-code": {
-    // `rounded` is 0.25rem, not the `--radius` scale; `--font-mono` is a real token here and is
-    // rewritten at runtime from the font settings, so this follows those without being told.
-    borderRadius: "0.25rem",
-    backgroundColor: "var(--muted)",
-    padding: "0.125rem 0.25rem",
-    fontFamily: "var(--font-mono)",
-    fontSize: "0.9em",
-  },
-  ".cm-cursor": { borderLeftColor: "var(--foreground)" },
-  "&.cm-editor .cm-selectionBackground, ::selection": { backgroundColor: "var(--accent)" },
-});

@@ -64,9 +64,14 @@ image paste being consumed rather than inserted, a controlled value pushed back 
 editor without resetting the selection mid-word, `[data-composer-input]` staying findable for
 `focus-pane`.
 
-`EditorState.create` is DOM-free, so a state-level test could catch the whole class of "an extension
-is in a compartment *and* beside it" without a renderer. That may be the cheap half here, the way an
-exhaustive switch was the cheap half above.
+The cheap half of *that* is now done too. `EditorState.create` needs no DOM, so
+`composer-extensions.test.ts` builds the real editor headlessly and asserts on facets: that the
+menu's keymap is the first group CodeMirror consults, and that exactly one placeholder is installed
+before and after a reconfigure. Both were verified to fail when the original bugs are put back.
+
+What is still uncovered is everything needing layout, focus or a real key event — the IME guard, the
+paste path, the pill's appearance, the height cap. That is the harness, and it is still the larger
+question.
 
 ## Sort the Agents list by its own timestamps
 
