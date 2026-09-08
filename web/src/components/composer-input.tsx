@@ -1,9 +1,17 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { defineLanguageFacet, HighlightStyle, Language, syntaxHighlighting } from "@codemirror/language";
+import { defineLanguageFacet, HighlightStyle, Language, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { parser as markdownParser } from "@lezer/markdown";
-import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { Decoration, EditorView, keymap, placeholder as placeholderExtension, type DecorationSet } from "@codemirror/view";
+import { Compartment, EditorState, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
+import {
+  Decoration,
+  EditorView,
+  keymap,
+  placeholder as placeholderExtension,
+  ViewPlugin,
+  type DecorationSet,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { useEffect, useRef } from "react";
 
 import { leadingToken, triggeredBy, type Triggerable } from "@/presentation/composer-menu.ts";
@@ -101,39 +109,103 @@ function pillsFor(state: EditorState): DecorationSet {
 }
 
 /**
- * Markdown, styled as its own source rather than rendered.
+ * Markdown as it will look once sent, rather than as its own source.
  *
- * The asterisks stay visible and the text between them goes bold. That is the honest thing for a
- * composer to do: the message is markdown, it will be *rendered* as markdown in the transcript
- * (ADR 0012), and hiding the syntax while it is still being written would mean the box showed
- * something other than what would be sent — which is the same objection ADR 0012 raises against
- * suppressing an unclosed `**` in a streaming message.
+ * The first attempt styled the source and left every marker visible, on the argument that a composer
+ * showing something other than what it will send is lying. That was the wrong reading of ADR 0012.
+ * What that decision refuses is *withholding structure while it forms* — it renders a streamed
+ * message live, asterisks and all, precisely so the shape appears as it arrives. A composer that
+ * shows `` `ok` `` as backticks when the transcript will show a monospace chip is failing the same
+ * test from the other side: two renderings of one string, disagreeing.
+ *
+ * So the markers are hidden and the content is styled to match `web/src/components/markdown.tsx`
+ * exactly, with one rule keeping it honest: **the markers come back whenever the caret is inside the
+ * construct.** Nothing is ever hidden from someone editing it, and nothing has to be guessed at to
+ * put it back — move into the word and the backticks are there.
+ *
+ * Inline constructs only for now. Headings, quotes, lists and fences are still styled as source,
+ * because hiding a `#` means committing to a heading's size in a box that must not reflow while
+ * someone types in it, and that is a separate decision from this one.
  *
  * This is a second markdown implementation in the repo, and worth being explicit about. `marked`
- * lexes what a *model wrote* into the token tree both front-ends render; Lezer highlights what a
- * *human is typing*. They answer different questions and never meet: nothing here produces a token
- * tree, and nothing in the transcript consults this. Sharing one would have meant reconstructing
- * character offsets marked does not carry — its blockquote and list children are lexed against
- * de-quoted and de-indented text, and its table cells carry no position at all — which is a second
- * markdown authority by a longer road.
- *
- * Weights and colours only, no font changes. A heading that jumped to 1.5× would reflow the box
- * mid-sentence, and monospace on a code span would do the same in the middle of a line.
+ * lexes what a *model wrote* into the token tree both front-ends render; Lezer parses what a *human
+ * is typing*. They answer different questions and never meet: nothing here produces a token tree,
+ * and nothing in the transcript consults this. Sharing one would have meant reconstructing character
+ * offsets marked does not carry — its blockquote and list children are lexed against de-quoted and
+ * de-indented text, and its table cells carry no position at all.
  */
 const MARKDOWN_STYLE = HighlightStyle.define([
   { tag: tags.heading, fontWeight: "600" },
   { tag: tags.strong, fontWeight: "600" },
   { tag: tags.emphasis, fontStyle: "italic" },
-  { tag: tags.strikethrough, textDecoration: "line-through" },
+  { tag: tags.strikethrough, textDecoration: "line-through", color: "var(--muted-foreground)" },
   { tag: tags.link, color: "var(--trigger-command)" },
   { tag: tags.url, color: "var(--trigger-command)" },
-  // The punctuation that makes it markdown: dimmed so the words lead, present so nothing is hidden.
+  // Block markers stay visible, so they stay dimmed: the words lead, the syntax recedes.
   { tag: tags.processingInstruction, color: "var(--muted-foreground)" },
   { tag: tags.meta, color: "var(--muted-foreground)" },
-  { tag: tags.monospace, color: "var(--trigger-skill)" },
   { tag: tags.quote, color: "var(--muted-foreground)" },
   { tag: tags.list, color: "var(--muted-foreground)" },
 ]);
+
+/**
+ * The marker nodes that stop being shown once the caret leaves the construct they belong to.
+ *
+ * Only ever the punctuation — a `CodeMark` is a backtick, an `EmphasisMark` an asterisk. The text
+ * between them is never touched, so nothing can hide a character somebody wrote.
+ */
+const HIDEABLE_MARKS = new Set(["CodeMark", "EmphasisMark", "StrikethroughMark"]);
+
+/** The constructs whose content is styled to match what the transcript will render. */
+const STYLED_CONTENT: Record<string, string> = { InlineCode: "gh-md-code" };
+
+/**
+ * Hide the markers, style the content, and put the markers back under the caret.
+ *
+ * A ViewPlugin rather than a StateField because it has to react to the *selection* as well as the
+ * document: moving the caret into a code span changes what is shown without changing a character.
+ */
+const livePreview = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = previewFor(view);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        this.decorations = previewFor(update.view);
+      }
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
+function previewFor(view: EditorView): DecorationSet {
+  const found: Range<Decoration>[] = [];
+  const caret = view.state.selection.main;
+
+  syntaxTree(view.state).iterate({
+    enter: (node) => {
+      const style = STYLED_CONTENT[node.name];
+      if (style) found.push(Decoration.mark({ class: style }).range(node.from, node.to));
+      if (!HIDEABLE_MARKS.has(node.name)) return;
+
+      /*
+       * Measured against the *construct*, not the marker: a caret anywhere in `` `ok` `` reveals both
+       * backticks, so they appear and disappear as a pair. Revealing only the one being touched
+       * would shift the text sideways twice on the way through a word.
+       */
+      const construct = node.node.parent;
+      if (!construct) return;
+      const editing = caret.from <= construct.to && caret.to >= construct.from;
+      if (!editing) found.push(Decoration.replace({}).range(node.from, node.to));
+    },
+  });
+
+  return Decoration.set(found, true);
+}
 
 /**
  * The markdown grammar, wired up from `@lezer/markdown` rather than through
@@ -227,6 +299,7 @@ export function ComposerInput({
           EditorView.lineWrapping,
           MARKDOWN,
           syntaxHighlighting(MARKDOWN_STYLE),
+          livePreview,
           catalogueField,
           pillField,
           EditorView.updateListener.of((update) => {
@@ -387,6 +460,21 @@ const THEME = EditorView.theme({
   ".gh-pill-skill": {
     backgroundColor: "color-mix(in oklab, var(--trigger-skill) 18%, transparent)",
     color: "var(--trigger-skill)",
+  },
+  /*
+   * The transcript's code span, copied rather than approximated — `markdown.tsx` renders
+   * `rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]`, and anything close-but-different here
+   * would be the same disagreement in a smaller font. These two want to move together; if that one
+   * changes, this one has to.
+   */
+  ".gh-md-code": {
+    // `rounded` is 0.25rem, not the `--radius` scale; `--font-mono` is a real token here and is
+    // rewritten at runtime from the font settings, so this follows those without being told.
+    borderRadius: "0.25rem",
+    backgroundColor: "var(--muted)",
+    padding: "0.125rem 0.25rem",
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.9em",
   },
   ".cm-cursor": { borderLeftColor: "var(--foreground)" },
   "&.cm-editor .cm-selectionBackground, ::selection": { backgroundColor: "var(--accent)" },
