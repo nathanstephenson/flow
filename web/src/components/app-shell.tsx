@@ -147,7 +147,10 @@ export function AppShell() {
       "focus-pane": () => {
         const candidate = sessions[cursor];
         if (candidate) focus(candidate.id);
-        focusInPane("textarea");
+        // The Composer's input, whatever element it is made of. It was a `textarea` until it became
+        // a CodeMirror editor, which renders a contenteditable div — a selector naming the tag would
+        // have stopped working with nothing to say so.
+        focusInPane("[data-composer-input]");
       },
       // Omitted rather than no-op'd when there is no pane to search: an unhandled binding is not
       // preventDefault'd, so ⌘F goes back to being find-in-page instead of being swallowed by a

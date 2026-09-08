@@ -6,6 +6,7 @@ import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/atta
 import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentation/composer-hint.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
+import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
@@ -35,8 +36,8 @@ import { cn } from "@/lib/utils.ts";
  * `Chrome.queueDepth` and from nothing else (ADR 0002).
  *
  * The honest cost of that is a gap between Enter and the message appearing on a slow send, and it is
- * paid *on the composer* rather than by faking the transcript: the textarea clears at once, the
- * button spins, and a rejection puts the text back and says why.
+ * paid *on the composer* rather than by faking the transcript: the input clears at once, the button
+ * spins, and a rejection puts the text back and says why.
  */
 export function Composer({
   sessionId,
@@ -53,7 +54,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [sending, setSending] = useState(false);
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
 
   const ended = chrome.status === "ended";
@@ -71,7 +72,7 @@ export function Composer({
    * The panel floats over the transcript, so the transcript has to know how tall it is or the last
    * line of every message ends up behind it. Written straight onto the DOM as a custom property
    * rather than held in React state — the same `style.setProperty` idiom web/src/fonts.ts uses —
-   * because a textarea growing by one row must not re-render the transcript to say so.
+   * because the input growing by one row must not re-render the transcript to say so.
    */
   useEffect(() => {
     const element = panel.current;
@@ -110,19 +111,17 @@ export function Composer({
   }, [attachments]);
   useEffect(() => () => forget(live.current), [forget]);
 
+  /*
+   * Returns synchronously whether the paste was ours, because that is what decides whether the
+   * editor inserts anything — a promise resolves long after the event has been let through. The
+   * files themselves are read and attached afterwards. Filtering the clipboard for files is the
+   * editor's job now, so this is handed the ones it found.
+   */
   const paste = useCallback(
-    async (event: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> => {
-      const files = [...event.clipboardData.items]
-        .filter((item) => item.kind === "file")
-        .map((item) => item.getAsFile())
-        .filter((file): file is File => file !== null);
-      // Nothing to attach means this was an ordinary text paste, which must keep its default.
-      if (files.length === 0) return;
-      event.preventDefault();
-
+    (files: File[]): boolean => {
       if (!acceptsImages) {
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
-        return;
+        return true;
       }
 
       const verdicts = sortPastedItems(
@@ -131,7 +130,7 @@ export function Composer({
       );
       for (const refusal of refusalsIn(verdicts)) toast.error(refusalMessage(refusal));
 
-      const accepted = await Promise.all(
+      void Promise.all(
         verdicts
           .filter((verdict) => verdict.accepted)
           .map(async (verdict) => ({
@@ -140,8 +139,10 @@ export function Composer({
             data: await base64Of(verdict.item.file),
             url: URL.createObjectURL(verdict.item.file),
           })),
-      );
-      if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+      ).then((accepted) => {
+        if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
+      });
+      return true;
     },
     [acceptsImages, attachments.length, chrome.model],
   );
@@ -190,7 +191,7 @@ export function Composer({
     if (result === undefined) {
       setText(message);
       setAttachments((current) => [...sent, ...current]);
-      textarea.current?.focus();
+      input.current?.focus();
     } else {
       forget(sent);
     }
@@ -250,48 +251,19 @@ export function Composer({
         )}
 
         <div className="flex items-center gap-1">
-          <textarea
-            ref={textarea}
+          {/*
+            * Enter sends and Shift+Enter is a newline, which is the editor's business now rather
+            * than this component's. While a turn runs Enter is the *only* way to reach the Steering
+            * Queue, because the button beside it is Abort — which is why the placeholder says so.
+            */}
+          <ComposerInput
             value={text}
-            /*
-             * Two rows rather than one, so the box still looks like somewhere a paragraph goes, and
-             * rather than three because the auto-grow below reaches for a third the moment one is
-             * typed — a resting third row is height every pane pays for while empty.
-             *
-             * It is also the auto-grow floor: `height: auto` resolves to the rows-based height and
-             * `scrollHeight` never reports less, so clearing the text returns here, not to one line.
-             */
-            rows={2}
-            disabled={ended}
-            onPaste={(event) => void paste(event)}
             placeholder={composerPlaceholder(chrome)}
-            onChange={(event) => {
-              setText(event.target.value);
-              // Auto-grow, capped. A composer that can swallow the transcript is not a composer.
-              const element = event.target;
-              element.style.height = "auto";
-              element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
-            }}
-            onKeyDown={(event) => {
-              /*
-               * Enter sends, Shift+Enter is a newline — and a composing IME owns Enter outright.
-               * Without that last check, committing a CJK candidate also sends the message, which is
-               * a real bug and not a theoretical one.
-               *
-               * While a turn runs this is the *only* way to reach the Steering Queue, because the
-               * button beside it is Abort. That is why the placeholder says so.
-               */
-              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-              event.preventDefault();
-              void send();
-            }}
-            className={cn(
-              // Sans, matching what the message becomes: a user Entry renders as markdown in the
-              // chrome font, and composing against a monospace grid only to watch it reflow on send
-              // is a small lie about what you wrote.
-              "min-w-0 flex-1 resize-none bg-transparent px-3 py-2 text-sm outline-none",
-              "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
-            )}
+            disabled={ended}
+            handle={input}
+            onChange={setText}
+            onSubmit={() => void send()}
+            onPasteFiles={paste}
           />
 
           <div className="flex shrink-0 items-center pr-2">

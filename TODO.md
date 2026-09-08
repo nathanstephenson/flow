@@ -56,6 +56,13 @@ kind is a compile error rather than a row that renders nothing. It caught the co
 missing tone on the first build. A harness (jsdom and a rendering library) is the larger question,
 and it is what the components above still want.
 
+`ComposerInput` is now the sharpest case for one. It carries behaviours that are invisible when they
+break and that nothing else in the repo can catch — a composing IME owning Enter, an image paste
+being consumed rather than inserted, a controlled value pushed back into an uncontrolled editor
+without resetting the selection mid-word, and `[data-composer-input]` staying findable for
+`focus-pane`. Each is one line away from a silent regression, and each was verified by a person
+typing into it once.
+
 ## Sort the Agents list by its own timestamps
 
 `ordered` in `web/src/presentation/subagent-list.ts` sorts by position in the key list — first-seen
