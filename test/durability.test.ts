@@ -80,32 +80,32 @@ describe("durability and revive", () => {
     assert.equal(ended[0]?.event.type === "turn_ended" ? ended[0].event.reason : "", "aborted");
   });
 
-  it("closes a Delegation torn by an unclean shutdown", async () => {
-    // The case nothing in memory can cover: the Delegation was open when the process vanished, so
+  it("closes a Subagent torn by an unclean shutdown", async () => {
+    // The case nothing in memory can cover: the Subagent was open when the process vanished, so
     // the only record it existed is the transcript. Left alone, a Revive shows a subagent running
     // forever with a spinner nothing will stop.
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
     await first.host.send(id, "hello", "now");
-    first.backend.latest.beginDelegation("explorer", "read package.json");
+    first.backend.latest.beginSubagent("explorer", "read package.json");
 
     const second = await freshHost();
     const state = reduceAll(second.host.logFor(id).since(0));
-    const delegation = state.entries.find((entry) => entry.kind === "delegation");
-    assert.equal(delegation?.kind === "delegation" && delegation.status, "aborted");
-    assert.equal(state.entries.filter((entry) => entry.kind === "delegation").length, 1);
+    const subagent = state.entries.find((entry) => entry.kind === "subagent");
+    assert.equal(subagent?.kind === "subagent" && subagent.status, "aborted");
+    assert.equal(state.entries.filter((entry) => entry.kind === "subagent").length, 1);
   });
 
-  it("leaves a Delegation that finished before the crash alone", async () => {
+  it("leaves a Subagent that finished before the crash alone", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
     await first.host.send(id, "hello", "now");
-    first.backend.latest.beginDelegation("explorer").finish("complete");
+    first.backend.latest.beginSubagent("explorer").finish("complete");
 
     const second = await freshHost();
     const state = reduceAll(second.host.logFor(id).since(0));
-    const delegation = state.entries.find((entry) => entry.kind === "delegation");
-    assert.equal(delegation?.kind === "delegation" && delegation.status, "complete");
+    const subagent = state.entries.find((entry) => entry.kind === "subagent");
+    assert.equal(subagent?.kind === "subagent" && subagent.status, "complete");
   });
 
   it("carries Spend across a Revive rather than starting the bill again", async () => {

@@ -155,18 +155,18 @@ describe("the Conversation Context reading the Claude adapter reports", () => {
 });
 
 /**
- * Two producers streaming into one turn: the Agent Session's own model and a Delegation it spawned.
+ * Two producers streaming into one turn: the Agent Session's own model and a Subagent it spawned.
  *
- * The SDK attributes assistant, user and partial messages with `parent_tool_use_id`, so a Delegation's
- * deltas interleave with its parent's. One StreamedMessage serving both would let the Delegation's
+ * The SDK attributes assistant, user and partial messages with `parent_tool_use_id`, so a Subagent's
+ * deltas interleave with its parent's. One StreamedMessage serving both would let the Subagent's
  * `message_start` take the id the parent's Entry is on screen under — the stranded caret again.
  */
-describe("a Delegation streaming beside its parent", () => {
+describe("a Subagent streaming beside its parent", () => {
   it("keeps the two messages apart instead of one stealing the other's id", () => {
     const streams = new StreamedMessages();
     const events = [
       streams.for("").text(0, "Spawning a "),
-      // The Delegation opens mid-parent-message. This is the interleaving that used to clear `parts`.
+      // The Subagent opens mid-parent-message. This is the interleaving that used to clear `parts`.
       streams.for("call_1").text(0, "Reading "),
       streams.for("").text(0, "subagent."),
       streams.for("call_1").text(0, "the file."),
@@ -190,7 +190,7 @@ describe("a Delegation streaming beside its parent", () => {
     streams.for("call_1").text(0, "first");
     streams.finish("call_1", "msg_a", [textBlock("first")]);
 
-    // A second Delegation reusing the callId must start clean, not inherit the first one's parts.
+    // A second Subagent reusing the callId must start clean, not inherit the first one's parts.
     const reused = streams.for("call_1");
     reused.start("msg_b");
     const entries = transcript([reused.text(0, "second"), ...streams.finish("call_1", "msg_b", [textBlock("second")])]);
@@ -202,9 +202,9 @@ describe("a Delegation streaming beside its parent", () => {
 
 /**
  * Spend, as distinct from occupancy. `modelUsage` is cumulative for the session and keyed by model,
- * and a Delegation runs under its own model entry — so its tokens are already counted here, which is
+ * and a Subagent runs under its own model entry — so its tokens are already counted here, which is
  * the only place they appear at all. getContextUsage reports the parent's occupancy, and a
- * Delegation's conversation never occupies it.
+ * Subagent's conversation never occupies it.
  */
 describe("everything billed for an Agent Session", () => {
   const model = (over: Record<string, number | string> = {}) => ({
@@ -216,7 +216,7 @@ describe("everything billed for an Agent Session", () => {
     ...over,
   });
 
-  it("counts a Delegation's model beside the parent's, costliest first", () => {
+  it("counts a Subagent's model beside the parent's, costliest first", () => {
     const spend = describeSpend({
       modelUsage: {
         "claude-haiku-4-5-20251001": model({ inputTokens: 897, outputTokens: 10, costUSD: 0.000947, canonicalModel: "claude-haiku-4-5" }),
@@ -264,7 +264,7 @@ describe("everything billed for an Agent Session", () => {
  * is the declared identity, `description` the one-line brief, and `prompt` the full instruction —
  * which is deliberately not carried, being far too long for a transcript row.
  */
-describe("what the Agent tool says a Delegation is", () => {
+describe("what the Agent tool says a Subagent is", () => {
   it("names it by its subagent type", () => {
     assert.deepEqual(
       briefOf({

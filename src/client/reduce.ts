@@ -1,13 +1,13 @@
 import type {
   AgentEvent,
   Capabilities,
-  DelegationWait,
   EffortLevel,
   LoggedEvent,
   ModelInfo,
   NoticeLevel,
   Producer,
   Spend,
+  SubagentWait,
 } from "../protocol/events.ts";
 import type { SessionStatus } from "../protocol/commands.ts";
 import type { Branch } from "../protocol/git.ts";
@@ -22,8 +22,8 @@ import type { Branch } from "../protocol/git.ts";
 
 export type ToolStatus = "running" | "complete" | "error";
 
-/** Flattened from DelegationState, so an Entry stays a flat record like every other one. */
-export type DelegationStatus = "running" | "waiting" | "complete" | "aborted" | "error";
+/** Flattened from SubagentState, so an Entry stays a flat record like every other one. */
+export type SubagentStatus = "running" | "waiting" | "complete" | "aborted" | "error";
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
@@ -41,19 +41,33 @@ export type Entry =
       producer?: Producer;
     }
   /**
-   * One Delegation (ADR 0015). `id` is the spawning tool call's id, so this Entry and the `tool`
+   * One Subagent (ADR 0015). `id` is the spawning tool call's id, so this Entry and the `tool`
    * Entry beside it are two views of one thing: the tool row is what the parent asked for, and this
    * is what the subagent is doing about it. Two Entries rather than fields on one because `upsert`
    * is keyed on kind and id, and the two arrive from different events at different rates.
    */
   | {
-      kind: "delegation";
+      kind: "subagent";
       id: string;
       name: string;
       description?: string;
-      status: DelegationStatus;
-      waitingOn?: DelegationWait;
+      status: SubagentStatus;
+      waitingOn?: SubagentWait;
       producer?: Producer;
+      /**
+       * When the Subagent was first reported, and when it stopped.
+       *
+       * The only Entry carrying time, and deliberately so: a Subagent is the one thing here a
+       * reader watches rather than reads, so how long it has been going is part of its state. Every
+       * other Entry's moment is its position in the transcript.
+       *
+       * Taken from the event's own `at`, which the store otherwise discards. `startedAt` survives
+       * every later snapshot — upsert replaces the Entry wholesale, so it has to be carried forward
+       * explicitly or each snapshot would reset the clock.
+       */
+      startedAt: string;
+      /** Absent while it is still working. Set once, by the snapshot that ends it. */
+      endedAt?: string;
     }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
   /**
@@ -84,12 +98,29 @@ export type ViewState = {
   entries: Entry[];
   queue: string[];
   contextUsage?: { used: number; window: number; spend?: Spend };
+  /**
+   * Subagents running or waiting right now.
+   *
+   * Carried rather than derived because the front-ends need it per frame while a subagent streams,
+   * and counting it from `entries` there would be a scan of the whole transcript on every tick. Kept
+   * current in `case "subagent"` instead, which runs a few times a turn.
+   *
+   * A number, not a list: it reaches the web client's Chrome, which is shallow-compared by identity,
+   * so a fresh array would defeat the suppression that keeps a streaming snapshot from re-rendering
+   * the chrome. See `sameChrome` in web/src/store/agent-session-view.ts.
+   */
+  activeSubagents: number;
   endedReason?: string;
   lastSeq: number;
 };
 
 export function initialState(): ViewState {
-  return { status: "idle", entries: [], queue: [], lastSeq: 0 };
+  return { status: "idle", entries: [], queue: [], activeSubagents: 0, lastSeq: 0 };
+}
+
+/** Running and waiting are both live work; the three terminal states are not. */
+function isActive(status: SubagentStatus): boolean {
+  return status === "running" || status === "waiting";
 }
 
 export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = initialState()): ViewState {
@@ -99,11 +130,25 @@ export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = init
 }
 
 export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
-  const next = applyEvent(state, entry.event);
+  /*
+   * The cast is deliberate. `applyEvent`'s switch is exhaustive over `AgentEvent` and has no
+   * `default` arm, which is what makes a new event type a compile error in every front-end — the
+   * property the Entry union's comment relies on, and worth keeping.
+   *
+   * But a Presentation Transcript is durable and replayed in full forever (ADR 0001), so at runtime
+   * it can hold an event *this build* has never heard of: one written before a rename, or by a newer
+   * daemon against an older client. Such an event falls through the switch and `applyEvent` returns
+   * undefined — and spreading that replaced the entire view with `{ lastSeq }`. No status, no
+   * entries, no scope: one unrecognised line silently emptied a session.
+   *
+   * `lastSeq` still advances, because the event *was* consumed. Only its meaning is unavailable.
+   */
+  const next = applyEvent(state, entry.event, entry.at) as ViewState | undefined;
+  if (next === undefined) return { ...state, lastSeq: entry.seq };
   return next === state ? state : { ...next, lastSeq: entry.seq };
 }
 
-function applyEvent(state: ViewState, event: AgentEvent): ViewState {
+function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState {
   switch (event.type) {
     case "session_started":
       return {
@@ -181,20 +226,36 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         })),
       };
 
-    case "delegation":
+    case "subagent": {
+      // Snapshots repeat, so the count moves on the *transition* rather than on each arrival: a
+      // Subagent reporting `running` twice must not count twice.
+      const previous = state.entries.find(
+        (entry): entry is Extract<Entry, { kind: "subagent" }> =>
+          entry.kind === "subagent" && entry.id === event.subagentId,
+      );
+      const wasActive = previous !== undefined && isActive(previous.status);
+      const nowActive = isActive(event.state);
+      // Carried forward, not re-read: a running Subagent reports repeatedly, and taking `at` each
+      // time would keep resetting when it started. Cleared if it somehow resumes, so a live
+      // Subagent never shows an end.
+      const endedAt = nowActive ? undefined : (previous?.endedAt ?? at);
       return {
         ...state,
+        activeSubagents: state.activeSubagents + (nowActive ? 1 : 0) - (wasActive ? 1 : 0),
         entries: upsert(state.entries, {
-          kind: "delegation",
-          id: event.delegationId,
+          kind: "subagent",
+          id: event.subagentId,
           name: event.name,
           ...(event.description === undefined ? {} : { description: event.description }),
           status: event.state,
-          // Only ever set alongside "waiting", so a Delegation that resumes drops it rather than
+          // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.
           ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
+          startedAt: previous?.startedAt ?? at,
+          ...(endedAt === undefined ? {} : { endedAt }),
         }),
       };
+    }
 
     case "turn_ended":
       return { ...state, status: "idle" };

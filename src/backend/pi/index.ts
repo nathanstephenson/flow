@@ -323,10 +323,10 @@ function capabilitiesOf(session: AgentSession): Capabilities {
     compaction: true,
     fork: false,
     // pi's event stream carries no parent or agent identity on any of its messages or tool calls,
-    // so there is nothing to attribute a Delegation to even if pi can spawn one. False says "this
+    // so there is nothing to attribute a Subagent to even if pi can spawn one. False says "this
     // backend does not tell us", which is what it is, and the conformance contract skips
     // accordingly rather than failing.
-    delegation: false,
+    subagents: false,
   };
 }
 

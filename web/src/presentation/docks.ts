@@ -20,10 +20,21 @@
 export type DockSide = "bottom" | "right";
 
 /**
- * What is in a tab. `shellId` is absent between the tab being filled and the Shell being opened —
- * `openShell` needs the terminal's measured size, so the id arrives one paint later.
+ * What is in a tab.
+ *
+ * `shellId` is absent between the tab being filled and the Shell being opened — `openShell` needs
+ * the terminal's measured size, so the id arrives one paint later.
+ *
+ * A `subagents` tab holds its own selection rather than opening a second tab: `subagentId` set is
+ * one Subagent's transcript, absent is the list. Kept here, beside `shellId`, because that is what
+ * makes it survive a reload — the layout is what is persisted, so a selection anywhere else would
+ * be forgotten every time the page is closed.
+ *
+ * The kinds take the domain word; only the visible label says "Agents".
  */
-export type DockTabContent = { kind: "shell"; shellId?: string };
+export type DockTabContent =
+  | { kind: "shell"; shellId?: string }
+  | { kind: "subagents"; subagentId?: string };
 
 /** `content: undefined` is an unchosen tab, and unchosen is what draws the picker. */
 export type DockTab = { id: string; content: DockTabContent | undefined };
@@ -86,9 +97,42 @@ export function addTab(dock: Dock, tabId: string): Dock {
  * `openShell` needs the terminal's measured size — the tab's body opens the Shell one paint later
  * and reports the id back through `rememberShell`.
  */
-export function fillWithShell(dock: Dock, tabId: string): Dock {
+/**
+ * Fill a tab with the Subagents list, adding it if the picker was not shown for an existing one.
+ *
+ * Mirrors `fillWithShell`, but there is no late id to remember: the Subagents are already in the
+ * transcript, so the tab has everything it needs the moment it exists.
+ */
+export function fillWithSubagents(dock: Dock, tabId: string, subagentId?: string): Dock {
+  return fill(dock, tabId, subagentId === undefined ? { kind: "subagents" } : { kind: "subagents", subagentId });
+}
+
+/**
+ * Which Dock already has an Agents tab, if either does.
+ *
+ * Asked before opening one, so a reader who put the Subagents in the bottom Dock is sent there
+ * rather than getting a second copy on the right. The right Dock is checked first only to settle
+ * the case where both have one — a reader with two is served by either, and a rule beats a coin.
+ */
+export function subagentsSide(layout: DockLayout): DockSide | undefined {
+  const sides: DockSide[] = ["right", "bottom"];
+  return sides.find((side) => layout[side].tabs.some((tab) => tab.content?.kind === "subagents"));
+}
+
+/** Drill into one Subagent, or back to the list when `subagentId` is absent. */
+export function selectSubagent(dock: Dock, tabId: string, subagentId?: string): Dock {
+  return {
+    ...dock,
+    tabs: dock.tabs.map((tab) =>
+      tab.id === tabId && tab.content?.kind === "subagents"
+        ? { ...tab, content: subagentId === undefined ? { kind: "subagents" } : { kind: "subagents", subagentId } }
+        : tab,
+    ),
+  };
+}
+
+function fill(dock: Dock, tabId: string, content: DockTabContent): Dock {
   const known = dock.tabs.some((tab) => tab.id === tabId);
-  const content: DockTabContent = { kind: "shell" };
   return {
     ...dock,
     tabs: known
@@ -96,6 +140,10 @@ export function fillWithShell(dock: Dock, tabId: string): Dock {
       : [...dock.tabs, { id: tabId, content }],
     activeId: tabId,
   };
+}
+
+export function fillWithShell(dock: Dock, tabId: string): Dock {
+  return fill(dock, tabId, { kind: "shell" });
 }
 
 /** The Shell has been opened and has an id. A tab that closed while it opened is left alone. */
@@ -128,7 +176,7 @@ export function closeTab(dock: Dock, tabId: string): { dock: Dock; killed: strin
       tabs,
       activeId: dock.activeId === tabId ? neighbour?.id : dock.activeId,
     },
-    killed: closed?.content?.shellId,
+    killed: shellOf(closed),
   };
 }
 
@@ -186,15 +234,28 @@ function dropDead(dock: Dock, live: ReadonlySet<string>): Dock {
   return {
     ...dock,
     tabs: dock.tabs.filter((tab) => {
-      const shellId = tab.content?.shellId;
-      // Unchosen tabs, and tabs whose Shell is still being opened, claim nothing yet and survive.
+      const shellId = shellOf(tab);
+      // Unchosen tabs, tabs whose Shell is still being opened, and tabs that are not Shells at all
+      // claim nothing here and survive. Reconciling is against the Shells the Session Host has;
+      // it has no opinion about a tab showing Subagents, which live in the transcript.
       return shellId === undefined || live.has(shellId);
     }),
   };
 }
 
 function claims(dock: Dock): string[] {
-  return dock.tabs.map((tab) => tab.content?.shellId).filter((id): id is string => id !== undefined);
+  return dock.tabs.map(shellOf).filter((id): id is string => id !== undefined);
+}
+
+/**
+ * The Shell a tab holds, or undefined for any tab that holds something else.
+ *
+ * One reader for the three places that used to reach for `content.shellId` directly. Now that a tab
+ * can hold something other than a Shell, each of those is a place a non-Shell tab could be reaped or
+ * counted as claiming a Shell it has nothing to do with.
+ */
+function shellOf(tab: DockTab | undefined): string | undefined {
+  return tab?.content?.kind === "shell" ? tab.content.shellId : undefined;
 }
 
 /** After tabs have come and gone, the active one has to be a tab that is still there. */
@@ -215,7 +276,11 @@ export function tabLabel(dock: Dock, tabId: string): string {
   let ordinal = 0;
   for (const tab of dock.tabs) {
     if (tab.content?.kind === "shell") ordinal += 1;
-    if (tab.id === tabId) return tab.content === undefined ? "New tab" : `Shell ${ordinal}`;
+    if (tab.id !== tabId) continue;
+    if (tab.content === undefined) return "New tab";
+    // Not numbered: a second Agents tab shows the same Subagents as the first, so an ordinal would
+    // imply a distinction there is not. Shells are numbered because each is its own process.
+    return tab.content.kind === "subagents" ? "Agents" : `Shell ${ordinal}`;
   }
   return "New tab";
 }
@@ -274,6 +339,18 @@ function parseTab(value: unknown): DockTab | undefined {
   const content = record.content;
   if (typeof content !== "object" || content === null) return { id: record.id, content: undefined };
   const shape = content as Record<string, unknown>;
+  // Every kind has to be named here. An unrecognised one degrades to an unchosen tab, which is the
+  // right answer for a layout written by a newer build — but it also means a kind added without
+  // this line reopens as a blank picker, looking like the tab forgot itself.
+  if (shape.kind === "subagents") {
+    return {
+      id: record.id,
+      content:
+        typeof shape.subagentId === "string"
+          ? { kind: "subagents", subagentId: shape.subagentId }
+          : { kind: "subagents" },
+    };
+  }
   if (shape.kind !== "shell") return { id: record.id, content: undefined };
   return {
     id: record.id,

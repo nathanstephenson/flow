@@ -140,29 +140,30 @@ describe("highlighting the matched runs", () => {
 });
 
 /**
- * A Delegation has no `text`, so the haystack's early return had to learn about it. This one fails
+ * A Subagent has no `text`, so the haystack's early return had to learn about it. This one fails
  * silently rather than loudly if it regresses: searching for a subagent by name would simply stop
  * matching, with nothing to say it had.
  */
-describe("searching for a Delegation", () => {
+describe("searching for a Subagent", () => {
   it("matches on the subagent's name", () => {
-    const entry: Entry = { kind: "delegation", id: "call_1", name: "explorer", status: "running" };
+    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
     assert.equal(entryHaystack(entry).includes("explorer"), true);
   });
 
   it("matches on the brief it was given", () => {
     const entry: Entry = {
-      kind: "delegation",
+      kind: "subagent",
       id: "call_1",
       name: "explorer",
       description: "read package.json",
       status: "complete",
+      startedAt: "2026-01-01T00:00:00.000Z",
     };
     assert.equal(entryHaystack(entry).includes("package.json"), true);
   });
 
-  it("does not throw on a Delegation with no brief", () => {
-    const entry: Entry = { kind: "delegation", id: "call_1", name: "explorer", status: "complete" };
+  it("does not throw on a Subagent with no brief", () => {
+    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "complete", startedAt: "2026-01-01T00:00:00.000Z" };
     assert.equal(entryHaystack(entry), "explorer");
   });
 });

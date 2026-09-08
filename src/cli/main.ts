@@ -256,7 +256,7 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
       return `\n[thinking] ${entry.text}`;
     case "tool":
       return `  · ${entry.name} (${entry.status})`;
-    case "delegation":
+    case "subagent":
       return `  ⤷ ${entry.name} (${entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status})`;
     case "notice":
       return `  ! ${entry.level}: ${entry.text}`;

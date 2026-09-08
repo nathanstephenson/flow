@@ -52,7 +52,7 @@ const started: AgentEvent = {
   type: "session_started",
   backend: "fake",
   scope: "/tmp/scope",
-  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, delegation: false },
+  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, subagents: false },
 };
 
 describe("an Agent Session view", () => {
@@ -288,6 +288,7 @@ describe("the Chrome shallow compare", () => {
     contextUsage: undefined,
     endedReason: undefined,
     queueDepth: 0,
+    activeSubagents: 0,
     link: "live" as const,
   };
 
@@ -298,6 +299,10 @@ describe("the Chrome shallow compare", () => {
   it("notices a field that moved", () => {
     assert.equal(sameChrome(chrome, { ...chrome, status: "settled" }), false);
     assert.equal(sameChrome(chrome, { ...chrome, queueDepth: 1 }), false);
+    // A count rather than a list, precisely so this compares by value and a streaming tick that
+    // changes nothing about the Subagents cannot force a chrome publish.
+    assert.equal(sameChrome(chrome, { ...chrome, activeSubagents: 2 }), false);
+    assert.equal(sameChrome(chrome, { ...chrome, activeSubagents: 0 }), true);
     assert.equal(sameChrome(chrome, { ...chrome, link: "gone" }), false);
   });
 

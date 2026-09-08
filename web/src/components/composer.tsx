@@ -1,9 +1,9 @@
-import { ArrowUp, Loader2, Square, X } from "lucide-react";
+import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
-import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
+import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentation/composer-hint.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -38,7 +38,17 @@ import { cn } from "@/lib/utils.ts";
  * paid *on the composer* rather than by faking the transcript: the textarea clears at once, the
  * button spins, and a rejection puts the text back and says why.
  */
-export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
+export function Composer({
+  sessionId,
+  chrome,
+  onShowSubagents,
+}: {
+  sessionId: string;
+  chrome: Chrome;
+  /** Open the Subagents, from the strip. A callback rather than the Docks handle, so the Composer
+   * stays ignorant that Docks exist — it knows there is somewhere to go, not where. */
+  onShowSubagents: () => void;
+}) {
   const run = useCommand();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -224,6 +234,17 @@ export function Composer({ sessionId, chrome }: { sessionId: string; chrome: Chr
           * the strip underneath describes what it will do when pressed. Centred rather than pinned
           * to a corner, so it stays beside the text as the box grows.
           */}
+        {/*
+          * Above the Attachments, so it owns the panel's top edge — the panel has no
+          * `overflow-hidden`, so a child has to round its own corners to sit in them.
+          *
+          * Inside the measured element, not the gradient wrapper around it: the ResizeObserver
+          * reports this div's height as `--composer-inset`, so a strip in here pads the transcript
+          * clear of itself as it appears and goes away. Outside it, the last line of the transcript
+          * would sit behind it.
+          */}
+        <SubagentStrip chrome={chrome} onShow={onShowSubagents} />
+
         {attachments.length === 0 ? null : (
           <AttachmentTray attachments={attachments} onRemove={remove} />
         )}
@@ -329,6 +350,37 @@ function base64Of(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * What the session's Subagents are doing, when any of them are doing anything.
+ *
+ * Above the input because everything *below* it describes the next turn — which model, how hard,
+ * how much room is left — while this is a fact about the turn already running. Same reason the
+ * Attachments sit up here.
+ *
+ * Absent entirely when nothing is working, rather than present and empty: this is the only thing in
+ * the panel that comes and goes, and a reserved empty row would make the Composer taller for no
+ * reason for the whole of a session that never delegates.
+ */
+function SubagentStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void }) {
+  const label = subagentStripLabel(chrome);
+  if (label === undefined) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={onShow}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-t-xl border-b border-border/40 px-3 py-1.5",
+        "text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+      )}
+    >
+      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
+      {label}
+      <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0" />
+    </button>
+  );
 }
 
 /**

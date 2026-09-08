@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
-import { PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
+import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide } from "@/presentation/docks.ts";
 import type { DockAction } from "@/docks.ts";
 import { DockResizeHandle } from "@/components/dock-resize-handle.tsx";
+import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -31,11 +32,14 @@ export function Dock({
   side,
   dock,
   sessionId,
+  shells,
   dispatch,
 }: {
   side: DockSide;
   dock: DockState;
   sessionId: string;
+  /** Whether this host can open a Shell. The Dock itself is offered either way. */
+  shells: boolean;
   dispatch: (action: DockAction) => void;
 }) {
   const root = useRef<HTMLElement>(null);
@@ -165,7 +169,16 @@ export function Dock({
         </Tooltip>
       </div>
 
-      {active?.content?.kind === "shell" ? (
+      {active?.content?.kind === "subagents" ? (
+        <SubagentsPane
+          key={active.id}
+          sessionId={sessionId}
+          subagentId={active.content.subagentId}
+          onSelect={(subagentId) =>
+            dispatch({ type: "select-subagent", side, tabId: active.id, ...(subagentId ? { subagentId } : {}) })
+          }
+        />
+      ) : active?.content?.kind === "shell" ? (
         <ShellPane
           // Keyed by the tab, not by the Shell: the id arrives after the pty is spawned, and keying
           // on it would tear down the terminal that had just reported it.
@@ -177,7 +190,15 @@ export function Dock({
         />
       ) : (
         <ContentPicker
-          onChooseShell={() => dispatch({ type: "open-shell", side, ...(active ? { tabId: active.id } : {}) })}
+          onChooseSubagents={() =>
+            dispatch({ type: "open-subagents", side, ...(active ? { tabId: active.id } : {}) })
+          }
+          {...(shells
+            ? {
+                onChooseShell: () =>
+                  dispatch({ type: "open-shell", side, ...(active ? { tabId: active.id } : {}) }),
+              }
+            : {})}
         />
       )}
     </section>
@@ -188,16 +209,30 @@ export function Dock({
  * What a Dock shows when its active tab has no content yet — which is also what it shows when it has
  * no tabs at all, because those are the same question.
  *
- * One entry today. It is a list rather than a menu because it is the body of the Dock, not a popover
- * hanging off `+`: filling the space is what makes an empty Dock explain itself. A build with no pty
- * offers no Docks at all, which is why there is no "nothing available" case to draw.
+ * A list rather than a menu because it is the body of the Dock, not a popover hanging off `+`:
+ * filling the space is what makes an empty Dock explain itself.
+ *
+ * A Shell is offered only where the host can open one. The Docks used to be withheld entirely on
+ * that basis, which meant anything else they could hold was withheld with them.
  */
-function ContentPicker({ onChooseShell }: { onChooseShell: () => void }) {
+function ContentPicker({
+  onChooseShell,
+  onChooseSubagents,
+}: {
+  onChooseShell?: () => void;
+  onChooseSubagents: () => void;
+}) {
   return (
-    <div className="flex min-h-0 items-center justify-center overflow-auto p-4">
-      <Button variant="outline" size="sm" onClick={onChooseShell}>
-        <SquareTerminal aria-hidden data-icon="inline-start" />
-        Shell
+    <div className="flex min-h-0 items-center justify-center gap-2 overflow-auto p-4">
+      {onChooseShell === undefined ? null : (
+        <Button variant="outline" size="sm" onClick={onChooseShell}>
+          <SquareTerminal aria-hidden data-icon="inline-start" />
+          Shell
+        </Button>
+      )}
+      <Button variant="outline" size="sm" onClick={onChooseSubagents}>
+        <Bot aria-hidden data-icon="inline-start" />
+        Agents
       </Button>
     </div>
   );

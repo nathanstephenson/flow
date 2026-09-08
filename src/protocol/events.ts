@@ -54,15 +54,15 @@ export type Capabilities = {
   compaction: boolean;
   fork: boolean;
   /**
-   * Set when this Backend Adapter reports Delegations. False is not "this backend has no subagents"
+   * Set when this Backend Adapter reports Subagents. False is not "this backend has no subagents"
    * but "this backend does not tell us about them" — the distinction `effortLevels` draws for a
    * model with no Effort. A client hides the affordance rather than showing an empty tree.
    */
-  delegation: boolean;
+  subagents: boolean;
 };
 
 /**
- * What one model cost an Agent Session so far. A Delegation runs under its own entry, which is the
+ * What one model cost an Agent Session so far. A Subagent runs under its own entry, which is the
  * only place its tokens are reported at all.
  *
  * `id` is the model as a reader would name it (`claude-haiku-4-5`), not the versioned key the
@@ -86,33 +86,33 @@ export type TurnEndReason = "complete" | "aborted" | "error";
  * Who produced an event within a turn.
  *
  * Absent means the Agent Session's own model, which is the overwhelmingly common case and the reason
- * this is optional rather than a required `"self" | Delegation`: every event written before this
+ * this is optional rather than a required `"self" | Subagent`: every event written before this
  * existed reduces identically, so no Presentation Transcript needs migrating — and ADR 0001 forbids
  * rewriting one anyway.
  *
- * `delegationId` is the callId of the tool call that spawned the Delegation (ADR 0015), so this and
+ * `subagentId` is the callId of the tool call that spawned the Subagent (ADR 0015), so this and
  * the `tool` Entry a reader can already see address the same thing.
  */
-export type Producer = { delegationId: string };
+export type Producer = { subagentId: string };
 
-/** What a waiting Delegation is waiting on. A variant, so the type refuses a wait with no object. */
-export type DelegationWait =
+/** What a waiting Subagent is waiting on. A variant, so the type refuses a wait with no object. */
+export type SubagentWait =
   /** The Provider is not answering — a rate limit, or a retry in flight. */
   | "provider"
-  /** A Delegation of its own has not come back. */
+  /** A Subagent of its own has not come back. */
   | "child"
   /** A human has not yet answered a Permission Prompt. */
   | "permission";
 
 /**
- * A Delegation's whole state, as a snapshot (ADR 0015).
+ * A Subagent's whole state, as a snapshot (ADR 0015).
  *
- * The terminal states reuse TurnEndReason's three words verbatim: a Delegation ends the way a turn
+ * The terminal states reuse TurnEndReason's three words verbatim: a Subagent ends the way a turn
  * does, and inventing a second vocabulary for the same three outcomes is how two front-ends drift.
  */
-export type DelegationState =
+export type SubagentState =
   | { state: "running" }
-  | { state: "waiting"; on: DelegationWait }
+  | { state: "waiting"; on: SubagentWait }
   | { state: TurnEndReason };
 
 export type NoticeLevel = "info" | "warn" | "error";
@@ -141,8 +141,8 @@ export type AgentEvent =
   | { type: "user_message"; id: string; text: string; attachments?: string[] }
   | { type: "turn_started"; turnId: string }
   /**
-   * `producer` on these five is what attributes a Delegation's work to it (ADR 0015). Absent means
-   * the Agent Session's own model. Deliberately not on `turn_started`/`turn_ended` — a Delegation is
+   * `producer` on these five is what attributes a Subagent's work to it (ADR 0015). Absent means
+   * the Agent Session's own model. Deliberately not on `turn_started`/`turn_ended` — a Subagent is
    * not a turn and does not end one — nor on `notice`, which is GoodHarness talking, not a model.
    */
   | { type: "message"; id: string; text: string; final: boolean; producer?: Producer }
@@ -151,7 +151,7 @@ export type AgentEvent =
   | { type: "tool_updated"; callId: string; update: unknown; producer?: Producer }
   | { type: "tool_ended"; callId: string; result: unknown; isError: boolean; producer?: Producer }
   /**
-   * One Delegation, wholly (ADR 0015). `delegationId` is the callId of the spawning tool call, so
+   * One Subagent, wholly (ADR 0015). `subagentId` is the callId of the spawning tool call, so
    * this and the `tool_started` beside it address the same thing.
    *
    * `name` is the subagent's declared identity where a backend reports one and the tool name where
@@ -160,13 +160,13 @@ export type AgentEvent =
    * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
    * `since: N` holds a lifecycle it can complete.
    */
-  | ({ type: "delegation"; delegationId: string; name: string; description?: string } & DelegationState)
+  | ({ type: "subagent"; subagentId: string; name: string; description?: string } & SubagentState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[] }
   /**
    * `used`/`window` are occupancy: how full the Conversation Context is, and so what the next turn
    * has room to do. `spend` is a different measure — everything billed for this Agent Session so
-   * far, across every model, **including Delegations**, whose own conversations never enter the
+   * far, across every model, **including Subagents**, whose own conversations never enter the
    * Conversation Context and so are invisible to `used`.
    *
    * Optional because only a backend that reports per-model usage can supply it.

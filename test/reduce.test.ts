@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { initialState, reduceAll, type Entry, type ViewState } from "../src/client/reduce.ts";
+import { initialState, reduce, reduceAll, type Entry, type ViewState } from "../src/client/reduce.ts";
 import { SessionLog } from "../src/daemon/log.ts";
 import type { AgentEvent, LoggedEvent } from "../src/protocol/events.ts";
 
-const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, delegation: false };
+const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false };
 
 function transcript(...events: AgentEvent[]): SessionLog {
   const log = new SessionLog("s1");
@@ -195,13 +195,13 @@ describe("the branch a Scope is on", () => {
 });
 
 /**
- * A Delegation reduces to a flat, top-level Entry beside the tool call that spawned it (ADR 0015).
+ * A Subagent reduces to a flat, top-level Entry beside the tool call that spawned it (ADR 0015).
  *
  * The invariant these protect is `entries.length`: `web/src/store/agent-session-view.ts` decides the
- * key list changed by length alone, sound only while the transcript is append-only. A Delegation's
+ * key list changed by length alone, sound only while the transcript is append-only. A Subagent's
  * whole life must therefore add exactly one Entry, however many snapshots it takes to get there.
  */
-describe("a Delegation in the Presentation Transcript", () => {
+describe("a Subagent in the Presentation Transcript", () => {
   const at = (seq: number, event: AgentEvent): LoggedEvent => ({ seq, sessionId: "s1", at: "", event });
 
   const lifecycle = (...states: AgentEvent[]): ViewState =>
@@ -209,59 +209,246 @@ describe("a Delegation in the Presentation Transcript", () => {
 
   it("collapses every snapshot into one Entry", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "waiting", on: "provider" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "complete" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "waiting", on: "provider" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "complete" },
     );
 
     assert.equal(view.entries.length, 1, "the length heuristic in the web store depends on this");
     const entry = view.entries[0];
-    assert.equal(entry?.kind === "delegation" && entry.status, "complete");
+    assert.equal(entry?.kind === "subagent" && entry.status, "complete");
   });
 
   it("drops waitingOn once it is no longer waiting", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "waiting", on: "permission" },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "waiting", on: "permission" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
     );
     const entry = view.entries[0];
-    assert.equal(entry?.kind === "delegation" && entry.waitingOn, undefined, "a stale wait is a lie");
+    assert.equal(entry?.kind === "subagent" && entry.waitingOn, undefined, "a stale wait is a lie");
   });
 
   it("sits beside the tool call it shares an id with, not inside it", () => {
     const view = lifecycle(
       { type: "tool_started", callId: "call_1", name: "Agent", input: {} },
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
     );
-    assert.deepEqual(view.entries.map((entry: Entry) => entry.kind), ["tool", "delegation"]);
+    assert.deepEqual(view.entries.map((entry: Entry) => entry.kind), ["tool", "subagent"]);
     assert.deepEqual(view.entries.map((entry: Entry) => entry.id), ["call_1", "call_1"]);
   });
 
-  it("attributes a Delegation's message to it, at the top level", () => {
+  it("attributes a Subagent's message to it, at the top level", () => {
     const view = lifecycle(
-      { type: "delegation", delegationId: "call_1", name: "explorer", state: "running" },
-      { type: "message", id: "m1", text: "reading", final: true, producer: { delegationId: "call_1" } },
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "message", id: "m1", text: "reading", final: true, producer: { subagentId: "call_1" } },
       { type: "message", id: "m2", text: "parent", final: true },
     );
 
-    assert.deepEqual(view.entries.map((entry) => entry.kind), ["delegation", "assistant", "assistant"]);
+    assert.deepEqual(view.entries.map((entry) => entry.kind), ["subagent", "assistant", "assistant"]);
     const child = view.entries[1];
     const parent = view.entries[2];
-    assert.deepEqual(child?.kind === "assistant" && child.producer, { delegationId: "call_1" });
+    assert.deepEqual(child?.kind === "assistant" && child.producer, { subagentId: "call_1" });
     assert.equal(parent?.kind === "assistant" && parent.producer, undefined);
   });
 
-  it("keeps a parent and a Delegation streaming at once from stealing each other's text", () => {
+  it("keeps a parent and a Subagent streaming at once from stealing each other's text", () => {
     const view = lifecycle(
       { type: "message", id: "m1", text: "parent par", final: false },
-      { type: "message", id: "m2", text: "child ", final: false, producer: { delegationId: "call_1" } },
+      { type: "message", id: "m2", text: "child ", final: false, producer: { subagentId: "call_1" } },
       { type: "message", id: "m1", text: "parent partial", final: true },
-      { type: "message", id: "m2", text: "child done", final: true, producer: { delegationId: "call_1" } },
+      { type: "message", id: "m2", text: "child done", final: true, producer: { subagentId: "call_1" } },
     );
     assert.deepEqual(
       view.entries.map((entry) => (entry.kind === "assistant" ? entry.text : "")),
       ["parent partial", "child done"],
     );
+  });
+});
+
+/**
+ * The active-Subagent count, which the Composer strip reads through Chrome.
+ *
+ * Snapshots repeat, so the count has to move on the *transition* and not on each arrival — a
+ * Subagent reporting `running` twice must not count twice. Carried on ViewState rather than derived,
+ * because deriving it in the client would scan the whole transcript every frame while a subagent
+ * streams.
+ */
+describe("counting the Subagents that are still working", () => {
+  const at = (seq: number, event: AgentEvent): LoggedEvent => ({ seq, sessionId: "s1", at: "", event });
+  const run = (...events: AgentEvent[]): ViewState =>
+    reduceAll(events.map((event, index) => at(index + 1, event)));
+  const snap = (id: string, state: "running" | "complete" | "aborted" | "error"): AgentEvent => ({
+    type: "subagent",
+    subagentId: id,
+    name: "Explore",
+    state,
+  });
+
+  it("starts at zero", () => {
+    assert.equal(initialState().activeSubagents, 0);
+  });
+
+  it("counts one that is running", () => {
+    assert.equal(run(snap("a", "running")).activeSubagents, 1);
+  });
+
+  it("does not count a repeated snapshot twice", () => {
+    // The bug this guards: snapshots are latest-wins and arrive repeatedly, so counting arrivals
+    // rather than transitions would climb forever while a subagent works.
+    assert.equal(run(snap("a", "running"), snap("a", "running"), snap("a", "running")).activeSubagents, 1);
+  });
+
+  it("counts a waiting Subagent as still working", () => {
+    const view = run({ type: "subagent", subagentId: "a", name: "Explore", state: "waiting", on: "permission" });
+    assert.equal(view.activeSubagents, 1);
+  });
+
+  it("drops it again when it finishes", () => {
+    assert.equal(run(snap("a", "running"), snap("a", "complete")).activeSubagents, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "aborted")).activeSubagents, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "error")).activeSubagents, 0);
+  });
+
+  it("does not go negative when a terminal snapshot repeats", () => {
+    assert.equal(run(snap("a", "running"), snap("a", "complete"), snap("a", "complete")).activeSubagents, 0);
+  });
+
+  it("counts several at once, and each one leaving", () => {
+    assert.equal(run(snap("a", "running"), snap("b", "running"), snap("c", "running")).activeSubagents, 3);
+    assert.equal(run(snap("a", "running"), snap("b", "running"), snap("a", "complete")).activeSubagents, 1);
+  });
+
+  it("survives running, waiting and back again", () => {
+    const view = run(
+      snap("a", "running"),
+      { type: "subagent", subagentId: "a", name: "Explore", state: "waiting", on: "provider" },
+      snap("a", "running"),
+      snap("a", "complete"),
+    );
+    assert.equal(view.activeSubagents, 0);
+  });
+});
+
+/**
+ * An event this build has never heard of.
+ *
+ * A Presentation Transcript is durable and replayed in full forever (ADR 0001), so it outlives the
+ * vocabulary that wrote it: a rename leaves older lines behind, and a newer daemon can write lines
+ * an older client has never seen. Before this, such a line fell through applyEvent's switch and the
+ * spread of its undefined return replaced the whole view with `{ lastSeq }` — one unrecognised
+ * event silently emptied a session that had rendered fine a moment earlier.
+ */
+describe("an event from a vocabulary this build does not have", () => {
+  const unknown = { type: "an_event_from_the_future" } as unknown as AgentEvent;
+
+  it("leaves everything already reduced in place", () => {
+    const before = reduceAll(transcript(...SAMPLE).since(0));
+    const after = reduceAll(transcript(...SAMPLE, unknown).since(0));
+
+    assert.equal(after.status, before.status);
+    assert.equal(after.scope, before.scope);
+    assert.equal(after.backend, before.backend);
+    assert.deepEqual(after.entries, before.entries);
+    assert.deepEqual(after.contextUsage, before.contextUsage);
+  });
+
+  it("still advances lastSeq, because the event was consumed", () => {
+    // Otherwise a client resuming at `since` asks for it again on every reconnect, forever.
+    const after = reduceAll(transcript(...SAMPLE, unknown).since(0));
+    assert.equal(after.lastSeq, SAMPLE.length + 1);
+  });
+
+  it("survives a transcript written before the Subagent rename", () => {
+    // The concrete case: three transcripts on disk carry `type: "delegation"` from the old
+    // vocabulary, and they must still open.
+    const legacy = { type: "delegation", delegationId: "call_1", name: "Explore", state: "running" };
+    const state = reduceAll(
+      transcript(
+        { type: "session_started", backend: "fake", scope: "/tmp", capabilities: CAPS },
+        legacy as unknown as AgentEvent,
+        { type: "user_message", id: "u1", text: "after the unknown line" },
+      ).since(0),
+    );
+
+    assert.equal(state.scope, "/tmp", "the session must not be emptied by a line it cannot read");
+    assert.equal(state.entries.filter((entry) => entry.kind === "user").length, 1);
+    assert.equal(state.activeSubagents, 0, "an unreadable subagent line counts for nothing");
+  });
+});
+
+/**
+ * When a Subagent started and stopped.
+ *
+ * The only Entry that carries time, taken from the event's own `at` — which the store otherwise
+ * discards, and which is why this was not possible before.
+ */
+describe("timing a Subagent", () => {
+  const at = (iso: string, event: AgentEvent): LoggedEvent => ({ seq: 1, sessionId: "s1", at: iso, event });
+  const snap = (state: "running" | "complete"): AgentEvent => ({
+    type: "subagent",
+    subagentId: "a",
+    name: "Explore",
+    state,
+  });
+  const only = (view: ViewState) => {
+    const entry = view.entries.find((candidate) => candidate.kind === "subagent");
+    return entry?.kind === "subagent" ? entry : undefined;
+  };
+  const run = (...steps: [string, AgentEvent][]): ViewState => {
+    let state = initialState();
+    steps.forEach(([iso, event], index) => {
+      state = reduce(state, { ...at(iso, event), seq: index + 1 });
+    });
+    return state;
+  };
+
+  it("records when it was first reported", () => {
+    const view = run(["2026-01-01T00:00:00.000Z", snap("running")]);
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+  });
+
+  it("keeps the original start across every later snapshot", () => {
+    // The bug this guards: taking `at` on each arrival resets the clock, so a Subagent that worked
+    // for a minute reads as having started a moment ago.
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:00:30.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("running")],
+    );
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+  });
+
+  it("has no end while it is still working", () => {
+    const view = run(["2026-01-01T00:00:00.000Z", snap("running")]);
+    assert.equal(only(view)?.endedAt, undefined);
+  });
+
+  it("records the end, keeping the start", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:15.000Z", snap("complete")],
+    );
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+    assert.equal(only(view)?.endedAt, "2026-01-01T00:01:15.000Z");
+  });
+
+  it("keeps the first end when a terminal snapshot repeats", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("complete")],
+      ["2026-01-01T00:02:00.000Z", snap("complete")],
+    );
+    assert.equal(only(view)?.endedAt, "2026-01-01T00:01:00.000Z");
+  });
+
+  it("clears the end if it somehow resumes, so a live Subagent shows none", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("complete")],
+      ["2026-01-01T00:02:00.000Z", snap("running")],
+    );
+    assert.equal(only(view)?.endedAt, undefined);
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
   });
 });

@@ -4,8 +4,7 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
-import { useDelegationCollapse } from "@/components/delegation-collapse.tsx";
-import { producerKey } from "@/presentation/delegation-tree.ts";
+import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
@@ -33,16 +32,6 @@ import { cn } from "@/lib/utils.ts";
 export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
 
 export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
-  const row = renderEntry({ entry, query, sessionId });
-  const owner = producerKey(entry);
-  if (owner === undefined) return row;
-  // A rule down the left, rather than indentation alone: a subagent's rows are otherwise
-  // indistinguishable from the parent's own at a glance, which is the whole point of attributing
-  // them. Derived from the Entry because TranscriptEntryProps carries no depth, by contract.
-  return <div className="ml-[3ch] border-l border-border/60 pl-[1ch]">{row}</div>;
-});
-
-function renderEntry({ entry, query, sessionId }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -52,14 +41,14 @@ function renderEntry({ entry, query, sessionId }: TranscriptEntryProps) {
       return <ThinkingEntryView entry={entry} query={query} />;
     case "tool":
       return <ToolCallEntryView entry={entry} query={query} />;
-    case "delegation":
-      return <DelegationEntryView entry={entry} query={query} />;
+    case "subagent":
+      return <SubagentEntryView entry={entry} query={query} />;
     case "notice":
       return <NoticeEntryView entry={entry} query={query} />;
     case "marker":
       return <TranscriptMarker entry={entry} />;
   }
-}
+});
 
 type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
 
@@ -193,7 +182,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
           <ToolStatusDot status={entry.status} />
           <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
           {precis === undefined ? null : (
-            <span className="truncate font-mono text-xs text-muted-foreground">{precis}</span>
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
           {entry.status === "running" ? (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
@@ -210,72 +199,52 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 }
 
 /**
- * One Delegation: what a subagent was asked to do, and how far it has got (ADR 0015).
+ * That a Subagent was started, and how far it has got (ADR 0015).
  *
- * The same species of thing as a tool call — bounded, and a record of work that happened elsewhere —
- * so it takes the same card shape rather than inventing a second one. It sits deeper than a tool
- * call because it is what one of those is doing, and the indent is derived from the Entry rather
- * than passed in: TranscriptEntryProps is `{ entry, query, sessionId }` and nothing else, by
- * contract, so a parent cannot hand a child row its depth.
+ * Deliberately not expandable, and deliberately not the work itself. What a Subagent did lives in
+ * the Agents tab: interleaved here it read as the session's own work, and with two running at once
+ * it read as nobody's in particular — a flat list ordered by `seq` has one axis and parallel work
+ * needs two. So this row is the notice, and the tab is the record.
  *
  * Waiting states name what is being waited on. "Waiting" alone is a spinner with extra steps.
  */
-function DelegationEntryView({ entry, query }: { entry: Of<"delegation">; query: string }) {
-  const [toggled, setToggled] = useState<boolean | undefined>(undefined);
-  const open = toggled ?? entry.status === "error";
+function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: string }) {
   const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
   const live = entry.status === "running" || entry.status === "waiting";
+  const open = useOpenSubagent();
 
-  const collapse = useDelegationCollapse();
-  const key = entryKey(entry);
-  const hidden = collapse.isCollapsed(key);
-  const members = collapse.members(key);
+  const body = (
+    <>
+      <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
+      <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
+      <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+      {entry.description === undefined ? null : (
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+          <Highlighted text={entry.description} query={query} />
+        </span>
+      )}
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground">{live ? `${status}…` : status}</span>
+    </>
+  );
+
+  const shell = "flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground";
 
   return (
-    <div className="py-0.5 pl-[4ch]">
-      <details
-        open={open}
-        onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-lg border bg-card text-card-foreground"
-      >
-        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <ToolStatusDot status={entry.status === "waiting" ? "running" : delegationDot(entry.status)} />
-          <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
-          {entry.description === undefined ? null : (
-            <span className="truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
-          )}
-          {live ? <span className="ml-auto shrink-0 text-xs text-muted-foreground">{status}…</span> : null}
-          {members > 0 ? (
-            <button
-              type="button"
-              // Stops the click reaching <summary>, which would toggle the card's own disclosure
-              // instead of the rows below it — two different things behind one gesture.
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                collapse.toggle(key);
-              }}
-              className={cn(
-                "shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground",
-                live ? "" : "ml-auto",
-              )}
-            >
-              {hidden ? `show ${members} row${members === 1 ? "" : "s"}` : `hide ${members} row${members === 1 ? "" : "s"}`}
-            </button>
-          ) : null}
-        </summary>
-
-        <div className="border-t p-3 text-sm">
-          <Highlighted text={entry.description ?? "No brief was recorded for this Delegation."} query={query} />
-        </div>
-      </details>
+    <div className="py-0.5 pl-[2ch]">
+      {open === undefined ? (
+        // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
+        <div className={shell}>{body}</div>
+      ) : (
+        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "text-left hover:bg-accent")}>
+          {body}
+        </button>
+      )}
     </div>
   );
 }
 
 /** Aborted is a stop, not a failure: only an error earns the one coloured token. */
-function delegationDot(status: Of<"delegation">["status"]): "running" | "complete" | "error" {
+function subagentDot(status: Of<"subagent">["status"]): "running" | "complete" | "error" {
   if (status === "error") return "error";
   return status === "running" ? "running" : "complete";
 }

@@ -5,12 +5,15 @@ import {
   closeTab,
   defaultLayout,
   fillWithShell,
+  fillWithSubagents,
   parseLayouts,
   pruneLayouts,
   reconcileLayout,
   rememberShell,
+  selectSubagent,
   setActive,
   setSize,
+  subagentsSide,
   toggleMinimised,
   type DockLayout,
   type DockSide,
@@ -41,6 +44,18 @@ export type DockAction =
   | { type: "open-shell"; side: DockSide; tabId?: string }
   /** The Shell has been opened and has an id; the tab has been waiting for it. */
   | { type: "remember-shell"; side: DockSide; tabId: string; shellId: string }
+  /**
+   * Show the Subagents. Chosen from the picker, or reached from the Composer's strip or a
+   * transcript card — both of which have to *open* the Dock rather than toggle it, since a reader
+   * clicking "2 agents running" on a Dock that happens to be open would otherwise close it.
+   *
+   * `side` is optional, and omitting it is the usual case: whichever Dock already has an Agents tab
+   * wins, so a reader who keeps the Subagents in the bottom Dock is not handed a second copy on the
+   * right. The picker passes a side because it is *in* a Dock, and that is the one being filled.
+   */
+  | { type: "open-subagents"; side?: DockSide; tabId?: string; subagentId?: string }
+  /** Drill into one Subagent, or back to the list when `subagentId` is absent. */
+  | { type: "select-subagent"; side: DockSide; tabId: string; subagentId?: string }
   | { type: "close-tab"; side: DockSide; tabId: string }
   | { type: "activate"; side: DockSide; tabId: string }
   | { type: "resize"; side: DockSide; px: number; available?: number };
@@ -65,6 +80,25 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
     (action: DockAction) => {
       if (sessionId === undefined) return;
       update(sessionId, (layout) => {
+        // Resolved from the layout rather than named by the caller, so it runs before the shared
+        // derivation below — which assumes every other action says which Dock it means.
+        if (action.type === "open-subagents") {
+          // Wherever the Subagents already are, else the side asked for, else the right Dock.
+          const side = subagentsSide(layout) ?? action.side ?? "right";
+          const target = layout[side];
+          // Reuse that Dock's Agents tab: a second would show the same Subagents, and the reader
+          // asked to see them rather than to have another tab.
+          const existing = target.tabs.find((tab) => tab.content?.kind === "subagents");
+          const filled = fillWithSubagents(
+            target,
+            action.tabId ?? existing?.id ?? newTabId(),
+            // Drilling straight in when a reader asked for one Subagent by name, rather than
+            // landing them on the list to find it again.
+            ...(action.subagentId === undefined ? [] : [action.subagentId]),
+          );
+          return { ...layout, [side]: { ...filled, minimised: false } };
+        }
+
         const dock = layout[action.side];
         switch (action.type) {
           case "toggle":
@@ -73,6 +107,11 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
             return { ...layout, [action.side]: addTab(dock, newTabId()) };
           case "open-shell":
             return { ...layout, [action.side]: fillWithShell(dock, action.tabId ?? newTabId()) };
+          case "select-subagent":
+            return {
+              ...layout,
+              [action.side]: selectSubagent(dock, action.tabId, action.subagentId),
+            };
           case "remember-shell":
             return { ...layout, [action.side]: rememberShell(dock, action.tabId, action.shellId) };
           case "close-tab": {

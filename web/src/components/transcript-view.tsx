@@ -6,8 +6,7 @@ import { isPinned } from "@/presentation/stick-to-bottom.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
-import { DelegationCollapseProvider, type DelegationCollapse } from "@/components/delegation-collapse.tsx";
-import { memberCount, visibleKeys } from "@/presentation/delegation-tree.ts";
+import { ownKeys } from "@/presentation/subagent-rows.ts";
 
 /**
  * The Presentation Transcript, as a document.
@@ -28,24 +27,11 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   const keys = useTranscriptKeys(view);
   const matching = useFilteredKeys(view, keys, query);
 
-  // Collapse filters keys, never entries (ADR 0015). Applied after search and before the tail
-  // window, so a collapsed Delegation's rows do not consume the window they are not drawn in.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  // A Subagent's own rows belong to the Agents tab, not here (ADR 0015). This filters *keys*, never
+  // `entries` — filtering the entry list would break the length heuristic the store relies on. What
+  // survives is the session's own work plus the card saying a Subagent was started.
   const getEntry = useCallback((key: string) => view.getEntry(key), [view]);
-  const collapse = useMemo<DelegationCollapse>(
-    () => ({
-      isCollapsed: (delegation) => collapsed.has(delegation),
-      members: (delegation) => memberCount(keys, getEntry, delegation),
-      toggle: (delegation) =>
-        setCollapsed((current) => {
-          const next = new Set(current);
-          if (!next.delete(delegation)) next.add(delegation);
-          return next;
-        }),
-    }),
-    [collapsed, keys, getEntry],
-  );
-  const shown = useMemo(() => visibleKeys(matching, getEntry, collapsed), [matching, getEntry, collapsed]);
+  const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
 
   const [showAll, setShowAll] = useState(false);
   const windowed = showAll || shown.length <= TAIL_WINDOW ? shown : shown.slice(-TAIL_WINDOW);
@@ -131,11 +117,9 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
             </button>
           ) : null}
 
-          <DelegationCollapseProvider value={collapse}>
-            {windowed.map((key) => (
-              <TranscriptRow key={key} view={view} entryKey={key} query={query} />
-            ))}
-          </DelegationCollapseProvider>
+          {windowed.map((key) => (
+            <TranscriptRow key={key} view={view} entryKey={key} query={query} />
+          ))}
 
           {shown.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">

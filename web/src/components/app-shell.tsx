@@ -167,10 +167,10 @@ export function AppShell() {
       // Silently ignored where the host has no pty, for the same reason the buttons are absent
       // there: a shortcut that reports a capability you do not have teaches nothing.
       "toggle-bottom-dock": () => {
-        if (focusedId !== undefined && config.shell) docks.dispatch({ type: "toggle", side: "bottom" });
+        if (focusedId !== undefined) docks.dispatch({ type: "toggle", side: "bottom" });
       },
       "toggle-right-dock": () => {
-        if (focusedId !== undefined && config.shell) docks.dispatch({ type: "toggle", side: "right" });
+        if (focusedId !== undefined) docks.dispatch({ type: "toggle", side: "right" });
       },
       "toggle-rail": () => setRailOpen((open) => !open),
       // `?` now lands somewhere, which is what it was resolving to nothing for.
@@ -271,7 +271,8 @@ export function AppShell() {
               sessionId={focusedId}
               searchOpen={searchOpen}
               onCloseSearch={() => setSearchOpen(false)}
-              {...(config.shell ? { docks } : {})}
+              docks={docks}
+              shells={config.shell === true}
             />
           )}
         </SidebarInset>
