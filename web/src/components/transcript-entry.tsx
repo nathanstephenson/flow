@@ -4,6 +4,7 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
@@ -210,20 +211,34 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: string }) {
   const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
   const live = entry.status === "running" || entry.status === "waiting";
+  const open = useOpenSubagent();
+
+  const body = (
+    <>
+      <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
+      <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
+      <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+      {entry.description === undefined ? null : (
+        <span className="truncate font-mono text-xs text-muted-foreground">
+          <Highlighted text={entry.description} query={query} />
+        </span>
+      )}
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground">{live ? `${status}…` : status}</span>
+    </>
+  );
+
+  const shell = "flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground";
 
   return (
     <div className="py-0.5 pl-[2ch]">
-      <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground">
-        <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
-        <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-        <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
-        {entry.description === undefined ? null : (
-          <span className="truncate font-mono text-xs text-muted-foreground">
-            <Highlighted text={entry.description} query={query} />
-          </span>
-        )}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">{live ? `${status}…` : status}</span>
-      </div>
+      {open === undefined ? (
+        // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
+        <div className={shell}>{body}</div>
+      ) : (
+        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "text-left hover:bg-accent")}>
+          {body}
+        </button>
+      )}
     </div>
   );
 }

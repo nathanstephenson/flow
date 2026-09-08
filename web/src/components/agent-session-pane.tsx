@@ -9,6 +9,7 @@ import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.t
 import { Composer } from "@/components/composer.tsx";
 import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
+import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
 import { TranscriptView } from "@/components/transcript-view.tsx";
 import { cn } from "@/lib/utils.ts";
 
@@ -105,7 +106,18 @@ function AttachedPane({
         />
       ) : null}
 
-      <TranscriptView view={view} query={query} />
+      {/*
+        * The transcript only mentions that a Subagent ran; the Docks are where its work lives, and
+        * this pane is the thing that knows both. Same destination as the Composer's strip, but
+        * carrying which Subagent was asked for, so a click lands on that one rather than the list.
+        */}
+      <SubagentOpenProvider
+        value={(subagentKey) =>
+          docks.dispatch({ type: "open-subagents", side: "right", subagentId: subagentKey })
+        }
+      >
+        <TranscriptView view={view} query={query} />
+      </SubagentOpenProvider>
 
       <Composer
         sessionId={sessionId}

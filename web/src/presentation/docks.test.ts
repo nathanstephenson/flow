@@ -375,3 +375,24 @@ describe("an Agents tab", () => {
     assert.deepEqual(parseLayouts(JSON.stringify(stored)).s1?.right.tabs[0]?.content, { kind: "subagents" });
   });
 });
+
+describe("opening one Subagent from the transcript", () => {
+  it("drills straight into the Subagent asked for", () => {
+    // The transcript card names one, so landing on the list would make the reader find it again.
+    const dock = fillWithSubagents(addTab(defaultLayout().right, "t1"), "t1", "subagent:abc");
+    assert.deepEqual(dock.tabs[0]?.content, { kind: "subagents", subagentId: "subagent:abc" });
+    assert.equal(dock.activeId, "t1");
+  });
+
+  it("opens on the list when no Subagent was named", () => {
+    const dock = fillWithSubagents(addTab(defaultLayout().right, "t1"), "t1");
+    assert.deepEqual(dock.tabs[0]?.content, { kind: "subagents" });
+  });
+
+  it("retargets a tab that was already showing a different Subagent", () => {
+    const first = fillWithSubagents(addTab(defaultLayout().right, "t1"), "t1", "subagent:aaa");
+    const second = fillWithSubagents(first, "t1", "subagent:bbb");
+    assert.deepEqual(second.tabs[0]?.content, { kind: "subagents", subagentId: "subagent:bbb" });
+    assert.equal(second.tabs.length, 1, "retargeting must not add a tab");
+  });
+});

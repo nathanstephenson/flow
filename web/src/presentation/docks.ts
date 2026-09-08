@@ -103,8 +103,8 @@ export function addTab(dock: Dock, tabId: string): Dock {
  * Mirrors `fillWithShell`, but there is no late id to remember: the Subagents are already in the
  * transcript, so the tab has everything it needs the moment it exists.
  */
-export function fillWithSubagents(dock: Dock, tabId: string): Dock {
-  return fill(dock, tabId, { kind: "subagents" });
+export function fillWithSubagents(dock: Dock, tabId: string, subagentId?: string): Dock {
+  return fill(dock, tabId, subagentId === undefined ? { kind: "subagents" } : { kind: "subagents", subagentId });
 }
 
 /** Drill into one Subagent, or back to the list when `subagentId` is absent. */

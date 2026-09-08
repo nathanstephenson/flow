@@ -165,7 +165,6 @@ function SubagentTranscript({
   const getEntry = useMemo(() => (key: string) => view.getEntry(key), [view]);
   const rows = useMemo(() => memberKeys(keys, getEntry, subagentId), [keys, getEntry, subagentId]);
   const subagent = useEntry(view, subagentId);
-  const name = subagent?.kind === "subagent" ? subagent.name : "agent";
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -183,8 +182,8 @@ function SubagentTranscript({
 
       {/*
        * Pinned where the Composer sits in the pane, and dressed like it, so the two read as the same
-       * kind of thing: the bar you act from. It carries the name so the bar says what you are
-       * leaving, not just that you can leave.
+       * kind of thing: the bar you act from. It names the destination rather than what is being
+       * left — the Subagent's own name is already at the top of what you are reading.
        */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-background via-background to-transparent px-2 pt-6 pb-2">
         <Button
@@ -194,7 +193,7 @@ function SubagentTranscript({
           className="pointer-events-auto w-full justify-start rounded-xl border bg-card/85 shadow-lg backdrop-blur-sm"
         >
           <ChevronLeft aria-hidden data-icon="inline-start" />
-          <span className="truncate">Back from {name}</span>
+          <span className="truncate">Back to Agents</span>
         </Button>
       </div>
     </div>

@@ -48,7 +48,7 @@ export type DockAction =
    * *open* the Dock rather than toggle it, since a reader clicking "2 agents running" on a Dock that
    * happens to be open would otherwise close it.
    */
-  | { type: "open-subagents"; side: DockSide; tabId?: string }
+  | { type: "open-subagents"; side: DockSide; tabId?: string; subagentId?: string }
   /** Drill into one Subagent, or back to the list when `subagentId` is absent. */
   | { type: "select-subagent"; side: DockSide; tabId: string; subagentId?: string }
   | { type: "close-tab"; side: DockSide; tabId: string }
@@ -87,7 +87,13 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
             // Reuse an Agents tab if this Dock already has one: a second would show the same
             // Subagents, and the reader asked to see them rather than to have another tab.
             const existing = dock.tabs.find((tab) => tab.content?.kind === "subagents");
-            const filled = fillWithSubagents(dock, action.tabId ?? existing?.id ?? newTabId());
+            const filled = fillWithSubagents(
+              dock,
+              action.tabId ?? existing?.id ?? newTabId(),
+              // Drilling straight in when a reader asked for one Subagent by name, rather than
+              // landing them on the list to find it again.
+              ...(action.subagentId === undefined ? [] : [action.subagentId]),
+            );
             return { ...layout, [action.side]: { ...filled, minimised: false } };
           }
           case "select-subagent":
