@@ -44,11 +44,6 @@ export type ModelInfo = {
 };
 
 /**
- * What a Backend Adapter can be asked to do, declared per Agent Session. Clients hide controls a
- * backend cannot serve rather than breaking on them. `providers` is what distinguishes the two
- * backends in practice: Claude reports one, pi reports several.
- */
-/**
  * One Skill: a named prompt a backend expands when a message begins with it.
  *
  * A fact about the Scope, not about the Agent Session, which is why it is fetched rather than
@@ -65,6 +60,11 @@ export type Skill = {
   argumentHint?: string;
 };
 
+/**
+ * What a Backend Adapter can be asked to do, declared per Agent Session. Clients hide controls a
+ * backend cannot serve rather than breaking on them. `providers` is what distinguishes the two
+ * backends in practice: Claude reports one, pi reports several.
+ */
 export type Capabilities = {
   providers: string[];
   models: ModelInfo[];

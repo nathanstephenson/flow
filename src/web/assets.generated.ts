@@ -77,7 +77,7 @@ export const ASSETS: AssetManifest = {
 };
 
 /** sha256 over every input to the build above. test/web.test.ts recomputes it. */
-export const SOURCE_HASH = "05b6018ee10597d3731c57ff24138a7aa4bb21a561a76e00547f85b647a86e6d";
+export const SOURCE_HASH = "7fa2a093ce033f03e512bd16a70d3eb8f9e88603f86d5ac54fce9d927914ce6b";
 
 /** What scripts/build-web.mjs proved the bundle contains, so a test can notice if it stops. */
 export const SHARED_MODULES: readonly string[] = ["src/client/connection.ts","src/client/context-usage.ts","src/client/diff.ts","src/client/markdown.ts","src/client/model-choices.ts","src/client/reduce.ts","src/client/relative-time.ts","src/client/search.ts","src/client/session-label.ts","src/client/status.ts","src/client/tool-summary.ts"];
