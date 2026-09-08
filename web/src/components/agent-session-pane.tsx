@@ -107,7 +107,13 @@ function AttachedPane({
 
       <TranscriptView view={view} query={query} />
 
-      <Composer sessionId={sessionId} chrome={chrome} />
+      <Composer
+        sessionId={sessionId}
+        chrome={chrome}
+        // The right Dock, opened rather than toggled: a reader clicking "2 agents running" while it
+        // happens to be open would otherwise close the thing they asked to see.
+        onShowSubagents={() => docks.dispatch({ type: "open-subagents", side: "right" })}
+      />
     </section>
   );
 
