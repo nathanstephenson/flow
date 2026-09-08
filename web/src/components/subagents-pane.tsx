@@ -107,6 +107,12 @@ function SubagentRow({
   const live = entry.status === "running" || waiting;
   const when = timing(entry, now);
 
+  // What it was asked to do leads, because that is what tells two Subagents of the same type apart —
+  // and they usually are the same type. The type is the answer to a second question, so it sits
+  // under it. Falls back to the type when no brief was recorded, rather than leading with nothing.
+  const title = entry.description ?? entry.name;
+  const subtitle = entry.description === undefined ? undefined : entry.name;
+
   return (
     <li>
       <button
@@ -116,21 +122,28 @@ function SubagentRow({
       >
         <span className="flex w-full items-center gap-2">
           <StatusDot status={entry.status} />
-          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
-          {entry.description === undefined ? null : (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
-          )}
+          <span className="min-w-0 truncate text-sm text-foreground">{title}</span>
           <span className="ml-auto shrink-0 text-xs text-muted-foreground">
             {waiting ? `waiting on ${entry.waitingOn}` : live ? "running" : entry.status}
           </span>
         </span>
 
-        {/* Aligned under the name rather than the dot, so the second line reads as a continuation. */}
-        {when.at === "" ? null : (
-          <span className="pl-4 text-xs text-muted-foreground/70">
-            {when.label} {when.at}
-          </span>
-        )}
+        {/*
+          * Aligned under the title rather than the dot, so the pair reads as one block. The time
+          * carries no label: the status above it already says whether it is a start or an end, and
+          * repeating that on every row spends a word to say what the row already said. The full
+          * phrase survives as the hover title, so nothing is actually lost.
+          */}
+        <span className="flex w-full items-baseline gap-2 pl-4">
+          {subtitle === undefined ? null : (
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{subtitle}</span>
+          )}
+          {when.at === "" ? null : (
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground/70" title={`${when.label} ${when.at}`}>
+              {when.at}
+            </span>
+          )}
+        </span>
       </button>
     </li>
   );
