@@ -116,7 +116,21 @@ export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = init
 }
 
 export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
-  const next = applyEvent(state, entry.event);
+  /*
+   * The cast is deliberate. `applyEvent`'s switch is exhaustive over `AgentEvent` and has no
+   * `default` arm, which is what makes a new event type a compile error in every front-end — the
+   * property the Entry union's comment relies on, and worth keeping.
+   *
+   * But a Presentation Transcript is durable and replayed in full forever (ADR 0001), so at runtime
+   * it can hold an event *this build* has never heard of: one written before a rename, or by a newer
+   * daemon against an older client. Such an event falls through the switch and `applyEvent` returns
+   * undefined — and spreading that replaced the entire view with `{ lastSeq }`. No status, no
+   * entries, no scope: one unrecognised line silently emptied a session.
+   *
+   * `lastSeq` still advances, because the event *was* consumed. Only its meaning is unavailable.
+   */
+  const next = applyEvent(state, entry.event) as ViewState | undefined;
+  if (next === undefined) return { ...state, lastSeq: entry.seq };
   return next === state ? state : { ...next, lastSeq: entry.seq };
 }
 

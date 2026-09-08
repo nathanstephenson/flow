@@ -329,3 +329,50 @@ describe("counting the Subagents that are still working", () => {
     assert.equal(view.activeSubagents, 0);
   });
 });
+
+/**
+ * An event this build has never heard of.
+ *
+ * A Presentation Transcript is durable and replayed in full forever (ADR 0001), so it outlives the
+ * vocabulary that wrote it: a rename leaves older lines behind, and a newer daemon can write lines
+ * an older client has never seen. Before this, such a line fell through applyEvent's switch and the
+ * spread of its undefined return replaced the whole view with `{ lastSeq }` — one unrecognised
+ * event silently emptied a session that had rendered fine a moment earlier.
+ */
+describe("an event from a vocabulary this build does not have", () => {
+  const unknown = { type: "an_event_from_the_future" } as unknown as AgentEvent;
+
+  it("leaves everything already reduced in place", () => {
+    const before = reduceAll(transcript(...SAMPLE).since(0));
+    const after = reduceAll(transcript(...SAMPLE, unknown).since(0));
+
+    assert.equal(after.status, before.status);
+    assert.equal(after.scope, before.scope);
+    assert.equal(after.backend, before.backend);
+    assert.deepEqual(after.entries, before.entries);
+    assert.deepEqual(after.contextUsage, before.contextUsage);
+  });
+
+  it("still advances lastSeq, because the event was consumed", () => {
+    // Otherwise a client resuming at `since` asks for it again on every reconnect, forever.
+    const after = reduceAll(transcript(...SAMPLE, unknown).since(0));
+    assert.equal(after.lastSeq, SAMPLE.length + 1);
+  });
+
+  it("survives a transcript written before the Subagent rename", () => {
+    // The concrete case: three transcripts on disk carry `type: "delegation"` from the old
+    // vocabulary, and they must still open.
+    const legacy = { type: "delegation", delegationId: "call_1", name: "Explore", state: "running" };
+    const state = reduceAll(
+      transcript(
+        { type: "session_started", backend: "fake", scope: "/tmp", capabilities: CAPS },
+        legacy as unknown as AgentEvent,
+        { type: "user_message", id: "u1", text: "after the unknown line" },
+      ).since(0),
+    );
+
+    assert.equal(state.scope, "/tmp", "the session must not be emptied by a line it cannot read");
+    assert.equal(state.entries.filter((entry) => entry.kind === "user").length, 1);
+    assert.equal(state.activeSubagents, 0, "an unreadable subagent line counts for nothing");
+  });
+});
