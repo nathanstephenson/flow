@@ -472,13 +472,15 @@ export class SessionHost {
   /**
    * Compact this Agent Session's Conversation Context now.
    *
-   * Three refusals, and each is a state where compacting would be a lie rather than a failure.
+   * **A Dormant or Settled session Revives first**, the way `send` does (ADR 0003: resuming work is
+   * one action). This used to refuse, on the reasoning that a Revive rebuilds a Conversation Context
+   * only to summarise what it just rebuilt. That was simply wrong — a Revive *restores* the
+   * conversation from its resume token, it does not summarise it — and the case for allowing it is
+   * a good one: a session parked at 90% occupancy is exactly the one worth compacting, and before
+   * resuming is the best moment, because nothing is waiting on the turn it makes room for.
    *
-   * **Dormant or Settled.** Deliberately does not Revive, which is the one place this departs from
-   * every other command that tolerates a missing Backend Session. A Revive rebuilds the Conversation
-   * Context from the resume token and then compacts what it just rebuilt — spending money (ADR 0003)
-   * to summarise a summary. `send` cannot make this distinction, which is half of why compaction is
-   * not a `/compact` typed into it.
+   * Two refusals are left, and each is a state where compacting would be a lie rather than a
+   * failure.
    *
    * **A turn in flight.** The backend is mid-conversation and would be summarising a context it is
    * still writing to. Queueing it instead was rejected: `abort` discards the queue wholesale, so a
@@ -495,11 +497,16 @@ export class SessionHost {
    */
   async compact(sessionId: string, instructions?: string): Promise<void> {
     const record = this.record(sessionId);
+    // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
+    // something it should be told plainly.
+    if (record.status === "ended") {
+      throw new CommandRefused(`Agent Session ${sessionId} has Ended; it has no Conversation Context`);
+    }
+    if (!record.session) await this.revive(sessionId);
+
     const session = record.session;
     if (!session) {
-      throw new CommandRefused(
-        `Agent Session ${sessionId} is ${record.status}; there is no Conversation Context to compact`,
-      );
+      throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session to compact`);
     }
     if (record.turnInFlight) {
       throw new CommandRefused(

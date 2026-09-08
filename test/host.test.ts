@@ -281,13 +281,27 @@ describe("compacting a Conversation Context", () => {
     assert.deepEqual(backend.latest.compactions, []);
   });
 
-  // The one place this departs from every other command that tolerates a missing Backend Session.
-  // Reviving would rebuild the Conversation Context and then summarise what it had just rebuilt.
-  it("refuses a Dormant session instead of Reviving it to serve the request", async () => {
+  /*
+   * A Revive restores the conversation from its resume token rather than summarising it, so what
+   * gets compacted here is the real thing — and a session parked at 90% occupancy is the one most
+   * worth compacting before it is picked up again. Same rule as `send` (ADR 0003).
+   */
+  it("Revives a Dormant session rather than refusing it", async () => {
     await host.shutdown();
-
-    await assert.rejects(() => host.compact(sessionId), /no Conversation Context/);
     assert.equal(host.list().find((session) => session.id === sessionId)?.status, "dormant");
+
+    await host.compact(sessionId);
+
+    assert.deepEqual(backend.latest.compactions, [undefined]);
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "idle");
+    assert.ok(typesOf(host, sessionId).includes("revived"), "the Revive is on the record");
+  });
+
+  // The one state with no Conversation Context to reach, and a refusal rather than a 500.
+  it("refuses an Ended session", async () => {
+    await host.dispose(sessionId);
+
+    await assert.rejects(() => host.compact(sessionId), /has Ended/);
   });
 
   it("refuses a backend that does not declare compaction", async () => {
