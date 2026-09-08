@@ -53,12 +53,17 @@ export type ComposerInputHandle = {
  * What the open menu wants from the keys the editor would otherwise take.
  *
  * Handed in rather than owned here, because which item is highlighted is the menu's business and
- * the menu is React's. `choose` returns whether it took the Enter, so an empty menu still sends.
+ * the menu is React's. Both pickers return whether they took the key, so an empty menu still sends.
+ *
+ * Two of them, because completing and sending are different intentions. `complete` is Tab: it puts
+ * the name in the box and leaves the caret after it, for a Skill whose arguments are the point.
+ * `submit` is Enter: the name is the whole message, so it goes.
  */
 export type MenuKeys = {
   active: boolean;
   move: (delta: number) => void;
-  choose: () => boolean;
+  complete: () => boolean;
+  submit: () => boolean;
   dismiss: () => void;
 };
 
@@ -327,8 +332,18 @@ export function ComposerInput({
                 stop(event);
                 return true;
               }
+              /*
+               * Tab completes without sending, which is the only reason it is worth taking a key
+               * the browser uses for focus: a Skill with arguments needs the name settled and the
+               * caret left after it. Shift+Tab is left alone, so tabbing *backwards* out of the
+               * composer still works while the menu is open.
+               */
+              if (event.key === "Tab" && !event.shiftKey && open.complete()) {
+                stop(event);
+                return true;
+              }
               // Shift+Enter is a newline even here, and a composing IME still owns Enter outright.
-              if (event.key === "Enter" && !event.shiftKey && !target.composing && open.choose()) {
+              if (event.key === "Enter" && !event.shiftKey && !target.composing && open.submit()) {
                 stop(event);
                 return true;
               }

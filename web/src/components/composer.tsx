@@ -182,49 +182,6 @@ export function Composer({
     // Deliberately not `query`: this fires when the menu opens, not as it filters.
   }, [query === undefined, run, sessionId]);
 
-  const choose = useCallback(
-    (item: (typeof catalogue)[number]): void => {
-      const filled = completed(text, item.name);
-      setText(filled.text);
-      input.current?.replace(filled.text, filled.caret);
-      setQuery(undefined);
-      input.current?.focus();
-    },
-    [text],
-  );
-
-  /*
-   * The caret decides whether the menu is open, so it arrives with the text. Reset to the first item
-   * on every change: after filtering, the third of five is a different thing than it was, and
-   * keeping the index would leave the highlight on whatever happened to land there.
-   */
-  const onChange = useCallback((next: string, caret: number): void => {
-    setText(next);
-    setQuery(menuQuery(next, caret));
-    setHighlighted(0);
-  }, []);
-
-  /*
-   * `active` is the *rendered* list rather than the query, which is what makes an unrecognised name
-   * fall back to being text. Type `/zzz` and nothing matches, so the menu is not open, so Enter is
-   * an ordinary send — no special case for it anywhere, and none needed.
-   */
-  const menuKeys = useMemo(
-    () => ({
-      active: items.length > 0,
-      move: (delta: number) =>
-        setHighlighted((current) => (current + delta + items.length) % items.length),
-      choose: () => {
-        const picked = items[highlighted];
-        if (!picked) return false;
-        choose(picked);
-        return true;
-      },
-      dismiss: () => setQuery(undefined),
-    }),
-    [choose, highlighted, items],
-  );
-
   const remove = useCallback(
     (key: string): void => {
       setAttachments((current) => {
@@ -235,8 +192,13 @@ export function Composer({
     [forget],
   );
 
-  const send = useCallback(async (): Promise<void> => {
-    const message = text.trim();
+  /*
+   * `override` is what lets Enter complete a name and send it in one keystroke: `setText` has not
+   * settled by the time this runs, so the completed message is handed in rather than read back out
+   * of state that is still a render behind.
+   */
+  const send = useCallback(async (override?: string): Promise<void> => {
+    const message = (override ?? text).trim();
     // An image with no words is a message — "look at this" is what the paste already said.
     if ((message === "" && attachments.length === 0) || sending || ended) return;
 
@@ -291,6 +253,63 @@ export function Composer({
       forget(sent);
     }
   }, [attachments, catalogue, ended, forget, run, sending, sessionId, text]);
+
+  /**
+   * Put the highlighted name in the box.
+   *
+   * `andSend` is the difference between the two keys that pick from this menu, and it is the whole
+   * reason there are two. Tab completes and leaves the caret after the name, which is what someone
+   * reaching for `/code-review [<pr#>]` wants — its arguments are the point. Enter takes the name
+   * as the whole message and goes, which is what someone reaching for `/tdd` wants, and having to
+   * press Enter twice for that would be a keystroke spent on nothing.
+   */
+  const choose = useCallback(
+    (item: (typeof catalogue)[number], andSend = false): void => {
+      const filled = completed(text, item.name);
+      setQuery(undefined);
+      if (andSend) {
+        void send(filled.text);
+        return;
+      }
+      setText(filled.text);
+      input.current?.replace(filled.text, filled.caret);
+      input.current?.focus();
+    },
+    [send, text],
+  );
+
+  /*
+   * The caret decides whether the menu is open, so it arrives with the text. Reset to the first item
+   * on every change: after filtering, the third of five is a different thing than it was, and
+   * keeping the index would leave the highlight on whatever happened to land there.
+   */
+  const onChange = useCallback((next: string, caret: number): void => {
+    setText(next);
+    setQuery(menuQuery(next, caret));
+    setHighlighted(0);
+  }, []);
+
+  /*
+   * `active` is the *rendered* list rather than the query, which is what makes an unrecognised name
+   * fall back to being text. Type `/zzz` and nothing matches, so the menu is not open, so Enter is
+   * an ordinary send — no special case for it anywhere, and none needed.
+   */
+  const menuKeys = useMemo(() => {
+    const pick = (andSend: boolean) => (): boolean => {
+      const picked = items[highlighted];
+      if (!picked) return false;
+      choose(picked, andSend);
+      return true;
+    };
+    return {
+      active: items.length > 0,
+      move: (delta: number) =>
+        setHighlighted((current) => (current + delta + items.length) % items.length),
+      complete: pick(false),
+      submit: pick(true),
+      dismiss: () => setQuery(undefined),
+    };
+  }, [choose, highlighted, items]);
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
