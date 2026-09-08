@@ -182,7 +182,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
           <ToolStatusDot status={entry.status} />
           <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
           {precis === undefined ? null : (
-            <span className="truncate font-mono text-xs text-muted-foreground">{precis}</span>
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
           {entry.status === "running" ? (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
@@ -219,7 +219,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
       <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
       <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
       {entry.description === undefined ? null : (
-        <span className="truncate font-mono text-xs text-muted-foreground">
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
           <Highlighted text={entry.description} query={query} />
         </span>
       )}

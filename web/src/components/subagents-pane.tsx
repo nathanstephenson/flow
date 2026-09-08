@@ -110,7 +110,7 @@ function SubagentRow({
         <StatusDot status={entry.status} />
         <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
         {entry.description === undefined ? null : (
-          <span className="truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
         )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {waiting ? `waiting on ${entry.waitingOn}` : live ? "running" : entry.status}
@@ -193,7 +193,7 @@ function SubagentTranscript({
           className="pointer-events-auto w-full justify-start rounded-xl border bg-card/85 shadow-lg backdrop-blur-sm"
         >
           <ChevronLeft aria-hidden data-icon="inline-start" />
-          <span className="truncate">Back to Agents</span>
+          <span>Back to Agents</span>
         </Button>
       </div>
     </div>
