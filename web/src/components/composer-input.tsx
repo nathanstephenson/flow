@@ -1,4 +1,7 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defineLanguageFacet, HighlightStyle, Language, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
+import { parser as markdownParser } from "@lezer/markdown";
 import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, keymap, placeholder as placeholderExtension, type DecorationSet } from "@codemirror/view";
 import { useEffect, useRef } from "react";
@@ -8,21 +11,23 @@ import { leadingToken, triggeredBy, type Triggerable } from "@/presentation/comp
 /**
  * The Composer's text box.
  *
- * A CodeMirror editor rather than a `<textarea>`, and the reason is what comes next rather than
- * anything wrong with the textarea: a slash-command menu needs to anchor to the caret, and a command
- * or skill picked from it has to show as a pill the caret cannot be dragged into the middle of.
- * Neither is expressible in a textarea, which has one string and no way to decorate a range of it.
+ * A CodeMirror editor rather than a `<textarea>`, for the two things a textarea cannot do: it has
+ * one string and no way to decorate a range of it, so neither the pill under a `/name` nor the
+ * markdown a message is being written in could be shown at all.
  *
- * This commit does none of that. It is the swap alone, and the whole of its job is that the box goes
- * on behaving exactly as the textarea did — Enter sends, Shift+Enter does not, a composing IME owns
- * Enter outright, the box grows to a cap, an image paste is caught, and an ended session cannot be
- * typed into. There is no component harness in this repo (see TODO.md), so every one of those was
- * verified by hand and is listed in the commit that introduces this file.
+ * Everything the textarea did, it still does, and each of those had to be re-earned rather than
+ * ported — Enter sends, Shift+Enter does not, a composing IME owns Enter outright, the box floors at
+ * two rows and caps at 200px, an image paste is caught rather than inserted, an ended session cannot
+ * be typed into. There is no component harness in this repo (see TODO.md), so all of it is verified
+ * by someone typing into the box, which is how the duplicated placeholder got as far as it did.
  *
  * The text stays React's. CodeMirror is uncontrolled by nature and `value` is pushed into it only
  * when the two have actually diverged, which is what stops the send-clears-the-box path from
- * fighting the editor's own state. Everything else the Composer needs — focus after a refused send —
- * comes back through `handle`.
+ * fighting the editor's own state. Everything else the Composer needs — focus after a refused send,
+ * a caret placed after a completed name — comes back through `handle`.
+ *
+ * **Every reconfigurable extension lives in a compartment and nowhere else.** A compartment does not
+ * replace an extension sitting beside it, it adds one, so a placeholder in both places drew twice.
  */
 export type ComposerInputHandle = {
   focus: () => void;
@@ -94,6 +99,54 @@ function pillsFor(state: EditorState): DecorationSet {
     Decoration.mark({ class: found.kind === "command" ? "gh-pill-command" : "gh-pill-skill" }).range(0, token.to),
   ]);
 }
+
+/**
+ * Markdown, styled as its own source rather than rendered.
+ *
+ * The asterisks stay visible and the text between them goes bold. That is the honest thing for a
+ * composer to do: the message is markdown, it will be *rendered* as markdown in the transcript
+ * (ADR 0012), and hiding the syntax while it is still being written would mean the box showed
+ * something other than what would be sent — which is the same objection ADR 0012 raises against
+ * suppressing an unclosed `**` in a streaming message.
+ *
+ * This is a second markdown implementation in the repo, and worth being explicit about. `marked`
+ * lexes what a *model wrote* into the token tree both front-ends render; Lezer highlights what a
+ * *human is typing*. They answer different questions and never meet: nothing here produces a token
+ * tree, and nothing in the transcript consults this. Sharing one would have meant reconstructing
+ * character offsets marked does not carry — its blockquote and list children are lexed against
+ * de-quoted and de-indented text, and its table cells carry no position at all — which is a second
+ * markdown authority by a longer road.
+ *
+ * Weights and colours only, no font changes. A heading that jumped to 1.5× would reflow the box
+ * mid-sentence, and monospace on a code span would do the same in the middle of a line.
+ */
+const MARKDOWN_STYLE = HighlightStyle.define([
+  { tag: tags.heading, fontWeight: "600" },
+  { tag: tags.strong, fontWeight: "600" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+  { tag: tags.link, color: "var(--trigger-command)" },
+  { tag: tags.url, color: "var(--trigger-command)" },
+  // The punctuation that makes it markdown: dimmed so the words lead, present so nothing is hidden.
+  { tag: tags.processingInstruction, color: "var(--muted-foreground)" },
+  { tag: tags.meta, color: "var(--muted-foreground)" },
+  { tag: tags.monospace, color: "var(--trigger-skill)" },
+  { tag: tags.quote, color: "var(--muted-foreground)" },
+  { tag: tags.list, color: "var(--muted-foreground)" },
+]);
+
+/**
+ * The markdown grammar, wired up from `@lezer/markdown` rather than through
+ * `@codemirror/lang-markdown`.
+ *
+ * The wrapper package statically imports `@codemirror/lang-html`, to parse HTML embedded in
+ * markdown, and it costs 60kB gzipped that this box has no use for — nobody writes an HTML block
+ * into a chat message, and if they do it is text either way. Going through `Language` directly skips
+ * it: `MarkdownParser` is a `@lezer/common` `Parser` like any other, so nothing here is a
+ * workaround. It also means no fenced code block opens the door to a nested grammar, which is the
+ * other half of what that package is for.
+ */
+const MARKDOWN = new Language(defineLanguageFacet(), markdownParser, [], "markdown");
 
 function stop(event: KeyboardEvent): void {
   event.preventDefault();
@@ -172,6 +225,8 @@ export function ComposerInput({
           // Below the Enter binding, so a newline is what Enter does only when the above declines.
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,
+          MARKDOWN,
+          syntaxHighlighting(MARKDOWN_STYLE),
           catalogueField,
           pillField,
           EditorView.updateListener.of((update) => {

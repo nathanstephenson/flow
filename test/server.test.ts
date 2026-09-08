@@ -39,6 +39,23 @@ describe("Session Host transport", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  /**
+   * The Skill catalogue over the real transport.
+   *
+   * A command whose whole job is to answer with data rather than to change something, which is a
+   * shape the protocol did not have until the composer's menu needed one — worth pinning end to end,
+   * because a JSON round trip is where "returns an array" quietly becomes "returns null".
+   */
+  it("answers list_skills with the catalogue itself, not a wrapper", async () => {
+    const id = await client.command<string>({ type: "create", scope: root, backend: "fake" });
+    const skills = await client.command({ type: "list_skills", sessionId: id });
+
+    assert.deepEqual(skills, [
+      { name: "tdd", description: "Red, green, refactor" },
+      { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+    ]);
+  });
+
   describe("git over the wire", () => {
     const get = async (path: string) =>
       await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
