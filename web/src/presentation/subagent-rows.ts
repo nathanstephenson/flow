@@ -15,9 +15,11 @@ import type { Entry } from "../../../src/client/reduce.ts";
  * DOM-free like `search.ts`, so the TUI can draw the same split rather than inventing a second rule.
  */
 
+const SUBAGENT_PREFIX = "subagent:";
+
 /** The key of the Entry a Subagent's own row uses, given the id its rows are attributed to. */
 export function subagentKey(subagentId: string): string {
-  return `subagent:${subagentId}`;
+  return `${SUBAGENT_PREFIX}${subagentId}`;
 }
 
 /** The Subagent a row belongs to, or undefined for the Agent Session's own work. */
@@ -26,16 +28,31 @@ export function producerKey(entry: Entry): string | undefined {
 }
 
 /**
- * The rows the Agent Session produced itself.
+ * The rows the Agent Session produced itself, and one row per Subagent it started.
  *
- * A Subagent's own `subagent` Entry survives this — it carries no producer, because it is the record
- * that one was started, which is exactly what the main transcript should say.
+ * Two things are dropped, for the same reason: neither tells a reader anything the Subagent's own
+ * card does not.
+ *
+ * The first is everything a Subagent produced — its work belongs to the Agents tab.
+ *
+ * The second is the tool call that spawned it. A Subagent shares its id with that call, so the
+ * transcript holds two Entries for it (ADR 0015): the `tool` row is what the parent asked for, and
+ * the `subagent` row is what came of it. That pairing earned its keep while the card sat above the
+ * Subagent's actual rows. With those gone the two rows are adjacent, carry the same brief, and only
+ * one of them carries a status — so the tool row is the one to lose.
  */
 export function ownKeys(
   keys: readonly string[],
   getEntry: (key: string) => Entry | undefined,
 ): string[] {
+  // Keys alone answer this: a Subagent's Entry key is `subagent:<id>` and its spawning call's is
+  // `tool:<id>`, so the pairing is visible without reading a single Entry.
+  const spawners = new Set(
+    keys.filter((key) => key.startsWith(SUBAGENT_PREFIX)).map((key) => `tool:${key.slice(SUBAGENT_PREFIX.length)}`),
+  );
+
   return keys.filter((key) => {
+    if (spawners.has(key)) return false;
     const entry = getEntry(key);
     // A key with no Entry cannot happen while the transcript is append-only, but dropping it here
     // would hide a row for a reason nobody could see. Kept, and rendered as whatever it turns out

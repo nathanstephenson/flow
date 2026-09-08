@@ -23,8 +23,10 @@ const childTool: Entry = {
   producer: { subagentId: "call_1" },
 };
 const parentTool: Entry = { kind: "tool", id: "t2", name: "Bash", input: {}, status: "complete" };
+/** The call that spawned the Subagent: same id as its `subagent` Entry, by design (ADR 0015). */
+const spawningCall: Entry = { kind: "tool", id: "call_1", name: "Agent", input: {}, status: "complete" };
 
-const ENTRIES = [parentSaid, subagentEntry, childSaid, childTool, parentTool];
+const ENTRIES = [parentSaid, spawningCall, subagentEntry, childSaid, childTool, parentTool];
 const KEYS = ENTRIES.map(entryKey);
 const getEntry = (key: string): Entry | undefined => ENTRIES.find((entry) => entryKey(entry) === key);
 
@@ -35,12 +37,25 @@ describe("splitting a Subagent's rows from the session's own", () => {
   });
 
   it("keeps the session's own rows and drops what a Subagent produced", () => {
-    // The main transcript's whole job now: the session's work, plus the notice that a Subagent ran.
+    // The main transcript's whole job now: the session's work, plus one row per Subagent started.
     assert.deepEqual(ownKeys(KEYS, getEntry), [
       entryKey(parentSaid),
       entryKey(subagentEntry),
       entryKey(parentTool),
     ]);
+  });
+
+  it("drops the tool call that spawned a Subagent, keeping only the Subagent's own row", () => {
+    // Both carry the same brief and sit adjacent; only the Subagent row carries a status. Leaving
+    // both in showed every Subagent twice.
+    const kept = ownKeys(KEYS, getEntry);
+    assert.ok(!kept.includes(entryKey(spawningCall)), "the spawning call must not appear beside the card");
+    assert.ok(kept.includes(entryKey(subagentEntry)));
+  });
+
+  it("leaves an ordinary tool call alone", () => {
+    // The rule is about the pairing, not about tool calls in general.
+    assert.ok(ownKeys(KEYS, getEntry).includes(entryKey(parentTool)));
   });
 
   it("keeps the Subagent's own Entry, which carries no producer", () => {
