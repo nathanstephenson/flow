@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
-import type { BackendEvent, Capabilities, EffortLevel, ModelInfo } from "../../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel, ModelInfo, Skill } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
 /**
@@ -123,6 +123,29 @@ export class PiSession implements BackendSession {
    */
   async compact(instructions?: string): Promise<void> {
     void this.session.compact(instructions);
+  }
+
+  /**
+   * pi splits what Claude calls a Skill in two: a `Skill` is a capability the model may invoke, and a
+   * `PromptTemplate` is a named prompt a human triggers. Both are offered here, because from the
+   * composer they are the same act — type a name, get a prompt — and only the second has an
+   * `argumentHint` to carry.
+   *
+   * Reloaded first, for the reason the Claude adapter rescans: a human who has just written one
+   * opens the menu expecting to find it.
+   */
+  async skills(): Promise<Skill[]> {
+    await this.session.resourceLoader.reload();
+    const { skills } = this.session.resourceLoader.getSkills();
+    const { prompts } = this.session.resourceLoader.getPrompts();
+    return [
+      ...skills.map((skill) => ({ name: skill.name, description: skill.description })),
+      ...prompts.map((prompt) => ({
+        name: prompt.name,
+        description: prompt.description,
+        ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
+      })),
+    ];
   }
 
   private applyEffort(wanted: EffortLevel): void {

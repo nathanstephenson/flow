@@ -22,6 +22,7 @@ import type {
   ModelInfo,
   ModelSpend,
   Producer,
+  Skill,
   Spend,
   TurnEndReason,
 } from "../../protocol/events.ts";
@@ -367,6 +368,26 @@ class ClaudeSession implements BackendSession {
       parent_tool_use_id: null,
       session_id: this.sdkSessionId,
     } as SDKUserMessage);
+  }
+
+  /**
+   * `reloadSkills` and not `supportedCommands`, though the second is the one that sounds right.
+   *
+   * `supportedCommands()` returns everything the CLI knows — 52 of them in this repo — with no field
+   * distinguishing a Skill from a built-in, so telling `/tdd` from `/heapdump` would mean a denylist
+   * of names that rots on the next CLI release. `reloadSkills()` returns the 18 that are actually
+   * Skills, which is the question being asked.
+   *
+   * That it also rescans the disk is the behaviour worth having: a human who has just written a
+   * Skill opens the menu expecting to find it.
+   */
+  async skills(): Promise<Skill[]> {
+    const { skills } = await this.stream.reloadSkills();
+    return skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
+    }));
   }
 
   async abort(): Promise<void> {

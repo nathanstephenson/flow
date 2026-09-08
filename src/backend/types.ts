@@ -1,5 +1,5 @@
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
-import type { BackendEvent, Capabilities, EffortLevel, Spend } from "../protocol/events.ts";
+import type { BackendEvent, Capabilities, EffortLevel, Skill, Spend } from "../protocol/events.ts";
 
 /**
  * One Attachment's bytes on their way to a model.
@@ -67,6 +67,17 @@ export interface BackendSession {
    * does not. The promise resolving means the request was made, not that the summary exists.
    */
   compact?(instructions?: string): Promise<void>;
+  /**
+   * The Skills this Agent Session's Scope offers.
+   *
+   * Asked each time rather than cached, because the answer is a directory listing and a human who
+   * has just written a Skill expects to find it without restarting anything. An adapter that has no
+   * notion of them omits this, and the composer offers none.
+   *
+   * Only Skills — never the backend's own built-in commands. A CLI's `/model`, `/clear` or `/config`
+   * would be a second way to change state the Session Host already owns, able to disagree with it.
+   */
+  skills?(): Promise<Skill[]>;
   dispose(): Promise<void>;
 }
 

@@ -48,6 +48,23 @@ export type ModelInfo = {
  * backend cannot serve rather than breaking on them. `providers` is what distinguishes the two
  * backends in practice: Claude reports one, pi reports several.
  */
+/**
+ * One Skill: a named prompt a backend expands when a message begins with it.
+ *
+ * A fact about the Scope, not about the Agent Session, which is why it is fetched rather than
+ * carried on `Capabilities` or written into a transcript. The list is read from disk — a `skills/`
+ * directory, a `.claude/commands` file — and is stale the moment someone edits one, so a copy
+ * embedded in an append-only record would be wrong forever and wrong for every session at once.
+ *
+ * `argumentHint` is the backend's own summary of what may follow the name. Optional because most
+ * take nothing, and an empty string is not the same as no hint at all.
+ */
+export type Skill = {
+  name: string;
+  description: string;
+  argumentHint?: string;
+};
+
 export type Capabilities = {
   providers: string[];
   models: ModelInfo[];

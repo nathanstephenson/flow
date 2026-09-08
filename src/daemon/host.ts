@@ -9,7 +9,15 @@ import {
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
 import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
-import type { AgentEvent, BackendEvent, Capabilities, EffortLevel, LoggedEvent, Spend } from "../protocol/events.ts";
+import type {
+  AgentEvent,
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  LoggedEvent,
+  Skill,
+  Spend,
+} from "../protocol/events.ts";
 import type { Branch } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
@@ -507,6 +515,29 @@ export class SessionHost {
   }
 
   /**
+   * The Skills this Agent Session can be sent.
+   *
+   * Answers with an empty list in every case it cannot answer properly — no Backend Session, an
+   * adapter with no notion of Skills, a backend that threw while reading its own disk. This is the
+   * opposite of `compact`'s three refusals, and deliberately: a refusal is right for an act with
+   * consequences and wrong for a menu. Opening one on a Dormant session must not Revive it, and must
+   * not put a red toast in front of someone who pressed `/` — an empty menu says "nothing to offer
+   * here" perfectly well.
+   *
+   * Nothing is written down, and `touch` is not called: reading a menu is not activity on an Agent
+   * Session, and letting it postpone a Reap would mean an idle browser tab kept sessions alive.
+   */
+  async listSkills(sessionId: string): Promise<Skill[]> {
+    const session = this.record(sessionId).session;
+    if (!session?.skills) return [];
+    try {
+      return await session.skills();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Move this Agent Session's Scope to another branch.
    *
    * Refused while running, and running is the only status where it has to be: git would change
@@ -743,6 +774,8 @@ export class SessionHost {
         return await this.switchBranch(command.sessionId, command.branch);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
+      case "list_skills":
+        return await this.listSkills(command.sessionId);
       case "list":
         return this.list();
     }
@@ -796,7 +829,16 @@ export class SessionHost {
     const { text, attachments } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
-    const sent = note === undefined ? text : `${note}\n\n${text}`;
+    /*
+     * After the human's words, not before them.
+     *
+     * A backend expands a Skill the human picked — `/tdd`, `/code-review` — only when the name is at
+     * the very start of the message, and a note prepended here moves it off that first character. It
+     * worked until the turn after someone switched branch, and then quietly became an ordinary
+     * message asking the model about the word "/tdd". Ordering within one message is not what makes
+     * the note work: it arrives before the model acts either way.
+     */
+    const sent = note === undefined ? text : `${text}\n\n${note}`;
 
     record.turnInFlight = true;
     record.status = "running";

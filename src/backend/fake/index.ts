@@ -5,6 +5,7 @@ import type {
   BackendEvent,
   Capabilities,
   EffortLevel,
+  Skill,
   Spend,
   SubagentState,
   SubagentWait,
@@ -95,6 +96,20 @@ export class FakeSession implements BackendSession {
     this.modelId = modelId;
     this.emit({ type: "model_changed", model: { id: modelId, provider: "fake" } });
     if (this.wantedEffort) await this.setEffort(this.wantedEffort);
+  }
+
+  /**
+   * Two, and one of them takes arguments — the split a menu has to render, the same way the two
+   * models here carry the Effort and Attachment splits. Reassigned by a test that wants a different
+   * catalogue, or emptied by one that wants none.
+   */
+  skillList: Skill[] = [
+    { name: "tdd", description: "Red, green, refactor" },
+    { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+  ];
+
+  async skills(): Promise<Skill[]> {
+    return this.skillList;
   }
 
   async setEffort(effort: EffortLevel): Promise<void> {

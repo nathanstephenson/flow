@@ -300,3 +300,53 @@ describe("compacting a Conversation Context", () => {
     assert.deepEqual(plain.latest.compactions, [], "the method exists; the flag is what gates it");
   });
 });
+
+/**
+ * The Skill catalogue.
+ *
+ * Every case that cannot be answered properly answers with an empty list, which is the opposite of
+ * how `compact` behaves and deliberately so: a refusal is right for an act with consequences and
+ * wrong for a menu somebody opened with a keystroke.
+ */
+describe("listing the Skills an Agent Session offers", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+  it("answers with what the backend reports, argument hints and all", async () => {
+    assert.deepEqual(await host.listSkills(sessionId), [
+      { name: "tdd", description: "Red, green, refactor" },
+      { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+    ]);
+  });
+
+  // Opening a menu is not a reason to start a Backend Session and spend money (ADR 0003).
+  it("answers empty for a Dormant session rather than Reviving it", async () => {
+    await host.shutdown();
+
+    assert.deepEqual(await host.listSkills(sessionId), []);
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "dormant");
+  });
+
+  it("answers empty when the backend cannot read its own Skills", async () => {
+    backend.latest.skills = async () => {
+      throw new Error("skills directory is unreadable");
+    };
+
+    assert.deepEqual(await host.listSkills(sessionId), []);
+  });
+
+  it("writes nothing down, so a menu is not activity on the transcript", async () => {
+    const before = typesOf(host, sessionId).length;
+    await host.listSkills(sessionId);
+
+    assert.equal(typesOf(host, sessionId).length, before);
+  });
+});

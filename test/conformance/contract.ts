@@ -174,6 +174,34 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /**
+     * Skills only — never the backend's own built-in commands.
+     *
+     * The Claude CLI answers `supportedCommands()` with 52 entries, of which 18 are Skills and the
+     * rest are its own controls: `/model`, `/clear`, `/config`, `/compact`. Offering those in the
+     * composer would be a second way to change state the Session Host already owns and can disagree
+     * with — a `/model` there would move the backend without the host, the picker, or the transcript
+     * ever hearing about it.
+     */
+    it("offers Skills and none of the backend's own controls", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        if (!session.skills) return;
+        const skills = await session.skills();
+
+        for (const skill of skills) {
+          assert.ok(skill.name.length > 0, "a Skill with no name cannot be typed");
+          assert.ok(!skill.name.startsWith("/"), "the name is the name, not the keystroke that finds it");
+        }
+        const offered = new Set(skills.map((skill) => skill.name));
+        for (const control of ["model", "clear", "compact", "config", "effort", "rename"]) {
+          assert.ok(!offered.has(control), `${control} is the backend's own control, not a Skill`);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it("attributes every producer to a Subagent it declared", async () => {
       const { session, events, dispose } = await start(target);
       try {

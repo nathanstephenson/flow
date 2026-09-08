@@ -109,4 +109,14 @@ export type Command =
    * `instructions` steer what the summary keeps. Both backends take them; neither requires them.
    */
   | { type: "compact"; sessionId: string; instructions?: string }
+  /**
+   * The Skills this Agent Session's Scope offers, for the composer's menu.
+   *
+   * A fetch and not an event, and nothing about it is ever written down. Skills are read off disk
+   * and change whenever someone edits a file, so a copy carried on `Capabilities` would be embedded
+   * in `session_started` — a line of an append-only transcript, stale from the first edit and stale
+   * in every session at once. It is also only ever wanted after a deliberate keystroke, which is the
+   * difference between this and the model list: nobody sees a Skill without asking for one.
+   */
+  | { type: "list_skills"; sessionId: string }
   | { type: "list" };
