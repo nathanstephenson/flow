@@ -59,7 +59,9 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
-  const [skills, setSkills] = useState<Skill[]>([]);
+  // `undefined` until the first fetch answers, which is not the same as "none": one is a menu still
+  // looking and the other is a menu with nothing to offer, and they have to read differently.
+  const [skills, setSkills] = useState<Skill[] | undefined>(undefined);
   const [query, setQuery] = useState<string | undefined>(undefined);
   const [highlighted, setHighlighted] = useState(0);
 
@@ -154,13 +156,21 @@ export function Composer({
   );
 
   const catalogue = useMemo(
-    () => triggerables(chrome.capabilities?.compaction, skills),
+    () => triggerables(chrome.capabilities?.compaction, skills ?? []),
     [chrome.capabilities?.compaction, skills],
   );
   const items = useMemo(
     () => (query === undefined ? [] : matching(catalogue, query)),
     [catalogue, query],
   );
+  /*
+   * Open is the *query*, not the items.
+   *
+   * It used to be the items, which meant `/` did nothing at all until a round trip came back — and
+   * did nothing *ever* if it came back empty. A menu that is invisible when it cannot answer is
+   * indistinguishable from one that was never built, which is precisely the report this fixed.
+   */
+  const menuOpen = query !== undefined;
 
   /*
    * Fetched when the menu first opens, not on mount and not on every keystroke.
@@ -174,7 +184,10 @@ export function Composer({
     if (query === undefined) return;
     let live = true;
     void run<Skill[]>({ type: "list_skills", sessionId }).then((found) => {
-      if (live && found) setSkills(found);
+      // `?? []` and not `if (found)`: a host that cannot answer this command at all replies with
+      // null and a 200, so a truthiness check left the menu saying "Looking for Skills…" forever
+      // rather than admitting it had none. An empty answer is still an answer.
+      if (live) setSkills(found ?? []);
     });
     return () => {
       live = false;
@@ -302,14 +315,17 @@ export function Composer({
       return true;
     };
     return {
-      active: items.length > 0,
+      active: menuOpen,
+      // Guarded, because an open menu can legitimately have nothing in it and `% 0` is NaN.
       move: (delta: number) =>
-        setHighlighted((current) => (current + delta + items.length) % items.length),
+        setHighlighted((current) =>
+          items.length === 0 ? 0 : (current + delta + items.length) % items.length,
+        ),
       complete: pick(false),
       submit: pick(true),
       dismiss: () => setQuery(undefined),
     };
-  }, [choose, highlighted, items]);
+  }, [choose, highlighted, items, menuOpen]);
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
@@ -366,7 +382,9 @@ export function Composer({
           * measured element, so `--composer-inset` accounts for it as it opens and closes.
           */}
         <ComposerMenu
+          open={menuOpen}
           items={items}
+          loading={skills === undefined}
           highlighted={highlighted}
           onChoose={choose}
           onHighlight={setHighlighted}

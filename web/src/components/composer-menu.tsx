@@ -18,17 +18,28 @@ import type { Triggerable } from "@/presentation/composer-menu.ts";
  * cannot be reached by tabbing anyway.
  */
 export function ComposerMenu({
+  open,
   items,
+  loading,
   highlighted,
   onChoose,
   onHighlight,
 }: {
+  /**
+   * Whether `/` was typed — not whether there is anything to show.
+   *
+   * These came apart because tying the menu's visibility to its contents made it invisible exactly
+   * when something had gone wrong: a slow catalogue, an empty one, a daemon that could not answer.
+   * A menu that says nothing is indistinguishable from a menu that was never built.
+   */
+  open: boolean;
   items: Triggerable[];
+  /** The catalogue has not answered yet. Distinct from having answered with nothing. */
+  loading: boolean;
   highlighted: number;
   onChoose: (item: Triggerable) => void;
   onHighlight: (index: number) => void;
 }) {
-  const open = items.length > 0;
   /*
    * The list that was last worth showing, kept so the close has something to animate away.
    * Dropping to `items` immediately would collapse an empty box — the height would animate but the
@@ -40,6 +51,7 @@ export function ComposerMenu({
   const remembered = useRef<Triggerable[]>([]);
   if (open) remembered.current = items;
   const shown = open ? items : remembered.current;
+  const empty = shown.length === 0;
 
   return (
     /*
@@ -60,6 +72,16 @@ export function ComposerMenu({
     >
       <div className="overflow-hidden">
         <div className="max-h-64 overflow-y-auto border-b p-1" role="listbox" aria-label="Commands and Skills">
+          {/*
+            * A row rather than nothing, in both cases. "Still looking" and "nothing here" are
+            * different answers and both are better than an empty box, which is the one thing that
+            * cannot be told apart from a broken feature.
+            */}
+          {empty ? (
+            <div className="px-2 py-1 text-sm text-muted-foreground">
+              {loading ? "Looking for Skills…" : "No Commands or Skills for this Agent Session"}
+            </div>
+          ) : null}
           {shown.map((item, index) => (
             <div
               key={`${item.kind}:${item.name}`}
