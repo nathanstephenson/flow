@@ -122,6 +122,58 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /**
+     * The flag and the method must agree, because the host gates on the flag alone and every client
+     * hides its control on the flag alone. An adapter declaring `compaction` without a `compact` is
+     * a control that throws a TypeError the first time anyone uses it.
+     */
+    it("backs a declared compaction with a method, and an undeclared one with neither", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        assert.equal(
+          typeof session.compact === "function",
+          session.capabilities.compaction,
+          "capabilities.compaction and BackendSession.compact must say the same thing",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * A compaction is not a turn and must not read as one.
+     *
+     * The case that made this worth asserting: the Claude SDK has no `compact()`, so the adapter
+     * asks by putting `/compact` down the prompt channel — and the CLI's answer comes back as an
+     * ordinary `assistant` message. Left alone, "Not enough messages to compact." would appear in
+     * the Presentation Transcript as something the model said. Whatever an adapter has to do to ask
+     * for one, none of it may surface as the model talking or as a turn.
+     *
+     * An empty Conversation Context has nothing to compact, which is the point: this asserts the
+     * shape of the reply, not that a summary was produced.
+     */
+    it("asks for a compaction without it reading as a turn or as the model talking", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.compact) return;
+        await session.compact();
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+        assert.deepEqual(
+          events.filter((event) => event.type === "message"),
+          [],
+          "a local command's reply is not an assistant message",
+        );
+        assert.deepEqual(
+          events.filter((event) => event.type === "turn_started" || event.type === "turn_ended"),
+          [],
+          "a compaction opens no turn, so the Steering Queue never believes the session is busy",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     it("attributes every producer to a Subagent it declared", async () => {
       const { session, events, dispose } = await start(target);
       try {

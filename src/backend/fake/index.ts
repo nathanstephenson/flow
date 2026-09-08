@@ -34,8 +34,10 @@ const FAKE_CAPABILITIES: Capabilities = {
  * assertions deterministic instead of timing-dependent.
  */
 export class FakeSession implements BackendSession {
-  readonly capabilities = FAKE_CAPABILITIES;
+  readonly capabilities: Capabilities;
   readonly prompts: string[] = [];
+  /** Every compaction asked of this session, with whatever instructions came with it. */
+  readonly compactions: Array<string | undefined> = [];
   /** Parallel to `prompts`, so a test can assert what reached the backend beside each text. */
   readonly promptedAttachments: PromptAttachment[][] = [];
   readonly resumedFrom: string | undefined;
@@ -51,7 +53,21 @@ export class FakeSession implements BackendSession {
   private turnId: string | undefined;
   private wantedEffort: EffortLevel | undefined;
 
-  constructor(options: BackendCreateOptions) {
+  /**
+   * Present only when this session declares it can compact, which is what the conformance contract
+   * asserts of every adapter: the flag and the method have to say the same thing, or a client that
+   * hides its control on the flag will call a method that is not there.
+   */
+  compact?: (instructions?: string) => Promise<void>;
+
+  constructor(options: BackendCreateOptions, overrides: FakeCapabilityOverrides = {}) {
+    this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
+    if (this.capabilities.compaction) {
+      this.compact = async (instructions?: string) => {
+        this.compactions.push(instructions);
+        this.emit({ type: "compacted", trigger: "manual", before: 1_000, after: 100 });
+      };
+    }
     this.emit = options.emit;
     this.modelId = options.modelId ?? "fake-1";
     this.resumedFrom = options.resume;
@@ -89,6 +105,7 @@ export class FakeSession implements BackendSession {
     this.effort = level;
     this.emit({ type: "effort_changed", effort: level });
   }
+
 
   async dispose(): Promise<void> {
     this.disposed = true;
@@ -222,12 +239,29 @@ export class FakeSubagent {
   }
 }
 
+/**
+ * What this fake claims it can do, for the tests that need a backend on the other side of a
+ * capability gate.
+ *
+ * Off by default so the existing suite keeps asserting against a backend that serves neither, which
+ * is the case clients must hide a control for. A test that wants the other side asks for it.
+ */
+export type FakeCapabilityOverrides = Partial<Pick<Capabilities, "compaction" | "fork">>;
+
 export class FakeBackend implements AgentBackend {
   readonly name = "fake";
   readonly sessions: FakeSession[] = [];
 
+  // A plain field, not a constructor parameter property: `node --experimental-strip-types` erases
+  // types and cannot emit the assignment one implies.
+  private readonly overrides: FakeCapabilityOverrides;
+
+  constructor(overrides: FakeCapabilityOverrides = {}) {
+    this.overrides = overrides;
+  }
+
   async create(options: BackendCreateOptions): Promise<BackendSession> {
-    const session = new FakeSession(options);
+    const session = new FakeSession(options, this.overrides);
     this.sessions.push(session);
     return session;
   }

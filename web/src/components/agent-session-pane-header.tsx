@@ -168,9 +168,12 @@ function SteeringQueueBadge({ depth }: { depth: number }) {
  * for one act is how a confirm dialog gets born, and it must never fire on mount or on focus, because
  * a Revive silently spends money and edits files.
  *
- * Compaction and fork are declared on `Capabilities` but there is no `Command` for either, so they
- * are not offered at all rather than offered and broken. The slot is here when the protocol grows
- * them, and the rule when it does is the Effort rule: hide what this Agent Session cannot serve.
+ * Compaction is offered here now that the protocol has a `Command` for it, on the rule this slot was
+ * reserved under: hide what this Agent Session cannot serve. Two conditions, not one — a backend
+ * that declares `compaction`, and a session with a live Conversation Context to compact. The host
+ * refuses a Dormant one rather than Reviving it, so offering it there would be offering a refusal.
+ *
+ * Fork is still declared on `Capabilities` with no `Command` behind it, and so is still not offered.
  */
 function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
@@ -195,6 +198,18 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
           {canRevive(chrome.status) ? (
             <DropdownMenuItem onClick={() => void run({ type: "revive", sessionId })}>
               Revive this Agent Session
+            </DropdownMenuItem>
+          ) : null}
+          {/*
+            * `idle` alone, and it is the whole of what the host will accept: Dormant and Settled
+            * have no Conversation Context to compact and are refused rather than Revived, and
+            * `running` is refused because the backend is still writing to the context it would be
+            * summarising. Those are the same three refusals `SessionHost.compact` raises, stated
+            * here as a hidden item rather than left to come back as a 409.
+            */}
+          {chrome.capabilities?.compaction && chrome.status === "idle" ? (
+            <DropdownMenuItem onClick={() => void run({ type: "compact", sessionId })}>
+              Compact the Conversation Context
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem onClick={() => void navigator.clipboard?.writeText(sessionId)}>

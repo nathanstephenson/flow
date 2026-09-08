@@ -462,6 +462,51 @@ export class SessionHost {
   }
 
   /**
+   * Compact this Agent Session's Conversation Context now.
+   *
+   * Three refusals, and each is a state where compacting would be a lie rather than a failure.
+   *
+   * **Dormant or Settled.** Deliberately does not Revive, which is the one place this departs from
+   * every other command that tolerates a missing Backend Session. A Revive rebuilds the Conversation
+   * Context from the resume token and then compacts what it just rebuilt — spending money (ADR 0003)
+   * to summarise a summary. `send` cannot make this distinction, which is half of why compaction is
+   * not a `/compact` typed into it.
+   *
+   * **A turn in flight.** The backend is mid-conversation and would be summarising a context it is
+   * still writing to. Queueing it instead was rejected: `abort` discards the queue wholesale, so a
+   * compaction would vanish with a cancelled turn and nobody would be told which of the two they
+   * had lost.
+   *
+   * **A backend that cannot.** Checked on `capabilities.compaction` rather than on whether the
+   * method exists, so an adapter cannot half-declare itself — the flag is what clients hide the
+   * control on, and the two must agree.
+   *
+   * Nothing is written to the Presentation Transcript here. Compaction is the backend's (ADR 0001),
+   * so what a reader sees is the `compacted` the adapter emits when it lands, not a record of it
+   * having been asked for.
+   */
+  async compact(sessionId: string, instructions?: string): Promise<void> {
+    const record = this.record(sessionId);
+    const session = record.session;
+    if (!session) {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is ${record.status}; there is no Conversation Context to compact`,
+      );
+    }
+    if (record.turnInFlight) {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is running; abort the turn or wait for it to end before compacting`,
+      );
+    }
+    if (!session.capabilities.compaction || !session.compact) {
+      throw new CommandRefused(`${record.backendName} cannot compact a Conversation Context`);
+    }
+
+    await session.compact(instructions);
+    this.touch(record);
+  }
+
+  /**
    * Move this Agent Session's Scope to another branch.
    *
    * Refused while running, and running is the only status where it has to be: git would change
@@ -696,6 +741,8 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
+      case "compact":
+        return await this.compact(command.sessionId, command.instructions);
       case "list":
         return this.list();
     }

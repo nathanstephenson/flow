@@ -178,6 +178,8 @@ export async function runTui(options: TuiOptions): Promise<void> {
       overlay = { kind: "effort", index: Math.max(0, effortChoices(view).indexOf(view.effort ?? "off")) };
     } else if (key === KEY.ctrlG) {
       await openBranches("switch", scopeOf(selected));
+    } else if (key === KEY.ctrlK) {
+      await compact();
     } else if (key === KEY.escape) {
       if (selected) await options.connection.command({ type: "abort", sessionId: selected });
     } else if (key === KEY.enter || key === KEY.newline) {
@@ -288,6 +290,29 @@ export async function runTui(options: TuiOptions): Promise<void> {
     if (choice && selected) {
       await options.connection.command({ type: "set_model", sessionId: selected, modelId: choice.model.id });
       notice = `model → ${choice.model.label ?? choice.model.id}`;
+    }
+  }
+
+  /**
+   * Ask the backend to compact the Conversation Context.
+   *
+   * The refusals live in the Session Host, not here — Dormant, Settled and mid-turn are all 409s
+   * with a sentence saying which — so this sends and reports whatever comes back rather than
+   * reimplementing that judgement against a `view` that can be a frame behind. The one thing it does
+   * check locally is the capability, because a backend that cannot compact at all should say so
+   * without a round trip.
+   */
+  async function compact(): Promise<void> {
+    if (!selected) return;
+    if (!view.capabilities?.compaction) {
+      notice = "this backend cannot compact";
+      return;
+    }
+    try {
+      await options.connection.command({ type: "compact", sessionId: selected });
+      notice = "compacting…";
+    } catch (error) {
+      notice = error instanceof Error ? error.message : String(error);
     }
   }
 

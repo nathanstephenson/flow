@@ -55,6 +55,18 @@ export interface BackendSession {
    * nearest one it can serve and reports what it settled on with `effort_changed`.
    */
   setEffort(effort: EffortLevel): Promise<void>;
+  /**
+   * Compact the Conversation Context now.
+   *
+   * Optional, and paired with `capabilities.compaction`: an adapter that cannot serve one omits the
+   * method and declares `false`, and clients hide the control rather than offering something that
+   * breaks. Present-but-declared-false is not a state worth having, so the host checks the flag and
+   * never the method.
+   *
+   * Reports through events like everything else — a `compacted` when it lands, a `notice` when it
+   * does not. The promise resolving means the request was made, not that the summary exists.
+   */
+  compact?(instructions?: string): Promise<void>;
   dispose(): Promise<void>;
 }
 

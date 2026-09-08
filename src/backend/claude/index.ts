@@ -183,6 +183,8 @@ class ClaudeSession implements BackendSession {
 
   private sdkSessionId = "";
   private turnId: string | undefined;
+  /** Set between asking the CLI for a compaction and the `result` that closes it. See `compact`. */
+  private compacting = false;
   private disposed = false;
   private modelId: string | undefined;
   private bootedModel: string | undefined;
@@ -343,6 +345,30 @@ class ClaudeSession implements BackendSession {
     } as SDKUserMessage);
   }
 
+  /**
+   * The SDK exposes no `compact()`. Slash commands are dispatched by the CLI out of the prompt
+   * channel itself — verified in `spikes/slash-dispatch.ts`, where `/compact` came back with
+   * `turns=0 input_tokens=0` and no credential ever checked — so this is the same shape as
+   * `applyEffort` above: the SDK has no method, and the wire format lives in one place.
+   *
+   * Deliberately no `turn_started`. A local command is not a turn, nothing is billed for it, and a
+   * turn opened here would leave the queue believing the session was busy.
+   *
+   * `compacting` is what keeps the CLI's reply out of the transcript as an assistant message, which
+   * is how it arrives — "Not enough messages to compact." would otherwise be attributed to the
+   * model. Cleared on the `result` that closes the command, in every outcome.
+   */
+  async compact(instructions?: string): Promise<void> {
+    if (this.disposed) throw new Error("Backend Session disposed");
+    this.compacting = true;
+    this.inbox.push({
+      type: "user",
+      message: { role: "user", content: instructions ? `/compact ${instructions}` : "/compact" },
+      parent_tool_use_id: null,
+      session_id: this.sdkSessionId,
+    } as SDKUserMessage);
+  }
+
   async abort(): Promise<void> {
     try {
       await this.stream.interrupt();
@@ -416,6 +442,9 @@ class ClaudeSession implements BackendSession {
       }
     } catch (error) {
       if (!this.disposed) {
+        // A stream that has failed will never deliver the `result` that would clear this, and a
+        // session left suppressing would silently drop every assistant message after it.
+        this.compacting = false;
         this.emit({ type: "notice", level: "error", text: message(error) });
         this.endTurn("error");
       }
@@ -437,10 +466,21 @@ class ClaudeSession implements BackendSession {
         return;
 
       case "stream_event":
+        // A local command's reply is not the model talking, so none of it may reach the transcript
+        // as a partial assistant message either. See `compact`.
+        if (this.compacting) return;
         this.translateStreamEvent(sdkMessage.event, producerOf(sdkMessage));
         return;
 
       case "assistant": {
+        // What the CLI says about a command it ran itself, said as GoodHarness rather than as the
+        // model. On a compaction that landed there is a `compacted` marker beside this; on one that
+        // did not — "Not enough messages to compact." — this is the only account of it.
+        if (this.compacting) {
+          const said = textOf(sdkMessage.message.content);
+          if (said) this.emit({ type: "notice", level: "info", text: said });
+          return;
+        }
         // The streamed copy and this one are the same Entry, and StreamedMessage is what guarantees
         // it. Tool calls stay here: they have nothing to do with the partial-message state.
         const producer = producerOf(sdkMessage);
@@ -492,12 +532,22 @@ class ClaudeSession implements BackendSession {
         return;
       }
 
-      case "result":
+      case "result": {
+        // Cleared here and only here: a local command always ends in a result, whatever it made of
+        // the request, so this is the one point that cannot leave the session suppressing forever.
+        const wasCompacting = this.compacting;
+        this.compacting = false;
         // Read before the meter is asked for, so the two land on the client as one event.
         this.spend = addSpend(this.priorSpend, describeSpend(sdkMessage));
+        // Worth asking even for a compaction, and especially then — occupancy has just fallen, and
+        // that number is the whole reason anyone asked for one.
         void this.reportContextUsage();
+        // A compaction opened no turn, so there is none to end. `finishTurn` would no-op, but
+        // saying so here keeps a local command out of the turn lifecycle entirely.
+        if (wasCompacting) return;
         this.finishTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
+      }
 
       default:
         return;
@@ -734,6 +784,15 @@ export function describeContextUsage(
  * `post_tokens` is optional upstream, so `after` is omitted rather than defaulted: a compaction
  * reported as ending at zero tokens would read as having thrown the conversation away.
  */
+/** The text of an assistant message, for the one case that is not the model speaking. See `compact`. */
+function textOf(content: Extract<SDKMessage, { type: "assistant" }>["message"]["content"]): string {
+  return content
+    .filter((block) => block.type === "text")
+    .map((block) => ("text" in block ? block.text : ""))
+    .join("")
+    .trim();
+}
+
 type CompactBoundary = Extract<SDKMessage, { type: "system"; subtype: "compact_boundary" }>["compact_metadata"];
 
 export function describeCompaction(

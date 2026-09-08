@@ -112,6 +112,19 @@ export class PiSession implements BackendSession {
     this.applyEffort(effort);
   }
 
+  /**
+   * pi compacts first-class, so this is the whole implementation: it reports through
+   * `compaction_end`, which `translate` already turns into a `compacted`.
+   *
+   * Not awaited to completion on purpose. pi resolves this when the summary exists, which is a model
+   * call away, and the host's caller is an HTTP request that should not be held open for it — the
+   * events are how anyone finds out either way. A failure still reaches the transcript, because pi
+   * puts it on `compaction_end.errorMessage` rather than throwing.
+   */
+  async compact(instructions?: string): Promise<void> {
+    void this.session.compact(instructions);
+  }
+
   private applyEffort(wanted: EffortLevel): void {
     const level = clampEffort(wanted, availableEffort(this.session));
     // Nothing to set on a model with no effort control. The request stays on file, so switching

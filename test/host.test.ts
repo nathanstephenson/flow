@@ -236,3 +236,67 @@ describe("a Subagent the turn left behind", () => {
     assert.deepEqual(subagentStates(), ["running", "waiting", "aborted"]);
   });
 });
+
+/**
+ * Compaction, and the three states the host refuses it in.
+ *
+ * Each refusal is a case where compacting would be a lie rather than a failure, so each is asserted
+ * on its own — and on the transcript staying untouched, because a refused command must leave no
+ * bytes behind in an append-only record.
+ */
+describe("compacting a Conversation Context", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend({ compaction: true });
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+  it("asks the backend, and carries instructions when there are any", async () => {
+    await host.compact(sessionId);
+    await host.compact(sessionId, "keep the API decisions");
+
+    assert.deepEqual(backend.latest.compactions, [undefined, "keep the API decisions"]);
+  });
+
+  // Nothing about having asked: compaction is the backend's (ADR 0001), so what a reader sees is
+  // the `compacted` the adapter emits, never a record of the request.
+  it("writes nothing of its own to the transcript", async () => {
+    const before = typesOf(host, sessionId).length;
+    await host.compact(sessionId);
+
+    assert.deepEqual(typesOf(host, sessionId).slice(before), ["compacted"]);
+  });
+
+  it("refuses while a turn is in flight, rather than queueing behind it", async () => {
+    await host.send(sessionId, "hello", "now");
+    const before = typesOf(host, sessionId).length;
+
+    await assert.rejects(() => host.compact(sessionId), /running/);
+    assert.equal(typesOf(host, sessionId).length, before, "a refusal leaves no bytes behind");
+    assert.deepEqual(backend.latest.compactions, []);
+  });
+
+  // The one place this departs from every other command that tolerates a missing Backend Session.
+  // Reviving would rebuild the Conversation Context and then summarise what it had just rebuilt.
+  it("refuses a Dormant session instead of Reviving it to serve the request", async () => {
+    await host.shutdown();
+
+    await assert.rejects(() => host.compact(sessionId), /no Conversation Context/);
+    assert.equal(host.list().find((session) => session.id === sessionId)?.status, "dormant");
+  });
+
+  it("refuses a backend that does not declare compaction", async () => {
+    const plain = new FakeBackend();
+    const other = new SessionHost();
+    other.registerBackend(plain);
+    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+
+    await assert.rejects(() => other.compact(id), /cannot compact/);
+    assert.deepEqual(plain.latest.compactions, [], "the method exists; the flag is what gates it");
+  });
+});
