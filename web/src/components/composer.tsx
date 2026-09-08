@@ -1,5 +1,5 @@
 import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
@@ -7,6 +7,9 @@ import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentati
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
+import { ComposerMenu } from "@/components/composer-menu.tsx";
+import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
+import type { Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
@@ -56,6 +59,9 @@ export function Composer({
   const [sending, setSending] = useState(false);
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [query, setQuery] = useState<string | undefined>(undefined);
+  const [highlighted, setHighlighted] = useState(0);
 
   const ended = chrome.status === "ended";
   const running = chrome.status === "running";
@@ -147,6 +153,78 @@ export function Composer({
     [acceptsImages, attachments.length, chrome.model],
   );
 
+  const catalogue = useMemo(
+    () => triggerables(chrome.capabilities?.compaction, skills),
+    [chrome.capabilities?.compaction, skills],
+  );
+  const items = useMemo(
+    () => (query === undefined ? [] : matching(catalogue, query)),
+    [catalogue, query],
+  );
+
+  /*
+   * Fetched when the menu first opens, not on mount and not on every keystroke.
+   *
+   * Reading a Skill directory is a disk listing behind an HTTP round trip, and most sessions never
+   * press `/` at all — so paying for it on mount would be paying for it in every pane, forever, to
+   * answer a question nobody asked. Re-fetched whenever the menu opens from closed, because the
+   * whole point of asking the backend rather than caching is that someone may have just written one.
+   */
+  useEffect(() => {
+    if (query === undefined) return;
+    let live = true;
+    void run<Skill[]>({ type: "list_skills", sessionId }).then((found) => {
+      if (live && found) setSkills(found);
+    });
+    return () => {
+      live = false;
+    };
+    // Deliberately not `query`: this fires when the menu opens, not as it filters.
+  }, [query === undefined, run, sessionId]);
+
+  const choose = useCallback(
+    (item: (typeof catalogue)[number]): void => {
+      const filled = completed(text, item.name);
+      setText(filled.text);
+      input.current?.replace(filled.text, filled.caret);
+      setQuery(undefined);
+      input.current?.focus();
+    },
+    [text],
+  );
+
+  /*
+   * The caret decides whether the menu is open, so it arrives with the text. Reset to the first item
+   * on every change: after filtering, the third of five is a different thing than it was, and
+   * keeping the index would leave the highlight on whatever happened to land there.
+   */
+  const onChange = useCallback((next: string, caret: number): void => {
+    setText(next);
+    setQuery(menuQuery(next, caret));
+    setHighlighted(0);
+  }, []);
+
+  /*
+   * `active` is the *rendered* list rather than the query, which is what makes an unrecognised name
+   * fall back to being text. Type `/zzz` and nothing matches, so the menu is not open, so Enter is
+   * an ordinary send — no special case for it anywhere, and none needed.
+   */
+  const menuKeys = useMemo(
+    () => ({
+      active: items.length > 0,
+      move: (delta: number) =>
+        setHighlighted((current) => (current + delta + items.length) % items.length),
+      choose: () => {
+        const picked = items[highlighted];
+        if (!picked) return false;
+        choose(picked);
+        return true;
+      },
+      dismiss: () => setQuery(undefined),
+    }),
+    [choose, highlighted, items],
+  );
+
   const remove = useCallback(
     (key: string): void => {
       setAttachments((current) => {
@@ -161,6 +239,23 @@ export function Composer({
     const message = text.trim();
     // An image with no words is a message — "look at this" is what the paste already said.
     if ((message === "" && attachments.length === 0) || sending || ended) return;
+
+    /*
+     * A Command is not a message, so it does not become one.
+     *
+     * This is the whole of the difference the blue pill stands for: nothing is appended to the
+     * Presentation Transcript, no turn is started, no model is asked anything. Whatever follows the
+     * name is the instruction — `/compact keep the API decisions` — and Attachments are left where
+     * they are, since a Command has nowhere to carry them and losing a screenshot to one would be
+     * the same theft a refused send is careful to avoid.
+     */
+    const command = triggeredBy(message, catalogue);
+    if (command?.kind === "command") {
+      const instructions = message.slice(command.name.length + 1).trim();
+      setText("");
+      await run({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+      return;
+    }
 
     const sent = attachments;
     setText("");
@@ -195,7 +290,7 @@ export function Composer({
     } else {
       forget(sent);
     }
-  }, [attachments, ended, forget, run, sending, sessionId, text]);
+  }, [attachments, catalogue, ended, forget, run, sending, sessionId, text]);
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
@@ -246,6 +341,18 @@ export function Composer({
           */}
         <SubagentStrip chrome={chrome} onShow={onShowSubagents} />
 
+        {/*
+          * Above the Attachments and the input both, so the panel grows upward into the transcript
+          * rather than pushing the box someone is typing in down the screen. It is inside the
+          * measured element, so `--composer-inset` accounts for it as it opens and closes.
+          */}
+        <ComposerMenu
+          items={items}
+          highlighted={highlighted}
+          onChoose={choose}
+          onHighlight={setHighlighted}
+        />
+
         {attachments.length === 0 ? null : (
           <AttachmentTray attachments={attachments} onRemove={remove} />
         )}
@@ -260,8 +367,10 @@ export function Composer({
             value={text}
             placeholder={composerPlaceholder(chrome)}
             disabled={ended}
+            catalogue={catalogue}
+            menu={menuKeys}
             handle={input}
-            onChange={setText}
+            onChange={onChange}
             onSubmit={() => void send()}
             onPasteFiles={paste}
           />

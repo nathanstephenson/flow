@@ -1,7 +1,9 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap, placeholder as placeholderExtension } from "@codemirror/view";
+import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { Decoration, EditorView, keymap, placeholder as placeholderExtension, type DecorationSet } from "@codemirror/view";
 import { useEffect, useRef } from "react";
+
+import { leadingToken, triggeredBy, type Triggerable } from "@/presentation/composer-menu.ts";
 
 /**
  * The Composer's text box.
@@ -22,12 +24,90 @@ import { useEffect, useRef } from "react";
  * fighting the editor's own state. Everything else the Composer needs — focus after a refused send —
  * comes back through `handle`.
  */
-export type ComposerInputHandle = { focus: () => void };
+export type ComposerInputHandle = {
+  focus: () => void;
+  /**
+   * Replace the whole message and put the caret somewhere specific.
+   *
+   * Imperative because the caret is the point. Pushing text in through `value` leaves the caret at
+   * the end of the document, which is right for clearing the box after a send and wrong for
+   * completing a name — `/code-review the diff` wants the caret after the name, not after "diff".
+   */
+  replace: (text: string, caret: number) => void;
+};
+
+/**
+ * What the open menu wants from the keys the editor would otherwise take.
+ *
+ * Handed in rather than owned here, because which item is highlighted is the menu's business and
+ * the menu is React's. `choose` returns whether it took the Enter, so an empty menu still sends.
+ */
+export type MenuKeys = {
+  active: boolean;
+  move: (delta: number) => void;
+  choose: () => boolean;
+  dismiss: () => void;
+};
+
+/** The catalogue the pill decoration resolves names against. Replaced, never mutated. */
+const setCatalogue = StateEffect.define<Triggerable[]>();
+
+const catalogueField = StateField.define<Triggerable[]>({
+  create: () => [],
+  update(current, transaction) {
+    for (const effect of transaction.effects) if (effect.is(setCatalogue)) return effect.value;
+    return current;
+  },
+});
+
+/**
+ * The pill under a leading `/name` that GoodHarness or the backend will actually act on.
+ *
+ * Derived from the text rather than remembered from a menu choice, and that is the point: someone
+ * who types `/tdd` from memory gets the same pill as someone who picked it from the list, because
+ * the backend will treat the two identically. A pill that appeared only for menu picks would be
+ * telling one of those two people something false.
+ *
+ * Deriving is safe here in a way it would not be in the Session Host or a Backend Adapter. The pill
+ * *is* the feedback — it appears under the name before Enter is pressed, and one backspace takes it
+ * away again — so nothing is decided invisibly. What the host must never do is guess at meaning
+ * nobody can see.
+ *
+ * A mark and not an atomic widget, so the text stays text: the caret still moves through it, and
+ * backspace still edits it into something ordinary.
+ */
+const pillField = StateField.define<DecorationSet>({
+  create: (state) => pillsFor(state),
+  update: (current, transaction) =>
+    transaction.docChanged || transaction.effects.some((effect) => effect.is(setCatalogue))
+      ? pillsFor(transaction.state)
+      : current.map(transaction.changes),
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+function pillsFor(state: EditorState): DecorationSet {
+  const text = state.doc.toString();
+  const found = triggeredBy(text, state.field(catalogueField));
+  const token = leadingToken(text);
+  if (!found || !token) return Decoration.none;
+  return Decoration.set([
+    Decoration.mark({ class: found.kind === "command" ? "gh-pill-command" : "gh-pill-skill" }).range(0, token.to),
+  ]);
+}
+
+function stop(event: KeyboardEvent): void {
+  event.preventDefault();
+  // The global keyboard layer listens on `window`, and Escape while typing means "blur this". With
+  // the menu open Escape means "close the menu", so the event must not reach it.
+  event.stopPropagation();
+}
 
 export function ComposerInput({
   value,
   placeholder,
   disabled,
+  catalogue,
+  menu,
   handle,
   onChange,
   onSubmit,
@@ -36,9 +116,13 @@ export function ComposerInput({
   value: string;
   placeholder: string;
   disabled: boolean;
+  /** What a leading `/name` may resolve to, for the pill. */
+  catalogue: Triggerable[];
+  menu: MenuKeys;
   /** Filled with the imperative surface the Composer needs. A ref object, not a callback ref. */
   handle: React.RefObject<ComposerInputHandle | null>;
-  onChange: (text: string) => void;
+  /** The caret comes with the text, because whether the menu is open depends on where it is. */
+  onChange: (text: string, caret: number) => void;
   onSubmit: () => void;
   /** Returns true when it took the files, which is what decides whether the paste is prevented. */
   onPasteFiles: (files: File[]) => boolean;
@@ -54,8 +138,8 @@ export function ComposerInput({
    * render, which throws away CodeMirror's state to install a function that differs only by
    * identity.
    */
-  const latest = useRef({ onChange, onSubmit, onPasteFiles });
-  latest.current = { onChange, onSubmit, onPasteFiles };
+  const latest = useRef({ onChange, onSubmit, onPasteFiles, menu });
+  latest.current = { onChange, onSubmit, onPasteFiles, menu };
 
   const editable = useRef(new Compartment()).current;
   const hint = useRef(new Compartment()).current;
@@ -89,10 +173,40 @@ export function ComposerInput({
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,
           placeholderExtension(placeholder),
+          catalogueField,
+          pillField,
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) latest.current.onChange(update.state.doc.toString());
+            // Selection too, not only the document: the menu closes when the caret leaves the name,
+            // and an arrow key moves the caret without changing a character.
+            if (!update.docChanged && !update.selectionSet) return;
+            latest.current.onChange(update.state.doc.toString(), update.state.selection.main.head);
           }),
           EditorView.domEventHandlers({
+            /*
+             * Ahead of the keymap, and only while the menu is open. These are the editor's own keys
+             * — Enter, the arrows, Escape — borrowed for as long as there is a list in front of the
+             * person pressing them, and handed straight back when there is not.
+             */
+            keydown: (event, target) => {
+              const open = latest.current.menu;
+              if (!open.active) return false;
+              if (event.key === "Escape") {
+                open.dismiss();
+                stop(event);
+                return true;
+              }
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                open.move(event.key === "ArrowDown" ? 1 : -1);
+                stop(event);
+                return true;
+              }
+              // Shift+Enter is a newline even here, and a composing IME still owns Enter outright.
+              if (event.key === "Enter" && !event.shiftKey && !target.composing && open.choose()) {
+                stop(event);
+                return true;
+              }
+              return false;
+            },
             paste: (event) => {
               const files = [...(event.clipboardData?.items ?? [])]
                 .filter((item) => item.kind === "file")
@@ -112,7 +226,14 @@ export function ComposerInput({
       }),
     });
     view.current = editor;
-    handle.current = { focus: () => editor.focus() };
+    handle.current = {
+      focus: () => editor.focus(),
+      replace: (text, caret) =>
+        editor.dispatch({
+          changes: { from: 0, to: editor.state.doc.length, insert: text },
+          selection: { anchor: Math.min(caret, text.length) },
+        }),
+    };
 
     return () => {
       editor.destroy();
@@ -137,6 +258,10 @@ export function ComposerInput({
   useEffect(() => {
     view.current?.dispatch({ effects: editable.reconfigure(editableFor(disabled)) });
   }, [disabled, editable]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: setCatalogue.of(catalogue) });
+  }, [catalogue]);
 
   // The placeholder is `composerPlaceholder(chrome)` and says what the next Enter will *do* — Revive
   // a Dormant session, or queue behind a running turn. It changes with the status, so it cannot be
@@ -183,6 +308,28 @@ const THEME = EditorView.theme({
   ".cm-placeholder": { color: "var(--muted-foreground)" },
   // The textarea showed this through `disabled:opacity-50`; `readOnly` has no such pseudo-class.
   "&:not(.cm-focused) .cm-content[contenteditable='false']": { opacity: "0.5", cursor: "not-allowed" },
+  /*
+   * Two colours because they are two different things, not for decoration. Blue is a Command:
+   * GoodHarness performs it, and it never reaches a model. Purple is a Skill: the backend expands it,
+   * and it goes as the message it already is. Someone about to press Enter can tell which of those
+   * is about to happen without having learned the difference first.
+   *
+   * Set as backgrounds on an inline run, so the pill wraps with the text rather than being a box the
+   * line has to make room for.
+   */
+  ".gh-pill-command, .gh-pill-skill": {
+    borderRadius: "0.375rem",
+    padding: "0.05rem 0.2rem",
+    fontWeight: "500",
+  },
+  ".gh-pill-command": {
+    backgroundColor: "color-mix(in oklab, var(--trigger-command) 18%, transparent)",
+    color: "var(--trigger-command)",
+  },
+  ".gh-pill-skill": {
+    backgroundColor: "color-mix(in oklab, var(--trigger-skill) 18%, transparent)",
+    color: "var(--trigger-skill)",
+  },
   ".cm-cursor": { borderLeftColor: "var(--foreground)" },
   "&.cm-editor .cm-selectionBackground, ::selection": { backgroundColor: "var(--accent)" },
 });
