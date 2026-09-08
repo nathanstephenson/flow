@@ -5,7 +5,8 @@ import type { Entry } from "@client/reduce.ts";
 import { useAgentSession, useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { ordered, subagentKeys } from "@/presentation/subagent-list.ts";
+import { useNow } from "@/lib/use-now.ts";
+import { ordered, subagentKeys, timing } from "@/presentation/subagent-list.ts";
 import { memberKeys } from "@/presentation/subagent-rows.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { cn } from "@/lib/utils.ts";
@@ -59,6 +60,9 @@ function SubagentList({
   // Not memoised: a status change reorders this without changing the key array at all, so a memo
   // here would freeze every row's position at whatever it was when the Subagent first appeared.
   const rows = ordered(spawned, getEntry);
+  // One timer for the list rather than one per row, the same way the session rail does it: below an
+  // hour `relativeTime` changes at most once a minute, so a 30s tick is already generous.
+  const now = useNow();
 
   if (rows.length === 0) {
     return (
@@ -72,7 +76,7 @@ function SubagentList({
     <div className="min-h-0 flex-1 overflow-auto p-2">
       <ul className="flex flex-col gap-1">
         {rows.map((key) => (
-          <SubagentRow key={key} view={view} entryKey={key} onSelect={() => onSelect(key)} />
+          <SubagentRow key={key} view={view} entryKey={key} now={now} onSelect={() => onSelect(key)} />
         ))}
       </ul>
     </div>
@@ -89,32 +93,44 @@ function SubagentList({
 function SubagentRow({
   view,
   entryKey: key,
+  now,
   onSelect,
 }: {
   view: AgentSessionView;
   entryKey: string;
+  now: number;
   onSelect: () => void;
 }) {
   const entry = useEntry(view, key);
   if (entry?.kind !== "subagent") return null;
   const waiting = entry.status === "waiting";
   const live = entry.status === "running" || waiting;
+  const when = timing(entry, now);
 
   return (
     <li>
       <button
         type="button"
         onClick={onSelect}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent"
+        className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent"
       >
-        <StatusDot status={entry.status} />
-        <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
-        {entry.description === undefined ? null : (
-          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
-        )}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {waiting ? `waiting on ${entry.waitingOn}` : live ? "running" : entry.status}
+        <span className="flex w-full items-center gap-2">
+          <StatusDot status={entry.status} />
+          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+          {entry.description === undefined ? null : (
+            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{entry.description}</span>
+          )}
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+            {waiting ? `waiting on ${entry.waitingOn}` : live ? "running" : entry.status}
+          </span>
         </span>
+
+        {/* Aligned under the name rather than the dot, so the second line reads as a continuation. */}
+        {when.at === "" ? null : (
+          <span className="pl-4 text-xs text-muted-foreground/70">
+            {when.label} {when.at}
+          </span>
+        )}
       </button>
     </li>
   );

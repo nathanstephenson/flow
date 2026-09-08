@@ -6,7 +6,7 @@ import { entryKey } from "./entry-key.ts";
 import { memberKeys, ownKeys, producerKey, subagentKey } from "./subagent-rows.ts";
 
 const parentSaid: Entry = { kind: "assistant", id: "m1", text: "dispatching", final: true };
-const subagentEntry: Entry = { kind: "subagent", id: "call_1", name: "Explore", status: "running" };
+const subagentEntry: Entry = { kind: "subagent", id: "call_1", name: "Explore", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
 const childSaid: Entry = {
   kind: "assistant",
   id: "m2",

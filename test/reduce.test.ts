@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { initialState, reduceAll, type Entry, type ViewState } from "../src/client/reduce.ts";
+import { initialState, reduce, reduceAll, type Entry, type ViewState } from "../src/client/reduce.ts";
 import { SessionLog } from "../src/daemon/log.ts";
 import type { AgentEvent, LoggedEvent } from "../src/protocol/events.ts";
 
@@ -374,5 +374,81 @@ describe("an event from a vocabulary this build does not have", () => {
     assert.equal(state.scope, "/tmp", "the session must not be emptied by a line it cannot read");
     assert.equal(state.entries.filter((entry) => entry.kind === "user").length, 1);
     assert.equal(state.activeSubagents, 0, "an unreadable subagent line counts for nothing");
+  });
+});
+
+/**
+ * When a Subagent started and stopped.
+ *
+ * The only Entry that carries time, taken from the event's own `at` — which the store otherwise
+ * discards, and which is why this was not possible before.
+ */
+describe("timing a Subagent", () => {
+  const at = (iso: string, event: AgentEvent): LoggedEvent => ({ seq: 1, sessionId: "s1", at: iso, event });
+  const snap = (state: "running" | "complete"): AgentEvent => ({
+    type: "subagent",
+    subagentId: "a",
+    name: "Explore",
+    state,
+  });
+  const only = (view: ViewState) => {
+    const entry = view.entries.find((candidate) => candidate.kind === "subagent");
+    return entry?.kind === "subagent" ? entry : undefined;
+  };
+  const run = (...steps: [string, AgentEvent][]): ViewState => {
+    let state = initialState();
+    steps.forEach(([iso, event], index) => {
+      state = reduce(state, { ...at(iso, event), seq: index + 1 });
+    });
+    return state;
+  };
+
+  it("records when it was first reported", () => {
+    const view = run(["2026-01-01T00:00:00.000Z", snap("running")]);
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+  });
+
+  it("keeps the original start across every later snapshot", () => {
+    // The bug this guards: taking `at` on each arrival resets the clock, so a Subagent that worked
+    // for a minute reads as having started a moment ago.
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:00:30.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("running")],
+    );
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+  });
+
+  it("has no end while it is still working", () => {
+    const view = run(["2026-01-01T00:00:00.000Z", snap("running")]);
+    assert.equal(only(view)?.endedAt, undefined);
+  });
+
+  it("records the end, keeping the start", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:15.000Z", snap("complete")],
+    );
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
+    assert.equal(only(view)?.endedAt, "2026-01-01T00:01:15.000Z");
+  });
+
+  it("keeps the first end when a terminal snapshot repeats", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("complete")],
+      ["2026-01-01T00:02:00.000Z", snap("complete")],
+    );
+    assert.equal(only(view)?.endedAt, "2026-01-01T00:01:00.000Z");
+  });
+
+  it("clears the end if it somehow resumes, so a live Subagent shows none", () => {
+    const view = run(
+      ["2026-01-01T00:00:00.000Z", snap("running")],
+      ["2026-01-01T00:01:00.000Z", snap("complete")],
+      ["2026-01-01T00:02:00.000Z", snap("running")],
+    );
+    assert.equal(only(view)?.endedAt, undefined);
+    assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
   });
 });

@@ -54,6 +54,20 @@ export type Entry =
       status: SubagentStatus;
       waitingOn?: SubagentWait;
       producer?: Producer;
+      /**
+       * When the Subagent was first reported, and when it stopped.
+       *
+       * The only Entry carrying time, and deliberately so: a Subagent is the one thing here a
+       * reader watches rather than reads, so how long it has been going is part of its state. Every
+       * other Entry's moment is its position in the transcript.
+       *
+       * Taken from the event's own `at`, which the store otherwise discards. `startedAt` survives
+       * every later snapshot — upsert replaces the Entry wholesale, so it has to be carried forward
+       * explicitly or each snapshot would reset the clock.
+       */
+      startedAt: string;
+      /** Absent while it is still working. Set once, by the snapshot that ends it. */
+      endedAt?: string;
     }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
   /**
@@ -129,12 +143,12 @@ export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
    *
    * `lastSeq` still advances, because the event *was* consumed. Only its meaning is unavailable.
    */
-  const next = applyEvent(state, entry.event) as ViewState | undefined;
+  const next = applyEvent(state, entry.event, entry.at) as ViewState | undefined;
   if (next === undefined) return { ...state, lastSeq: entry.seq };
   return next === state ? state : { ...next, lastSeq: entry.seq };
 }
 
-function applyEvent(state: ViewState, event: AgentEvent): ViewState {
+function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState {
   switch (event.type) {
     case "session_started":
       return {
@@ -221,6 +235,10 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
       );
       const wasActive = previous !== undefined && isActive(previous.status);
       const nowActive = isActive(event.state);
+      // Carried forward, not re-read: a running Subagent reports repeatedly, and taking `at` each
+      // time would keep resetting when it started. Cleared if it somehow resumes, so a live
+      // Subagent never shows an end.
+      const endedAt = nowActive ? undefined : (previous?.endedAt ?? at);
       return {
         ...state,
         activeSubagents: state.activeSubagents + (nowActive ? 1 : 0) - (wasActive ? 1 : 0),
@@ -233,6 +251,8 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
           // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.
           ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
+          startedAt: previous?.startedAt ?? at,
+          ...(endedAt === undefined ? {} : { endedAt }),
         }),
       };
     }

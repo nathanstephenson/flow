@@ -1,3 +1,4 @@
+import { relativeTime } from "../../../src/client/relative-time.ts";
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
 
 /**
@@ -84,4 +85,32 @@ export function activeKeys(
 function statusOf(key: string, getEntry: (key: string) => Entry | undefined): SubagentStatus {
   const entry = getEntry(key);
   return entry?.kind === "subagent" ? entry.status : "complete";
+}
+
+/**
+ * When a Subagent started, or when it stopped — whichever a reader wants to know.
+ *
+ * Relative rather than a clock time, matching the rest of the app: `relativeTime` is what the
+ * session rail already uses, and both front-ends share it so "2h" cannot come to mean two things.
+ * `now` is a parameter for the same reason it is there — a frame renders identically twice.
+ *
+ * A terminal Subagent is labelled by *what happened*, not by "completed": one that was aborted or
+ * failed did not complete, and a list where every finished row says "completed" would hide the two
+ * outcomes worth noticing.
+ */
+export function timing(
+  entry: Extract<Entry, { kind: "subagent" }>,
+  now: number,
+): { label: string; at: string } {
+  switch (entry.status) {
+    case "running":
+    case "waiting":
+      return { label: "started", at: relativeTime(entry.startedAt, now) };
+    case "complete":
+      return { label: "completed", at: relativeTime(entry.endedAt ?? entry.startedAt, now) };
+    case "aborted":
+      return { label: "aborted", at: relativeTime(entry.endedAt ?? entry.startedAt, now) };
+    case "error":
+      return { label: "failed", at: relativeTime(entry.endedAt ?? entry.startedAt, now) };
+  }
 }

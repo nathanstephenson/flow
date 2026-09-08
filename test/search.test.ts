@@ -146,7 +146,7 @@ describe("highlighting the matched runs", () => {
  */
 describe("searching for a Subagent", () => {
   it("matches on the subagent's name", () => {
-    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "running" };
+    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
     assert.equal(entryHaystack(entry).includes("explorer"), true);
   });
 
@@ -157,12 +157,13 @@ describe("searching for a Subagent", () => {
       name: "explorer",
       description: "read package.json",
       status: "complete",
+      startedAt: "2026-01-01T00:00:00.000Z",
     };
     assert.equal(entryHaystack(entry).includes("package.json"), true);
   });
 
   it("does not throw on a Subagent with no brief", () => {
-    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "complete" };
+    const entry: Entry = { kind: "subagent", id: "call_1", name: "explorer", status: "complete", startedAt: "2026-01-01T00:00:00.000Z" };
     assert.equal(entryHaystack(entry), "explorer");
   });
 });

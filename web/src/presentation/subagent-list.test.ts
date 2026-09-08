@@ -3,13 +3,14 @@ import { describe, it } from "node:test";
 
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
 import { entryKey } from "./entry-key.ts";
-import { activeKeys, ordered, subagentKeys } from "./subagent-list.ts";
+import { activeKeys, ordered, subagentKeys, timing } from "./subagent-list.ts";
 
 const subagent = (id: string, status: SubagentStatus): Entry => ({
   kind: "subagent",
   id,
   name: "Explore",
   status,
+  startedAt: "2026-01-01T00:00:00.000Z",
 });
 
 /** A transcript is a list of entries; its keys are what the store hands a component. */
@@ -143,5 +144,61 @@ describe("which Subagents are still working", () => {
   it("is empty once everything has finished", () => {
     const { keys, getEntry } = transcript(subagent("a", "complete"), subagent("b", "aborted"));
     assert.deepEqual(activeKeys(subagentKeys(keys, getEntry), getEntry), []);
+  });
+});
+
+/**
+ * How long a Subagent has been going, or how long ago it stopped.
+ *
+ * The one Entry that carries time, because a Subagent is the one thing in the transcript a reader
+ * watches rather than reads.
+ */
+describe("when a Subagent started or stopped", () => {
+  const NOW = Date.parse("2026-01-01T01:00:00.000Z");
+  const at = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
+
+  const timed = (status: SubagentStatus, startedAt: string, endedAt?: string): Entry => ({
+    kind: "subagent",
+    id: "a",
+    name: "Explore",
+    status,
+    startedAt,
+    ...(endedAt === undefined ? {} : { endedAt }),
+  });
+
+  const of = (entry: Entry) =>
+    entry.kind === "subagent" ? timing(entry, NOW) : { label: "", at: "" };
+
+  it("says when a running Subagent started", () => {
+    assert.deepEqual(of(timed("running", at(3))), { label: "started", at: "3m" });
+  });
+
+  it("says when a waiting Subagent started, not that it is waiting", () => {
+    // The status column already says it is waiting and on what; this answers "for how long".
+    assert.deepEqual(of(timed("waiting", at(20))), { label: "started", at: "20m" });
+  });
+
+  it("says when a finished Subagent finished, not when it began", () => {
+    assert.deepEqual(of(timed("complete", at(30), at(2))), { label: "completed", at: "2m" });
+  });
+
+  it("names the outcome rather than calling everything completed", () => {
+    // A list where an aborted and a failed Subagent both read "completed" hides the two outcomes
+    // actually worth noticing.
+    assert.equal(of(timed("aborted", at(30), at(1))).label, "aborted");
+    assert.equal(of(timed("error", at(30), at(1))).label, "failed");
+  });
+
+  it("falls back to the start when a terminal snapshot carried no end", () => {
+    // An old transcript, or a torn Subagent closed on load: better the start than nothing.
+    assert.deepEqual(of(timed("complete", at(5))), { label: "completed", at: "5m" });
+  });
+
+  it("says just now under a minute, matching the rest of the app", () => {
+    assert.equal(of(timed("running", at(0))).at, "just now");
+  });
+
+  it("says nothing rather than something wrong for an unparseable time", () => {
+    assert.equal(of(timed("running", "")).at, "");
   });
 });
