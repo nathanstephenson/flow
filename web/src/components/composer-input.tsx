@@ -2,7 +2,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { defineLanguageFacet, HighlightStyle, Language, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { parser as markdownParser } from "@lezer/markdown";
-import { Compartment, EditorState, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
+import { Compartment, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -313,42 +313,55 @@ export function ComposerInput({
             if (!update.docChanged && !update.selectionSet) return;
             latest.current.onChange(update.state.doc.toString(), update.state.selection.main.head);
           }),
-          EditorView.domEventHandlers({
-            /*
-             * Ahead of the keymap, and only while the menu is open. These are the editor's own keys
-             * — Enter, the arrows, Escape — borrowed for as long as there is a list in front of the
-             * person pressing them, and handed straight back when there is not.
-             */
-            keydown: (event, target) => {
-              const open = latest.current.menu;
-              if (!open.active) return false;
-              if (event.key === "Escape") {
-                open.dismiss();
-                stop(event);
-                return true;
-              }
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                open.move(event.key === "ArrowDown" ? 1 : -1);
-                stop(event);
-                return true;
-              }
+          /*
+           * `Prec.highest`, and this is the whole reason the menu's keys work at all.
+           *
+           * CodeMirror resolves handlers by precedence, and within one precedence that is the
+           * order they appear in this array. This sits below both keymaps above, so unraised the
+           * Enter binding fired first and sent the message, `defaultKeymap` moved the caret on the
+           * arrows, and Escape simplified the selection. The menu saw none of them — it opened,
+           * and then ignored every key pressed at it.
+           */
+          Prec.highest(
+            EditorView.domEventHandlers({
               /*
-               * Tab completes without sending, which is the only reason it is worth taking a key
-               * the browser uses for focus: a Skill with arguments needs the name settled and the
-               * caret left after it. Shift+Tab is left alone, so tabbing *backwards* out of the
-               * composer still works while the menu is open.
+               * Only while the menu is open. These are the editor's own keys — Enter, Tab, the
+               * arrows, Escape — borrowed for as long as there is a list in front of the person
+               * pressing them, and handed straight back when there is not.
                */
-              if (event.key === "Tab" && !event.shiftKey && open.complete()) {
-                stop(event);
-                return true;
-              }
-              // Shift+Enter is a newline even here, and a composing IME still owns Enter outright.
-              if (event.key === "Enter" && !event.shiftKey && !target.composing && open.submit()) {
-                stop(event);
-                return true;
-              }
-              return false;
-            },
+              keydown: (event, target) => {
+                const open = latest.current.menu;
+                if (!open.active) return false;
+                if (event.key === "Escape") {
+                  open.dismiss();
+                  stop(event);
+                  return true;
+                }
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  open.move(event.key === "ArrowDown" ? 1 : -1);
+                  stop(event);
+                  return true;
+                }
+                /*
+                 * Tab completes without sending, which is the only reason it is worth taking a key
+                 * the browser uses for focus: a Skill with arguments needs the name settled and the
+                 * caret left after it. Shift+Tab is left alone, so tabbing *backwards* out of the
+                 * composer still works while the menu is open.
+                 */
+                if (event.key === "Tab" && !event.shiftKey && open.complete()) {
+                  stop(event);
+                  return true;
+                }
+                // Shift+Enter is a newline even here, and a composing IME still owns Enter outright.
+                if (event.key === "Enter" && !event.shiftKey && !target.composing && open.submit()) {
+                  stop(event);
+                  return true;
+                }
+                return false;
+              },
+            }),
+          ),
+          EditorView.domEventHandlers({
             paste: (event) => {
               const files = [...(event.clipboardData?.items ?? [])]
                 .filter((item) => item.kind === "file")
