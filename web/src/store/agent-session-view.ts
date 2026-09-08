@@ -196,6 +196,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     // make Chrome differ on every streaming tick and the shallow compare below could never suppress
     // a publish. See the note in contract.ts. Resume bookkeeping stays with `since` above.
     queueDepth: view.queue.length,
+    activeSubagents: view.activeSubagents,
     link,
   };
 }

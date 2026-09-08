@@ -265,3 +265,67 @@ describe("a Subagent in the Presentation Transcript", () => {
     );
   });
 });
+
+/**
+ * The active-Subagent count, which the Composer strip reads through Chrome.
+ *
+ * Snapshots repeat, so the count has to move on the *transition* and not on each arrival — a
+ * Subagent reporting `running` twice must not count twice. Carried on ViewState rather than derived,
+ * because deriving it in the client would scan the whole transcript every frame while a subagent
+ * streams.
+ */
+describe("counting the Subagents that are still working", () => {
+  const at = (seq: number, event: AgentEvent): LoggedEvent => ({ seq, sessionId: "s1", at: "", event });
+  const run = (...events: AgentEvent[]): ViewState =>
+    reduceAll(events.map((event, index) => at(index + 1, event)));
+  const snap = (id: string, state: "running" | "complete" | "aborted" | "error"): AgentEvent => ({
+    type: "subagent",
+    subagentId: id,
+    name: "Explore",
+    state,
+  });
+
+  it("starts at zero", () => {
+    assert.equal(initialState().activeSubagents, 0);
+  });
+
+  it("counts one that is running", () => {
+    assert.equal(run(snap("a", "running")).activeSubagents, 1);
+  });
+
+  it("does not count a repeated snapshot twice", () => {
+    // The bug this guards: snapshots are latest-wins and arrive repeatedly, so counting arrivals
+    // rather than transitions would climb forever while a subagent works.
+    assert.equal(run(snap("a", "running"), snap("a", "running"), snap("a", "running")).activeSubagents, 1);
+  });
+
+  it("counts a waiting Subagent as still working", () => {
+    const view = run({ type: "subagent", subagentId: "a", name: "Explore", state: "waiting", on: "permission" });
+    assert.equal(view.activeSubagents, 1);
+  });
+
+  it("drops it again when it finishes", () => {
+    assert.equal(run(snap("a", "running"), snap("a", "complete")).activeSubagents, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "aborted")).activeSubagents, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "error")).activeSubagents, 0);
+  });
+
+  it("does not go negative when a terminal snapshot repeats", () => {
+    assert.equal(run(snap("a", "running"), snap("a", "complete"), snap("a", "complete")).activeSubagents, 0);
+  });
+
+  it("counts several at once, and each one leaving", () => {
+    assert.equal(run(snap("a", "running"), snap("b", "running"), snap("c", "running")).activeSubagents, 3);
+    assert.equal(run(snap("a", "running"), snap("b", "running"), snap("a", "complete")).activeSubagents, 1);
+  });
+
+  it("survives running, waiting and back again", () => {
+    const view = run(
+      snap("a", "running"),
+      { type: "subagent", subagentId: "a", name: "Explore", state: "waiting", on: "provider" },
+      snap("a", "running"),
+      snap("a", "complete"),
+    );
+    assert.equal(view.activeSubagents, 0);
+  });
+});

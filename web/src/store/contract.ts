@@ -42,6 +42,14 @@ export type Chrome = {
 
   /** Depth only. The Steering Queue itself belongs to the Session Host (ADR 0002). */
   queueDepth: number;
+  /**
+   * Subagents running or waiting right now.
+   *
+   * A count, not the Subagents themselves. Chrome is compared by shallow identity, so a derived
+   * array would be a fresh object every tick and could never be suppressed — the same trap the
+   * `lastSeq` note above describes. Anything wanting the Subagents reads the transcript surface.
+   */
+  activeSubagents: number;
   /** Transport state, so the UI can say the Session Host has gone rather than appear idle. */
   link: LinkState;
 };

@@ -84,12 +84,29 @@ export type ViewState = {
   entries: Entry[];
   queue: string[];
   contextUsage?: { used: number; window: number; spend?: Spend };
+  /**
+   * Subagents running or waiting right now.
+   *
+   * Carried rather than derived because the front-ends need it per frame while a subagent streams,
+   * and counting it from `entries` there would be a scan of the whole transcript on every tick. Kept
+   * current in `case "subagent"` instead, which runs a few times a turn.
+   *
+   * A number, not a list: it reaches the web client's Chrome, which is shallow-compared by identity,
+   * so a fresh array would defeat the suppression that keeps a streaming snapshot from re-rendering
+   * the chrome. See `sameChrome` in web/src/store/agent-session-view.ts.
+   */
+  activeSubagents: number;
   endedReason?: string;
   lastSeq: number;
 };
 
 export function initialState(): ViewState {
-  return { status: "idle", entries: [], queue: [], lastSeq: 0 };
+  return { status: "idle", entries: [], queue: [], activeSubagents: 0, lastSeq: 0 };
+}
+
+/** Running and waiting are both live work; the three terminal states are not. */
+function isActive(status: SubagentStatus): boolean {
+  return status === "running" || status === "waiting";
 }
 
 export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = initialState()): ViewState {
@@ -181,9 +198,18 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
         })),
       };
 
-    case "subagent":
+    case "subagent": {
+      // Snapshots repeat, so the count moves on the *transition* rather than on each arrival: a
+      // Subagent reporting `running` twice must not count twice.
+      const previous = state.entries.find(
+        (entry): entry is Extract<Entry, { kind: "subagent" }> =>
+          entry.kind === "subagent" && entry.id === event.subagentId,
+      );
+      const wasActive = previous !== undefined && isActive(previous.status);
+      const nowActive = isActive(event.state);
       return {
         ...state,
+        activeSubagents: state.activeSubagents + (nowActive ? 1 : 0) - (wasActive ? 1 : 0),
         entries: upsert(state.entries, {
           kind: "subagent",
           id: event.subagentId,
@@ -195,6 +221,7 @@ function applyEvent(state: ViewState, event: AgentEvent): ViewState {
           ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
         }),
       };
+    }
 
     case "turn_ended":
       return { ...state, status: "idle" };
