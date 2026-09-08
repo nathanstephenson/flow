@@ -263,13 +263,40 @@ describe("compacting a Conversation Context", () => {
     assert.deepEqual(backend.latest.compactions, [undefined, "keep the API decisions"]);
   });
 
-  // Nothing about having asked: compaction is the backend's (ADR 0001), so what a reader sees is
-  // the `compacted` the adapter emits, never a record of the request.
-  it("writes nothing of its own to the transcript", async () => {
+  // No `user_message`: compaction is not something anyone said, and ADR 0001 puts the act itself in
+  // the backend. The turn around it is the backend's own work being declared, not a record of the
+  // request — and it is what makes the session occupied while it runs.
+  it("opens a turn and writes no message of its own", async () => {
     const before = typesOf(host, sessionId).length;
     await host.compact(sessionId);
 
-    assert.deepEqual(typesOf(host, sessionId).slice(before), ["compacted"]);
+    assert.deepEqual(typesOf(host, sessionId).slice(before), ["turn_started", "compacted", "turn_ended"]);
+  });
+
+  /*
+   * The bug this test exists for.
+   *
+   * A compaction spends money and holds the backend for minutes, and it used to say so to nobody:
+   * `turnInFlight` stayed false, so a message typed during one was dispatched straight into the
+   * backend ahead of it instead of queueing, and a second `/compact` sailed past the refusal below.
+   * Both are the same missing fact.
+   */
+  it("occupies the session while it runs, so a message queues behind it", async () => {
+    backend.latest.holdCompaction = true;
+    await host.compact(sessionId);
+
+    await host.send(sessionId, "hello", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, [], "the message waited rather than jumping the queue");
+    assert.ok(typesOf(host, sessionId).includes("queue_changed"), "it is in the Steering Queue");
+  });
+
+  it("refuses a second compaction while the first is still running", async () => {
+    backend.latest.holdCompaction = true;
+    await host.compact(sessionId);
+
+    await assert.rejects(() => host.compact(sessionId), /running/);
+    assert.deepEqual(backend.latest.compactions, [undefined], "only the first was asked for");
   });
 
   it("refuses while a turn is in flight, rather than queueing behind it", async () => {

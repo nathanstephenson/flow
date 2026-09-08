@@ -141,33 +141,46 @@ export function runContract(target: ConformanceTarget): void {
     });
 
     /**
-     * A compaction is not a turn and must not read as one.
+     * A compaction occupies the session, and it is never the model talking.
      *
-     * The case that made this worth asserting: the Claude SDK has no `compact()`, so the adapter
-     * asks by putting `/compact` down the prompt channel — and the CLI's answer comes back as an
-     * ordinary `assistant` message. Left alone, "Not enough messages to compact." would appear in
-     * the Presentation Transcript as something the model said. Whatever an adapter has to do to ask
-     * for one, none of it may surface as the model talking or as a turn.
+     * Two halves, and they used to be one. The reply must not read as the model: the Claude SDK has
+     * no `compact()`, so the adapter asks by putting `/compact` down the prompt channel, and the
+     * CLI's answer comes back as an ordinary `assistant` message — left alone, "Not enough messages
+     * to compact." appears in the Presentation Transcript as something the model said.
+     *
+     * **But it must read as a turn**, which is the half this asserted backwards. The reasoning was
+     * that a local command is not billed and that a turn would leave the Steering Queue believing
+     * the session busy. One session's transcript falsified both: summarising billed $3.85 and held
+     * the backend for three minutes, during which "not busy" was the false belief — so a message
+     * typed meanwhile was pushed into the backend ahead of the compaction, and a second request
+     * sailed past the host's refusal. Occupancy is the fact every one of those depends on.
      *
      * An empty Conversation Context has nothing to compact, which is the point: this asserts the
-     * shape of the reply, not that a summary was produced.
+     * shape of the exchange, not that a summary was produced.
      */
-    it("asks for a compaction without it reading as a turn or as the model talking", async () => {
+    it("occupies the session for a compaction, without it reading as the model talking", async () => {
       const { session, events, dispose } = await start(target);
       try {
         if (!session.compact) return;
         await session.compact();
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+        const started = events.filter((event) => event.type === "turn_started");
+        assert.equal(started.length, 1, "the session is occupied before `compact` returns");
+
+        // Polled rather than slept: a turn left open pins the session in `running` forever, so what
+        // matters is that it closes at all, not how long an adapter's backend took to say so.
+        const ended = await waitFor(events, (event) => event.type === "turn_ended", 60_000);
+        assert.ok(ended, "a compaction that never ends its turn refuses every later message");
+        assert.equal(
+          ended.type === "turn_ended" ? ended.turnId : undefined,
+          started[0]?.type === "turn_started" ? started[0].turnId : "",
+          "it ends the turn it opened",
+        );
 
         assert.deepEqual(
           events.filter((event) => event.type === "message"),
           [],
           "a local command's reply is not an assistant message",
-        );
-        assert.deepEqual(
-          events.filter((event) => event.type === "turn_started" || event.type === "turn_ended"),
-          [],
-          "a compaction opens no turn, so the Steering Queue never believes the session is busy",
         );
       } finally {
         await dispose();
@@ -349,6 +362,21 @@ async function models(session: BackendSession, timeoutMs = 15_000): Promise<Mode
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return session.capabilities.models;
+}
+
+/** The first event matching `match`, or undefined if none arrives before the deadline. */
+async function waitFor(
+  events: BackendEvent[],
+  match: (event: BackendEvent) => boolean,
+  timeoutMs: number,
+): Promise<BackendEvent | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const found = events.find(match);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return events.find(match);
 }
 
 /** Adapters announce the model in force with model_changed as the session opens. */

@@ -485,15 +485,21 @@ export class SessionHost {
    * **A turn in flight.** The backend is mid-conversation and would be summarising a context it is
    * still writing to. Queueing it instead was rejected: `abort` discards the queue wholesale, so a
    * compaction would vanish with a cancelled turn and nobody would be told which of the two they
-   * had lost.
+   * had lost. This now also refuses a *second* compaction, because a compaction is a turn.
    *
    * **A backend that cannot.** Checked on `capabilities.compaction` rather than on whether the
    * method exists, so an adapter cannot half-declare itself — the flag is what clients hide the
    * control on, and the two must agree.
    *
-   * Nothing is written to the Presentation Transcript here. Compaction is the backend's (ADR 0001),
-   * so what a reader sees is the `compacted` the adapter emits when it lands, not a record of it
-   * having been asked for.
+   * **The session is occupied for the duration**, exactly as `dispatch` occupies it. A compaction
+   * spends money and holds the backend for minutes, and while it did not say so the Steering Queue
+   * believed the session idle — so a message typed during one was pushed into the backend's inbox
+   * ahead of the compaction instead of queueing behind it, and a second `/compact` sailed past the
+   * refusal above. `turn_ended` from the adapter releases it and drains the queue, the same path
+   * every other turn takes.
+   *
+   * No `user_message` is written. Compaction is not something anyone said, and the turn it opens is
+   * the backend's own work; what a reader sees is the `compacted` the adapter emits when it lands.
    */
   async compact(sessionId: string, instructions?: string): Promise<void> {
     const record = this.record(sessionId);
@@ -517,6 +523,11 @@ export class SessionHost {
       throw new CommandRefused(`${record.backendName} cannot compact a Conversation Context`);
     }
 
+    // Set here rather than left to the adapter's `turn_started`, because that is how `dispatch`
+    // occupies a session too: the host's own flag is what `send` consults, and it must be true
+    // before this returns or the very next request races it.
+    record.turnInFlight = true;
+    record.status = "running";
     await session.compact(instructions);
     this.touch(record);
   }

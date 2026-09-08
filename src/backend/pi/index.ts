@@ -9,7 +9,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
-import type { BackendEvent, Capabilities, EffortLevel, ModelInfo, Skill } from "../../protocol/events.ts";
+import type {
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  ModelInfo,
+  Skill,
+  TurnEndReason,
+} from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 
 /**
@@ -56,6 +63,12 @@ export class PiSession implements BackendSession {
   private readonly sessionDir: string | undefined;
 
   private turnId: string | undefined;
+  /**
+   * The turn a *requested* compaction opened, kept apart from `turnId` because pi compacts on its
+   * own initiative too — and an automatic one runs inside a turn that is already open. Set only by
+   * `compact`, so `compaction_end` can tell whose turn it is ending, if anyone's.
+   */
+  private compactionTurnId: string | undefined;
   private aborting = false;
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
@@ -120,9 +133,34 @@ export class PiSession implements BackendSession {
    * call away, and the host's caller is an HTTP request that should not be held open for it — the
    * events are how anyone finds out either way. A failure still reaches the transcript, because pi
    * puts it on `compaction_end.errorMessage` rather than throwing.
+   *
+   * The turn is opened *here* rather than on `compaction_start`, because that event fires for pi's
+   * automatic compactions as well — and those happen inside a turn that is already open. Only the
+   * ones somebody asked for occupy a session of their own, and `compactionTurnId` is what tells the
+   * two apart when the end arrives.
    */
   async compact(instructions?: string): Promise<void> {
-    void this.session.compact(instructions);
+    const turnId = `compaction-${++this.messageSeq}`;
+    this.compactionTurnId = turnId;
+    this.emit({ type: "turn_started", turnId });
+    // A rejection here would never reach `compaction_end`, and a turn left open pins the session in
+    // `running` forever — refusing every later send and every later compaction.
+    void this.session.compact(instructions).catch((error: unknown) => {
+      this.emit({
+        type: "notice",
+        level: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+      this.endCompactionTurn("error");
+    });
+  }
+
+  /** Ends the turn a requested compaction opened, and does nothing for one pi started itself. */
+  private endCompactionTurn(reason: TurnEndReason): void {
+    const turnId = this.compactionTurnId;
+    if (!turnId) return;
+    this.compactionTurnId = undefined;
+    this.emit({ type: "turn_ended", turnId, reason });
   }
 
   /**
@@ -279,15 +317,20 @@ export class PiSession implements BackendSession {
         if (event.errorMessage) {
           this.emit({ type: "notice", level: "error", text: event.errorMessage });
         }
-        if (event.aborted || event.willRetry || !event.result) return;
+        if (event.willRetry) return;
         // pi counts what it started from and never what it ended at, so `after` goes unreported
         // rather than guessed. Only "manual" is somebody asking; a threshold and an overflow are
         // both pi deciding on its own.
-        this.emit({
-          type: "compacted",
-          trigger: event.reason === "manual" ? "manual" : "auto",
-          before: event.result.tokensBefore,
-        });
+        if (!event.aborted && event.result) {
+          this.emit({
+            type: "compacted",
+            trigger: event.reason === "manual" ? "manual" : "auto",
+            before: event.result.tokensBefore,
+          });
+        }
+        // Last, so the marker lands while the turn is still open — `turn_ended` is what returns the
+        // session to idle and lets the Steering Queue drain behind it.
+        this.endCompactionTurn(event.aborted ? "aborted" : event.errorMessage ? "error" : "complete");
         return;
 
       default:

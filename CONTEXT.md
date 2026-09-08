@@ -50,8 +50,10 @@ already a different thing, and the one kind GoodHarness refuses to fetch (ADR 00
 
 **Command**:
 Something a human triggers by name from the composer and **GoodHarness itself performs** — compacting
-the Conversation Context today. Never reaches a model, produces no user turn, and is the whole of the
-message it appears in.
+the Conversation Context today. Never reaches a model and is the whole of the message it appears in,
+so it enters no Presentation Transcript as a user turn. It does **occupy the Agent Session** while it
+runs, and shows as a turn: a Command may spend money and hold the backend for minutes, and the
+Steering Queue can only order what comes next if it knows the session is busy.
 _Note_: `Command` in `src/protocol/commands.ts` is the wider union of every client→host message,
 `send` and `create` included, and only some of its members are typeable. When both are in play, say
 "a typed Command" for this one.

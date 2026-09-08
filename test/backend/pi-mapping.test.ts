@@ -16,6 +16,8 @@ type Stub = {
   session: AgentSession;
   fire: (event: AgentSessionEvent) => void;
   prompts: Array<{ text: string; options: unknown }>;
+  compactions: Array<string | undefined>;
+  failCompaction: (reason: string) => void;
   aborted: number;
   thinkingLevel: string | undefined;
 };
@@ -23,7 +25,8 @@ type Stub = {
 function stubSession(): Stub {
   let listener: ((event: AgentSessionEvent) => void) | undefined;
   const prompts: Array<{ text: string; options: unknown }> = [];
-  const state = { aborted: 0 };
+  const compactions: Array<string | undefined> = [];
+  const state = { aborted: 0, compactFails: undefined as string | undefined };
   // m1 reasons across three levels and can be shown an image, m2 does neither — the split every
   // real registry has, on both axes.
   const models = [
@@ -54,6 +57,14 @@ function stubSession(): Stub {
     async abort() {
       state.aborted += 1;
     },
+    // pi resolves this only when the summary exists, so it stays pending unless a test says
+    // otherwise — which is what a real compaction looks like from the adapter's side.
+    compact(instructions?: string) {
+      compactions.push(instructions);
+      return state.compactFails
+        ? Promise.reject(new Error(state.compactFails))
+        : new Promise<void>(() => {});
+    },
     async setModel(model: { id: string }) {
       current = models.find((candidate) => candidate.id === model.id) ?? current;
       // pi clamps its own thinking level when the new model cannot serve the old one.
@@ -78,6 +89,10 @@ function stubSession(): Stub {
     session,
     fire: (event) => listener?.(event),
     prompts,
+    compactions,
+    failCompaction: (reason: string) => {
+      state.compactFails = reason;
+    },
     get aborted() {
       return state.aborted;
     },
@@ -341,6 +356,66 @@ describe("pi compaction", () => {
       events.map((event) => event.type),
       ["compacting", "compacting", "compacted"],
     );
+  });
+
+  /*
+   * A requested compaction occupies the session; one pi started for itself does not.
+   *
+   * That asymmetry is the whole reason `compactionTurnId` exists. pi compacts on its own initiative
+   * mid-turn, so opening a turn on `compaction_start` would open a second one inside a turn already
+   * running — and closing one on `compaction_end` would end the *real* turn early, returning the
+   * session to idle while the model was still working.
+   */
+  describe("the turn a requested compaction occupies", () => {
+    const turns = () => events.filter((event) => event.type === "turn_started" || event.type === "turn_ended");
+
+    it("opens on the request and closes when pi reports the end", async () => {
+      await session.compact("keep the API decisions");
+
+      assert.deepEqual(stub.compactions, ["keep the API decisions"]);
+      assert.deepEqual(turns().map((event) => event.type), ["turn_started"], "still running");
+
+      ended({ reason: "manual" });
+      assert.deepEqual(turns().map((event) => event.type), ["turn_started", "turn_ended"]);
+    });
+
+    // The marker has to land inside the turn: turn_ended is what returns the session to idle and
+    // lets the Steering Queue drain, so anything after it belongs to whatever comes next.
+    it("records the compaction before it gives the session back", async () => {
+      await session.compact();
+      ended({ reason: "manual" });
+
+      const order = events.map((event) => event.type);
+      assert.ok(order.indexOf("compacted") < order.indexOf("turn_ended"));
+    });
+
+    it("opens no turn for a compaction pi started itself", () => {
+      stub.fire({ type: "compaction_start", reason: "threshold" } as unknown as AgentSessionEvent);
+      ended({ reason: "threshold" });
+
+      assert.deepEqual(turns(), [], "an automatic compaction runs inside the turn that provoked it");
+    });
+
+    // A turn left open pins the session in `running` forever, refusing every later send.
+    it("gives the session back when pi rejects the request outright", async () => {
+      stub.failCompaction("no provider configured");
+      await session.compact();
+      await Promise.resolve();
+
+      assert.deepEqual(turns().map((event) => event.type), ["turn_started", "turn_ended"]);
+      assert.deepEqual(
+        events.filter((event) => event.type === "notice"),
+        [{ type: "notice", level: "error", text: "no provider configured" }],
+      );
+    });
+
+    // pi is about to go again, so the session is still occupied.
+    it("holds the turn open while pi intends to retry", async () => {
+      await session.compact();
+      ended({ willRetry: true });
+
+      assert.deepEqual(turns().map((event) => event.type), ["turn_started"]);
+    });
   });
 
   // Otherwise the meter pulses until the session is disposed.

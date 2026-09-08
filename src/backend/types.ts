@@ -65,6 +65,11 @@ export interface BackendSession {
    *
    * Reports through events like everything else — a `compacted` when it lands, a `notice` when it
    * does not. The promise resolving means the request was made, not that the summary exists.
+   *
+   * **Opens a turn and closes it**, exactly as `prompt` does: `turn_started` before this returns,
+   * `turn_ended` whatever the outcome. A compaction is a model call that runs for minutes, and the
+   * Steering Queue orders the messages behind it on that pair alone. An adapter that opens one and
+   * never closes it pins the Agent Session in `running` and refuses everything sent afterwards.
    */
   compact?(instructions?: string): Promise<void>;
   /**

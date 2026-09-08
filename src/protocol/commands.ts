@@ -100,11 +100,14 @@ export type Command =
    * window fills.
    *
    * A command of its own rather than a `/compact` a human types into `send`, because the Session
-   * Host does not treat message text as a string it must preserve byte for byte: `dispatch` prepends
+   * Host does not treat message text as a string it must preserve byte for byte: `dispatch` may add
    * a branch-change note to it, and `userContent` moves it behind any Attachments. A command hidden
    * in that payload would work until the turn someone switched branch, and then silently become a
-   * paid turn asking the model about the word "/compact". `send` would also Revive a Dormant session
-   * to deliver it (ADR 0003), which is the one state where compacting means nothing at all.
+   * paid turn asking the model about the word "/compact" — recorded forever in an append-only
+   * transcript, and titling the Agent Session if it were the first message.
+   *
+   * It still *occupies* the session the way a send does, because it spends money and holds the
+   * backend for minutes. That is the host's `turnInFlight`, set here as `dispatch` sets it.
    *
    * `instructions` steer what the summary keeps. Both backends take them; neither requires them.
    */

@@ -37,6 +37,28 @@ describe("what the composer promises about the next message", () => {
     assert.match(composerPlaceholder(chrome({ status: "running", queueDepth: 2 })), /Enter queues it behind 2/);
   });
 
+  /*
+   * The report this exists for: "compaction doesn't seem to do anything, or at least I can't see an
+   * indicator". It had one — a pulsing 6px bar — and a compaction runs for minutes producing nothing
+   * to read, so the box someone just typed into has to say what is happening rather than leave them
+   * to infer it from a rhythm.
+   */
+  it("names a compaction rather than calling it the current turn", () => {
+    const compacting = chrome({ status: "running", compacting: true });
+
+    assert.match(composerPlaceholder(compacting), /Compacting the Conversation Context/);
+    assert.match(composerPlaceholder({ ...compacting, queueDepth: 2 }), /queues it behind 2/);
+  });
+
+  // A compaction Revives first (ADR 0003), so this is the state a session is really in when someone
+  // compacts one they have just come back to — and "this Revives the Agent Session" is stale by then.
+  it("says it is compacting even from a status that would otherwise offer a Revive", () => {
+    assert.match(
+      composerPlaceholder(chrome({ status: "dormant", compacting: true })),
+      /Compacting the Conversation Context/,
+    );
+  });
+
   it("names the queue depth it will land behind", () => {
     assert.match(composerPlaceholder(chrome({ queueDepth: 3 })), /behind 3/);
     assert.match(sendLabel(chrome({ queueDepth: 3 })), /behind 3/);

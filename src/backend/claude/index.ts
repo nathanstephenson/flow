@@ -352,8 +352,14 @@ class ClaudeSession implements BackendSession {
    * `turns=0 input_tokens=0` and no credential ever checked — so this is the same shape as
    * `applyEffort` above: the SDK has no method, and the wire format lives in one place.
    *
-   * Deliberately no `turn_started`. A local command is not a turn, nothing is billed for it, and a
-   * turn opened here would leave the queue believing the session was busy.
+   * **A compaction is a turn.** It was not, on the reasoning that a local command is not billed and
+   * that a turn here would leave the Steering Queue believing the session was busy. Both halves were
+   * wrong, and one session's transcript showed it: summarising is a model call, so it billed $3.85,
+   * and it held the session for three minutes — during which the queue's belief that nothing was
+   * running was the false one. Everything downstream follows from saying so: a second compaction is
+   * refused by the guard the host already has, a message typed meanwhile is queued in order rather
+   * than pushed into this inbox ahead of the compaction, and three minutes of work becomes
+   * abortable.
    *
    * `compacting` is what keeps the CLI's reply out of the transcript as an assistant message, which
    * is how it arrives — "Not enough messages to compact." would otherwise be attributed to the
@@ -362,6 +368,8 @@ class ClaudeSession implements BackendSession {
   async compact(instructions?: string): Promise<void> {
     if (this.disposed) throw new Error("Backend Session disposed");
     this.compacting = true;
+    this.turnId = randomUUID();
+    this.emit({ type: "turn_started", turnId: this.turnId });
     // Said before the CLI has been asked, because the whole point is that summarising takes a model
     // call: someone who sees nothing for ten seconds asks again.
     this.emit({ type: "compacting", active: true });
@@ -570,9 +578,6 @@ class ClaudeSession implements BackendSession {
         // Worth asking even for a compaction, and especially then — occupancy has just fallen, and
         // that number is the whole reason anyone asked for one.
         void this.reportContextUsage();
-        // A compaction opened no turn, so there is none to end. `finishTurn` would no-op, but
-        // saying so here keeps a local command out of the turn lifecycle entirely.
-        if (wasCompacting) return;
         this.finishTurn(sdkMessage.subtype === "success" ? "complete" : "error");
         return;
       }

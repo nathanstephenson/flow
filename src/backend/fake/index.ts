@@ -61,12 +61,27 @@ export class FakeSession implements BackendSession {
    */
   compact?: (instructions?: string) => Promise<void>;
 
+  /**
+   * Leaves a requested compaction running — the turn opens and never closes.
+   *
+   * Real compactions take minutes, and everything that goes wrong around one goes wrong *during*
+   * it: a message racing ahead of it, a second request arriving on top of it. A fake that finishes
+   * before it returns cannot reproduce any of that.
+   */
+  holdCompaction = false;
+
   constructor(options: BackendCreateOptions, overrides: FakeCapabilityOverrides = {}) {
     this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
     if (this.capabilities.compaction) {
+      // Opens and closes a turn, because a compaction is one: it spends money and holds the backend
+      // while it runs, and the Steering Queue only orders messages correctly if it is told so.
       this.compact = async (instructions?: string) => {
         this.compactions.push(instructions);
+        this.turnId = randomUUID();
+        this.emit({ type: "turn_started", turnId: this.turnId });
+        if (this.holdCompaction) return;
         this.emit({ type: "compacted", trigger: "manual", before: 1_000, after: 100 });
+        this.completeTurn("complete");
       };
     }
     this.emit = options.emit;
