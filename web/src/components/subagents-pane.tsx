@@ -3,11 +3,10 @@ import { useMemo } from "react";
 
 import type { Entry } from "@client/reduce.ts";
 import { useAgentSession, useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
-import { SubagentScopeProvider } from "@/components/subagent-scope.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { ordered, subagentKeys } from "@/presentation/subagent-list.ts";
-import { memberKeys } from "@/presentation/subagent-tree.ts";
+import { memberKeys } from "@/presentation/subagent-rows.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { cn } from "@/lib/utils.ts";
 
@@ -149,6 +148,9 @@ function StatusDot({ status }: { status: Extract<Entry, { kind: "subagent" }>["s
  * The main transcript's *scroller* is deliberately not reused: it pads itself by
  * `var(--composer-inset)`, which the Composer sets on the nearest `[data-pane]` ancestor. A Dock is
  * inside that pane, so this would have inherited the height of the Composer it cannot see.
+ *
+ * No indent to suppress: the main transcript no longer draws a Subagent's rows at all, so
+ * `TranscriptEntry` has no attribution rule left to turn off here.
  */
 function SubagentTranscript({
   view,
@@ -167,8 +169,7 @@ function SubagentTranscript({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <SubagentScopeProvider value={subagentId}>
-        <div className="min-h-0 flex-1 overflow-auto px-2 pt-2 pb-16">
+      <div className="min-h-0 flex-1 overflow-auto px-2 pt-2 pb-16">
           {rows.length === 0 ? (
             <p className="p-2 text-sm text-muted-foreground">
               {subagent?.kind === "subagent" && subagent.status === "running"
@@ -176,10 +177,9 @@ function SubagentTranscript({
                 : "This agent produced no rows of its own."}
             </p>
           ) : (
-            rows.map((key) => <SubagentRowEntry key={key} view={view} entryKey={key} />)
+            rows.map((key: string) => <SubagentRowEntry key={key} view={view} entryKey={key} />)
           )}
-        </div>
-      </SubagentScopeProvider>
+      </div>
 
       {/*
        * Pinned where the Composer sits in the pane, and dressed like it, so the two read as the same
