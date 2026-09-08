@@ -31,11 +31,14 @@ export function Dock({
   side,
   dock,
   sessionId,
+  shells,
   dispatch,
 }: {
   side: DockSide;
   dock: DockState;
   sessionId: string;
+  /** Whether this host can open a Shell. The Dock itself is offered either way. */
+  shells: boolean;
   dispatch: (action: DockAction) => void;
 }) {
   const root = useRef<HTMLElement>(null);
@@ -177,7 +180,12 @@ export function Dock({
         />
       ) : (
         <ContentPicker
-          onChooseShell={() => dispatch({ type: "open-shell", side, ...(active ? { tabId: active.id } : {}) })}
+          {...(shells
+            ? {
+                onChooseShell: () =>
+                  dispatch({ type: "open-shell", side, ...(active ? { tabId: active.id } : {}) }),
+              }
+            : {})}
         />
       )}
     </section>
@@ -188,17 +196,21 @@ export function Dock({
  * What a Dock shows when its active tab has no content yet — which is also what it shows when it has
  * no tabs at all, because those are the same question.
  *
- * One entry today. It is a list rather than a menu because it is the body of the Dock, not a popover
- * hanging off `+`: filling the space is what makes an empty Dock explain itself. A build with no pty
- * offers no Docks at all, which is why there is no "nothing available" case to draw.
+ * A list rather than a menu because it is the body of the Dock, not a popover hanging off `+`:
+ * filling the space is what makes an empty Dock explain itself.
+ *
+ * A Shell is offered only where the host can open one. The Docks used to be withheld entirely on
+ * that basis, which meant anything else they could hold was withheld with them.
  */
-function ContentPicker({ onChooseShell }: { onChooseShell: () => void }) {
+function ContentPicker({ onChooseShell }: { onChooseShell?: () => void }) {
   return (
-    <div className="flex min-h-0 items-center justify-center overflow-auto p-4">
-      <Button variant="outline" size="sm" onClick={onChooseShell}>
-        <SquareTerminal aria-hidden data-icon="inline-start" />
-        Shell
-      </Button>
+    <div className="flex min-h-0 items-center justify-center gap-2 overflow-auto p-4">
+      {onChooseShell === undefined ? null : (
+        <Button variant="outline" size="sm" onClick={onChooseShell}>
+          <SquareTerminal aria-hidden data-icon="inline-start" />
+          Shell
+        </Button>
+      )}
     </div>
   );
 }

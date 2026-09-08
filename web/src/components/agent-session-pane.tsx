@@ -31,7 +31,9 @@ import { cn } from "@/lib/utils.ts";
 export type AgentSessionPaneProps = {
   sessionId: string;
   /** Absent where the host cannot open a Shell: no content kind exists, so no Dock is offered. */
-  docks?: Docks;
+  docks: Docks;
+  /** Whether this host can open a Shell at all; the Docks exist either way. */
+  shells: boolean;
   /**
    * Whether the transcript search field is on screen. Owned by the app shell because ⌘F is resolved
    * there with every other key, and the pane remounts per Agent Session.
@@ -40,7 +42,7 @@ export type AgentSessionPaneProps = {
   onCloseSearch: () => void;
 };
 
-export function AgentSessionPane({ sessionId, docks, searchOpen, onCloseSearch }: AgentSessionPaneProps) {
+export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onCloseSearch }: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
   // One frame at most: the acquire happens in a layout effect, so this does not reach the screen.
@@ -52,7 +54,8 @@ export function AgentSessionPane({ sessionId, docks, searchOpen, onCloseSearch }
       sessionId={sessionId}
       searchOpen={searchOpen}
       onCloseSearch={onCloseSearch}
-      {...(docks ? { docks } : {})}
+      docks={docks}
+      shells={shells}
     />
   );
 }
@@ -61,6 +64,7 @@ function AttachedPane({
   view,
   sessionId,
   docks,
+  shells,
   searchOpen,
   onCloseSearch,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
@@ -131,7 +135,7 @@ function AttachedPane({
    */
   return (
     <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
-      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} {...(docks ? { docks } : {})} />
+      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={docks} />
 
       <div
         // The frame the Docks are a share of, and the element their live sizes are written onto. It
@@ -151,13 +155,13 @@ function AttachedPane({
           )}
         >
           {conversation}
-          {bottomOpen && bottom && docks ? (
-            <Dock side="bottom" dock={bottom} sessionId={sessionId} dispatch={docks.dispatch} />
+          {bottomOpen && bottom ? (
+            <Dock side="bottom" dock={bottom} sessionId={sessionId} shells={shells} dispatch={docks.dispatch} />
           ) : null}
         </div>
 
-        {rightOpen && right && docks ? (
-          <Dock side="right" dock={right} sessionId={sessionId} dispatch={docks.dispatch} />
+        {rightOpen && right ? (
+          <Dock side="right" dock={right} sessionId={sessionId} shells={shells} dispatch={docks.dispatch} />
         ) : null}
       </div>
     </div>

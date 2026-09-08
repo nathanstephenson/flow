@@ -5,10 +5,12 @@ import {
   closeTab,
   defaultLayout,
   fillWithShell,
+  fillWithSubagents,
   parseLayouts,
   pruneLayouts,
   reconcileLayout,
   rememberShell,
+  selectSubagent,
   setActive,
   setSize,
   toggleMinimised,
@@ -41,6 +43,14 @@ export type DockAction =
   | { type: "open-shell"; side: DockSide; tabId?: string }
   /** The Shell has been opened and has an id; the tab has been waiting for it. */
   | { type: "remember-shell"; side: DockSide; tabId: string; shellId: string }
+  /**
+   * Show the Subagents. Chosen from the picker, or reached from the Composer's strip — which has to
+   * *open* the Dock rather than toggle it, since a reader clicking "2 agents running" on a Dock that
+   * happens to be open would otherwise close it.
+   */
+  | { type: "open-subagents"; side: DockSide; tabId?: string }
+  /** Drill into one Subagent, or back to the list when `subagentId` is absent. */
+  | { type: "select-subagent"; side: DockSide; tabId: string; subagentId?: string }
   | { type: "close-tab"; side: DockSide; tabId: string }
   | { type: "activate"; side: DockSide; tabId: string }
   | { type: "resize"; side: DockSide; px: number; available?: number };
@@ -73,6 +83,18 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
             return { ...layout, [action.side]: addTab(dock, newTabId()) };
           case "open-shell":
             return { ...layout, [action.side]: fillWithShell(dock, action.tabId ?? newTabId()) };
+          case "open-subagents": {
+            // Reuse an Agents tab if this Dock already has one: a second would show the same
+            // Subagents, and the reader asked to see them rather than to have another tab.
+            const existing = dock.tabs.find((tab) => tab.content?.kind === "subagents");
+            const filled = fillWithSubagents(dock, action.tabId ?? existing?.id ?? newTabId());
+            return { ...layout, [action.side]: { ...filled, minimised: false } };
+          }
+          case "select-subagent":
+            return {
+              ...layout,
+              [action.side]: selectSubagent(dock, action.tabId, action.subagentId),
+            };
           case "remember-shell":
             return { ...layout, [action.side]: rememberShell(dock, action.tabId, action.shellId) };
           case "close-tab": {

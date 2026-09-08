@@ -5,19 +5,26 @@ import {
   addTab,
   clampDockSize,
   closeTab,
-  fillWithShell,
   defaultLayout,
+  fillWithShell,
+  fillWithSubagents,
   emptyDock,
   parseLayouts,
   pruneLayouts,
   reconcileLayout,
   rememberShell,
+  selectSubagent,
   setActive,
   setSize,
   tabLabel,
   toggleMinimised,
   type Dock,
+  type DockTabContent,
 } from "./docks.ts";
+
+/** The Shell a tab holds, or undefined for a tab holding anything else. */
+const shellOf = (tab: { content?: DockTabContent | undefined } | undefined): string | undefined =>
+  tab?.content?.kind === "shell" ? tab.content.shellId : undefined;
 
 /** A Dock with `count` Shells in it, each with an id, the first active. */
 function withShells(count: number): Dock {
@@ -143,7 +150,7 @@ describe("choosing a Shell from the picker", () => {
 
   it("takes the Shell id once the pty is open", () => {
     const dock = rememberShell(fillWithShell(emptyDock("bottom"), "t1"), "t1", "sh1");
-    assert.equal(dock.tabs[0]?.content?.shellId, "sh1");
+    assert.equal(shellOf(dock.tabs[0]), "sh1");
   });
 
   it("drops the id of a tab that closed while its Shell was opening", () => {
@@ -158,7 +165,7 @@ describe("reconciling against the Session Host", () => {
   it("drops tabs whose Shell is gone", () => {
     const { bottom } = reconcileLayout(layout(withShells(2)), ["sh2"]);
     assert.deepEqual(
-      bottom.tabs.map((tab) => tab.content?.shellId),
+      bottom.tabs.map(shellOf),
       ["sh2"],
     );
     assert.equal(bottom.activeId, "t2");
@@ -176,7 +183,7 @@ describe("reconciling against the Session Host", () => {
   it("adopts a live Shell nothing claims", () => {
     const { bottom } = reconcileLayout(layout(withShells(1)), ["sh1", "sh7"]);
     assert.deepEqual(
-      bottom.tabs.map((tab) => tab.content?.shellId),
+      bottom.tabs.map(shellOf),
       ["sh1", "sh7"],
     );
   });
@@ -228,7 +235,7 @@ describe("layouts read back from storage", () => {
     const dock = parseLayouts(stored).a?.bottom;
     assert.equal(dock?.size, 420);
     assert.equal(dock?.minimised, false);
-    assert.equal(dock?.tabs[0]?.content?.shellId, "sh1");
+    assert.equal(shellOf(dock?.tabs[0]), "sh1");
   });
 
   it("drops a tab with no usable id, and forgets an unknown kind", () => {
@@ -264,5 +271,107 @@ describe("pruning", () => {
   it("returns the same object when it has nothing to forget", () => {
     const layouts = { a: defaultLayout() };
     assert.equal(pruneLayouts(layouts, ["a", "b"]), layouts);
+  });
+});
+
+/**
+ * A tab showing the Subagents.
+ *
+ * Unlike a Shell, this holds no resource of its own — the Subagents are already in the Presentation
+ * Transcript — so there is no late id to remember and nothing to kill when the tab closes. What it
+ * does hold is the reader's place: which Subagent they drilled into, kept in the tab content so it
+ * survives a reload, the same way `shellId` does.
+ */
+describe("an Agents tab", () => {
+  const withSubagents = () => fillWithSubagents(addTab(defaultLayout().right, "t1"), "t1");
+
+  it("fills the tab the picker was shown for, and activates it", () => {
+    const dock = withSubagents();
+    assert.deepEqual(dock.tabs, [{ id: "t1", content: { kind: "subagents" } }]);
+    assert.equal(dock.activeId, "t1");
+  });
+
+  it("adds a tab when there was no unchosen one to fill", () => {
+    const dock = fillWithSubagents(defaultLayout().right, "fresh");
+    assert.deepEqual(dock.tabs.map((tab) => tab.id), ["fresh"]);
+  });
+
+  it("calls itself Agents, without an ordinal", () => {
+    // Two Agents tabs would show the same Subagents, so numbering them implies a distinction that
+    // is not there. Shells are numbered because each one is its own process.
+    const dock = fillWithSubagents(withSubagents(), "t2");
+    assert.equal(tabLabel(dock, "t1"), "Agents");
+    assert.equal(tabLabel(dock, "t2"), "Agents");
+  });
+
+  it("numbers Shells around it, ignoring it in the count", () => {
+    const dock = fillWithShell(fillWithSubagents(fillWithShell(defaultLayout().right, "s1"), "a1"), "s2");
+    assert.equal(tabLabel(dock, "s1"), "Shell 1");
+    assert.equal(tabLabel(dock, "a1"), "Agents");
+    assert.equal(tabLabel(dock, "s2"), "Shell 2");
+  });
+
+  it("remembers which Subagent was drilled into, and forgets it on the way back", () => {
+    const selected = selectSubagent(withSubagents(), "t1", "subagent:abc");
+    assert.deepEqual(selected.tabs[0]?.content, { kind: "subagents", subagentId: "subagent:abc" });
+
+    const back = selectSubagent(selected, "t1");
+    assert.deepEqual(back.tabs[0]?.content, { kind: "subagents" }, "back must clear it, not keep a stale id");
+  });
+
+  it("leaves a Shell tab alone when asked to select a Subagent in it", () => {
+    const dock = fillWithShell(defaultLayout().right, "s1");
+    assert.deepEqual(selectSubagent(dock, "s1", "subagent:abc").tabs, dock.tabs);
+  });
+
+  it("kills nothing when closed", () => {
+    // A Shell tab's close ends a pty (ADR 0008). This one owns no process.
+    const { killed } = closeTab(withSubagents(), "t1");
+    assert.equal(killed, undefined);
+  });
+
+  it("survives reconciling against the Session Host's live Shells", () => {
+    // The reconcile drops tabs whose Shell has gone. An Agents tab claims no Shell, so a reconcile
+    // that found none must not take it with them — it survived only by accident before the kinds
+    // were told apart.
+    const layout = { ...defaultLayout(), right: withSubagents() };
+    const reconciled = reconcileLayout(layout, []);
+    assert.deepEqual(reconciled.right.tabs.map((tab) => tab.content?.kind), ["subagents"]);
+  });
+
+  it("does not claim a Shell that another tab could have adopted", () => {
+    const layout = { ...defaultLayout(), right: withSubagents() };
+    const reconciled = reconcileLayout(layout, ["live-shell"]);
+    // The unclaimed live Shell is adopted into the bottom Dock, not attached to the Agents tab.
+    assert.deepEqual(reconciled.right.tabs.map((tab) => tab.content?.kind), ["subagents"]);
+    assert.ok(reconciled.bottom.tabs.some((tab) => tab.content?.kind === "shell"));
+  });
+
+  it("comes back from storage with its kind and its selection", () => {
+    // parseTab whitelists kinds one by one, so a kind added without a line there reopens as a blank
+    // picker — which looks like the tab forgetting itself.
+    const stored = {
+      s1: {
+        bottom: { tabs: [], activeId: undefined, size: 300, minimised: true },
+        right: {
+          tabs: [{ id: "t1", content: { kind: "subagents", subagentId: "subagent:abc" } }],
+          activeId: "t1",
+          size: 380,
+          minimised: false,
+        },
+      },
+    };
+    const parsed = parseLayouts(JSON.stringify(stored));
+    assert.deepEqual(parsed.s1?.right.tabs[0]?.content, { kind: "subagents", subagentId: "subagent:abc" });
+  });
+
+  it("comes back from storage on the list when nothing was selected", () => {
+    const stored = {
+      s1: {
+        bottom: { tabs: [], activeId: undefined, size: 300, minimised: true },
+        right: { tabs: [{ id: "t1", content: { kind: "subagents" } }], activeId: "t1", size: 380, minimised: false },
+      },
+    };
+    assert.deepEqual(parseLayouts(JSON.stringify(stored)).s1?.right.tabs[0]?.content, { kind: "subagents" });
   });
 });
