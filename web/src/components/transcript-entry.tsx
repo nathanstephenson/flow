@@ -5,6 +5,7 @@ import type { Entry } from "@client/reduce.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useSubagentCollapse } from "@/components/subagent-collapse.tsx";
+import { useSubagentScope } from "@/components/subagent-scope.tsx";
 import { producerKey } from "@/presentation/subagent-tree.ts";
 import { entryKey } from "@/presentation/entry-key.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
@@ -33,9 +34,12 @@ import { cn } from "@/lib/utils.ts";
 export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
 
 export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
+  const scope = useSubagentScope();
   const row = renderEntry({ entry, query, sessionId });
   const owner = producerKey(entry);
-  if (owner === undefined) return row;
+  // Not indented when the surface already shows one Subagent and nothing else: there the rule would
+  // mark every row identically, which says nothing and costs width.
+  if (owner === undefined || owner === scope) return row;
   // A rule down the left, rather than indentation alone: a subagent's rows are otherwise
   // indistinguishable from the parent's own at a glance, which is the whole point of attributing
   // them. Derived from the Entry because TranscriptEntryProps carries no depth, by contract.

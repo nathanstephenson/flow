@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from "react";
-import { PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
+import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide } from "@/presentation/docks.ts";
 import type { DockAction } from "@/docks.ts";
 import { DockResizeHandle } from "@/components/dock-resize-handle.tsx";
+import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -168,7 +169,16 @@ export function Dock({
         </Tooltip>
       </div>
 
-      {active?.content?.kind === "shell" ? (
+      {active?.content?.kind === "subagents" ? (
+        <SubagentsPane
+          key={active.id}
+          sessionId={sessionId}
+          subagentId={active.content.subagentId}
+          onSelect={(subagentId) =>
+            dispatch({ type: "select-subagent", side, tabId: active.id, ...(subagentId ? { subagentId } : {}) })
+          }
+        />
+      ) : active?.content?.kind === "shell" ? (
         <ShellPane
           // Keyed by the tab, not by the Shell: the id arrives after the pty is spawned, and keying
           // on it would tear down the terminal that had just reported it.
@@ -180,6 +190,9 @@ export function Dock({
         />
       ) : (
         <ContentPicker
+          onChooseSubagents={() =>
+            dispatch({ type: "open-subagents", side, ...(active ? { tabId: active.id } : {}) })
+          }
           {...(shells
             ? {
                 onChooseShell: () =>
@@ -202,7 +215,13 @@ export function Dock({
  * A Shell is offered only where the host can open one. The Docks used to be withheld entirely on
  * that basis, which meant anything else they could hold was withheld with them.
  */
-function ContentPicker({ onChooseShell }: { onChooseShell?: () => void }) {
+function ContentPicker({
+  onChooseShell,
+  onChooseSubagents,
+}: {
+  onChooseShell?: () => void;
+  onChooseSubagents: () => void;
+}) {
   return (
     <div className="flex min-h-0 items-center justify-center gap-2 overflow-auto p-4">
       {onChooseShell === undefined ? null : (
@@ -211,6 +230,10 @@ function ContentPicker({ onChooseShell }: { onChooseShell?: () => void }) {
           Shell
         </Button>
       )}
+      <Button variant="outline" size="sm" onClick={onChooseSubagents}>
+        <Bot aria-hidden data-icon="inline-start" />
+        Agents
+      </Button>
     </div>
   );
 }
