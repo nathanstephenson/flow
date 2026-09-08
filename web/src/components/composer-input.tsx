@@ -172,7 +172,6 @@ export function ComposerInput({
           // Below the Enter binding, so a newline is what Enter does only when the above declines.
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.lineWrapping,
-          placeholderExtension(placeholder),
           catalogueField,
           pillField,
           EditorView.updateListener.of((update) => {
@@ -221,7 +220,11 @@ export function ComposerInput({
           EditorView.contentAttributes.of({ "data-composer-input": "" }),
           THEME,
           editable.of(editableFor(disabled)),
-          hint.of([]),
+          // The placeholder lives in the compartment and nowhere else. It was also installed
+          // directly here, which is not a duplicate that replaces itself: reconfiguring the
+          // compartment added a second placeholder beside the first, and both rendered — one
+          // sentence printed over the other.
+          hint.of(placeholderExtension(placeholder)),
         ],
       }),
     });

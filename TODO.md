@@ -56,12 +56,17 @@ kind is a compile error rather than a row that renders nothing. It caught the co
 missing tone on the first build. A harness (jsdom and a rendering library) is the larger question,
 and it is what the components above still want.
 
-`ComposerInput` is now the sharpest case for one. It carries behaviours that are invisible when they
-break and that nothing else in the repo can catch — a composing IME owning Enter, an image paste
-being consumed rather than inserted, a controlled value pushed back into an uncontrolled editor
-without resetting the selection mid-word, and `[data-composer-input]` staying findable for
-`focus-pane`. Each is one line away from a silent regression, and each was verified by a person
-typing into it once.
+`ComposerInput` is now the sharpest case for one, and it has already made the argument itself: it
+shipped with its placeholder installed both directly and in a compartment, so reconfiguring it drew
+a second placeholder over the first. Typecheck, the build and 681 tests all passed; a person looking
+at the box found it. Everything else it carries fails the same way — a composing IME owning Enter, an
+image paste being consumed rather than inserted, a controlled value pushed back into an uncontrolled
+editor without resetting the selection mid-word, `[data-composer-input]` staying findable for
+`focus-pane`.
+
+`EditorState.create` is DOM-free, so a state-level test could catch the whole class of "an extension
+is in a compartment *and* beside it" without a renderer. That may be the cheap half here, the way an
+exhaustive switch was the cheap half above.
 
 ## Sort the Agents list by its own timestamps
 
