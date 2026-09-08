@@ -72,6 +72,31 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   }, []);
 
   /**
+   * Hold the pin while the Composer changes height.
+   *
+   * The Composer floats over this scroller and pads it clear of itself with `--composer-inset`, so
+   * anything that changes the Composer's height changes this element's padding: the `/` menu opening,
+   * an image attached, the input growing a line, a Subagent strip appearing. None of those re-render
+   * the transcript, and the only other re-pin runs in a layout effect that fires on a *render* — so
+   * the padding grew underneath the content and nothing put the reader back at the bottom until the
+   * next unrelated tick. Against an animated menu that reads as the chat lagging behind it.
+   *
+   * A ResizeObserver on the scroller catches all of them at once, because padding is what changes
+   * and `contentRect` is the box inside it. Setting `scrollTop` changes no layout, so this cannot
+   * feed itself.
+   */
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  /**
    * A search changes the visible set wholesale, so the distance from the bottom jumps without the
    * reader touching anything. Going to the bottom is the only interpretation that is never wrong.
    */

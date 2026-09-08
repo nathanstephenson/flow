@@ -205,6 +205,23 @@ export type AgentEvent =
    * report what it cost — pi says only that it finished.
    */
   | { type: "compacted"; trigger: "auto" | "manual"; before: number; after?: number }
+  /**
+   * A compaction is in flight, or has stopped being.
+   *
+   * Separate from `compacted` because they answer different questions and arrive at different times.
+   * `compacted` is the record of one that landed, and it is a row a reader can scroll back to.
+   * This is a state that lasts while the backend summarises — which is a model call, and long enough
+   * that without it someone who asked for a compaction watches nothing happen and asks again.
+   *
+   * Not a row, then, and never rendered as one: it drives the chrome, the way `queue_changed` does.
+   * `active: false` arrives whatever the outcome, including one that failed or compacted nothing,
+   * because the alternative is a spinner nobody can stop.
+   *
+   * Each backend reports what it can see. pi announces its own compactions before they start, so it
+   * says so for automatic ones too; the Claude SDK reports only the boundary after the fact, so
+   * there it means "a human asked for this and it has not come back yet".
+   */
+  | { type: "compacting"; active: boolean }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "branch_changed"; branch: Branch }

@@ -257,15 +257,25 @@ export class PiSession implements BackendSession {
         return;
 
       /*
-       * pi reports compaction as a start/end pair, but only the end is translated: the Claude
-       * adapter has a single boundary message and nothing else, so emitting a start here would give
-       * one backend two transcript rows per compaction and the other one. `compaction_start` is
-       * left to fall through `default` for that reason, not by oversight.
+       * The start drives the chrome, never a transcript row — which is why it is translated now and
+       * was not before. One compaction is still one row in both backends, because that row is
+       * `compacted` and it comes from the end.
        *
-       * A compaction that aborted or is about to be retried did not happen yet, so it says nothing —
-       * the same rule `agent_end` applies to `willRetry` above.
+       * pi announces its own compactions before they begin, so this fires for automatic ones too.
+       * The Claude SDK reports only the boundary after the fact, so there the same state means "a
+       * human asked and it has not come back". Each says what it can see.
+       */
+      case "compaction_start":
+        this.emit({ type: "compacting", active: true });
+        return;
+
+      /*
+       * A compaction that aborted or is about to be retried did not happen yet, so it records
+       * nothing — the same rule `agent_end` applies to `willRetry` above. It still has to stop
+       * saying it is working, so the state is cleared before any of that is decided.
        */
       case "compaction_end":
+        this.emit({ type: "compacting", active: false });
         if (event.errorMessage) {
           this.emit({ type: "notice", level: "error", text: event.errorMessage });
         }

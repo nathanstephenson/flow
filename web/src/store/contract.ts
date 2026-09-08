@@ -50,6 +50,8 @@ export type Chrome = {
    * `lastSeq` note above describes. Anything wanting the Subagents reads the transcript surface.
    */
   activeSubagents: number;
+  /** Set while the backend is summarising the Conversation Context. A boolean, so it compares. */
+  compacting: boolean;
   /** Transport state, so the UI can say the Session Host has gone rather than appear idle. */
   link: LinkState;
 };

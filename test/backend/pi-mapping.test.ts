@@ -325,11 +325,35 @@ describe("pi compaction", () => {
     );
   });
 
-  // Two rows for one compaction is what translating both halves would give, and the Claude adapter
-  // has only a boundary to report. See the comment on `compaction_end` in the adapter.
-  it("ignores compaction_start, so one compaction is one row in both backends", () => {
+  /*
+   * The start says a compaction is *happening*; the end says one *happened*. Only the second is a
+   * transcript row, which is what keeps one compaction to one row in both backends — the Claude
+   * adapter has only a boundary to report.
+   */
+  it("announces a compaction as state, and records it as a row only when it ends", () => {
     stub.fire({ type: "compaction_start", reason: "threshold" } as unknown as AgentSessionEvent);
-    assert.deepEqual(events, []);
+
+    assert.deepEqual(events, [{ type: "compacting", active: true }]);
+    assert.deepEqual(compactions(), [], "starting is not a row");
+
+    ended({});
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["compacting", "compacting", "compacted"],
+    );
+  });
+
+  // Otherwise the meter pulses until the session is disposed.
+  it("stops saying it is working even when nothing was compacted", () => {
+    for (const outcome of [{ aborted: true }, { willRetry: true }, { errorMessage: "boom", result: undefined }]) {
+      events.length = 0;
+      ended(outcome);
+      assert.deepEqual(
+        events.filter((event) => event.type === "compacting"),
+        [{ type: "compacting", active: false }],
+      );
+      assert.deepEqual(compactions(), []);
+    }
   });
 });
 

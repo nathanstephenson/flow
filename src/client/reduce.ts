@@ -115,6 +115,13 @@ export type ViewState = {
    * the chrome. See `sameChrome` in web/src/store/agent-session-view.ts.
    */
   activeSubagents: number;
+  /**
+   * Set while the backend is summarising the Conversation Context.
+   *
+   * A boolean rather than a count: two compactions cannot overlap, because the host refuses a
+   * second one while a turn is in flight and a compaction is not a turn to queue behind.
+   */
+  compacting?: true;
   endedReason?: string;
   lastSeq: number;
 };
@@ -293,9 +300,14 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
       };
 
+    case "compacting":
+      // Absent rather than `false`, so Chrome's identity comparison sees the same value it saw
+      // before a compaction as after one, rather than a new object every time this arrives.
+      return event.active ? { ...state, compacting: true } : omitCompacting(state);
+
     case "compacted":
       return {
-        ...state,
+        ...omitCompacting(state),
         entries: [
           ...state.entries,
           {
@@ -342,6 +354,18 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "session_ended":
       return { ...state, status: "ended", endedReason: event.reason };
   }
+}
+
+/**
+ * `compacting` dropped, without leaving an explicit `undefined` behind for the spread to carry.
+ *
+ * `compacted` clears it as well as `compacting: false` does: a backend that reports the boundary but
+ * never says it stopped would otherwise leave the chrome saying so forever.
+ */
+function omitCompacting(state: ViewState): ViewState {
+  if (!state.compacting) return state;
+  const { compacting: _dropped, ...rest } = state;
+  return rest;
 }
 
 /**

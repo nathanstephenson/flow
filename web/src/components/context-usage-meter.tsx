@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils.ts";
  * rest; the numbers are one hover away, from the shared formatter so the TUI and this UI cannot
  * drift on the rounding again.
  */
-export function ContextUsageMeter({ usage }: { usage: Chrome["contextUsage"] }) {
+export function ContextUsageMeter({ usage, compacting }: { usage: Chrome["contextUsage"]; compacting: boolean }) {
   // Keyed off the formatter's "nothing honest to say" rather than re-testing the window here, so
   // there is one place that decides. No denominator means a bar would assert "nothing used yet",
   // and with the percentage text gone there is no honest text-only fallback left to show instead.
@@ -31,14 +31,22 @@ export function ContextUsageMeter({ usage }: { usage: Chrome["contextUsage"] }) 
          * The width has to stay an inline style: it is a runtime percentage, not a class.
          */}
         <span className="inline-block h-1.5 w-32 overflow-hidden rounded-full bg-muted" aria-hidden>
+          {/*
+           * A compaction pulses the bar it is about to move. Summarising is a model call away, so
+           * without this someone who asked for one watches an unchanged number and asks again — and
+           * the bar is where they are already looking, which no toast can claim.
+           */}
           <span
-            className={cn("block h-full", fraction > 0.9 ? "bg-destructive" : "bg-primary")}
-            style={{ width: `${Math.round(fraction * 100)}%` }}
+            className={cn(
+              "block h-full",
+              compacting ? "animate-pulse bg-primary" : fraction > 0.9 ? "bg-destructive" : "bg-primary",
+            )}
+            style={{ width: compacting ? "100%" : `${Math.round(fraction * 100)}%` }}
           />
         </span>
         {/* The bar is `aria-hidden` and its length was half of what said the value; the text that
             carried the other half is gone, so the reading survives here. */}
-        <span className="sr-only">{contextUsageLabel(usage)}</span>
+        <span className="sr-only">{compacting ? "Compacting…" : contextUsageLabel(usage)}</span>
       </TooltipTrigger>
       <TooltipContent>
         {/* A two-column grid so the values line up: Spent sits under Context, not beside it. */}

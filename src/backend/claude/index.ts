@@ -362,6 +362,9 @@ class ClaudeSession implements BackendSession {
   async compact(instructions?: string): Promise<void> {
     if (this.disposed) throw new Error("Backend Session disposed");
     this.compacting = true;
+    // Said before the CLI has been asked, because the whole point is that summarising takes a model
+    // call: someone who sees nothing for ten seconds asks again.
+    this.emit({ type: "compacting", active: true });
     this.inbox.push({
       type: "user",
       message: { role: "user", content: instructions ? `/compact ${instructions}` : "/compact" },
@@ -466,6 +469,7 @@ class ClaudeSession implements BackendSession {
         // A stream that has failed will never deliver the `result` that would clear this, and a
         // session left suppressing would silently drop every assistant message after it.
         this.compacting = false;
+        this.emit({ type: "compacting", active: false });
         this.emit({ type: "notice", level: "error", text: message(error) });
         this.endTurn("error");
       }
@@ -558,6 +562,9 @@ class ClaudeSession implements BackendSession {
         // the request, so this is the one point that cannot leave the session suppressing forever.
         const wasCompacting = this.compacting;
         this.compacting = false;
+        // Whatever it made of the request. A compaction that found nothing to do still has to stop
+        // saying it is working, or the meter pulses until the session is disposed.
+        if (wasCompacting) this.emit({ type: "compacting", active: false });
         // Read before the meter is asked for, so the two land on the client as one event.
         this.spend = addSpend(this.priorSpend, describeSpend(sdkMessage));
         // Worth asking even for a compaction, and especially then — occupancy has just fallen, and
