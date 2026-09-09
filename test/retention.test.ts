@@ -24,7 +24,7 @@ describe("settling and reaping", () => {
   let store: TranscriptStore;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-"));
+    root = mkdtempSync(join(tmpdir(), "flow-"));
     store = new TranscriptStore(root);
   });
 
@@ -190,7 +190,7 @@ describe("config", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-"));
+    root = mkdtempSync(join(tmpdir(), "flow-"));
   });
 
   afterEach(() => {

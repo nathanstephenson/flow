@@ -35,7 +35,7 @@ const program = ts.createProgram([entry], {
   target: ts.ScriptTarget.ES2023,
   skipLibCheck: true,
   noEmit: true,
-  baseUrl: "/workspace/GoodHarness",
+  baseUrl: "/workspace/Flow",
 });
 const checker = program.getTypeChecker();
 const source = program.getSourceFile(entry);

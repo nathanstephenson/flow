@@ -17,7 +17,7 @@ under another name is unresolved, and is a documentation question rather than a 
 Two things to settle before building anything:
 
 - **It breaks the glossary.** CONTEXT.md defines a Subagent as living wholly inside one Backend
-  Session. A GoodHarness-implemented one would live in a *second* one, so either the term widens or
+  Session. A Flow-implemented one would live in a *second* one, so either the term widens or
   pi's version needs its own name.
 - **It moves the agent loop into the daemon.** With Claude the CLI owns the subagent loop and we
   watch. Here we would own it, making retries, timeouts, cancellation and the child's failure modes

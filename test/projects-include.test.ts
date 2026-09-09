@@ -18,7 +18,7 @@ describe("the opted-in Projects", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-include-"));
+    root = mkdtempSync(join(tmpdir(), "flow-include-"));
     for (const path of ["work/api/.git", "work/backend/db/.git", "notes", "solo/.git"]) {
       mkdirSync(join(root, path), { recursive: true });
     }
@@ -74,7 +74,7 @@ describe("searching for a directory to opt in", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-dirsearch-"));
+    root = mkdtempSync(join(tmpdir(), "flow-dirsearch-"));
     for (const path of [
       "work/api/.git",
       "work/api/packages/api-server",

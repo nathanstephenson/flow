@@ -54,7 +54,7 @@ export type SessionMeta = {
 };
 
 export function defaultStateRoot(): string {
-  return process.env["GOODHARNESS_STATE_DIR"] ?? join(homedir(), ".goodharness");
+  return process.env["FLOW_STATE_DIR"] ?? join(homedir(), ".flow");
 }
 
 export class TranscriptStore {

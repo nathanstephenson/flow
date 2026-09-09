@@ -33,7 +33,7 @@ import { toast } from "@/components/ui/toaster.tsx";
  * resolved by web/src/presentation/bindings.ts like every other key. Upstream binds it with its own
  * `window` listener inside the component, which would have been a second keyboard listener this app
  * could neither document nor suppress while a dialog had the keyboard, so that listener is removed
- * (see the GOODHARNESS note in components/ui/sidebar.tsx).
+ * (see the FLOW note in components/ui/sidebar.tsx).
  *
  * Whether the rail is open is deliberately *not* remembered across reloads, though its width is:
  * reloading into an app with no visible navigation is a bad first frame, and hiding the rail is a

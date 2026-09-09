@@ -644,7 +644,7 @@ export class SessionHost {
      * Riding along with the next message costs nothing, arrives before the model acts, and is not
      * a `user_message` the human never sent — it is part of one they did.
      */
-    record.pendingBranchNote = `[GoodHarness] This working tree is now on branch ${switched.value.name}. Any files you read earlier may have changed, so re-read before relying on them.`;
+    record.pendingBranchNote = `[Flow] This working tree is now on branch ${switched.value.name}. Any files you read earlier may have changed, so re-read before relying on them.`;
     this.touch(record);
     return switched.value;
   }

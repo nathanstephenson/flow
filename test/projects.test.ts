@@ -18,7 +18,7 @@ describe("discovering Projects", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-projects-"));
+    root = mkdtempSync(join(tmpdir(), "flow-projects-"));
   });
 
   afterEach(() => {

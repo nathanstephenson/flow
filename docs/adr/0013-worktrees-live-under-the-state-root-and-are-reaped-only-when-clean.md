@@ -2,7 +2,7 @@
 
 An Agent Session can be started in a Worktree the Session Host cuts for it, at
 `<stateRoot>/worktrees/<repo>/<branch>`, and a reap removes that directory only when
-`git status --porcelain` comes back empty. This is the first thing in GoodHarness that runs git —
+`git status --porcelain` comes back empty. This is the first thing in Flow that runs git —
 before it, the only git knowledge in the tree was one `statSync` on `.git` telling the Candidate walk
 where to stop.
 
@@ -22,7 +22,7 @@ repository, `<root>/<repo>-<branch>`, and it was rejected on a rule this codebas
 worktree is recognised — which means every worktree placed under the Project Root would be discovered
 as a Candidate and offered for opting in. That is exactly the list-that-grows-into-noise ADR 0011 was
 written to prevent, and it would have needed a new exclusion rule in the walk to undo. Under the state
-root nothing has to change: `<stateRoot>` defaults to `~/.goodharness`, the walk skips dotted
+root nothing has to change: `<stateRoot>` defaults to `~/.flow`, the walk skips dotted
 directories, and a repository is a leaf, so a Worktree is invisible to discovery three times over.
 The cost is a working tree in a directory no human would have guessed, which is real, and is what
 `git worktree list` in the origin repository is for.
@@ -39,7 +39,7 @@ repository's name: the name is already in the Scope, and sending it too would be
 truth about where an Agent Session lives, able to disagree with the first.
 
 **Removed only when clean, which is a narrower rule than it first appears.** ADR 0006 is careful that
-reaping is "the only operation in GoodHarness that destroys a Presentation Transcript" and that a
+reaping is "the only operation in Flow that destroys a Presentation Transcript" and that a
 Settle stays reversible, "a Settle you regret in the morning is recoverable". Deleting a Worktree
 would be a second destructive act on that same one-day timer, from a sweep nobody is watching. What
 made a rule easy to write is that `git worktree remove` does not delete the branch ref or its
@@ -74,14 +74,14 @@ label of its own, which was clearer but spent a permanent reading on something t
 a Scope is fixed for an Agent Session's whole life, so there is no version of it a reader could act
 on. The cost of demoting it is worth stating plainly, because it undoes something the label was
 introduced to fix: **a Worktree is no longer distinguishable at a glance.** It is legible on hover,
-and inferable from a branch named `goodharness/…`, and that is all. If glanceability turns out to
+and inferable from a branch named `flow/…`, and that is all. If glanceability turns out to
 matter, the cheap fix is a different icon for the two cases rather than the label's return.
 
 Nothing here may become a control for the checkout. Anyone tempted is proposing to rebind Scope,
 which the first section of this ADR rejects. The wording lives in `src/client/scope-kind.ts` rather
 than in either client, for the reason `context-usage.ts` is shared: it is one phrase two front-ends
 must say identically. It is "Project checkout" and not "Local checkout" because local mode is the
-only mode GoodHarness has, so "local" would contrast with nothing today and mislead on the day it
+only mode Flow has, so "local" would contrast with nothing today and mislead on the day it
 does — and not "main checkout", which collides with a branch called `main` in the very tooltip that
 now has to name both.
 

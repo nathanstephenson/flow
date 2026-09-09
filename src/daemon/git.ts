@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import type { Branch } from "../protocol/git.ts";
 
 /**
- * The one place GoodHarness runs git.
+ * The one place Flow runs git.
  *
  * Every invocation goes through `run`, so the environment, the timeout and the shape of a failure
  * are decided once. Nothing here throws: git is a foreign program, and whether it agreed is data
@@ -24,7 +24,7 @@ import type { Branch } from "../protocol/git.ts";
  *
  * git runs as the reader's own shell would run it, minus the prompt. No `--no-verify`, no
  * `GIT_CONFIG_NOSYSTEM`: a reader whose hook installs dependencies wants it to run, and a switch
- * that behaves differently under GoodHarness than under their shell is the bug this would be blamed
+ * that behaves differently under Flow than under their shell is the bug this would be blamed
  * for.
  */
 
@@ -46,7 +46,7 @@ export const MAX_BRANCHES = 500;
 /** How many names a derived branch or directory will try before giving up. */
 const MAX_CANDIDATES = 50;
 
-const NAMESPACE = "goodharness/";
+const NAMESPACE = "flow/";
 
 export type GitFailure = {
   /** What was attempted, in git's own terms — `switch feature/login`. Not the argv, which carries -C. */
@@ -203,9 +203,9 @@ export async function switchBranch(scope: string, branch: string): Promise<GitRe
  * and uniqueness is settled by probing for a free one rather than by an escaping scheme that would
  * make the path unreadable to keep a round trip nobody performs.
  *
- * The leading `goodharness/` of a derived name is dropped: that namespace exists to say who made
+ * The leading `flow/` of a derived name is dropped: that namespace exists to say who made
  * the branch when read inside the repository, and inside `<stateRoot>/worktrees` it is already said
- * by where the directory is. Keeping it would put "goodharness-" in front of every label.
+ * by where the directory is. Keeping it would put "flow-" in front of every label.
  */
 export function flattenBranch(branch: string): string {
   const named = branch.startsWith(NAMESPACE) ? branch.slice(NAMESPACE.length) : branch;
@@ -220,14 +220,14 @@ export function flattenBranch(branch: string): string {
 /**
  * The branch a new worktree gets when nobody named one.
  *
- * `goodharness/<base-leaf>-<date>`: the namespace so `git branch` in the reader's own terminal says
+ * `flow/<base-leaf>-<date>`: the namespace so `git branch` in the reader's own terminal says
  * who made it — a branch ref always survives a reap, so these accumulate and have to be
  * identifiable six months later — the base branch's own leaf so two are distinguishable at a
  * glance, and the date because that is the fact someone actually uses to decide whether they still
  * care.
  *
- * **Exactly two segments, always.** Git refs are files, so `refs/heads/goodharness/main` cannot
- * exist while `refs/heads/goodharness/main/2` does. Any scheme with a variable number of segments
+ * **Exactly two segments, always.** Git refs are files, so `refs/heads/flow/main` cannot
+ * exist while `refs/heads/flow/main/2` does. Any scheme with a variable number of segments
  * is a trap that fires on the second worktree of the day, so the counter goes inside the last
  * segment and never adds one.
  */
@@ -259,7 +259,7 @@ export type WorktreePlan = { branch: string; path: string };
  * The two are probed **independently**, because they collide for unrelated reasons: the directory
  * sits under the repository's *basename*, so `~/a/api` and `~/b/api` share one, and coupling the
  * probes would bump a branch name because an unrelated repository had a name clash — leaving a
- * branch called `goodharness/main-2026-09-04-2` for a reason nobody could reconstruct.
+ * branch called `flow/main-2026-09-04-2` for a reason nobody could reconstruct.
  *
  * A name the reader supplied is never bumped. Someone who typed a name and got a different one has
  * been ignored, so an existing ref is a failure carrying git's own conclusion; bumping exists only

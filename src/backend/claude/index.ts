@@ -62,7 +62,7 @@ export type ClaudeBackendOptions = {
  * look in — so there, Claude Code is a documented prerequisite and we resolve it from PATH.
  */
 export function resolveClaudeExecutable(): string | undefined {
-  const override = process.env["GOODHARNESS_CLAUDE_PATH"];
+  const override = process.env["FLOW_CLAUDE_PATH"];
   if (override) return override;
   if (!isSingleExecutable()) return undefined;
 
@@ -72,8 +72,8 @@ export function resolveClaudeExecutable(): string | undefined {
   const path = found.stdout?.split("\n")[0]?.trim();
   if (!path) {
     throw new Error(
-      "Claude Code was not found on PATH. A GoodHarness binary needs it installed separately: " +
-        "npm i -g @anthropic-ai/claude-code (or set GOODHARNESS_CLAUDE_PATH).",
+      "Claude Code was not found on PATH. A Flow binary needs it installed separately: " +
+        "npm i -g @anthropic-ai/claude-code (or set FLOW_CLAUDE_PATH).",
     );
   }
   return path;
@@ -83,7 +83,7 @@ export function resolveClaudeExecutable(): string | undefined {
  * Work out what to actually execute when the SDK asks for the CLI.
  *
  * A JS install is run as `<node> <cli-path> ...`, using process.execPath as the interpreter. Inside
- * a single executable, process.execPath is *this binary*, so that spawn re-invokes GoodHarness with
+ * a single executable, process.execPath is *this binary*, so that spawn re-invokes Flow with
  * the CLI's arguments, argument parsing rejects them, and the exit status surfaces as "Claude Code
  * process exited with code 1". Executing the CLI path directly sidesteps the interpreter entirely.
  *
@@ -625,7 +625,7 @@ class ClaudeSession implements BackendSession {
         return;
 
       case "assistant": {
-        // What the CLI says about a command it ran itself, said as GoodHarness rather than as the
+        // What the CLI says about a command it ran itself, said as Flow rather than as the
         // model. On a compaction that landed there is a `compacted` marker beside this; on one that
         // did not — "Not enough messages to compact." — this is the only account of it.
         if (this.compacting) {
@@ -735,7 +735,7 @@ class ClaudeSession implements BackendSession {
    * request there would stop us reading the stream until the CLI answered and one hung request
    * would stall the Agent Session. The meter is chrome, so it may land just after `turn_ended`.
    *
-   * Silent on rejection rather than emitting a `notice`. Only GOODHARNESS_CLAUDE_PATH and the SEA
+   * Silent on rejection rather than emitting a `notice`. Only FLOW_CLAUDE_PATH and the SEA
    * build's PATH lookup can reach a CLI the SDK did not ship, and `getContextUsage` is a required
    * member of `Query` — so an older CLI rejects at runtime with no type warning, and a notice would
    * repeat every turn to say the meter has nothing to show.

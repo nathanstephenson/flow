@@ -7,7 +7,7 @@ under the tool call that spawned it is a rendering concern, done by grouping the
 paint time.
 
 **A Subagent is neither kind of session, which is why it is neither word.** CONTEXT.md reserves
-Agent Session for the durable thing GoodHarness owns and Backend Session for the SDK's ephemeral one.
+Agent Session for the durable thing Flow owns and Backend Session for the SDK's ephemeral one.
 A subagent is a third thing: it owns no Presentation Transcript, it is never Revived, and it lives
 wholly inside one Backend Session. (This ADR also said it dies with the turn that spawned it, which
 ADR 0016 repealed for a backgrounded one — nothing else here rests on it.) Calling it a session would

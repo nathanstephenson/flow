@@ -23,10 +23,10 @@ const result = await build({
   // Bundled dependencies call createRequire(import.meta.url), which esbuild lowers to undefined in
   // a CommonJS build. Point it at a real file URL for this bundle instead.
   banner: {
-    js: "const __goodharnessMetaUrl = require('node:url').pathToFileURL(__filename).href;",
+    js: "const __flowMetaUrl = require('node:url').pathToFileURL(__filename).href;",
   },
-  define: { "import.meta.url": "__goodharnessMetaUrl" },
-  outfile: join(out, "goodharness.cjs"),
+  define: { "import.meta.url": "__flowMetaUrl" },
+  outfile: join(out, "flow.cjs"),
   // pi pulls in optional native and wasm packages that cannot be bundled. They are only reachable
   // through the pi adapter, which is loaded lazily, so the binary works without them.
   //
@@ -51,12 +51,12 @@ console.log(`bundle: ${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 writeFileSync(
   join(out, "sea-config.json"),
-  JSON.stringify({ main: join(out, "goodharness.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true }, null, 2),
+  JSON.stringify({ main: join(out, "flow.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true }, null, 2),
 );
 
 execFileSync(process.execPath, ["--experimental-sea-config", join(out, "sea-config.json")], { stdio: "inherit" });
 
-const binary = join(out, "goodharness");
+const binary = join(out, "flow");
 copyFileSync(process.execPath, binary);
 
 // macOS refuses to run a binary whose code signature no longer matches its contents, and injection

@@ -218,7 +218,7 @@ export type AgentEvent =
   /**
    * `producer` on these five is what attributes a Subagent's work to it (ADR 0015). Absent means
    * the Agent Session's own model. Deliberately not on `turn_started`/`turn_ended` — a Subagent is
-   * not a turn and does not end one — nor on `notice`, which is GoodHarness talking, not a model.
+   * not a turn and does not end one — nor on `notice`, which is Flow talking, not a model.
    */
   | { type: "message"; id: string; text: string; final: boolean; producer?: Producer }
   | { type: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
@@ -275,7 +275,7 @@ export type AgentEvent =
    * The Conversation Context was compacted — the backend replaced part of what the model can see
    * with a summary of it.
    *
-   * Not host-owned: compaction is the backend's, and GoodHarness only reports it (ADR 0001 —
+   * Not host-owned: compaction is the backend's, and Flow only reports it (ADR 0001 —
    * `Conversation Context` is "compacted and owned by the backend"). Nothing here touches the
    * Presentation Transcript, which is why this is the only trace of it a reader ever gets. Until
    * this event existed the whole thing happened invisibly, and a session's `used` would simply fall

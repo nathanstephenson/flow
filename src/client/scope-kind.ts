@@ -5,7 +5,7 @@
  * both of them have to say identically, and the last time wording like this lived in two places the
  * two places drifted.
  *
- * **Not "Local checkout".** That phrase contrasts with a remote or hosted one, and GoodHarness has
+ * **Not "Local checkout".** That phrase contrasts with a remote or hosted one, and Flow has
  * no such thing — local mode is the only mode there is (README), so "Local" would distinguish
  * nothing today and would be actively wrong on the day it does. The contrast that is real is
  * between the Project's own checkout and a Worktree cut from it, so that is the one named.

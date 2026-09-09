@@ -20,8 +20,8 @@ describe("branches", () => {
   let backend: FakeBackend;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-state-"));
-    work = mkdtempSync(join(tmpdir(), "goodharness-work-"));
+    root = mkdtempSync(join(tmpdir(), "flow-state-"));
+    work = mkdtempSync(join(tmpdir(), "flow-work-"));
     store = new TranscriptStore(root);
     backend = new FakeBackend();
     host = new SessionHost({ store });

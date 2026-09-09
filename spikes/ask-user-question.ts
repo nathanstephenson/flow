@@ -1,5 +1,5 @@
 /**
- * Manual probe: find out whether GoodHarness can serve the SDK's `AskUserQuestion` tool at all.
+ * Manual probe: find out whether Flow can serve the SDK's `AskUserQuestion` tool at all.
  *
  * The Claude adapter denies every tool outside its allowlist, so a model that asks its human a
  * question today is told the tool is unavailable. Serving one means holding `canUseTool` open until

@@ -34,7 +34,7 @@ describe("the Settings on disk", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-settings-"));
+    root = mkdtempSync(join(tmpdir(), "flow-settings-"));
   });
 
   afterEach(() => {
@@ -203,7 +203,7 @@ describe("the Settings over the wire", () => {
   let config: ConfigStore;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-settings-http-"));
+    root = mkdtempSync(join(tmpdir(), "flow-settings-http-"));
     token = readOrCreateToken(root);
     config = new ConfigStore(root);
     running = await serve({ host: new SessionHost(), token, config });
@@ -263,7 +263,7 @@ describe("the Settings over the wire", () => {
    * it in would let a GET report something the file does not hold (ADR 0009).
    */
   it("keeps the opted-in Projects and the candidates apart", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "goodharness-settings-tree-"));
+    const workspace = mkdtempSync(join(tmpdir(), "flow-settings-tree-"));
     mkdirSync(join(workspace, "work/repo-a/.git"), { recursive: true });
     mkdirSync(join(workspace, "work/repo-b/.git"), { recursive: true });
     try {
@@ -298,7 +298,7 @@ describe("the Settings over the wire", () => {
   });
 
   it("searches for a directory to opt in, and says which search it ran", async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "goodharness-settings-search-"));
+    const workspace = mkdtempSync(join(tmpdir(), "flow-settings-search-"));
     mkdirSync(join(workspace, "mono/.git"), { recursive: true });
     mkdirSync(join(workspace, "mono/packages/api"), { recursive: true });
     try {
@@ -358,7 +358,7 @@ describe("a retention change reaches a running host", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-settings-reap-"));
+    root = mkdtempSync(join(tmpdir(), "flow-settings-reap-"));
   });
 
   afterEach(() => {

@@ -114,7 +114,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
   /**
    * Open the branch list, having asked for it first.
    *
-   * Asked at the moment it is opened rather than held, because it changes outside GoodHarness — the
+   * Asked at the moment it is opened rather than held, because it changes outside Flow — the
    * same reason `/api/branches` is a query. A Scope that is not a repository opens nothing and says
    * so, which is this client's version of hiding the control.
    */

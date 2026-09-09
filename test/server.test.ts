@@ -25,7 +25,7 @@ describe("Session Host transport", () => {
   let token: string;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-http-"));
+    root = mkdtempSync(join(tmpdir(), "flow-http-"));
     token = readOrCreateToken(root);
     backend = new FakeBackend();
     host = new SessionHost();
@@ -82,7 +82,7 @@ describe("Session Host transport", () => {
     // Not a 404: the directory exists, and reporting the state distinguishes "not a repository"
     // from a typo better than a status code would.
     it("answers 200 for a directory that is not a repository", async () => {
-      const plain = mkdtempSync(join(tmpdir(), "goodharness-plain-"));
+      const plain = mkdtempSync(join(tmpdir(), "flow-plain-"));
       const response = await get(`/api/branches?scope=${encodeURIComponent(plain)}`);
 
       assert.equal(response.status, 200);
@@ -159,7 +159,7 @@ describe("Session Host transport", () => {
 
   it("accepts the cookie the handoff set", async () => {
     const response = await fetch(`${running.url}/api/sessions`, {
-      headers: { cookie: `goodharness=${token}` },
+      headers: { cookie: `flow=${token}` },
     });
     assert.equal(response.status, 200);
   });
@@ -304,7 +304,7 @@ describe("attachments over the wire", () => {
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/gFj0X3TAAAAAElFTkSuQmCC";
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-attach-"));
+    root = mkdtempSync(join(tmpdir(), "flow-attach-"));
     token = readOrCreateToken(root);
     store = new TranscriptStore(root);
     const host = new SessionHost({ store });

@@ -25,8 +25,8 @@ describe("worktrees", () => {
   let store: TranscriptStore;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-state-"));
-    work = mkdtempSync(join(tmpdir(), "goodharness-work-"));
+    root = mkdtempSync(join(tmpdir(), "flow-state-"));
+    work = mkdtempSync(join(tmpdir(), "flow-work-"));
     store = new TranscriptStore(root);
   });
 
@@ -64,7 +64,7 @@ describe("worktrees", () => {
 
     const summary = host.list().find((entry) => entry.id === id);
     assert.ok(summary?.branch);
-    assert.match(summary.branch.name, /^goodharness\/main-\d{4}-\d{2}-\d{2}$/);
+    assert.match(summary.branch.name, /^flow\/main-\d{4}-\d{2}-\d{2}$/);
     // The base branch is cut from, never checked out: the repository is still on main.
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "main");
   });
@@ -78,7 +78,7 @@ describe("worktrees", () => {
     assert.ok(meta?.worktree);
     assert.equal(meta.worktree.repo, repo);
     assert.equal(meta.worktree.path, meta.scope);
-    assert.match(meta.worktree.branch, /^goodharness\/main-/);
+    assert.match(meta.worktree.branch, /^flow\/main-/);
 
     // The flag has to survive a bounce, or the daemon that reaps this session is not the one that
     // knows it owns a directory.

@@ -1,12 +1,12 @@
-# GoodHarness
+# Flow
 
-GoodHarness lets an engineer run and watch coding-agent sessions from a terminal or a browser, over
+Flow lets an engineer run and watch coding-agent sessions from a terminal or a browser, over
 more than one agent SDK, without the two front-ends drifting apart.
 
 ## Language
 
 **Agent Session**:
-The durable unit of work GoodHarness owns. Bound to a Scope, owns a Presentation Transcript, and
+The durable unit of work Flow owns. Bound to a Scope, owns a Presentation Transcript, and
 survives a daemon restart as Dormant.
 _Avoid_: session, run, job
 
@@ -38,7 +38,7 @@ The append-only, sequence-numbered record of what a human saw. Never rewritten, 
 _Avoid_: history, log, messages
 
 **Conversation Context**:
-What the model can currently see. Compacted and owned by the backend, not by GoodHarness.
+What the model can currently see. Compacted and owned by the backend, not by Flow.
 _Avoid_: history, transcript, memory
 
 **Attachment**:
@@ -47,10 +47,10 @@ Conversation Context. Images are the only kind carried today. Addressed under th
 was sent to, because it has no life apart from the transcript naming it: it is Reaped with that
 transcript and is never reachable without it.
 _Avoid_: upload, file, blob, paste, and above all **image** — a markdown image in model output is
-already a different thing, and the one kind GoodHarness refuses to fetch (ADR 0012).
+already a different thing, and the one kind Flow refuses to fetch (ADR 0012).
 
 **Command**:
-Something a human triggers by name from the composer and **GoodHarness itself performs** — compacting
+Something a human triggers by name from the composer and **Flow itself performs** — compacting
 the Conversation Context today. Never reaches a model and is the whole of the message it appears in,
 so it enters no Presentation Transcript as a user turn. It does **occupy the Agent Session** while it
 runs, and shows as a turn: a Command may spend money and hold the backend for minutes, and the
@@ -139,12 +139,12 @@ Scope one confuses a binding with a candidate for it.
 **Project**:
 A directory its owner has opted into starting Agent Sessions from. A *candidate* Scope, not a Scope:
 it exists before any Agent Session, outlives every one bound to it, and may have several at once.
-Opted into rather than merely found — a repository GoodHarness can see is a Candidate until it is
+Opted into rather than merely found — a repository Flow can see is a Candidate until it is
 listed — and it need not be a repository at all, because someone chose it deliberately.
 _Avoid_: scope, workspace, folder, repo
 
 **Candidate**:
-A repository GoodHarness found beneath the Project Root that is not a Project yet. Offered only so
+A repository Flow found beneath the Project Root that is not a Project yet. Offered only so
 that opting in is a click rather than a typed path. Discovered, never configured, and never offered
 as a Scope.
 _Avoid_: project, suggestion, available project
@@ -158,7 +158,7 @@ _Avoid_: checkout, copy, clone, workspace — and note it is a *kind of* Scope, 
 one, so an Agent Session bound to a Worktree is bound for its whole life like any other.
 
 **Project Root**:
-The single directory Candidates are looked for beneath, and the one GoodHarness reports itself as
+The single directory Candidates are looked for beneath, and the one Flow reports itself as
 open on. Configured, never discovered. It bounds what is suggested, not what a Project may be: a
 Project outside it is named by its own path.
 _Avoid_: workspace, workspace root, home, cwd

@@ -113,7 +113,7 @@ async function handle(
       return;
     }
     response.writeHead(302, {
-      "set-cookie": `goodharness=${presented}; HttpOnly; SameSite=Strict; Path=/`,
+      "set-cookie": `flow=${presented}; HttpOnly; SameSite=Strict; Path=/`,
       // Relative on purpose, and load-bearing when the handoff is taken through the Vite dev
       // server's proxy: an absolute Location would bounce the browser back to the Session Host's own
       // origin, stranding the cookie there while the app it has to authenticate sits on the other.
@@ -202,7 +202,7 @@ async function handle(
    * `GET /api/branches?scope=…` — the branches a Scope could be switched to.
    *
    * Its own endpoint rather than more of `/api/config`, and a query rather than state, for the
-   * reason `/api/directories` is (ADR 0011): the answer changes outside GoodHarness — a `git
+   * reason `/api/directories` is (ADR 0011): the answer changes outside Flow — a `git
    * branch` in a terminal, a `git fetch` — so there is nothing worth folding into the document
    * every client polls, and a cache would need a filesystem watcher in order to be more often
    * wrong.
@@ -626,7 +626,7 @@ function presentedToken(request: IncomingMessage): string | undefined {
   if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
 
   const cookie = request.headers.cookie;
-  const match = cookie ? /(?:^|;\s*)goodharness=([^;]+)/.exec(cookie) : null;
+  const match = cookie ? /(?:^|;\s*)flow=([^;]+)/.exec(cookie) : null;
   return match?.[1];
 }
 
