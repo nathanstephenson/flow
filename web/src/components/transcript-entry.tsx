@@ -325,7 +325,7 @@ const TOOL_TONE: Record<Of<"tool">["status"], string> = {
   error: "text-destructive",
 };
 
-function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
+export function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
   return (
     <span
       aria-hidden

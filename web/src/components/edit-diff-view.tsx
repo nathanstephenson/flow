@@ -55,11 +55,16 @@ function DiffLine({
 }) {
   // Two static class strings rather than an inline style, so Tailwind's scanner sees both and the
   // colours stay tokens. `kind` is known at render time, so nothing here is assembled dynamically.
+  //
+  // Added was `--chart-2` until it was looked at beside its own removed block: rhea's chart tokens
+  // are five zero-chroma greys, so "added" was the same grey as the muted text around it and a diff
+  // read as one red thing followed by some paragraph. Red and green are what a diff means everywhere
+  // else, and this is the one screen a reader arrives at with that expectation already formed.
   return (
     <div
       className={cn(
         "grid grid-cols-[1.25rem_minmax(0,1fr)] font-mono text-xs whitespace-pre",
-        kind === "removed" ? "bg-destructive/10 text-destructive" : "bg-chart-2/10 text-chart-2",
+        kind === "removed" ? "bg-destructive/10 text-destructive" : "bg-diff-added/10 text-diff-added",
       )}
     >
       <span className="pl-2 select-none" aria-hidden>

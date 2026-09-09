@@ -2,10 +2,12 @@ import { ArrowDown } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
+import { toolChains } from "@client/tool-chains.ts";
 import { isPinned } from "@/presentation/stick-to-bottom.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
+import { ToolChain } from "@/components/tool-chain.tsx";
 import { ownKeys } from "@/presentation/subagent-rows.ts";
 
 /**
@@ -34,8 +36,18 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
 
   const [showAll, setShowAll] = useState(false);
-  const windowed = showAll || shown.length <= TAIL_WINDOW ? shown : shown.slice(-TAIL_WINDOW);
+  // Memoised so the slice keeps its identity across an unrelated re-render: a Tool Chain subscribes
+  // to the transcript through its own key array, and a fresh array every frame would resubscribe it
+  // every frame.
+  const windowed = useMemo(
+    () => (showAll || shown.length <= TAIL_WINDOW ? shown : shown.slice(-TAIL_WINDOW)),
+    [showAll, shown],
+  );
   const earlier = shown.length - windowed.length;
+
+  // After the window and after the filter, never before: a Tool Chain says "these rows are adjacent",
+  // and the only list it can say that about honestly is the one the reader is looking at.
+  const segments = useMemo(() => toolChains(windowed), [windowed]);
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
@@ -142,9 +154,17 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
             </button>
           ) : null}
 
-          {windowed.map((key) => (
-            <TranscriptRow key={key} view={view} entryKey={key} query={query} />
-          ))}
+          {segments.map((segment) =>
+            segment.kind === "entry" ? (
+              <TranscriptRow key={segment.key} view={view} entryKey={segment.key} query={query} />
+            ) : (
+              <ToolChain key={segment.keys[0]} view={view} keys={segment.keys}>
+                {segment.keys.map((key) => (
+                  <TranscriptRow key={key} view={view} entryKey={key} query={query} />
+                ))}
+              </ToolChain>
+            ),
+          )}
 
           {shown.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">
