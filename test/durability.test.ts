@@ -96,6 +96,45 @@ describe("durability and revive", () => {
     assert.equal(state.entries.filter((entry) => entry.kind === "subagent").length, 1);
   });
 
+  it("closes an Enquiry torn by an unclean shutdown, and unlocks the composer with it", async () => {
+    /*
+     * The daemon-restart case, and the one the adapter cannot cover: nothing was in memory to
+     * abandon the permission callback, and the process holding it is gone. All that is left is to
+     * record that nobody will ever answer it — and, crucially, that the composer is free again. A
+     * transcript replayed with a trailing `asked` would lock every client that loaded it.
+     */
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    first.backend.latest.ask([
+      { header: "Library", question: "Which library?", multiSelect: false, options: [{ label: "zod" }] },
+    ]);
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const enquiry = state.entries.find((entry) => entry.kind === "enquiry");
+
+    assert.equal(enquiry?.kind === "enquiry" && enquiry.status, "aborted");
+    assert.equal(state.entries.filter((entry) => entry.kind === "enquiry").length, 1);
+    assert.equal(state.asking, undefined, "a replayed transcript must not lock the composer");
+  });
+
+  it("leaves an Enquiry answered before the crash alone", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    const askId = first.backend.latest.ask([
+      { header: "Library", question: "Which library?", multiSelect: false, options: [{ label: "zod" }] },
+    ]);
+    await first.host.answerEnquiry(id, askId, [["zod"]]);
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const enquiry = state.entries.find((entry) => entry.kind === "enquiry");
+
+    assert.equal(enquiry?.kind === "enquiry" && enquiry.status, "answered", "no second terminal state");
+  });
+
   it("leaves a Subagent that finished before the crash alone", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

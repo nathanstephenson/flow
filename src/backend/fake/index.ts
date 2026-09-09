@@ -5,6 +5,7 @@ import type {
   BackendEvent,
   Capabilities,
   EffortLevel,
+  Question,
   Skill,
   Spend,
   SubagentState,
@@ -26,6 +27,10 @@ const FAKE_CAPABILITIES: Capabilities = {
   compaction: false,
   fork: false,
   subagents: true,
+  // True by default, like `subagents` and unlike `compaction`: an Enquiry is something almost every
+  // host and reducer test needs to be able to drive, and the cannot-ask case stays reachable through
+  // the overrides for the handful that assert on a backend which has no channel to ask through.
+  enquiries: true,
 };
 
 /**
@@ -46,6 +51,10 @@ export class FakeSession implements BackendSession {
   readonly priorSpend: Spend | undefined;
   /** Every Subagent begun in this session, in the style of `prompts`. */
   readonly subagents: FakeSubagent[] = [];
+  /** Every Enquiry asked in this session, open or not, in the style of `prompts`. */
+  readonly enquiries: Array<{ askId: string; questions: Question[] }> = [];
+  /** What was answered, so a test can assert what reached the backend rather than what it emitted. */
+  readonly answered: Array<{ askId: string; answers: string[][] }> = [];
   modelId: string;
   effort: EffortLevel | undefined;
   disposed = false;
@@ -62,6 +71,13 @@ export class FakeSession implements BackendSession {
   compact?: (instructions?: string) => Promise<void>;
 
   /**
+   * Present only when this session declares it can ask, for the reason `compact` is: the conformance
+   * contract asserts the flag and the method say the same thing, or a client that hides its control
+   * on the flag will call a method that is not there.
+   */
+  answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
+
+  /**
    * Leaves a requested compaction running — the turn opens and never closes.
    *
    * Real compactions take minutes, and everything that goes wrong around one goes wrong *during*
@@ -72,6 +88,17 @@ export class FakeSession implements BackendSession {
 
   constructor(options: BackendCreateOptions, overrides: FakeCapabilityOverrides = {}) {
     this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
+    if (this.capabilities.enquiries) {
+      this.answerEnquiry = async (askId: string, answers: string[][]) => {
+        const open = this.enquiries.find((enquiry) => enquiry.askId === askId);
+        // Answered twice is an ordinary race, not a fault — the host turns the false into a refusal.
+        if (!open || this.answered.some((seen) => seen.askId === askId)) return false;
+        this.answered.push({ askId, answers });
+        this.emit({ type: "enquiry", askId, questions: open.questions, state: "answered", answers });
+        this.emit({ type: "tool_ended", callId: askId, result: "The user answered.", isError: false });
+        return true;
+      };
+    }
     if (this.capabilities.compaction) {
       // Opens and closes a turn, because a compaction is one: it spends money and holds the backend
       // while it runs, and the Steering Queue only orders messages correctly if it is told so.
@@ -178,6 +205,25 @@ export class FakeSession implements BackendSession {
    * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
    * torn-Subagent fixture, and the Session Host is what has to cope with it.
    */
+  /**
+   * Ask the human something, as a real backend would: the tool call that asks, and the Enquiry
+   * snapshot sharing its id.
+   *
+   * Both, because both is what a real adapter produces — an Enquiry whose tool call never appeared
+   * is a shape nothing downstream should have to cope with, and the front-ends suppress the tool row
+   * by pairing it with this one. Returns the `askId` so a test can answer it.
+   *
+   * Deliberately, `completeTurn()` does **not** close an open Enquiry. Leaving one open is the torn
+   * fixture the Session Host has to cope with, and it is the contract `beginSubagent` already sets.
+   */
+  ask(questions: Question[]): string {
+    const askId = randomUUID();
+    this.enquiries.push({ askId, questions });
+    this.emit({ type: "tool_started", callId: askId, name: "AskUserQuestion", input: { questions } });
+    this.emit({ type: "enquiry", askId, questions, state: "asked" });
+    return askId;
+  }
+
   beginSubagent(name: string, description?: string): FakeSubagent {
     const subagentId = randomUUID();
     const subagent = new FakeSubagent(subagentId, name, description, this.emit);
@@ -276,7 +322,7 @@ export class FakeSubagent {
  * Off by default so the existing suite keeps asserting against a backend that serves neither, which
  * is the case clients must hide a control for. A test that wants the other side asks for it.
  */
-export type FakeCapabilityOverrides = Partial<Pick<Capabilities, "compaction" | "fork">>;
+export type FakeCapabilityOverrides = Partial<Pick<Capabilities, "compaction" | "fork" | "enquiries">>;
 
 export class FakeBackend implements AgentBackend {
   readonly name = "fake";

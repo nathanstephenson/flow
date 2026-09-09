@@ -103,7 +103,7 @@ describe("modelInForce", () => {
 
   it("keeps the Effort levels that announcing a resolved id used to throw away", () => {
     // The symptom, asserted through the shared rule the pickers actually call.
-    const view = (id: string) => ({ ...initialState(), capabilities: { providers: ["anthropic"], models: listed, compaction: true, fork: true, subagents: false }, model: { id } });
+    const view = (id: string) => ({ ...initialState(), capabilities: { providers: ["anthropic"], models: listed, compaction: true, fork: true, subagents: false, enquiries: false }, model: { id } });
 
     assert.deepEqual(effortChoices(view("claude-opus-5")), [], "resolved id has no levels — the old behaviour");
     assert.deepEqual(effortChoices(view(modelInForce("claude-opus-5", aliases, listed) ?? "")), ["low", "medium", "high"]);

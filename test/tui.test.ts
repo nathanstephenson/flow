@@ -30,6 +30,7 @@ const CAPABILITIES: Capabilities = {
   compaction: true,
   fork: false,
   subagents: false,
+  enquiries: true,
 };
 
 function baseUi(overrides: Partial<UiState> = {}): UiState {
@@ -511,3 +512,119 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+describe("the TUI's Enquiry picker", () => {
+  const QUESTIONS = [
+    {
+      header: "Library",
+      question: "Which library should the rewrite use?",
+      multiSelect: false,
+      options: [{ label: "zod", description: "big" }, { label: "valibot", description: "small" }],
+    },
+    {
+      header: "Features",
+      question: "Which features?",
+      multiSelect: true,
+      options: [{ label: "Caching" }, { label: "Retries" }],
+    },
+  ];
+
+  const asking = (input = "", index = 0, cursor = 0, chosen: string[][] = [[], []]) =>
+    baseUi({
+      input,
+      view: {
+        ...baseUi().view,
+        asking: { askId: "a1", questions: QUESTIONS },
+      },
+      answering: { index, cursor, chosen },
+    });
+
+  it("draws the Question, its Options and a visible number column", () => {
+    const frame = renderFrame(asking(), { columns: 70, rows: 16 }).join("\n");
+
+    assert.match(frame, /Which library should the rewrite use\?/);
+    // The numbers are the one thing an arrow-driven list cannot do, and are what "numbered picker"
+    // means: a row can be addressed without being travelled to.
+    assert.match(frame, /> 1 zod/);
+    assert.match(frame, /  2 valibot/);
+    assert.match(frame, /\(1 of 2\)/);
+  });
+
+  it("shows checkboxes and the cursor only where they mean something", () => {
+    const multi = renderFrame(asking("", 1, 1, [[], ["Caching"]]), { columns: 70, rows: 16 }).join("\n");
+
+    assert.match(multi, /\(choose any\)/);
+    assert.match(multi, /1 \[x\] Caching/);
+    assert.match(multi, /> 2 \[ \] Retries/);
+    // A single-select always has exactly one answer, so an empty box beside every row would offer a
+    // choice that is not on offer.
+    assert.doesNotMatch(renderFrame(asking(), { columns: 70, rows: 16 }).join("\n"), /\[ \]/);
+  });
+
+  it("gives the row under the cursor its whole description, and marks the others as clipped", () => {
+    /*
+     * The defect this closes: an Option's description is the deciding information, and the model
+     * writes it long with the trade-off at the end — so clipping every row to a terminal's width
+     * reliably cut off the half that decides it, silently and mid-word.
+     */
+    const long = [
+      {
+        header: "Library",
+        question: "Which library?",
+        multiSelect: false,
+        options: [
+          { label: "zod", description: "Most widely adopted TypeScript schema library. Large ecosystem, great inference, heavier bundle." },
+          { label: "valibot", description: "Modular, tree-shakeable alternative with a much smaller bundle. Smaller ecosystem and fewer integrations." },
+        ],
+      },
+    ];
+    const ui = baseUi({
+      view: { ...baseUi().view, asking: { askId: "a1", questions: long } },
+      answering: { index: 0, cursor: 0, chosen: [[]] },
+    });
+
+    const frame = renderFrame(ui, { columns: 80, rows: 18 }).join("\n");
+
+    assert.match(frame, /heavier bundle\./, "the option being considered keeps its trade-off");
+    // The others stay one scannable line — but say they were cut, because a sentence stopping
+    // mid-word is otherwise indistinguishable from one the model wrote that way.
+    assert.match(frame, /2 valibot .*…$/m);
+  });
+
+  it("adds the typed answer as a row of its own, last", () => {
+    const frame = renderFrame(asking("neither, actually"), { columns: 70, rows: 16 }).join("\n");
+
+    assert.match(frame, /3 neither, actually/);
+    assert.match(frame, /your own answer/);
+  });
+
+  it("says the box cannot send, with the sigil and the hints", () => {
+    const frame = renderFrame(asking("typed"), { columns: 70, rows: 16 });
+    const prompt = frame.at(-1) ?? "";
+    const status = frame.at(-2) ?? "";
+
+    // `?` rather than `>`: a `>` over a box that cannot send a message tells exactly the lie the web
+    // client's placeholder is careful to refuse.
+    assert.match(prompt, /^\? typed/);
+    assert.match(status, /enter answer/);
+    assert.doesNotMatch(status, /\^K compact/, "a Command cannot run behind a blocked turn");
+  });
+
+  it("prompts for an answer rather than showing an empty box", () => {
+    assert.match(renderFrame(asking(), { columns: 70, rows: 16 }).at(-1) ?? "", /type your own answer/);
+  });
+
+  it("keeps the transcript on screen and the frame the right height", () => {
+    // An Overlay hides the transcript because it is a different task; here the message that
+    // motivated the question is the last thing on screen and is why the question makes sense.
+    for (const rows of [10, 16, 24]) {
+      assert.equal(renderFrame(asking(), { columns: 70, rows }).length, rows);
+    }
+  });
+
+  it("draws nothing at all when nothing is being asked", () => {
+    const frame = renderFrame(baseUi({ input: "hi" }), { columns: 70, rows: 16 });
+    assert.match(frame.at(-1) ?? "", /^> hi/);
+    assert.doesNotMatch(frame.join("\n"), /choose any/);
+  });
+});

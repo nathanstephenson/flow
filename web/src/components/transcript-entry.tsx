@@ -43,6 +43,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return <ToolCallEntryView entry={entry} query={query} />;
     case "subagent":
       return <SubagentEntryView entry={entry} query={query} />;
+    case "enquiry":
+      return <EnquiryEntryView entry={entry} query={query} />;
     case "notice":
       return <NoticeEntryView entry={entry} query={query} />;
     case "marker":
@@ -220,6 +222,56 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
  *
  * Waiting states name what is being waited on. "Waiting" alone is a spinner with extra steps.
  */
+/**
+ * What the model asked, and what it was told.
+ *
+ * **No controls.** A live Enquiry renders here as a card and nothing more; the answering surface is
+ * the composer and only the composer. Two answering surfaces for one Enquiry is two cursors, two
+ * selections and one blocked turn — and the duplication with the open picker is the same duplication
+ * `SubagentStrip` has with the Subagent rows, which reads the same way.
+ *
+ * The chosen labels come off the Entry rather than the tool result beside it, because the SDK writes
+ * that result as prose: reading it back would be parsing an English sentence to recover what this
+ * client's own user clicked.
+ */
+function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
+  return (
+    <div className="py-0.5 pl-[2ch]">
+      <div className="w-full rounded-lg border bg-card px-3 py-2 text-card-foreground">
+        <div className="flex items-center gap-2">
+          <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
+          <span className="shrink-0 text-xs text-muted-foreground">?</span>
+          <span className="shrink-0 font-mono text-sm">
+            {entry.questions.length === 1 ? "Asked a question" : `Asked ${entry.questions.length} questions`}
+          </span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+            {entry.status === "asked" ? "waiting…" : entry.status}
+          </span>
+        </div>
+        <dl className="mt-1 space-y-1">
+          {entry.questions.map((question, index) => {
+            const chosen = entry.answers?.[index] ?? [];
+            return (
+              <div key={question.question} className="text-sm">
+                <dt className="text-xs text-muted-foreground">
+                  <Highlighted text={question.question} query={query} />
+                </dt>
+                <dd className={cn("font-medium", chosen.length === 0 && "text-muted-foreground italic")}>
+                  {chosen.length === 0 ? (
+                    entry.status === "asked" ? "unanswered" : "no answer"
+                  ) : (
+                    <Highlighted text={chosen.join(", ")} query={query} />
+                  )}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
 function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: string }) {
   const status = entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status;
   const live = entry.status === "running" || entry.status === "waiting";

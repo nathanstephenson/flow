@@ -20,12 +20,45 @@ import type { Chrome } from "../store/contract.ts";
  * That is a real capability (ADR 0002) reachable by a key nobody would guess at, which makes saying
  * so the placeholder's job rather than a nicety.
  */
-export function composerPlaceholder(chrome: Chrome): string {
+/**
+ * Where the human is up to in an Enquiry, for the placeholder.
+ *
+ * A parameter rather than a field on Chrome, deliberately: the index moves on every commit and the
+ * cursor on every keystroke, and Chrome is a snapshot whose whole job is not changing while a turn
+ * streams. Which Enquiry is open belongs on Chrome; how far through it somebody is does not.
+ */
+export type Answering = { index: number; count: number; multiSelect: boolean };
+
+/**
+ * What the composer says while an Enquiry has the turn.
+ *
+ * The keys are the whole of what this has to say. Everything the placeholder normally carries — that
+ * Enter queues, that this Revives — is about a *message*, and while an Enquiry is open no message is
+ * going anywhere.
+ */
+export function answeringPlaceholder({ index, count, multiSelect }: Answering): string {
+  const where = count > 1 ? `Question ${index + 1} of ${count}` : "Answer above";
+  const how = multiSelect
+    ? "space to choose any that apply, Enter to answer"
+    : "↑↓ to choose, Enter to answer";
+  return `${where} — ${how}, or type your own`;
+}
+
+export function composerPlaceholder(chrome: Chrome, answering?: Answering): string {
   if (chrome.status === "ended") {
     return chrome.endedReason === undefined
       ? "This Agent Session has Ended. It will not Revive."
       : `Ended: ${chrome.endedReason}. It will not Revive.`;
   }
+  /*
+   * After `ended` and before `compacting`, and each placement is a claim.
+   *
+   * An Ended Agent Session cannot answer an Enquiry any more than it can send a message, so that
+   * sentence still wins. And a compaction cannot be running at all while this is open — a tool call
+   * is holding the turn, and the host refuses a compaction behind a turn in flight — so nothing is
+   * being shadowed here.
+   */
+  if (chrome.asking && answering) return answeringPlaceholder(answering);
   /*
    * Before the status cases, and named rather than left as a generic "running".
    *
@@ -50,6 +83,12 @@ export function composerPlaceholder(chrome: Chrome): string {
 
 /** The accessible name and tooltip for the send button, which is the one place the hint survives typing. */
 export function sendLabel(chrome: Chrome): string {
+  /*
+   * First, because it is the only one of these that is a refusal rather than a description. In
+   * practice the Abort button is what renders while an Enquiry is open — the turn is running — but
+   * that is a coincidence of two states lining up, and an accessible name should not depend on one.
+   */
+  if (chrome.asking) return "Answer the question above first";
   if (canRevive(chrome.status)) return "Revive this Agent Session and send";
   if (chrome.queueDepth > 0) return `Queue this message behind ${chrome.queueDepth}`;
   return "Send this message";

@@ -10,6 +10,7 @@ import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
+import { answerLines } from "../client/enquiry.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import { runTui } from "../tui/app.ts";
@@ -217,6 +218,21 @@ async function oneShot(
       onEntry: (entry) => {
         state = reduce(state, entry);
         rendered = render(state, rendered);
+        /*
+         * Nobody is here to answer, so the Enquiry is aborted rather than waited on.
+         *
+         * This runner takes one prompt and exits; it has no input at all. An Enquiry holds the turn
+         * until a human answers it, so without this the run simply never returns — and a hang is the
+         * worst of the three things that could happen, because it looks like a slow model rather
+         * than like a question. Aborting ends the turn, which prints the `aborted` row below and
+         * gets the transcript written; the Agent Session is left Dormant like any other, so `--session`
+         * can pick it up in the TUI or the web client, where it *can* be answered.
+         */
+        if (entry.event.type === "enquiry" && entry.event.state === "asked") {
+          console.log("  ? the model asked a question, and this runner has no way to answer it");
+          console.log(`  ? resume with: --session ${sessionId}  (or open it in the TUI)`);
+          void connection.command({ type: "abort", sessionId });
+        }
         if (entry.event.type === "turn_ended") done?.();
       },
     });
@@ -258,6 +274,13 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
       return `  · ${entry.name} (${entry.status})`;
     case "subagent":
       return `  ⤷ ${entry.name} (${entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status})`;
+    case "enquiry": {
+      // This runner takes no input, so an Enquiry it sees is one it aborts (see `oneShot`) — what
+      // reaches here is therefore `aborted`, and what it prints is what was asked and went
+      // unanswered. The TUI and the web client are where one can actually be answered.
+      const asked = answerLines(entry.questions, entry.answers).join("; ");
+      return `  ? [${entry.status}] ${asked}`;
+    }
     case "notice":
       return `  ! ${entry.level}: ${entry.text}`;
     case "marker":

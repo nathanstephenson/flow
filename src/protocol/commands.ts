@@ -122,4 +122,28 @@ export type Command =
    * difference between this and the model list: nobody sees a Skill without asking for one.
    */
   | { type: "list_skills"; sessionId: string }
+  /**
+   * Answer an Enquiry the model asked, whole.
+   *
+   * **Not a `send`.** An Enquiry is answered inside the turn that asked it and the Agent Session is
+   * `running` the whole time it waits — so `after_turn` would queue the answer behind a turn that
+   * cannot end until it arrives, and `now` would steer a paid message into a model blocked on a tool
+   * result. One of those two deadlocks, which is why this is a command of its own for the reason
+   * `compact` is: what it carries is not message text and must not be treated as any.
+   *
+   * `answers` is index-aligned with the Enquiry's own `questions` and must carry one entry per
+   * Question, because the backend holds a single promise for the whole tool call. Answering it in
+   * parts would need a fourth state — asked, but partly filled — recorded in an append-only
+   * Presentation Transcript for no reader's benefit. Pacing the Questions one at a time is a
+   * rendering decision and stays in the front-ends.
+   *
+   * The inner array is the labels chosen, or the human's own words where no option fitted. Nothing
+   * distinguishes the two: the Options are in the transcript beside this, so a reader can see.
+   *
+   * **Refused rather than Revived** when there is no Backend Session, which is the one place this
+   * parts company with `send` and `compact`. Those carry something still meaningful afterwards; a
+   * Revive attaches a *fresh* Backend Session, and the promise this would resolve died with the old
+   * one — so reviving here would start a process and spend money to answer nothing.
+   */
+  | { type: "answer_enquiry"; sessionId: string; askId: string; answers: string[][] }
   | { type: "list" };

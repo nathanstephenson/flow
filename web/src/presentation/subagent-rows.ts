@@ -16,6 +16,12 @@ import type { Entry } from "../../../src/client/reduce.ts";
  */
 
 const SUBAGENT_PREFIX = "subagent:";
+/**
+ * An Enquiry shares its id with the `AskUserQuestion` call that asked it, exactly as a Subagent
+ * shares its id with the `Agent` call that spawned it — so the transcript holds two Entries for one
+ * thing here too, and the same rule applies: the row carrying the status is the one to keep.
+ */
+const ENQUIRY_PREFIX = "enquiry:";
 
 /** The key of the Entry a Subagent's own row uses, given the id its rows are attributed to. */
 export function subagentKey(subagentId: string): string {
@@ -40,15 +46,24 @@ export function producerKey(entry: Entry): string | undefined {
  * the `subagent` row is what came of it. That pairing earned its keep while the card sat above the
  * Subagent's actual rows. With those gone the two rows are adjacent, carry the same brief, and only
  * one of them carries a status — so the tool row is the one to lose.
+ *
+ * An Enquiry is dropped on the same rule, which is why this generalised rather than growing a second
+ * function beside it: its `AskUserQuestion` row and its `enquiry` row are the same two views of one
+ * thing, and the `enquiry` row is the one that says what was chosen.
  */
 export function ownKeys(
   keys: readonly string[],
   getEntry: (key: string) => Entry | undefined,
 ): string[] {
   // Keys alone answer this: a Subagent's Entry key is `subagent:<id>` and its spawning call's is
-  // `tool:<id>`, so the pairing is visible without reading a single Entry.
+  // `tool:<id>`, so the pairing is visible without reading a single Entry. An Enquiry's is the same
+  // shape under a different prefix.
   const spawners = new Set(
-    keys.filter((key) => key.startsWith(SUBAGENT_PREFIX)).map((key) => `tool:${key.slice(SUBAGENT_PREFIX.length)}`),
+    keys.flatMap((key) => {
+      if (key.startsWith(SUBAGENT_PREFIX)) return [`tool:${key.slice(SUBAGENT_PREFIX.length)}`];
+      if (key.startsWith(ENQUIRY_PREFIX)) return [`tool:${key.slice(ENQUIRY_PREFIX.length)}`];
+      return [];
+    }),
   );
 
   return keys.filter((key) => {

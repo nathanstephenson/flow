@@ -6,6 +6,7 @@ import type {
   ModelInfo,
   NoticeLevel,
   Producer,
+  Question,
   Spend,
   SubagentWait,
 } from "../protocol/events.ts";
@@ -25,6 +26,24 @@ export type ToolStatus = "running" | "complete" | "error";
 
 /** Flattened from SubagentState, so an Entry stays a flat record like every other one. */
 export type SubagentStatus = "running" | "waiting" | "complete" | "aborted" | "error";
+
+/** Flattened from EnquiryState, for the reason SubagentStatus is flattened from SubagentState. */
+export type EnquiryStatus = "asked" | "answered" | "aborted";
+
+/**
+ * The Enquiry blocking this turn: what is being asked, and the id to answer it under.
+ *
+ * The whole thing rather than an id, because it reaches the web client's Chrome and the composer is
+ * handed Chrome and nothing else — a component fetching the body out of the transcript when it could
+ * have been handed it is a second data channel for one object.
+ *
+ * That is safe on a shallow-compared snapshot only because of how it is maintained: `reduce` mints
+ * this once, when the Enquiry is first asked, and carries the *same reference* through every
+ * streamed frame until something terminal drops it. What `activeSubagents` refuses is a value
+ * rebuilt per tick, which could never compare equal to the one before it; this is the opposite, and
+ * it holds the same contract `model` and `capabilities` already do.
+ */
+export type OpenEnquiry = { askId: string; questions: Question[] };
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
@@ -69,6 +88,31 @@ export type Entry =
       startedAt: string;
       /** Absent while it is still working. Set once, by the snapshot that ends it. */
       endedAt?: string;
+    }
+  /**
+   * One Enquiry: every Question one `AskUserQuestion` call asked, and what came of them.
+   *
+   * `id` is the `askId`, which is the asking tool call's id — so this Entry and the `tool` Entry
+   * beside it are two views of one thing, as a Subagent's two are (ADR 0015). The front-ends show
+   * this one and suppress that one, for the reason `subagent-rows.ts` already gives: the two are
+   * adjacent, carry the same brief, and only one of them carries a status.
+   *
+   * `answers` comes off the Enquiry's own snapshot rather than the tool result, because the SDK's
+   * result is prose — *"The user answered: "…"="zod""* — and a front-end reading that would be
+   * parsing an English sentence to find out what its own user clicked.
+   *
+   * No timestamps, unlike `subagent`. A Subagent is watched because it progresses; an Enquiry does
+   * not — it is open or it is not, and how long it has been open changes nothing a reader can do
+   * about it. Its moment is its position in the transcript, like every other Entry's.
+   */
+  | {
+      kind: "enquiry";
+      id: string;
+      questions: Question[];
+      status: EnquiryStatus;
+      /** Present only on `answered`, index-aligned with `questions`. */
+      answers?: string[][];
+      producer?: Producer;
     }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
   /**
@@ -115,6 +159,22 @@ export type ViewState = {
    * the chrome. See `sameChrome` in web/src/store/agent-session-view.ts.
    */
   activeSubagents: number;
+  /**
+   * The Enquiry blocking this turn, or absent.
+   *
+   * Drives the lockout: while this is set the composer may only answer it, in both front-ends. So
+   * **everything that ends a turn or a Backend Session clears it** — not only the Enquiry's own
+   * terminal snapshot, but `turn_ended`, `session_dormant`, `session_settled` and `session_ended`
+   * too. A torn turn that left this set would lock the composer with no key that unlocks it, which
+   * is the one failure of this feature a human could not recover from without reloading.
+   */
+  /*
+   * `| undefined` explicitly, unlike every other optional here, because this one is *cleared* on
+   * five different paths and `exactOptionalPropertyTypes` refuses an assigned `undefined` otherwise.
+   * The alternative is an `omitAsking` helper beside `omitCompacting` called from all five — more
+   * ceremony than the distinction earns, since nothing reads "absent" differently from "undefined".
+   */
+  asking?: OpenEnquiry | undefined;
   /**
    * Set while the backend is summarising the Conversation Context.
    *
@@ -269,8 +329,42 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       };
     }
 
+    case "enquiry": {
+      const open = event.state === "asked";
+      /*
+       * Minted once and then held by reference, which is what makes it safe on a shallow-compared
+       * snapshot: a repeated `asked` snapshot must not produce a fresh object, or the web client's
+       * chrome would republish on every one. Compared on the id rather than deep-equality because
+       * the id is what identifies an Enquiry and its questions cannot change under it.
+       */
+      const asking =
+        open && state.asking?.askId === event.askId
+          ? state.asking
+          : open
+            ? { askId: event.askId, questions: event.questions }
+            : state.asking?.askId === event.askId
+              ? undefined
+              : state.asking;
+
+      return {
+        ...state,
+        ...(asking === undefined ? { asking: undefined } : { asking }),
+        entries: upsert(state.entries, {
+          kind: "enquiry",
+          id: event.askId,
+          questions: event.questions,
+          status: event.state,
+          ...(event.state === "answered" ? { answers: event.answers } : {}),
+          ...(event.producer === undefined ? {} : { producer: event.producer }),
+        }),
+      };
+    }
+
     case "turn_ended":
-      return { ...state, status: "idle" };
+      // `asking` cleared here as well as on the Enquiry's own terminal snapshot. A backend that tore
+      // down without emitting one would otherwise leave the composer locked out for good — see
+      // ViewState.asking. Clearing twice costs nothing; clearing never is unrecoverable.
+      return { ...state, status: "idle", asking: undefined };
 
     case "queue_changed":
       return { ...state, queue: [...event.pending] };
@@ -324,6 +418,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         ...state,
         status: "dormant",
         queue: [],
+        // An Enquiry cannot survive its Backend Session: the promise a human would have answered
+        // died with it. Same for the two below.
+        asking: undefined,
         entries: [
           ...state.entries,
           { kind: "marker", id: `dormant-${state.entries.length}`, marker: "dormant", text: `Dormant: ${event.reason}` },
@@ -335,6 +432,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         ...state,
         status: "settled",
         queue: [],
+        asking: undefined,
         entries: [
           ...state.entries,
           { kind: "marker", id: `settled-${state.entries.length}`, marker: "settled", text: "Settled" },
@@ -352,7 +450,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       };
 
     case "session_ended":
-      return { ...state, status: "ended", endedReason: event.reason };
+      return { ...state, status: "ended", endedReason: event.reason, asking: undefined };
   }
 }
 

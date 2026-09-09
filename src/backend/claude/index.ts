@@ -28,8 +28,9 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
-import { Subagents, type SubagentBrief } from "./subagents.ts";
+import { ASK_TOOL, PendingEnquiries, questionsOf } from "./enquiries.ts";
 import { StreamedMessages } from "./streamed-message.ts";
+import { Subagents, type SubagentBrief } from "./subagents.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -175,7 +176,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true, enquiries: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -200,6 +201,7 @@ class ClaudeSession implements BackendSession {
   private readonly streamed = new StreamedMessages();
   /** Subagents open in this turn, and any turn end waiting on them. */
   private readonly subagents = new Subagents();
+  private readonly enquiries = new PendingEnquiries();
   /**
    * Everything this Agent Session has spent, across every model and every Backend Session.
    *
@@ -239,13 +241,24 @@ class ClaudeSession implements BackendSession {
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
         : {}),
       ...(isSingleExecutable() ? { spawnClaudeCodeProcess: spawnClaudeDirectly } : {}),
-      canUseTool: async (toolName: string) =>
-        allowed.includes(toolName)
-          ? { behavior: "allow" as const, updatedInput: {} }
+      /*
+       * The fall-through, and — for exactly one tool — the whole of how a human is asked something.
+       *
+       * `AskUserQuestion` is deliberately absent from `allowed`: an allowlisted tool is approved
+       * before this runs, so putting it there would answer the model's question with silence. It
+       * reaches here instead, and here the callback is *parked* rather than answered, which is the
+       * one place this adapter does not resolve a permission immediately. What settles it is a human,
+       * through `answerEnquiry` — or, on every path where there will never be one, an abandonment.
+       */
+      canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string }) => {
+        if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
+        return allowed.includes(toolName)
+          ? { behavior: "allow" as const, updatedInput: input }
           : {
               behavior: "deny" as const,
               message: `${toolName} is not enabled for this session. Continue without it.`,
-            },
+            };
+      },
     };
 
     this.stream = query({ prompt: this.inbox, options: queryOptions });
@@ -401,7 +414,58 @@ class ClaudeSession implements BackendSession {
     }));
   }
 
+  /**
+   * Hold the permission callback for an `AskUserQuestion` call until a human answers it.
+   *
+   * The returned promise is the turn: the SDK does not continue until it settles, so nothing here
+   * may throw and no path may drop it. `spikes/ask-user-question.ts` established that the assistant
+   * message carrying the `tool_use` block arrives *before* this does, so the `tool` Entry for
+   * `askId` is already in the Presentation Transcript by the time the snapshot below joins it.
+   *
+   * A call posing no readable Question is denied rather than parked, because a picker with nothing
+   * in it is a turn blocked on a box a human cannot answer.
+   */
+  private async ask(
+    askId: string,
+    input: Record<string, unknown>,
+  ): Promise<
+    { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string }
+  > {
+    const questions = questionsOf(input);
+    if (questions.length === 0) {
+      return { behavior: "deny", message: `${ASK_TOOL} was called with no question. Continue without it.` };
+    }
+
+    return await new Promise((resolve) => {
+      this.enquiries.hold(askId, questions, input, resolve);
+      this.emit({ type: "enquiry", askId, questions, state: "asked" });
+    });
+  }
+
+  async answerEnquiry(askId: string, answers: string[][]): Promise<boolean> {
+    const questions = this.enquiries.describe(askId);
+    if (!questions || !this.enquiries.answer(askId, answers)) return false;
+    this.emit({ type: "enquiry", askId, questions, state: "answered", answers });
+    return true;
+  }
+
+  /**
+   * Settle every open Enquiry as unanswered, and say so in the transcript.
+   *
+   * Called from every path that ends a turn or a Backend Session. Denying rather than dropping is
+   * what leaves the CLI's own conversation record complete — a real `tool_result` against the right
+   * id — so a later Revive resumes onto a turn with no dangling `tool_use`.
+   */
+  private abandonEnquiries(why: string): void {
+    for (const { askId, questions } of this.enquiries.abandonAll(why)) {
+      this.emit({ type: "enquiry", askId, questions, state: "aborted" });
+    }
+  }
+
   async abort(): Promise<void> {
+    // Before the interrupt, not after: the CLI is blocked on this callback, and an interrupt that
+    // waits on the outstanding permission request would be waiting on something only this releases.
+    this.abandonEnquiries("the turn was aborted");
     try {
       await this.stream.interrupt();
     } catch (error) {
@@ -458,6 +522,10 @@ class ClaudeSession implements BackendSession {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Before the stream closes, while there is still something to deny into. A callback dropped by
+    // the teardown leaves an unterminated tool call in the CLI's record, and the Agent Session this
+    // belongs to is going Dormant — so that record is exactly what the next Revive resumes onto.
+    this.abandonEnquiries("the session stopped");
     this.inbox.close();
     try {
       await this.stream.close();
@@ -478,6 +546,10 @@ class ClaudeSession implements BackendSession {
         // session left suppressing would silently drop every assistant message after it.
         this.compacting = false;
         this.emit({ type: "compacting", active: false });
+        // Same argument as the line above, for the other thing a dead stream will never deliver:
+        // nothing is coming back to answer an open Enquiry, and a picker left on screen over a
+        // session that has stopped is a question the human can answer into nothing.
+        this.abandonEnquiries("the session failed");
         this.emit({ type: "notice", level: "error", text: message(error) });
         this.endTurn("error");
       }
@@ -646,8 +718,16 @@ class ClaudeSession implements BackendSession {
 
   private endTurn(reason: TurnEndReason): void {
     const turnId = this.turnId;
+    /*
+     * Defensive, and should be unreachable: the turn cannot end while the CLI is blocked on a
+     * permission callback, so anything still open here has already been abandoned by the path that
+     * got us here. One line against the alternative, which is a picker on screen over a turn that
+     * ended — a question with no way to answer it and no way to dismiss it.
+     */
+    this.abandonEnquiries("the turn ended");
     // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
     this.subagents.clear();
+    this.enquiries.clear();
     if (!turnId) return;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });

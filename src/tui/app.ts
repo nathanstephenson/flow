@@ -4,6 +4,17 @@ import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import { sessionLabel } from "../client/session-label.ts";
 import { canSettle } from "../client/status.ts";
 import type { SessionSummary } from "../protocol/commands.ts";
+import {
+  answersOf,
+  canCommit,
+  cursorAfterTyping,
+  cursorClamped,
+  isFinished,
+  rowsFor,
+  startAnswering,
+  toggled,
+  type Answering,
+} from "../client/enquiry.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
 import { renderFrame, type Overlay, type UiState } from "./render.ts";
 
@@ -29,6 +40,15 @@ export async function runTui(options: TuiOptions): Promise<void> {
   let view: ViewState = initialState();
   let input = "";
   let overlay: Overlay = { kind: "none" };
+  /**
+   * Where the human is up to in the Enquiry on screen, and which Enquiry that is.
+   *
+   * The id is held beside the state rather than inferred, so a second Enquiry cannot inherit the
+   * first's cursor and half-filled answers — `view.asking` changing identity is the only signal that
+   * this is a different question, and comparing the id is how that is noticed.
+   */
+  let answering: Answering | undefined;
+  let answeringFor: string | undefined;
   let notice: string | undefined;
   let unsubscribe: (() => void) | undefined;
 
@@ -39,6 +59,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       view,
       input,
       overlay,
+      ...(answering === undefined ? {} : { answering }),
       now: Date.now(),
       ...(notice ? { notice } : {}),
     };
@@ -168,6 +189,18 @@ export async function runTui(options: TuiOptions): Promise<void> {
       return false;
     }
 
+    /*
+     * An open Enquiry takes the prompt line, and takes it *after* the overlay branch: an overlay
+     * opened before the question arrived must still be closable. Nothing below this runs while one
+     * is open, which is the lockout — no message is sent, and `^K` is refused rather than silently
+     * doing nothing.
+     */
+    if (view.asking) {
+      await handleEnquiryKey(key);
+      draw();
+      return false;
+    }
+
     if (key === KEY.ctrlS) {
       await refreshSessions();
       const index = sessions.findIndex((session) => session.id === selected);
@@ -192,6 +225,109 @@ export async function runTui(options: TuiOptions): Promise<void> {
 
     draw();
     return false;
+  }
+
+  /**
+   * Drive the Enquiry picker.
+   *
+   * The order of these branches is the whole rule, and it is the terminal's statement of the one the
+   * web client's key module states for the editor: **the moment the box has a character in it, the
+   * picker borrows only the keys a prompt line never needed.** The digits and Space are ordinary
+   * characters as far as anyone typing is concerned, so they are claimed only while `input` is
+   * empty — and both branches sit above the `isPrintable` one that would otherwise swallow them.
+   *
+   * Escape still aborts, as the status line has always said. The web client gives Escape to "go back
+   * a Question" because it has an Abort button to spare; here there is no button, so abort keeps the
+   * key and there is no going back. That asymmetry is deliberate and is named in both files.
+   */
+  async function handleEnquiryKey(key: string): Promise<void> {
+    const asking = view.asking;
+    if (!asking) return;
+    // Restarted whenever the Enquiry changes, so a second question cannot inherit the first's cursor.
+    if (!answering || answeringFor !== asking.askId) {
+      answering = startAnswering(asking.questions);
+      answeringFor = asking.askId;
+    }
+    const state: Answering = answering;
+    const question = asking.questions[state.index];
+    if (!question) return;
+    const rows = rowsFor(question, input);
+    const chosen = state.chosen[state.index] ?? [];
+
+    if (key === KEY.escape) {
+      if (selected) await options.connection.command({ type: "abort", sessionId: selected });
+      return;
+    }
+    if (key === KEY.up || key === KEY.down) {
+      // Clamped, not wrapped: every list in this TUI clamps, and the web client's every list wraps.
+      // Each front-end keeps its own idiom rather than the two of them growing a third.
+      state.cursor = cursorClamped(state.cursor, key === KEY.up ? -1 : 1, rows.length);
+      return;
+    }
+    if (input === "" && /^[1-9]$/.test(key)) {
+      const row = rows[Number(key) - 1];
+      if (!row) return;
+      state.cursor = Number(key) - 1;
+      if (question.multiSelect) state.chosen[state.index] = toggled(chosen, row.label);
+      else await commitAnswer(asking.questions, state, [row.label]);
+      return;
+    }
+    if (input === "" && key === " " && question.multiSelect) {
+      const row = rows[state.cursor];
+      if (row) state.chosen[state.index] = toggled(chosen, row.label);
+      return;
+    }
+    if (key === KEY.enter || key === KEY.newline) {
+      const row = rows[state.cursor];
+      const answer = question.multiSelect ? chosen : row ? [row.label] : [];
+      if (!canCommit(question, answer)) {
+        notice = "choose at least one, or type your own answer";
+        return;
+      }
+      await commitAnswer(asking.questions, state, answer);
+      return;
+    }
+
+    const had = input.trim() !== "";
+    if (key === KEY.backspace || key === KEY.backspaceAlt) input = input.slice(0, -1);
+    else if (isPrintable(key)) input += key;
+    else return;
+    // The cursor follows the typing onto the Other row, so an answer someone typed is not thrown
+    // away by an Enter aimed at it. See `cursorAfterTyping` for the trap this closes.
+    state.cursor = cursorAfterTyping(state.cursor, had, input.trim() !== "", rowsFor(question, input).length);
+  }
+
+  /**
+   * Record one Question's Answer and move on — sending the whole Enquiry once the last one is in.
+   *
+   * One command at the end rather than one per Question, because the backend holds a single promise
+   * for the whole tool call. The pacing is this front-end's; the wire sees one answer.
+   */
+  async function commitAnswer(
+    questions: NonNullable<typeof view.asking>["questions"],
+    state: Answering,
+    answer: string[],
+  ): Promise<void> {
+    state.chosen[state.index] = answer;
+    state.index += 1;
+    state.cursor = 0;
+    input = "";
+    if (!isFinished(state, questions)) return;
+
+    const askId = answeringFor;
+    answering = undefined;
+    answeringFor = undefined;
+    if (!selected || !askId) return;
+    try {
+      await options.connection.command({
+        type: "answer_enquiry",
+        sessionId: selected,
+        askId,
+        answers: answersOf(state, questions),
+      });
+    } catch (error) {
+      notice = error instanceof Error ? error.message : String(error);
+    }
   }
 
   async function handleOverlayKey(key: string): Promise<void> {

@@ -7,7 +7,20 @@ import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentati
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
+import { ComposerEnquiry } from "@/components/composer-enquiry.tsx";
 import { ComposerMenu } from "@/components/composer-menu.tsx";
+import {
+  answersOf,
+  canCommit,
+  cursorAfter,
+  cursorAfterTyping,
+  isFinished,
+  progressLabel,
+  rowsFor,
+  startAnswering,
+  toggled,
+  type Answering,
+} from "../../../src/client/enquiry.ts";
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
 import type { Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -64,6 +77,19 @@ export function Composer({
   const [skills, setSkills] = useState<Skill[] | undefined>(undefined);
   const [query, setQuery] = useState<string | undefined>(undefined);
   const [highlighted, setHighlighted] = useState(0);
+  /*
+   * Where the human is up to in the Enquiry on screen, and which Enquiry that is.
+   *
+   * Local, not on Chrome: the index moves on every commit and the cursor on every keystroke, and
+   * Chrome's whole job is not changing while a turn streams. The id is held beside it so a second
+   * Enquiry cannot inherit the first's cursor — `chrome.asking` changing identity is the only signal
+   * that this is a different question.
+   */
+  const [answering, setAnswering] = useState<Answering | undefined>(undefined);
+  const [answeringFor, setAnsweringFor] = useState<string | undefined>(undefined);
+  const [hint, setHint] = useState<string | undefined>(undefined);
+
+  const asking = chrome.asking;
 
   const ended = chrome.status === "ended";
   const running = chrome.status === "running";
@@ -195,6 +221,115 @@ export function Composer({
     // Deliberately not `query`: this fires when the menu opens, not as it filters.
   }, [query === undefined, run, sessionId]);
 
+  /*
+   * Start again whenever the Enquiry changes identity, including when it goes away. Done in render
+   * rather than an effect: it is a cache of `asking`, so running it twice does what running it once
+   * does, and an effect would leave one frame showing the previous question's cursor.
+   */
+  if (answeringFor !== asking?.askId) {
+    setAnsweringFor(asking?.askId);
+    setAnswering(asking ? startAnswering(asking.questions) : undefined);
+    setHint(undefined);
+  }
+
+  const question = asking && answering ? asking.questions[answering.index] : undefined;
+  const rows = useMemo(() => (question ? rowsFor(question, text) : []), [question, text]);
+  const chosen = answering?.chosen[answering.index] ?? [];
+
+  /**
+   * Record one Question's Answer and move on — sending the whole Enquiry once the last is in.
+   *
+   * One command at the end, because the backend holds a single promise for the whole tool call. The
+   * pacing is this component's; the wire sees one answer. Nothing is optimistic here either: the
+   * picker closes because the host appended an `answered` snapshot and it arrived over the stream,
+   * which is the same promise the rest of this file makes.
+   */
+  const commit = useCallback(
+    (answer: string[]): void => {
+      if (!asking || !answering) return;
+      const next: Answering = {
+        index: answering.index + 1,
+        cursor: 0,
+        chosen: answering.chosen.map((was, index) => (index === answering.index ? answer : was)),
+      };
+      setText("");
+      input.current?.replace("", 0);
+      setHint(undefined);
+      setAnswering(next);
+      if (!isFinished(next, asking.questions)) return;
+      void run({
+        type: "answer_enquiry",
+        sessionId,
+        askId: asking.askId,
+        answers: answersOf(next, asking.questions),
+      });
+    },
+    [answering, asking, run, sessionId],
+  );
+
+  /** Choose or toggle the row at `index`, which is what both a digit and a click mean. */
+  const answerRow = useCallback(
+    (index: number): void => {
+      const row = rows[index];
+      if (!question || !answering || !row) return;
+      if (question.multiSelect) {
+        setHint(undefined);
+        setAnswering({
+          ...answering,
+          cursor: index,
+          chosen: answering.chosen.map((was, at) =>
+            at === answering.index ? toggled(was, row.label) : was,
+          ),
+        });
+        return;
+      }
+      commit([row.label]);
+    },
+    [answering, commit, question, rows],
+  );
+
+  /*
+   * What the editor borrows while an Enquiry is open. Rebuilt per keystroke and read through a ref
+   * by the extension, never captured — the arrangement `menuKeys` already uses.
+   */
+  const enquiryKeys = useMemo(
+    () => ({
+      context: (composing: boolean) => ({
+        open: question !== undefined,
+        composing,
+        multiSelect: question?.multiSelect === true,
+        typing: text.trim() !== "",
+        multiline: text.includes("\n"),
+        hasPrevious: (answering?.index ?? 0) > 0,
+        rows: rows.length,
+      }),
+      move: (delta: number) =>
+        setAnswering((current) =>
+          current === undefined ? current : { ...current, cursor: cursorAfter(current.cursor, delta, rows.length) },
+        ),
+      toggle: () => answerRow(answering?.cursor ?? 0),
+      pick: (row: number) => answerRow(row),
+      commit: () => {
+        if (!question || !answering) return;
+        const row = rows[answering.cursor];
+        const answer = question.multiSelect ? chosen : row ? [row.label] : [];
+        // Refused rather than sent as nothing — and said, rather than the box simply not responding.
+        if (!canCommit(question, answer)) {
+          setHint("Choose at least one, or type your own answer.");
+          return;
+        }
+        commit(answer);
+      },
+      back: () =>
+        setAnswering((current) =>
+          current === undefined || current.index === 0
+            ? current
+            : { ...current, index: current.index - 1, cursor: 0 },
+        ),
+    }),
+    [answering, answerRow, chosen, commit, question, rows, text],
+  );
+
   const remove = useCallback(
     (key: string): void => {
       setAttachments((current) => {
@@ -211,6 +346,14 @@ export function Composer({
    * of state that is still a render behind.
    */
   const send = useCallback(async (override?: string): Promise<void> => {
+    /*
+     * Above everything, including the Command branch. `/compact` typed from memory never touches the
+     * menu, so the menu being shut is not what makes it unavailable — this is. An Enquiry is holding
+     * the turn, and a Command occupies the Agent Session: running one against a backend that is
+     * already blocked is asking the host to hold two things at once.
+     */
+    if (asking) return;
+
     const message = (override ?? text).trim();
     // An image with no words is a message — "look at this" is what the paste already said.
     if ((message === "" && attachments.length === 0) || sending || ended) return;
@@ -265,7 +408,7 @@ export function Composer({
     } else {
       forget(sent);
     }
-  }, [attachments, catalogue, ended, forget, run, sending, sessionId, text]);
+  }, [asking, attachments, catalogue, ended, forget, run, sending, sessionId, text]);
 
   /**
    * Put the highlighted name in the box.
@@ -296,11 +439,30 @@ export function Composer({
    * on every change: after filtering, the third of five is a different thing than it was, and
    * keeping the index would leave the highlight on whatever happened to land there.
    */
-  const onChange = useCallback((next: string, caret: number): void => {
-    setText(next);
-    setQuery(menuQuery(next, caret));
-    setHighlighted(0);
-  }, []);
+  const onChange = useCallback(
+    (next: string, caret: number): void => {
+      const had = text.trim() !== "";
+      setText(next);
+      /*
+       * Gated here rather than at `menuOpen`, because leaving `query` set would fire the
+       * `list_skills` effect — and a composer locked out of sending a Skill has no business listing
+       * a Skill directory over HTTP to offer one.
+       */
+      setQuery(asking ? undefined : menuQuery(next, caret));
+      setHighlighted(0);
+      // The cursor follows the typing onto the Other row, so an answer someone typed is not thrown
+      // away by an Enter aimed at it. See `cursorAfterTyping` for the trap this closes.
+      if (question) {
+        const count = rowsFor(question, next).length;
+        setAnswering((current) =>
+          current === undefined
+            ? current
+            : { ...current, cursor: cursorAfterTyping(current.cursor, had, next.trim() !== "", count) },
+        );
+      }
+    },
+    [asking, question, text],
+  );
 
   /*
    * `active` is the *rendered* list rather than the query, which is what makes an unrecognised name
@@ -381,6 +543,27 @@ export function Composer({
           * rather than pushing the box someone is typing in down the screen. It is inside the
           * measured element, so `--composer-inset` accounts for it as it opens and closes.
           */}
+        {/*
+          * Above the menu and inside the measured element, so `--composer-inset` follows it open and
+          * closed. Above rather than below because the two can never be open at once — the lockout
+          * sees to that — so the order is argued from meaning: an Enquiry is a fact about the turn
+          * already running, which is what everything above the box has in common.
+          */}
+        <ComposerEnquiry
+          question={question}
+          rows={rows}
+          cursor={answering?.cursor ?? 0}
+          chosen={chosen}
+          progress={asking && answering ? progressLabel(answering, asking.questions) : undefined}
+          hint={hint}
+          listboxId={`enquiry-${sessionId}`}
+          rowId={(index) => `enquiry-${sessionId}-${index}`}
+          onChoose={answerRow}
+          onHighlight={(index) =>
+            setAnswering((current) => (current === undefined ? current : { ...current, cursor: index }))
+          }
+        />
+
         <ComposerMenu
           open={menuOpen}
           items={items}
@@ -402,10 +585,20 @@ export function Composer({
             */}
           <ComposerInput
             value={text}
-            placeholder={composerPlaceholder(chrome)}
+            placeholder={composerPlaceholder(
+              chrome,
+              asking && answering
+                ? {
+                    index: answering.index,
+                    count: asking.questions.length,
+                    multiSelect: question?.multiSelect === true,
+                  }
+                : undefined,
+            )}
             disabled={ended}
             catalogue={catalogue}
             menu={menuKeys}
+            enquiry={enquiryKeys}
             handle={input}
             onChange={onChange}
             onSubmit={() => void send()}
@@ -419,7 +612,7 @@ export function Composer({
               <SendButton
                 chrome={chrome}
                 sending={sending}
-                disabled={text.trim() === "" && attachments.length === 0}
+                disabled={asking !== undefined || (text.trim() === "" && attachments.length === 0)}
                 onSend={send}
               />
             )}

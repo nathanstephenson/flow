@@ -43,6 +43,24 @@ function options(over: Partial<ComposerExtensionOptions> = {}): ComposerExtensio
     editable: new Compartment(),
     hint: new Compartment(),
     menu: () => menu(),
+    enquiry: () => ({
+      // Closed, which is every existing test's world: `enquiryAction` returns undefined throughout,
+      // so every binding above declines and the keys fall through exactly as they did before.
+      context: () => ({
+        open: false,
+        composing: false,
+        multiSelect: false,
+        typing: false,
+        multiline: false,
+        hasPrevious: false,
+        rows: 0,
+      }),
+      move: () => {},
+      toggle: () => {},
+      pick: () => {},
+      commit: () => {},
+      back: () => {},
+    }),
     onSubmit: () => {},
     onChange: () => {},
     onPasteFiles: () => true,
@@ -74,20 +92,34 @@ describe("the Composer's extensions", () => {
    * `state.facet(keymap)` returns the groups in the order CodeMirror will consult them, so this is
    * the real resolution order rather than a claim about it.
    */
-  it("consults the menu's keys before the editor's own", () => {
+  it("consults the Enquiry's keys, then the menu's, then the editor's own", () => {
     const groups = stateFrom().facet(keymap);
-    const first = groups[0] ?? [];
+
+    /*
+     * The Enquiry outranks the menu, and both outrank the editor.
+     *
+     * Two groups rather than one array with duplicate keys, so the order between them is a fact
+     * about facet position that this assertion reads back — rather than a claim about how CodeMirror
+     * chains same-key bindings within a single group. The two surfaces can never be open at once (an
+     * Enquiry locks the composer, and a locked composer opens no menu), so this order is
+     * unobservable at runtime; asserting it anyway is what stops the lockout depending on that.
+     */
+    assert.deepEqual(
+      (groups[0] ?? []).map((binding) => binding.key),
+      ["Escape", "ArrowUp", "ArrowDown", "Enter", "Space", "1", "2", "3", "4", "5"],
+      "the Enquiry's keymap must be the first group CodeMirror consults",
+    );
 
     assert.deepEqual(
-      first.map((binding) => binding.key),
+      (groups[1] ?? []).map((binding) => binding.key),
       ["Escape", "ArrowUp", "ArrowDown", "Tab", "Enter"],
-      "the menu's keymap must be the first group CodeMirror consults",
+      "the menu's keymap must be the second",
     );
   });
 
   it("still has the editor's own Enter, below the menu's", () => {
     const groups = stateFrom().facet(keymap);
-    const rest = groups.slice(1).flat();
+    const rest = groups.slice(2).flat();
 
     assert.ok(
       rest.some((binding) => binding.key === "Enter"),

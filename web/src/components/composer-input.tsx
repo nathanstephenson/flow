@@ -7,11 +7,12 @@ import {
   editableFor,
   hintFor,
   setCatalogue,
+  type EnquiryKeys,
   type MenuKeys,
 } from "@/components/composer-extensions.ts";
 import type { Triggerable } from "@/presentation/composer-menu.ts";
 
-export type { MenuKeys };
+export type { EnquiryKeys, MenuKeys };
 
 /**
  * The Composer's text box.
@@ -52,6 +53,7 @@ export function ComposerInput({
   disabled,
   catalogue,
   menu,
+  enquiry,
   handle,
   onChange,
   onSubmit,
@@ -63,6 +65,8 @@ export function ComposerInput({
   /** What a leading `/name` may resolve to, for the pill. */
   catalogue: Triggerable[];
   menu: MenuKeys;
+  /** What the open Enquiry's picker wants from the keys, read per keystroke like `menu`. */
+  enquiry: EnquiryKeys;
   /** Filled with the imperative surface the Composer needs. A ref object, not a callback ref. */
   handle: React.RefObject<ComposerInputHandle | null>;
   /** The caret comes with the text, because whether the menu is open depends on where it is. */
@@ -82,8 +86,8 @@ export function ComposerInput({
    * render, which throws away CodeMirror's state to install a function that differs only by
    * identity.
    */
-  const latest = useRef({ onChange, onSubmit, onPasteFiles, menu });
-  latest.current = { onChange, onSubmit, onPasteFiles, menu };
+  const latest = useRef({ onChange, onSubmit, onPasteFiles, menu, enquiry });
+  latest.current = { onChange, onSubmit, onPasteFiles, menu, enquiry };
 
   const editable = useRef(new Compartment()).current;
   const hint = useRef(new Compartment()).current;
@@ -101,6 +105,7 @@ export function ComposerInput({
           editable,
           hint,
           menu: () => latest.current.menu,
+          enquiry: () => latest.current.enquiry,
           onSubmit: () => latest.current.onSubmit(),
           onChange: (text, caret) => latest.current.onChange(text, caret),
           onPasteFiles: (files) => latest.current.onPasteFiles(files),

@@ -76,6 +76,14 @@ export type Capabilities = {
    * model with no Effort. A client hides the affordance rather than showing an empty tree.
    */
   subagents: boolean;
+  /**
+   * Set when this Backend Adapter can carry an Enquiry to a human and an answer back. False is not
+   * "this backend's models never ask" but "this backend has no channel to ask through" — the same
+   * distinction `subagents` draws, and pi is the case: its `tools` option is a filter over its own
+   * built-ins, not a place to register one of ours. A client hides the affordance rather than
+   * rendering a question nothing can answer.
+   */
+  enquiries: boolean;
 };
 
 /**
@@ -132,6 +140,56 @@ export type SubagentState =
   | { state: "waiting"; on: SubagentWait }
   | { state: TurnEndReason };
 
+/**
+ * One choice offered for a Question.
+ *
+ * `label` is what the choice is and `description` is why someone would pick it; both are the model's
+ * own words. `preview` is carried because the tool's schema has it and a transcript is durable, but
+ * nothing renders it yet: across every run of `spikes/ask-user-question.ts` the model populated
+ * `label` and `description` and nothing else, so its shape is still unobserved rather than known.
+ */
+export type QuestionOption = {
+  label: string;
+  description?: string;
+  preview?: string;
+};
+
+/**
+ * One of an Enquiry's questions, as the tool call posed it.
+ *
+ * `header` names the decision in a word or two and `question` is the sentence asked. Both are
+ * carried because neither is derived from the other: a picker shows the sentence, and a progress row
+ * with four sentences in it is unreadable.
+ *
+ * `multiSelect` is honoured rather than flattened. A model that asked for several answers and got one
+ * back would act on a constraint the human never agreed to.
+ */
+export type Question = {
+  header: string;
+  question: string;
+  multiSelect: boolean;
+  options: QuestionOption[];
+};
+
+/**
+ * What became of an Enquiry. A variant rather than a status beside a nullable `answers`, so the type
+ * refuses an answered Enquiry with nothing in it and an open one carrying answers.
+ *
+ * `aborted` reuses TurnEndReason's word verbatim, as SubagentState does: an Enquiry ends the way a
+ * turn does when the work stops and nobody can say what the human would have chosen. There is no
+ * `error` — an Enquiry that fails is a turn that failed, and is reported as one.
+ *
+ * `answers` is index-aligned with `questions`, one entry per Question. The inner array is the labels
+ * chosen — one for a single-select, several for a multiSelect — or the human's own words where they
+ * typed instead of choosing. Free text is deliberately not marked as such: the Options are in this
+ * same snapshot, so a reader that wants to know whether an answer was one of the offered ones can
+ * see for itself, and a flag would be a second source of truth about it.
+ */
+export type EnquiryState =
+  | { state: "asked" }
+  | { state: "answered"; answers: string[][] }
+  | { state: "aborted" };
+
 export type NoticeLevel = "info" | "warn" | "error";
 
 export type AgentEvent =
@@ -178,6 +236,30 @@ export type AgentEvent =
    * `since: N` holds a lifecycle it can complete.
    */
   | ({ type: "subagent"; subagentId: string; name: string; description?: string } & SubagentState)
+  /**
+   * One Enquiry, wholly — every Question of one `AskUserQuestion` call and what came of them.
+   *
+   * `askId` is the callId of the tool call that asked, so this and the `tool` Entry beside it address
+   * the same thing: the rule ADR 0015 sets for a Subagent, and available here for the same reason.
+   * `spikes/ask-user-question.ts` confirmed the SDK supplies it, and that the assistant message
+   * carrying the `tool_use` block lands *before* the permission callback — so the call is already in
+   * the transcript by the time this is emitted.
+   *
+   * Repeated on every transition, latest-wins — never an asked/answered pair, so a client joining at
+   * `since: N` holds a lifecycle it can complete, and one replaying a week-old transcript never
+   * offers an answer box for a promise that died with its Backend Session.
+   *
+   * The answers are carried **here** rather than read back off the `tool_ended`, and that is not a
+   * convenience. The SDK's tool result is prose — *"The user answered: "…"="zod", …"* — so the
+   * structure is gone by the time it returns, and a front-end rendering an answered Enquiry from the
+   * tool call alone would be parsing an English sentence to find out what its own user clicked.
+   *
+   * `producer` is here for the reason `SubagentWait`'s `"permission"` is (ADR 0015): a Subagent can
+   * ask, and a second breaking change to a shipped protocol for a case we already expect is the worse
+   * trade. Populated only where the SDK attributes the callback, which for a Subagent it has not yet
+   * been observed to do.
+   */
+  | ({ type: "enquiry"; askId: string; questions: Question[]; producer?: Producer } & EnquiryState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[] }
   /**

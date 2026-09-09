@@ -5,7 +5,7 @@ import { initialState, reduce, reduceAll, type Entry, type ViewState } from "../
 import { SessionLog } from "../src/daemon/log.ts";
 import type { AgentEvent, LoggedEvent } from "../src/protocol/events.ts";
 
-const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false };
+const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false, enquiries: false };
 
 function transcript(...events: AgentEvent[]): SessionLog {
   const log = new SessionLog("s1");
@@ -451,4 +451,93 @@ describe("timing a Subagent", () => {
     assert.equal(only(view)?.endedAt, undefined);
     assert.equal(only(view)?.startedAt, "2026-01-01T00:00:00.000Z");
   });
+});
+
+describe("an Enquiry in the transcript", () => {
+  const QUESTIONS = [
+    {
+      header: "Library",
+      question: "Which library?",
+      multiSelect: false,
+      options: [{ label: "zod" }, { label: "valibot" }],
+    },
+  ];
+
+  const asked: AgentEvent = { type: "enquiry", askId: "a1", questions: QUESTIONS, state: "asked" };
+
+  it("upserts in place, so its whole life is one row", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "turn_started", turnId: "t1" },
+        { type: "tool_started", callId: "a1", name: "AskUserQuestion", input: { questions: QUESTIONS } },
+        asked,
+        asked,
+        { type: "enquiry", askId: "a1", questions: QUESTIONS, state: "answered", answers: [["zod"]] },
+      ).since(0),
+    );
+
+    const rows = state.entries.filter((entry) => entry.kind === "enquiry");
+    assert.equal(rows.length, 1, "three snapshots, one row");
+    assert.equal(rows[0]?.kind === "enquiry" ? rows[0].status : "", "answered");
+    assert.deepEqual(rows[0]?.kind === "enquiry" ? rows[0].answers : [], [["zod"]]);
+  });
+
+  it("holds the same `asking` reference across repeated snapshots", () => {
+    /*
+     * The property the whole web chrome rests on. `asking` reaches a shallow-compared snapshot, so a
+     * repeated `asked` that minted a fresh object would republish the chrome on every one — the trap
+     * `activeSubagents` is a count to avoid.
+     */
+    const log = transcript(asked, asked);
+    const entries = log.since(0);
+    const once = reduce(initialState(), entries[0] as LoggedEvent);
+    const twice = reduce(once, entries[1] as LoggedEvent);
+
+    assert.ok(once.asking !== undefined);
+    assert.equal(once.asking, twice.asking, "the same object, not an equal one");
+  });
+
+  it("carries the answers on the Entry rather than leaving them to the tool result", () => {
+    // The SDK writes its tool result as prose, so a front-end reading that would be parsing an
+    // English sentence to recover what its own user clicked.
+    const state = reduceAll(
+      transcript(asked, {
+        type: "enquiry",
+        askId: "a1",
+        questions: QUESTIONS,
+        state: "answered",
+        answers: [["Neither — something I typed"]],
+      }).since(0),
+    );
+
+    const row = state.entries.find((entry) => entry.kind === "enquiry");
+    assert.deepEqual(row?.kind === "enquiry" ? row.answers : [], [["Neither — something I typed"]]);
+    assert.equal(state.asking, undefined, "answered means the composer is unlocked");
+  });
+
+  it("clears `asking` on its own terminal snapshot", () => {
+    const state = reduceAll(
+      transcript(asked, { type: "enquiry", askId: "a1", questions: QUESTIONS, state: "aborted" }).since(0),
+    );
+    assert.equal(state.asking, undefined);
+  });
+
+  /*
+   * The safety valve, and the most important assertion in this block.
+   *
+   * A torn turn that left `asking` set would lock the composer with no key that unlocks it — the one
+   * failure of this feature a human could not recover from without reloading the page. So everything
+   * that ends a turn or a Backend Session clears it, not only the Enquiry's own terminal snapshot.
+   */
+  for (const closing of [
+    { type: "turn_ended", turnId: "t1", reason: "aborted" },
+    { type: "session_dormant", reason: "host shutdown" },
+    { type: "session_settled" },
+    { type: "session_ended", reason: "disposed" },
+  ] as AgentEvent[]) {
+    it(`clears \`asking\` on ${closing.type}, even with no terminal snapshot`, () => {
+      const state = reduceAll(transcript({ type: "turn_started", turnId: "t1" }, asked, closing).since(0));
+      assert.equal(state.asking, undefined, "a composer locked out for good is unrecoverable");
+    });
+  }
 });

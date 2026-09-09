@@ -50,6 +50,21 @@ export type Chrome = {
    * `lastSeq` note above describes. Anything wanting the Subagents reads the transcript surface.
    */
   activeSubagents: number;
+  /**
+   * The Enquiry blocking this turn, whole, or undefined.
+   *
+   * An object on a shallow-compared snapshot, which the note above appears to forbid — but what that
+   * note refuses is a *derived* value, an array rebuilt on every tick that can never compare equal to
+   * the one before it. This is the opposite: `reduce` mints it once, when the Enquiry is first asked,
+   * and carries the same reference through every streamed frame until something terminal drops it.
+   * Its identity changes exactly twice per Enquiry, which is the contract `model` and `capabilities`
+   * already hold here.
+   *
+   * Whole rather than an id, because the Composer is handed `chrome` and nothing else — it has no
+   * `getEntry`, and giving it one so it could fetch a body it could have been handed is a second data
+   * channel for a single object.
+   */
+  asking: ViewState["asking"];
   /** Set while the backend is summarising the Conversation Context. A boolean, so it compares. */
   compacting: boolean;
   /** Transport state, so the UI can say the Session Host has gone rather than appear idle. */

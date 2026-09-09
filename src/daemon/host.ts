@@ -15,6 +15,7 @@ import type {
   Capabilities,
   EffortLevel,
   LoggedEvent,
+  Question,
   Skill,
   Spend,
 } from "../protocol/events.ts";
@@ -501,6 +502,52 @@ export class SessionHost {
    * No `user_message` is written. Compaction is not something anyone said, and the turn it opens is
    * the backend's own work; what a reader sees is the `compacted` the adapter emits when it lands.
    */
+  /**
+   * Answer an Enquiry this Agent Session is holding open.
+   *
+   * **Never Revives**, which is the one place this parts company with `send` and `compact`. Those
+   * carry something still meaningful after a Revive; this resolves a promise held by a Backend
+   * Session that no longer exists, so reviving here would start a process and spend money to answer
+   * nothing. Dormant, Settled and Ended are all refused, and the transcript already carries the
+   * `aborted` snapshot that says why.
+   *
+   * **Writes no `user_message`.** An answer is not something anyone said to the model — it is the
+   * input to a tool call the model itself made — and a turn is already in flight, so there is nothing
+   * to occupy and nothing to queue. What a reader sees is the `answered` snapshot the adapter emits.
+   *
+   * Arity is checked here rather than left to the adapter, because getting it wrong is not an error
+   * the model should be asked to cope with: a client sending two answers for three Questions would
+   * otherwise produce an `answers` map the model reads as consent nobody gave.
+   */
+  async answerEnquiry(sessionId: string, askId: string, answers: string[][]): Promise<void> {
+    const record = this.record(sessionId);
+    const session = record.session;
+    if (!session) {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is ${record.status}; the question it was asked can no longer be answered`,
+      );
+    }
+    // The flag, never the method — the rule `compact` sets, so an adapter cannot be half-capable.
+    if (!session.capabilities.enquiries || !session.answerEnquiry) {
+      throw new CommandRefused(`${record.backendName} cannot carry an answer to a question`);
+    }
+
+    const open = openEnquiries(record.log.since(0)).find((enquiry) => enquiry.askId === askId);
+    if (!open) throw new CommandRefused(`That question is no longer open`);
+    if (answers.length !== open.questions.length) {
+      throw new CommandRefused(
+        `That question has ${open.questions.length} parts and must be answered in one act`,
+      );
+    }
+
+    // False is a race, not a fault: the transcript said it was open and the backend says otherwise,
+    // which is what an abort landing between the two looks like.
+    if (!(await session.answerEnquiry(askId, answers))) {
+      throw new CommandRefused(`That question is no longer open`);
+    }
+    this.touch(record);
+  }
+
   async compact(sessionId: string, instructions?: string): Promise<void> {
     const record = this.record(sessionId);
     // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
@@ -674,6 +721,7 @@ export class SessionHost {
     // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
     // the rail would say settled while the pane said idle.
     this.closeOpenSubagents(record, record.log.since(0));
+    this.closeOpenEnquiries(record, record.log.since(0));
     const openTurn = openTurnId(record.log.since(0));
     if (openTurn) record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
     record.log.append({ type: "session_settled" });
@@ -759,6 +807,7 @@ export class SessionHost {
       record.turnInFlight = false;
       await session.dispose();
       this.closeOpenSubagents(record, record.log.since(0));
+      this.closeOpenEnquiries(record, record.log.since(0));
       record.log.append({ type: "session_dormant", reason: "host shutdown" });
       this.persist(record);
     }
@@ -792,6 +841,8 @@ export class SessionHost {
         return await this.switchBranch(command.sessionId, command.branch);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
+      case "answer_enquiry":
+        return await this.answerEnquiry(command.sessionId, command.askId, command.answers);
       case "list_skills":
         return await this.listSkills(command.sessionId);
       case "list":
@@ -823,6 +874,9 @@ export class SessionHost {
    */
   private closeTornTurn(record: SessionRecord, entries: LoggedEvent[]): void {
     this.closeOpenSubagents(record, entries);
+    // The daemon-restart case for an Enquiry: nothing was in memory to abandon its callback, and the
+    // process holding it is gone. All that is left is to record that nobody will ever answer it.
+    this.closeOpenEnquiries(record, entries);
     const openTurn = openTurnId(entries);
     if (!openTurn) return;
     record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
@@ -839,6 +893,25 @@ export class SessionHost {
   private closeOpenSubagents(record: SessionRecord, entries: LoggedEvent[]): void {
     for (const open of openSubagents(entries)) {
       record.log.append({ type: "subagent", ...open, state: "aborted" });
+    }
+  }
+
+  /**
+   * Record that an Enquiry nobody answered is over.
+   *
+   * Called beside `closeOpenSubagents` from every path that takes a Backend Session away, and always
+   * *before* the `session_dormant` / `session_settled` line, so a state arriving after the marker
+   * cannot reduce a pane back out of it.
+   *
+   * Self-deduplicating rather than conditional: it runs after `session.dispose()`, which is where a
+   * live adapter abandons its own pending callbacks and emits these snapshots itself — so by the time
+   * this reads the transcript there is usually nothing open, and it appends nothing. What it is for
+   * is the cases where there was no adapter to do it: a daemon that restarted, or one whose backend
+   * died without saying so.
+   */
+  private closeOpenEnquiries(record: SessionRecord, entries: LoggedEvent[]): void {
+    for (const open of openEnquiries(entries)) {
+      record.log.append({ type: "enquiry", ...open, state: "aborted" });
     }
   }
 
@@ -1020,6 +1093,27 @@ function branchFrom(entries: LoggedEvent[]): Branch | undefined {
  * Subagent belongs to a turn of a Backend Session, and the host outlives both. Reading it back
  * from the transcript is also what makes the restart path work at all — nothing was in memory.
  */
+/**
+ * The Enquiries the transcript last saw open.
+ *
+ * Derived rather than held on the record, for the reason `openSubagents` is derived: an Enquiry
+ * belongs to a turn of a Backend Session and the host outlives both, and reading it back from the
+ * transcript is what makes the restart path work at all — nothing was in memory.
+ *
+ * The whole `questions` array comes back with it, because a snapshot carries the whole state and the
+ * terminal one the host is about to append needs it again.
+ */
+function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[] }[] {
+  const open = new Map<string, Question[]>();
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type !== "enquiry") continue;
+    if (event.state === "asked") open.set(event.askId, event.questions);
+    else open.delete(event.askId);
+  }
+  return [...open].map(([askId, questions]) => ({ askId, questions }));
+}
+
 function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {
   const open = new Map<string, string>();
   for (const entry of entries) {

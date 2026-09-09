@@ -16,6 +16,7 @@ import {
 // Relative, not the `@/` alias the rest of this directory uses: `node --test` resolves neither
 // Vite aliases nor tsconfig paths, and a module nothing can import is a module nothing can test.
 import { menuAction, type MenuAction } from "../presentation/composer-keys.ts";
+import { enquiryAction, type EnquiryContext } from "../presentation/enquiry-keys.ts";
 import { leadingToken, triggeredBy, type Triggerable } from "../presentation/composer-menu.ts";
 
 /**
@@ -44,6 +45,21 @@ export type MenuKeys = {
   complete: () => boolean;
   submit: () => boolean;
   dismiss: () => void;
+};
+
+/**
+ * What the open Enquiry's picker can be asked to do, read at keystroke time like `MenuKeys`.
+ *
+ * `context` is handed the editor's own `composing` flag rather than reading one: whether an IME is
+ * mid-candidate is a fact about the view, and everything else here is a fact about the picker.
+ */
+export type EnquiryKeys = {
+  context: (composing: boolean) => EnquiryContext;
+  move: (delta: number) => void;
+  toggle: () => void;
+  pick: (row: number) => void;
+  commit: () => void;
+  back: () => void;
 };
 
 /** The catalogue the pill decoration resolves names against. Replaced, never mutated. */
@@ -233,6 +249,8 @@ export type ComposerExtensionOptions = {
   hint: Compartment;
   /** Read at keystroke time, never captured: which item is highlighted changes every keypress. */
   menu: () => MenuKeys;
+  /** The same, and for the same reason — the cursor and the typed answer both move per keypress. */
+  enquiry: () => EnquiryKeys;
   onSubmit: () => void;
   onChange: (text: string, caret: number) => void;
   onPasteFiles: (files: File[]) => boolean;
@@ -247,6 +265,29 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
      * comment can claim; and returning true makes CodeMirror call `preventDefault`, which the global
      * keyboard layer now takes as "already handled" instead of blurring the box on Escape.
      */
+    /*
+     * Ahead of the menu's group, in the same precedence bucket — two groups rather than one array
+     * with duplicate keys, so which is consulted first is a fact about facet order that
+     * `composer-extensions.test.ts` reads back, rather than a claim about how CodeMirror chains
+     * same-key bindings within one group.
+     *
+     * The two can never both be open: an Enquiry locks the composer, and a locked composer does not
+     * open the `/` menu. So the order is unobservable at runtime and is argued from meaning — but a
+     * lockout that depended on that being true would be a lockout with a race in it.
+     */
+    Prec.highest(
+      keymap.of([
+        { key: "Escape", run: enquiryKey("Escape", options.enquiry) },
+        { key: "ArrowUp", run: enquiryKey("ArrowUp", options.enquiry) },
+        { key: "ArrowDown", run: enquiryKey("ArrowDown", options.enquiry) },
+        { key: "Enter", run: enquiryKey("Enter", options.enquiry) },
+        { key: "Space", run: enquiryKey(" ", options.enquiry) },
+        ...["1", "2", "3", "4", "5"].map((digit) => ({
+          key: digit,
+          run: enquiryKey(digit, options.enquiry),
+        })),
+      ]),
+    ),
     Prec.highest(
       keymap.of([
         { key: "Escape", run: menuKey("dismiss", options.menu) },
@@ -316,6 +357,45 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
  * Shift that means something else — and declining is what lets the binding below it run. So Enter
  * still sends when nothing is highlighted, with no special case anywhere for it.
  */
+/**
+ * One key, handed to the pure rule and then to the picker.
+ *
+ * Keyed on the literal key rather than on an action, unlike `menuKey`, because the digits all map to
+ * the same action with a different row — so the action is the *answer* here rather than the question.
+ *
+ * `commit` returns true unconditionally, and that is load-bearing: a refused commit — an empty
+ * multiSelect — must not fall through to the editor's own Enter binding and reach `send()`. The
+ * picker shows what is missing instead. The guard in `send()` is defence, not the mechanism.
+ */
+function enquiryKey(key: string, enquiry: () => EnquiryKeys) {
+  return (target: EditorView): boolean => {
+    const open = enquiry();
+    const decided = enquiryAction({ key, shiftKey: false }, open.context(target.composing));
+    if (decided === undefined) return false;
+
+    switch (decided.action) {
+      case "back":
+        open.back();
+        return true;
+      case "previous":
+        open.move(-1);
+        return true;
+      case "next":
+        open.move(1);
+        return true;
+      case "toggle":
+        open.toggle();
+        return true;
+      case "pick":
+        open.pick(decided.row ?? 0);
+        return true;
+      case "commit":
+        open.commit();
+        return true;
+    }
+  };
+}
+
 function menuKey(wanted: MenuAction, menu: () => MenuKeys) {
   return (target: EditorView): boolean => {
     const open = menu();

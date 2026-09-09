@@ -123,6 +123,64 @@ export function runContract(target: ConformanceTarget): void {
     });
 
     /**
+     * The same pairing as compaction below, for the same reason, and with one thing more at stake:
+     * a client that offers a picker for an Enquiry nothing can answer holds a turn open forever.
+     */
+    it("backs a declared Enquiry capability with a method, and an undeclared one with neither", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        assert.equal(
+          typeof session.answerEnquiry === "function",
+          session.capabilities.enquiries,
+          "capabilities.enquiries and BackendSession.answerEnquiry must say the same thing",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * Gated on the flag, as the Subagent assertions are: an adapter with no channel to ask through
+     * is not a broken one. Vacuous for a turn that asks nothing, which is how the Subagent
+     * assertions already behave.
+     */
+    it("pairs every Enquiry with a terminal snapshot before the turn ends", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.enquiries) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const open = new Set<string>();
+        for (const event of events) {
+          if (event.type !== "enquiry") continue;
+          if (event.state === "asked") open.add(event.askId);
+          else open.delete(event.askId);
+        }
+        // An Enquiry left open is a turn nobody can end: the CLI is still blocked on the permission
+        // callback, and the Session Host never clears `turnInFlight`.
+        assert.deepEqual([...open], [], "an Enquiry left open outlives the turn that asked it");
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("reports no Enquiry unless it declared it could ask", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (session.capabilities.enquiries) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        assert.deepEqual(
+          events.filter((event) => event.type === "enquiry"),
+          [],
+          "a client hides the affordance on the flag, so an event behind it can never be answered",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
      * The flag and the method must agree, because the host gates on the flag alone and every client
      * hides its control on the flag alone. An adapter declaring `compaction` without a `compact` is
      * a control that throws a TypeError the first time anyone uses it.

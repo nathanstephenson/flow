@@ -1,6 +1,12 @@
 import type { SessionSummary } from "../protocol/commands.ts";
 import { contextUsageLabel } from "../client/context-usage.ts";
 import { effortChoices, modelChoices, type ModelChoice } from "../client/model-choices.ts";
+import {
+  answerLines,
+  progressLabel,
+  rowsFor,
+  type Answering,
+} from "../client/enquiry.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
 import { relativeTime } from "../client/relative-time.ts";
 import { scopeKindLabel } from "../client/scope-kind.ts";
@@ -38,6 +44,19 @@ export type UiState = {
   view: ViewState;
   input: string;
   overlay: Overlay;
+  /**
+   * Where the human is up to in the Enquiry blocking this turn, or absent.
+   *
+   * Deliberately **not** an `Overlay`. Every Overlay is opened by the human with a chord and closed
+   * with Escape; this one is opened by the model and cannot be closed at all — so folding it into
+   * that union would hand `handleOverlayKey`'s Escape a dismissal that must not exist. It is also
+   * drawn *with* the transcript rather than over it: an Overlay hides the transcript because it is a
+   * different task, but the message that motivated the question is the last thing on screen and is
+   * the reason the question makes any sense.
+   *
+   * Which Enquiry it belongs to is `view.asking`; this is only the cursor's place within it.
+   */
+  answering?: Answering;
   notice?: string;
   /** Passed in rather than read from the clock, so a frame renders identically twice. */
   now?: number;
@@ -48,12 +67,17 @@ export type Size = { columns: number; rows: number };
 export function renderFrame(ui: UiState, size: Size): string[] {
   const width = Math.max(20, size.columns);
   const height = Math.max(6, size.rows);
-  const body = height - 3;
+  const picker = enquiryLines(ui, width);
+  // The picker takes its rows off the transcript rather than replacing it, which is the difference
+  // between this and an Overlay. Bounded so a four-option Question on a short terminal still leaves
+  // something of the conversation visible.
+  const body = height - 3 - picker.length;
 
   const lines = [header(ui, width)];
   lines.push(...(ui.overlay.kind === "none" ? transcript(ui.view, width, body) : overlay(ui, width, body)));
+  lines.push(...picker);
   lines.push(status(ui, width));
-  lines.push(clip(`> ${ui.input}`, width));
+  lines.push(promptLine(ui, width));
   return lines;
 }
 
@@ -78,6 +102,78 @@ function header(ui: UiState, width: number): string {
   return clip(pad(left, Math.max(0, width - right.length - 1)) + " " + right, width);
 }
 
+/**
+ * The Enquiry picker: the Question on screen, its Options, and where the cursor is.
+ *
+ * Empty when nothing is being asked, which is what keeps `renderFrame` free of a conditional — the
+ * rows are simply zero and the transcript gets its full height back.
+ *
+ * Numbers are a visible column, and that is the one thing this does that an arrow-driven list
+ * cannot: a row can be addressed without being travelled to. It is what "numbered picker" means, and
+ * it is why the digits are worth borrowing from the prompt line to get.
+ */
+function enquiryLines(ui: UiState, width: number): string[] {
+  const asking = ui.view.asking;
+  const state = ui.answering;
+  if (!asking || !state) return [];
+  const question = asking.questions[state.index];
+  if (!question) return [];
+
+  const rows = rowsFor(question, ui.input);
+  const progress = progressLabel(state, asking.questions);
+  const mode = question.multiSelect ? "  (choose any)" : "";
+  const title = `${question.header}${progress ? `  (${progress})` : ""}${mode}`;
+
+  const lines = [rule(title, width), ...wrap(question.question, width)];
+  rows.forEach((row, index) => {
+    const onCursor = index === state.cursor;
+    const cursor = onCursor ? ">" : " ";
+    // The box only where it means something. A single-select has exactly one answer at all times,
+    // so drawing an empty one beside every row would offer a choice that is not on offer.
+    const box = question.multiSelect ? ((state.chosen[state.index] ?? []).includes(row.label) ? "[x] " : "[ ] ") : "";
+    const head = `${cursor} ${index + 1} ${box}${row.label}`;
+
+    /*
+     * The row under the cursor gets its whole description, wrapped underneath; the rest get one
+     * clipped line.
+     *
+     * An Option's description is not a nicety the way a Skill's is in the `/` menu — it is the
+     * deciding information, and the model writes it long: a hundred characters saying what the
+     * trade-off is, with the trade-off itself at the end. Clipping every row to the width of a
+     * terminal reliably cuts off the half that decides it.
+     *
+     * So the one being considered is shown in full and the others stay scannable. The picker's
+     * height therefore changes as the cursor moves, which is the cost of this and is paid
+     * deliberately: what it buys is never having to choose between options whose descriptions have
+     * been cut in the same place.
+     */
+    if (!row.description) {
+      lines.push(clip(head, width));
+      return;
+    }
+    if (onCursor) {
+      lines.push(clip(head, width));
+      // Indented under the number, so the wrapped text reads as belonging to the row above it.
+      for (const line of wrap(row.description, Math.max(8, width - 6))) lines.push(clip(`      ${line}`, width));
+      return;
+    }
+    lines.push(ellipsised(`${head}  ${row.description}`, width));
+  });
+  return lines;
+}
+
+/**
+ * The prompt line, and — while an Enquiry is open — the whole of how the lockout is stated.
+ *
+ * The TUI has no placeholder to put it in, so the sigil carries it: `?` rather than `>`, because a
+ * `>` over a box that cannot send a message tells exactly the lie the web client's placeholder is
+ * careful to refuse.
+ */
+function promptLine(ui: UiState, width: number): string {
+  if (!ui.view.asking) return clip(`> ${ui.input}`, width);
+  return clip(ui.input === "" ? "? [type your own answer]" : `? ${ui.input}`, width);
+}
+
 function status(ui: UiState, width: number): string {
   const parts: string[] = [];
   if (ui.view.queue.length > 0) parts.push(`${ui.view.queue.length} queued`);
@@ -92,7 +188,17 @@ function status(ui: UiState, width: number): string {
   // `^K` is listed only where it can be served, on the same rule the web client hides the menu item:
   // an affordance a backend cannot honour is worse than no affordance at all.
   const compact = ui.view.capabilities?.compaction ? "  ^K compact" : "";
-  parts.push(`^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`);
+  /*
+   * While an Enquiry is open the hints are replaced rather than added to, because most of them are
+   * no longer true: nothing here sends a message, and `^K` is refused. `esc abort` survives and is
+   * the one way out — the TUI has no Abort button to give Escape a second job, which is why it means
+   * abort here where on the web it means going back a Question.
+   */
+  parts.push(
+    ui.view.asking
+      ? "↑↓ choose  1-9 pick  enter answer  esc abort"
+      : `^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`,
+  );
   return clip(parts.join("  ·  "), width);
 }
 
@@ -120,6 +226,14 @@ function entryLines(entry: Entry, width: number): string[] {
     case "subagent":
       // Indented past a tool call: a Subagent is what one of those is doing, not another of them.
       return [clip(`    ⤷ [${entry.waitingOn ?? entry.status}] ${entry.name}`, width)];
+    case "enquiry": {
+      // What was asked and what was chosen, which is the whole requirement of this row. The lines
+      // come from the shared module, so the terminal and the browser cannot disagree about what an
+      // answered Enquiry says — only about how it is drawn.
+      const head = clip(`  [${entry.status}] asked ${entry.questions.length === 1 ? "a question" : `${entry.questions.length} questions`}`, width);
+      if (entry.status !== "answered") return [head];
+      return [head, ...answerLines(entry.questions, entry.answers).map((line) => clip(`    ${line}`, width))];
+    }
     case "notice":
       return wrap(`! ${entry.text}`, width);
     case "marker":
@@ -245,6 +359,18 @@ function padTo(lines: string[], height: number, width: number): string[] {
   const clipped = lines.slice(0, height).map((line) => clip(line, width));
   while (clipped.length < height) clipped.push("");
   return clipped;
+}
+
+/**
+ * Clipped, but saying so.
+ *
+ * `clip` cuts silently, which is right for a header where the reader can see the shape of what is
+ * missing. It is wrong for an Option's description, where a sentence that stops mid-word is
+ * indistinguishable from one the model wrote that way — and the reader is being asked to choose on
+ * the strength of it.
+ */
+function ellipsised(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text;
 }
 
 function clip(text: string, width: number): string {

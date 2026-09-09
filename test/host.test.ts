@@ -391,3 +391,147 @@ describe("listing the Skills an Agent Session offers", () => {
     assert.equal(typesOf(host, sessionId).length, before);
   });
 });
+
+/**
+ * An Enquiry is the first thing GoodHarness holds a turn open on a human for, so what this block is
+ * really testing is that a turn can always end: every path that takes the Backend Session away also
+ * closes the question, and no path revives a session to answer one.
+ *
+ * Mirrors `a Subagent the turn left behind` deliberately, case for case — the two have the same
+ * lifecycle problem, and two different-shaped test blocks for one problem is how they drift.
+ */
+describe("an Enquiry the model asked", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  const QUESTIONS = [
+    {
+      header: "Library",
+      question: "Which library?",
+      multiSelect: false,
+      options: [{ label: "zod" }, { label: "valibot" }],
+    },
+  ];
+
+  const enquiryStates = (): string[] =>
+    events(host, sessionId)
+      .filter((event) => event.type === "enquiry")
+      .map((event) => (event.type === "enquiry" ? event.state : ""));
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    await host.send(sessionId, "go", "now");
+  });
+
+  it("forwards an answer to the backend and writes no user_message", async () => {
+    const askId = backend.latest.ask(QUESTIONS);
+    const before = typesOf(host, sessionId).filter((type) => type === "user_message").length;
+
+    await host.answerEnquiry(sessionId, askId, [["zod"]]);
+
+    assert.deepEqual(backend.latest.answered, [{ askId, answers: [["zod"]] }]);
+    assert.deepEqual(enquiryStates(), ["asked", "answered"]);
+    // An answer is a tool call's input, not something anyone said to the model — and a turn is
+    // already in flight, so there is nothing to occupy and nothing to queue.
+    assert.equal(
+      typesOf(host, sessionId).filter((type) => type === "user_message").length,
+      before,
+    );
+  });
+
+  it("refuses an askId it cannot find, and leaves nothing behind", async () => {
+    backend.latest.ask(QUESTIONS);
+
+    await assert.rejects(
+      () => host.answerEnquiry(sessionId, "not-a-real-id", [["zod"]]),
+      /no longer open/,
+    );
+    assert.deepEqual(backend.latest.answered, []);
+  });
+
+  it("refuses an answer of the wrong arity rather than sending consent nobody gave", async () => {
+    const askId = backend.latest.ask([
+      ...QUESTIONS,
+      { header: "Features", question: "Which features?", multiSelect: true, options: [{ label: "Caching" }] },
+    ]);
+
+    await assert.rejects(() => host.answerEnquiry(sessionId, askId, [["zod"]]), /answered in one act/);
+    assert.deepEqual(backend.latest.answered, []);
+  });
+
+  it("refuses a second answer to one already answered", async () => {
+    const askId = backend.latest.ask(QUESTIONS);
+    await host.answerEnquiry(sessionId, askId, [["zod"]]);
+
+    await assert.rejects(() => host.answerEnquiry(sessionId, askId, [["valibot"]]), /no longer open/);
+    assert.equal(backend.latest.answered.length, 1);
+  });
+
+  it("refuses a backend that does not declare it can ask", async () => {
+    const plain = new FakeBackend({ enquiries: false });
+    const other = new SessionHost();
+    other.registerBackend(plain);
+    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+    await other.send(id, "go", "now");
+
+    await assert.rejects(() => other.answerEnquiry(id, "any", [["zod"]]), /cannot carry an answer/);
+  });
+
+  it("is aborted when the Agent Session Settles", async () => {
+    backend.latest.ask(QUESTIONS);
+    await host.settle(sessionId);
+
+    assert.deepEqual(enquiryStates(), ["asked", "aborted"]);
+    const types = typesOf(host, sessionId);
+    assert.ok(types.lastIndexOf("enquiry") < types.indexOf("session_settled"));
+  });
+
+  it("is aborted when the host shuts down", async () => {
+    backend.latest.ask(QUESTIONS);
+    await host.shutdown();
+
+    assert.deepEqual(enquiryStates(), ["asked", "aborted"]);
+    const types = typesOf(host, sessionId);
+    assert.ok(types.lastIndexOf("enquiry") < types.indexOf("session_dormant"));
+  });
+
+  it("leaves one that was already answered alone", async () => {
+    const askId = backend.latest.ask(QUESTIONS);
+    await host.answerEnquiry(sessionId, askId, [["zod"]]);
+    await host.shutdown();
+
+    assert.deepEqual(enquiryStates(), ["asked", "answered"], "no second terminal state");
+  });
+
+  it("refuses an answer once the session is Dormant, and does not Revive to take one", async () => {
+    backend.latest.ask(QUESTIONS);
+    const askId = backend.latest.enquiries[0]?.askId ?? "";
+    await host.shutdown();
+    const sessions = backend.sessions.length;
+
+    /*
+     * The deliberate mirror of `compact`, which *does* Revive a Dormant session. What that carries is
+     * still meaningful afterwards; this resolves a promise that died with the old Backend Session, so
+     * reviving would start a process and spend money to answer nothing.
+     */
+    await assert.rejects(() => host.answerEnquiry(sessionId, askId, [["zod"]]), /can no longer be answered/);
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.status, "dormant");
+    assert.equal(backend.sessions.length, sessions, "no Backend Session was started to answer it");
+  });
+
+  it("queues a message sent while one is open rather than steering into the blocked turn", async () => {
+    backend.latest.ask(QUESTIONS);
+
+    await host.send(sessionId, "meanwhile", "after_turn");
+
+    // The Agent Session really is running — the turn has not ended and the backend is held — so the
+    // Steering Queue does exactly what it does for any other in-flight turn.
+    assert.deepEqual(backend.latest.prompts, ["go"]);
+    const queued = events(host, sessionId).filter((event) => event.type === "queue_changed");
+    assert.deepEqual(queued.at(-1)?.type === "queue_changed" ? queued.at(-1)?.pending : [], ["meanwhile"]);
+  });
+});

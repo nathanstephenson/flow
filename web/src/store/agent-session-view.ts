@@ -198,6 +198,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     // a publish. See the note in contract.ts. Resume bookkeeping stays with `since` above.
     queueDepth: view.queue.length,
     activeSubagents: view.activeSubagents,
+    asking: view.asking,
     link,
   };
 }

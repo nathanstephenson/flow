@@ -434,6 +434,12 @@ function capabilitiesOf(session: AgentSession): Capabilities {
     // backend does not tell us", which is what it is, and the conformance contract skips
     // accordingly rather than failing.
     subagents: false,
+    // And no channel to ask a human anything through. `createAgentSession`'s `tools` option is a
+    // `string[]` filter over pi's own built-ins, not a place to register a host-side tool, so there
+    // is nowhere to put an equivalent of `AskUserQuestion` — the same closed door TODO.md already
+    // records for Subagents. False says "this backend cannot ask", and clients hide the affordance
+    // rather than rendering a question nothing could answer.
+    enquiries: false,
   };
 }
 

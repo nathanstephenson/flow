@@ -83,6 +83,22 @@ export interface BackendSession {
    * would be a second way to change state the Session Host already owns, able to disagree with it.
    */
   skills?(): Promise<Skill[]>;
+  /**
+   * Answer an Enquiry this Backend Session is holding open.
+   *
+   * Optional, and paired with `capabilities.enquiries` exactly as `compact` is paired with
+   * `capabilities.compaction`: an adapter with no channel to ask through omits the method and
+   * declares `false`, and the host gates on the flag and never on the method.
+   *
+   * Answers `false` when there is no such open Enquiry — one already answered, one abandoned when a
+   * turn was aborted, or an `askId` a client read out of a week-old transcript. Not an error: a stale
+   * answer is an ordinary race, and the host turns it into a refusal a human can read.
+   *
+   * Reports through events like everything else. The terminal `enquiry` snapshot is what a reader
+   * sees, and the promise resolving means the answer reached the backend, not that the model has
+   * acted on it.
+   */
+  answerEnquiry?(askId: string, answers: string[][]): Promise<boolean>;
   dispose(): Promise<void>;
 }
 

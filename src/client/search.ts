@@ -27,6 +27,22 @@ export function entryHaystack(entry: Entry): string {
   if (entry.kind === "subagent") {
     return [entry.name, entry.description].filter((part) => part !== undefined && part !== "").join("\n");
   }
+  /*
+   * An Enquiry has no `text` either, and what a reader remembers of one is the decision it put to
+   * them: the question, the options offered, and — most of all — what they chose. Searching for the
+   * answer you gave is the likeliest way anyone comes back to one of these.
+   */
+  if (entry.kind === "enquiry") {
+    return entry.questions
+      .flatMap((question, index) => [
+        question.header,
+        question.question,
+        ...question.options.map((option) => option.label),
+        ...(entry.answers?.[index] ?? []),
+      ])
+      .filter((part) => part !== "")
+      .join("\n");
+  }
   if (entry.kind !== "tool") return entry.text;
   const diff = editDiff(entry.input);
   // The diff's path is already inside the stringified input; it is repeated here so that a query
