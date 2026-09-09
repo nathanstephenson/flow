@@ -2,6 +2,7 @@ import { memo, useMemo, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
+import { authorisationLabel } from "@client/permission.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useOpenSubagent } from "@/components/subagent-open.tsx";
@@ -184,6 +185,9 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
   // *after* it was rendered — which is the usual order of events.
   const open = toggled ?? entry.status === "error";
   const precis = toolSummary(entry.input);
+  // Only where somebody was asked. Absent is the common case — pre-approved, or already carrying a
+  // Standing Authorisation — and a badge on every row would imply a judgement nobody made.
+  const authorised = authorisationLabel(entry.authorisation);
 
   return (
     <div className="py-0.5 pl-[2ch]">
@@ -198,7 +202,26 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
           {precis === undefined ? null : (
             <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
-          {entry.status === "running" ? (
+          {/*
+            * `ml-auto` here rather than on the running label, so the two cannot both claim the right
+            * edge — a call awaiting authorisation is running, and would otherwise print both.
+            *
+            * `denied` and `asked` are the two worth colouring: one is a refusal a reader is looking
+            * for when the answer came back thin, and the other is the row the composer is waiting
+            * on. An ordinary authorised call is a footnote and is styled as one.
+            */}
+          {authorised ? (
+            <span
+              className={cn(
+                "ml-auto shrink-0 text-xs",
+                entry.authorisation === "denied" || entry.authorisation === "asked"
+                  ? "text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              {authorised}
+            </span>
+          ) : entry.status === "running" ? (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
           ) : null}
         </summary>

@@ -5,7 +5,7 @@ import { initialState, reduce, reduceAll, type Entry, type ViewState } from "../
 import { SessionLog } from "../src/daemon/log.ts";
 import type { AgentEvent, LoggedEvent } from "../src/protocol/events.ts";
 
-const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false, enquiries: false };
+const CAPS = { providers: ["fake"], models: [], compaction: false, fork: false, subagents: false, enquiries: false, permissions: false };
 
 function transcript(...events: AgentEvent[]): SessionLog {
   const log = new SessionLog("s1");
@@ -538,6 +538,134 @@ describe("an Enquiry in the transcript", () => {
     it(`clears \`asking\` on ${closing.type}, even with no terminal snapshot`, () => {
       const state = reduceAll(transcript({ type: "turn_started", turnId: "t1" }, asked, closing).since(0));
       assert.equal(state.asking, undefined, "a composer locked out for good is unrecoverable");
+    });
+  }
+});
+
+describe("a Permission Prompt", () => {
+  /** A call raised and awaiting authorisation, as a real adapter produces it: the row, then the prompt. */
+  function raised(callId: string, tool: string, input: unknown = {}): AgentEvent[] {
+    return [
+      { type: "tool_started", callId, name: tool, input },
+      { type: "permission", callId, tool, state: "asked" },
+    ];
+  }
+
+  it("folds onto the tool row rather than adding one of its own", () => {
+    const state = reduceAll(
+      transcript(
+        { type: "turn_started", turnId: "t1" },
+        ...raised("c1", "WebFetch", { url: "https://example.com" }),
+        { type: "permission", callId: "c1", tool: "WebFetch", state: "decided", decision: "allow" },
+        { type: "tool_ended", callId: "c1", result: "ok", isError: false },
+      ).since(0),
+    );
+
+    /*
+     * The shape of this whole feature in the reducer. A prompt is *about* a call and shares its id,
+     * and the row a reader needs is the one already naming the tool and precising its arguments — a
+     * second row would print `WebFetch https://…` and then `Permission: allowed` underneath it.
+     */
+    const rows = state.entries.filter((entry) => entry.kind === "tool");
+    assert.equal(rows.length, 1, "one call, one row");
+    assert.equal(rows[0]?.kind === "tool" ? rows[0].authorisation : undefined, "allowed");
+    // The two readings are independent: `status` stays what the call did.
+    assert.equal(rows[0]?.kind === "tool" ? rows[0].status : undefined, "complete");
+  });
+
+  it("leaves the authorisation absent on a call nobody was asked about", () => {
+    const state = reduceAll(transcript(...SAMPLE).since(0));
+    const tool = state.entries.find((entry) => entry.kind === "tool");
+
+    // The common case by far, and it must not read as a decision: most rows in most transcripts are
+    // pre-approved or carry a Standing Authorisation, and nobody was ever asked.
+    assert.equal(tool?.kind === "tool" ? tool.authorisation : "set", undefined);
+  });
+
+  it("keeps always distinct from allowed on the row", () => {
+    const state = reduceAll(
+      transcript(
+        ...raised("c1", "mcp__github__create_pull_request"),
+        { type: "permission", callId: "c1", tool: "mcp__github__create_pull_request", state: "decided", decision: "always" },
+      ).since(0),
+    );
+    const tool = state.entries.find((entry) => entry.kind === "tool");
+
+    // The transcript is the only place that ever says which click widened what the machine will run.
+    assert.equal(tool?.kind === "tool" ? tool.authorisation : undefined, "always");
+  });
+
+  it("records an abandoned prompt as refused", () => {
+    const state = reduceAll(
+      transcript(...raised("c1", "Bash"), { type: "permission", callId: "c1", tool: "Bash", state: "aborted" }).since(0),
+    );
+    const tool = state.entries.find((entry) => entry.kind === "tool");
+
+    // An abandoned prompt *is* a refusal, and the model was told so. Anything softer would leave a
+    // row saying "waiting" over a session that has gone.
+    assert.equal(tool?.kind === "tool" ? tool.authorisation : undefined, "denied");
+  });
+
+  it("holds the same `authorising` reference across repeated snapshots", () => {
+    // The property the web chrome rests on, exactly as for `asking` above: a repeated `asked` that
+    // minted a fresh object would republish the chrome on every streamed token.
+    const log = transcript(...raised("c1", "Bash"), { type: "permission", callId: "c1", tool: "Bash", state: "asked" });
+    const entries = log.since(0);
+    const opened = reduceAll(entries.slice(0, 2));
+    const again = reduce(opened, entries[2] as LoggedEvent);
+
+    assert.deepEqual(opened.authorising, { callId: "c1", tool: "Bash" });
+    assert.equal(opened.authorising, again.authorising, "the same object, not an equal one");
+  });
+
+  it("holds `authorising` undefined rather than empty when nothing is waiting", () => {
+    // Not merely tidy: `sameChrome` compares per key with Object.is, so a fresh empty value on each
+    // of the clearing paths would republish the chrome for a session that never saw a prompt.
+    assert.equal(initialState().authorising, undefined);
+    assert.equal(reduceAll(transcript(...SAMPLE).since(0)).authorising, undefined);
+  });
+
+  it("decides several open prompts oldest-first", () => {
+    /*
+     * One assistant message can carry several tool calls, so several prompts can be open at once.
+     * They are worked through in the order they were raised, which is the order a human reads them.
+     */
+    const opened = reduceAll(transcript(...raised("c1", "Bash"), ...raised("c2", "WebFetch")).since(0));
+    assert.deepEqual(opened.authorising, { callId: "c1", tool: "Bash" }, "the oldest is in hand");
+
+    const decided = reduce(
+      opened,
+      transcript({ type: "permission", callId: "c1", tool: "Bash", state: "decided", decision: "allow" }).since(0)[0] as LoggedEvent,
+    );
+    assert.deepEqual(decided.authorising, { callId: "c2", tool: "WebFetch" }, "deciding one promotes the next");
+  });
+
+  it("clears `authorising` when the last open prompt is decided", () => {
+    const state = reduceAll(
+      transcript(
+        ...raised("c1", "Bash"),
+        { type: "permission", callId: "c1", tool: "Bash", state: "decided", decision: "deny" },
+      ).since(0),
+    );
+    assert.equal(state.authorising, undefined);
+  });
+
+  /*
+   * The lockout's escape hatches. While `authorising` is set the composer may only decide, so a torn
+   * turn that left it set would lock it with no key that unlocks it — the one failure of this feature
+   * a human could not recover from without reloading.
+   */
+  const CLEARING: Array<[string, AgentEvent]> = [
+    ["turn_ended", { type: "turn_ended", turnId: "t1", reason: "aborted" }],
+    ["session_dormant", { type: "session_dormant", reason: "host shutdown" }],
+    ["session_settled", { type: "session_settled" }],
+    ["session_ended", { type: "session_ended", reason: "disposed" }],
+  ];
+
+  for (const [name, event] of CLEARING) {
+    it(`clears \`authorising\` on ${name}`, () => {
+      const state = reduceAll(transcript({ type: "turn_started", turnId: "t1" }, ...raised("c1", "Bash"), event).since(0));
+      assert.equal(state.authorising, undefined);
     });
   }
 });

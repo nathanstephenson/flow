@@ -440,6 +440,13 @@ function capabilitiesOf(session: AgentSession): Capabilities {
     // records for Subagents. False says "this backend cannot ask", and clients hide the affordance
     // rather than rendering a question nothing could answer.
     enquiries: false,
+    // And nothing runs a tool past a human first. Note this is **not** the reason above: an approval
+    // hook is a different surface from registering a tool, so the closed door that blocks an Enquiry
+    // says nothing about this one. What is true is that pi's adapter has no such hook today and its
+    // 17-member event union has no permission event in it — so a pi Agent Session runs whatever pi
+    // runs, silently, where a Claude one would ask. That asymmetry is the standing consequence, and
+    // TODO.md carries the open question.
+    permissions: false,
   };
 }
 

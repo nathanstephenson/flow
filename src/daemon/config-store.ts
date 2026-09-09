@@ -83,6 +83,34 @@ export class ConfigStore {
   readonly projectInclude = (): readonly string[] => this.config.projects?.include ?? [];
 
   /**
+   * The Standing Authorisations, asked fresh. Empty when none has been granted.
+   *
+   * Read at Backend Session create time rather than watched, which is why this is a getter and not a
+   * subscription: ADR 0009 rejected the observer shape, and a grant made in one Agent Session
+   * reaching every other live one would be exactly that. A session that has not asked does not care,
+   * and one that asks again after a grant elsewhere prompts once more and then picks the list up on
+   * its next Revive.
+   */
+  readonly standingAuthorisations = (): readonly string[] => this.config.permissions?.allow ?? [];
+
+  /**
+   * Grant a Standing Authorisation for one tool — what an Always decision leaves behind.
+   *
+   * Additive, and the one write on this store that is: `update` replaces the list wholesale, which is
+   * right for a client sending the list it wants but wrong for a single click, where two sessions
+   * granting different tools at once would each erase the other's. Idempotent, so a second click on
+   * a tool already granted writes nothing.
+   *
+   * A bound method rather than the store itself, for the reason `retention` is one: `SessionHost`
+   * owns Agent Sessions, and it must not become the owner of config.json to do this.
+   */
+  readonly allowTool = (name: string): void => {
+    const granted = this.standingAuthorisations();
+    if (granted.includes(name)) return;
+    this.update({ permissions: { allow: [...granted, name] } });
+  };
+
+  /**
    * Merge a patch in, write it out, and report the result. Throws ConfigError on anything unusable,
    * having changed nothing.
    *
@@ -97,8 +125,11 @@ export class ConfigStore {
     // A section that is now *absent* has to be deleted, not merely left unwritten. The merge above
     // preserves whatever the file already holds — which is what keeps a hand-written key this
     // daemon has never heard of alive, and would otherwise keep a Project Root that the patch just
-    // cleared. `projects` is the only optional section, so it is the only one that can be cleared.
+    // cleared. Both optional sections can be cleared, so both are deleted when absent — and for
+    // `permissions` that is not tidiness: a section left behind would keep a Standing Authorisation
+    // the human had just revoked.
     if (next.projects === undefined) delete document["projects"];
+    if (next.permissions === undefined) delete document["permissions"];
 
     mkdirSync(this.root, { recursive: true });
     // Written beside the target and renamed over it: a crash mid-write leaves the old config intact
@@ -139,5 +170,6 @@ function settingsOf(config: Config): Settings {
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),
+    ...(config.permissions === undefined ? {} : { permissions: config.permissions }),
   };
 }

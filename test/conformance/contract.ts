@@ -184,6 +184,60 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /** The same pairing, and the same thing at stake: buttons that settle nothing hold a turn open. */
+    it("backs a declared Permission capability with a method, and an undeclared one with neither", async () => {
+      const { session, dispose } = await start(target);
+      try {
+        assert.equal(
+          typeof session.answerPermission === "function",
+          session.capabilities.permissions,
+          "capabilities.permissions and BackendSession.answerPermission must say the same thing",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
+    /**
+     * Gated on the flag, and vacuous for a turn that asks nothing — the shape the two assertions
+     * above already have.
+     */
+    it("pairs every Permission Prompt with a terminal snapshot before the turn ends", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.permissions) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const open = new Set<string>();
+        for (const event of events) {
+          if (event.type !== "permission") continue;
+          if (event.state === "asked") open.add(event.callId);
+          else open.delete(event.callId);
+        }
+        // A prompt left open is a turn nobody can end: the CLI is still blocked on the callback, and
+        // the Session Host never clears `turnInFlight`.
+        assert.deepEqual([...open], [], "a Permission Prompt left open outlives the turn that raised it");
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("reports no Permission Prompt unless it declared it could ask", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (session.capabilities.permissions) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        assert.deepEqual(
+          events.filter((event) => event.type === "permission"),
+          [],
+          "a client hides the affordance on the flag, so an event behind it can never be decided",
+        );
+      } finally {
+        await dispose();
+      }
+    });
+
     /**
      * The flag and the method must agree, because the host gates on the flag alone and every client
      * hides its control on the flag alone. An adapter declaring `compaction` without a `compact` is

@@ -48,6 +48,24 @@ export type Settings = {
      */
     include?: string[];
   };
+  /**
+   * The Standing Authorisations: tools a human has authorised for every Agent Session on the machine,
+   * so a Permission Prompt is never raised for them again.
+   *
+   * **Absent rather than defaulted**, as `projects` is: a machine that has never granted one has none,
+   * and that is the state every installation starts in rather than a value with a right answer.
+   *
+   * Names, not rules. `allow` cannot express `Bash(git:*)` or "this MCP server, read tools only", so
+   * one grant on a tool authorises every future call of it whatever the arguments — which is why this
+   * is the one section of the Settings with a revocation list in the client rather than only an
+   * editor. What a person granted, they must be able to see and take back.
+   *
+   * Never a way *round* `disallowedTools`: an operator who refused a tool outranks a grant made here,
+   * and the adapter checks in that order.
+   */
+  permissions?: {
+    allow?: string[];
+  };
 };
 
 /**
@@ -66,6 +84,12 @@ export type SettingsPatch = {
    * sends the whole list it wants to end up with.
    */
   projects?: { root?: string; include?: string[] };
+  /**
+   * `allow` **replaces**, for the reason `projects.include` does: a client sends the whole list it
+   * wants to end up with, because a merged list makes a revocation indistinguishable from an
+   * omission — and here that failure mode is a grant nobody can take back.
+   */
+  permissions?: { allow?: string[] };
 };
 
 const UNITS: Record<string, number> = {

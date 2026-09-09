@@ -60,6 +60,18 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
    */
   if (chrome.asking && answering) return answeringPlaceholder(answering);
   /*
+   * Beside the Enquiry's line and on the same argument: the keys are the whole of what there is to
+   * say, because nothing about a *message* is true while a tool call is holding the turn.
+   *
+   * The tool is named here even though the panel above already names it, which the Enquiry's line
+   * does not do for its Question. The difference is what is being asked: a Question is a sentence
+   * someone reads, and a prompt is a decision they may take with a digit without their eyes leaving
+   * the box — so the box has to say what they are about to authorise.
+   */
+  if (chrome.authorising) {
+    return `Authorise ${chrome.authorising.tool}? — ↑↓ to choose, Enter to decide, Esc to refuse`;
+  }
+  /*
    * Before the status cases, and named rather than left as a generic "running".
    *
    * A compaction takes minutes and produces nothing to read while it works, so a composer that says
@@ -89,6 +101,7 @@ export function sendLabel(chrome: Chrome): string {
    * that is a coincidence of two states lining up, and an accessible name should not depend on one.
    */
   if (chrome.asking) return "Answer the question above first";
+  if (chrome.authorising) return `Decide whether ${chrome.authorising.tool} may run first`;
   if (canRevive(chrome.status)) return "Revive this Agent Session and send";
   if (chrome.queueDepth > 0) return `Queue this message behind ${chrome.queueDepth}`;
   return "Send this message";

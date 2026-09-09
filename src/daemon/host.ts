@@ -15,6 +15,7 @@ import type {
   Capabilities,
   EffortLevel,
   LoggedEvent,
+  PermissionDecision,
   Question,
   Skill,
   Spend,
@@ -132,6 +133,23 @@ export type SessionHostOptions = {
    * `retention` for exactly that; a literal is the convenience the tests use.
    */
   retention?: number | "never" | (() => number | "never");
+  /**
+   * The Standing Authorisations in force, read at each Backend Session create.
+   *
+   * A function for the reason `retention` is one, and given by the daemon as `ConfigStore`'s
+   * `standingAuthorisations`: a grant made an hour ago must reach a session started now without
+   * restarting the daemon. Omitted means none, which is what every test wants.
+   */
+  standingAuthorisations?: () => readonly string[];
+  /**
+   * Grant a Standing Authorisation — what an Always decision leaves behind.
+   *
+   * A bound function rather than the ConfigStore itself, so this object stays ignorant of
+   * config.json (ADR 0009): it owns Agent Sessions, and a file full of typefaces is not its
+   * business. Omitted means an Always authorises the call and is not remembered, which is what a
+   * host built without a Settings file can honestly offer.
+   */
+  allowTool?: (name: string) => void;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -140,6 +158,8 @@ export class SessionHost {
   private readonly backends = new Map<string, AgentBackend>();
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
+  private readonly standingAuthorisations: (() => readonly string[]) | undefined;
+  private readonly allowTool: ((name: string) => void) | undefined;
   private readonly closedListeners = new Set<(sessionId: string) => void>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
@@ -148,6 +168,8 @@ export class SessionHost {
   constructor(options: SessionHostOptions = {}) {
     this.store = options.store;
     this.retention = options.retention ?? "never";
+    this.standingAuthorisations = options.standingAuthorisations;
+    this.allowTool = options.allowTool;
   }
 
   /**
@@ -548,6 +570,72 @@ export class SessionHost {
     this.touch(record);
   }
 
+  /**
+   * Authorise, or refuse, one tool call this Agent Session is holding open.
+   *
+   * Refused when there is no Backend Session, and **never Revives**, for the reason `answerEnquiry`
+   * never does: the promise this settles died with the process that held it.
+   *
+   * Unlike `answerEnquiry` it does **not** read the transcript first. That scan buys arity checking
+   * there, and a prompt has no arity — one decision settles one call. What is left would be an
+   * O(transcript) walk per decision, on a record that grows all session, to produce a nicer message
+   * for a race the adapter already reports by answering `false`. So this delegates, and turns the
+   * `false` into the refusal.
+   *
+   * An `always` is persisted **after** the callback is settled, never before. Crashing between the
+   * two then loses a Standing Authorisation and the next session asks once more — a cost already
+   * accepted for a grant made in another session. The other order would leave a tool permanently
+   * authorised that the human never saw run, in a turn that then died: a record of consent to
+   * something that did not happen.
+   */
+  async answerPermission(sessionId: string, callId: string, decision: PermissionDecision): Promise<void> {
+    const record = this.record(sessionId);
+    const session = record.session;
+    if (!session) {
+      throw new CommandRefused(
+        `Agent Session ${sessionId} is ${record.status}; what it was waiting to be allowed can no longer be authorised`,
+      );
+    }
+    // The flag, never the method — the rule `compact` sets, so an adapter cannot be half-capable.
+    if (!session.capabilities.permissions || !session.answerPermission) {
+      throw new CommandRefused(`${record.backendName} cannot be asked before it acts`);
+    }
+
+    /*
+     * Read before the decision, because deciding is what forgets it — but only for an `always`,
+     * which is the one decision that needs the name.
+     *
+     * `answerEnquiry` scans unconditionally because it has an arity to check. There is nothing to
+     * check here, so on the common path this would be an O(transcript) walk, per decision, on a
+     * record that grows all session — to fetch a string two of the three decisions throw away.
+     */
+    const tool =
+      decision === "always"
+        ? openPermissions(record.log.since(0)).find((open) => open.callId === callId)?.tool
+        : undefined;
+
+    // False is a race, not a fault, and it is also what says to persist nothing: an abort landing
+    // between a client's click and this call must not leave a Standing Authorisation behind.
+    if (!(await session.answerPermission(callId, decision))) {
+      throw new CommandRefused(`That tool call is no longer waiting to be authorised`);
+    }
+    this.touch(record);
+
+    if (decision !== "always" || tool === undefined) return;
+    try {
+      this.allowTool?.(tool);
+    } catch (error) {
+      // Partial success, and the register `applyEffort` uses for exactly this shape: the tool ran, and
+      // only the remembering failed. Reporting it as a refusal would be a lie about what happened.
+      record.log.append({
+        type: "notice",
+        level: "warn",
+        text: `Allowed ${tool} once, but could not remember it: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      this.touch(record);
+    }
+  }
+
   async compact(sessionId: string, instructions?: string): Promise<void> {
     const record = this.record(sessionId);
     // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
@@ -722,6 +810,7 @@ export class SessionHost {
     // the rail would say settled while the pane said idle.
     this.closeOpenSubagents(record, record.log.since(0));
     this.closeOpenEnquiries(record, record.log.since(0));
+    this.closeOpenPermissions(record, record.log.since(0));
     const openTurn = openTurnId(record.log.since(0));
     if (openTurn) record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
     record.log.append({ type: "session_settled" });
@@ -808,6 +897,7 @@ export class SessionHost {
       await session.dispose();
       this.closeOpenSubagents(record, record.log.since(0));
       this.closeOpenEnquiries(record, record.log.since(0));
+      this.closeOpenPermissions(record, record.log.since(0));
       record.log.append({ type: "session_dormant", reason: "host shutdown" });
       this.persist(record);
     }
@@ -843,6 +933,8 @@ export class SessionHost {
         return await this.compact(command.sessionId, command.instructions);
       case "answer_enquiry":
         return await this.answerEnquiry(command.sessionId, command.askId, command.answers);
+      case "answer_permission":
+        return await this.answerPermission(command.sessionId, command.callId, command.decision);
       case "list_skills":
         return await this.listSkills(command.sessionId);
       case "list":
@@ -860,6 +952,11 @@ export class SessionHost {
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
+      // Read here rather than held, so a Revive picks up every grant made since this Agent Session
+      // last had a Backend Session — which is the whole of how a grant reaches an older session.
+      ...(this.standingAuthorisations
+        ? { standingAuthorisations: this.standingAuthorisations() }
+        : {}),
     });
     record.session = session;
     record.capabilities = session.capabilities;
@@ -877,6 +974,7 @@ export class SessionHost {
     // The daemon-restart case for an Enquiry: nothing was in memory to abandon its callback, and the
     // process holding it is gone. All that is left is to record that nobody will ever answer it.
     this.closeOpenEnquiries(record, entries);
+    this.closeOpenPermissions(record, entries);
     const openTurn = openTurnId(entries);
     if (!openTurn) return;
     record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
@@ -913,6 +1011,22 @@ export class SessionHost {
   private closeOpenEnquiries(record: SessionRecord, entries: LoggedEvent[]): void {
     for (const open of openEnquiries(entries)) {
       record.log.append({ type: "enquiry", ...open, state: "aborted" });
+    }
+  }
+
+  /**
+   * Record that a Permission Prompt nobody decided is over.
+   *
+   * Beside `closeOpenEnquiries`, called from the same three paths and self-deduplicating for the same
+   * reason: a live adapter abandons its own callbacks in `dispose()` and emits these snapshots
+   * itself, so this usually appends nothing. What it is for is a daemon that restarted, or a backend
+   * that died without saying so — and the failure it prevents is worse here than there. A prompt left
+   * open in a replayed transcript locks the composer on buttons whose promise died with the process,
+   * so the human has a question they cannot answer and cannot dismiss.
+   */
+  private closeOpenPermissions(record: SessionRecord, entries: LoggedEvent[]): void {
+    for (const open of openPermissions(entries)) {
+      record.log.append({ type: "permission", ...open, state: "aborted" });
     }
   }
 
@@ -1125,6 +1239,27 @@ function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Ques
     else open.delete(event.askId);
   }
   return [...open].map(([askId, questions]) => ({ askId, questions }));
+}
+
+/**
+ * The Permission Prompts the transcript last saw open.
+ *
+ * Derived rather than held, for the reason `openEnquiries` is derived: a prompt belongs to a turn of
+ * a Backend Session and the host outlives both, and reading it back from the transcript is the only
+ * thing that works on the restart path — nothing was in memory to read.
+ *
+ * The tool name comes back with it, because a snapshot carries the whole state and the terminal one
+ * the host is about to append needs it again.
+ */
+function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string }[] {
+  const open = new Map<string, string>();
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type !== "permission") continue;
+    if (event.state === "asked") open.set(event.callId, event.tool);
+    else open.delete(event.callId);
+  }
+  return [...open].map(([callId, tool]) => ({ callId, tool }));
 }
 
 function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {

@@ -17,6 +17,7 @@ import {
 // Vite aliases nor tsconfig paths, and a module nothing can import is a module nothing can test.
 import { menuAction, type MenuAction } from "../presentation/composer-keys.ts";
 import { enquiryAction, type EnquiryContext } from "../presentation/enquiry-keys.ts";
+import { permissionAction, type PermissionContext } from "../presentation/permission-keys.ts";
 import { leadingToken, triggeredBy, type Triggerable } from "../presentation/composer-menu.ts";
 
 /**
@@ -60,6 +61,22 @@ export type EnquiryKeys = {
   pick: (row: number) => void;
   commit: () => void;
   back: () => void;
+};
+
+/**
+ * What the open Permission Prompt's picker can be asked to do, read at keystroke time like the two
+ * above.
+ *
+ * Shorter than `EnquiryKeys` by exactly what a prompt does not have: no `toggle`, because a call is
+ * allowed or it is not, and no `back`, because there is no earlier part to go back to. `deny` is the
+ * one it gains, and it is Escape's meaning here.
+ */
+export type PermissionKeys = {
+  context: (composing: boolean) => PermissionContext;
+  move: (delta: number) => void;
+  pick: (row: number) => void;
+  commit: () => void;
+  deny: () => void;
 };
 
 /** The catalogue the pill decoration resolves names against. Replaced, never mutated. */
@@ -251,6 +268,8 @@ export type ComposerExtensionOptions = {
   menu: () => MenuKeys;
   /** The same, and for the same reason — the cursor and the typed answer both move per keypress. */
   enquiry: () => EnquiryKeys;
+  /** The same again: the cursor moves per keypress, and which prompt is in hand changes per turn. */
+  permission: () => PermissionKeys;
   onSubmit: () => void;
   onChange: (text: string, caret: number) => void;
   onPasteFiles: (files: File[]) => boolean;
@@ -275,6 +294,28 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
      * open the `/` menu. So the order is unobservable at runtime and is argued from meaning — but a
      * lockout that depended on that being true would be a lockout with a race in it.
      */
+    /*
+     * Ahead of the Enquiry's group, on the same terms and with the same caveat: the two can never
+     * both be open, because the CLI is blocked on one callback at a time — so the order is
+     * unobservable at runtime and is argued from meaning. A lockout that *depended* on that being
+     * true would be a lockout with a race in it, which is why this is a group of its own rather
+     * than more keys in the one below.
+     *
+     * Only three digits, unlike the Enquiry's five: a prompt has exactly three choices, and binding
+     * a fourth would take a character out of the editor to reach a row that is not there.
+     */
+    Prec.highest(
+      keymap.of([
+        { key: "Escape", run: permissionKey("Escape", options.permission) },
+        { key: "ArrowUp", run: permissionKey("ArrowUp", options.permission) },
+        { key: "ArrowDown", run: permissionKey("ArrowDown", options.permission) },
+        { key: "Enter", run: permissionKey("Enter", options.permission) },
+        ...["1", "2", "3"].map((digit) => ({
+          key: digit,
+          run: permissionKey(digit, options.permission),
+        })),
+      ]),
+    ),
     Prec.highest(
       keymap.of([
         { key: "Escape", run: enquiryKey("Escape", options.enquiry) },
@@ -367,6 +408,40 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
  * multiSelect — must not fall through to the editor's own Enter binding and reach `send()`. The
  * picker shows what is missing instead. The guard in `send()` is defence, not the mechanism.
  */
+/**
+ * One key, handed to the pure rule and then to the picker. Shaped exactly as `enquiryKey`.
+ *
+ * Every arm returns true, `commit` included, and here that is stronger than it is next door: an
+ * Enter that fell through to the editor's own binding would reach `send()` over a turn blocked on a
+ * callback, and an Escape that fell through would blur the composer — leaving the panel on screen
+ * with nothing focused to drive it.
+ */
+function permissionKey(key: string, permission: () => PermissionKeys) {
+  return (target: EditorView): boolean => {
+    const open = permission();
+    const decided = permissionAction({ key, shiftKey: false }, open.context(target.composing));
+    if (decided === undefined) return false;
+
+    switch (decided.action) {
+      case "deny":
+        open.deny();
+        return true;
+      case "previous":
+        open.move(-1);
+        return true;
+      case "next":
+        open.move(1);
+        return true;
+      case "pick":
+        open.pick(decided.row ?? 0);
+        return true;
+      case "commit":
+        open.commit();
+        return true;
+    }
+  };
+}
+
 function enquiryKey(key: string, enquiry: () => EnquiryKeys) {
   return (target: EditorView): boolean => {
     const open = enquiry();

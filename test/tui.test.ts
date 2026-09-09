@@ -31,6 +31,7 @@ const CAPABILITIES: Capabilities = {
   fork: false,
   subagents: false,
   enquiries: true,
+  permissions: true,
 };
 
 function baseUi(overrides: Partial<UiState> = {}): UiState {
@@ -626,5 +627,113 @@ describe("the TUI's Enquiry picker", () => {
     const frame = renderFrame(baseUi({ input: "hi" }), { columns: 70, rows: 16 });
     assert.match(frame.at(-1) ?? "", /^> hi/);
     assert.doesNotMatch(frame.join("\n"), /choose any/);
+  });
+});
+
+describe("the TUI's Permission Prompt picker", () => {
+  const authorising = (cursor = 0) =>
+    baseUi({
+      view: {
+        ...baseUi().view,
+        entries: [
+          {
+            kind: "tool" as const,
+            id: "c1",
+            name: "Bash",
+            input: { command: "rm -rf /tmp/scratch" },
+            status: "running" as const,
+            authorisation: "asked" as const,
+          },
+        ],
+        authorising: { callId: "c1", tool: "Bash" },
+      },
+      deciding: cursor,
+    });
+
+  it("names the tool and shows what the call would actually do", () => {
+    const frame = renderFrame(authorising(), { columns: 70, rows: 18 }).join("\n");
+
+    // The name alone is the withholding `tool-summary.ts` exists to stop: "authorise Bash?" is not a
+    // question anybody can answer.
+    assert.match(frame, /Authorise Bash\?/);
+    assert.match(frame, /rm -rf \/tmp\/scratch/);
+  });
+
+  it("offers the three choices with a visible number column", () => {
+    const frame = renderFrame(authorising(), { columns: 70, rows: 18 }).join("\n");
+
+    assert.match(frame, /1 Allow once/);
+    assert.match(frame, /2 Deny/);
+    assert.match(frame, /3 Always allow on this machine/);
+  });
+
+  it("shows the whole of the description under the cursor", () => {
+    // Unwrapped before matching: the description is wrapped across lines under the row, which is the
+    // point — a truncated one would have lost the second half rather than folded it.
+    const onAlways = renderFrame(authorising(2), { columns: 70, rows: 20 })
+      .join(" ")
+      .replace(/\s+/g, " ");
+
+    /*
+     * The row this rule exists for: "Always allow on this machine" is a sentence whose consequence
+     * is in its second half, and clipping every row to the width of a terminal cuts off exactly the
+     * part that should give someone pause.
+     */
+    assert.match(onAlways, /never ask again in any Agent Session/);
+    assert.match(onAlways, /Revocable in Settings/);
+  });
+
+  it("moves the cursor without moving the choices", () => {
+    const first = renderFrame(authorising(0), { columns: 70, rows: 18 }).join("\n");
+    const last = renderFrame(authorising(2), { columns: 70, rows: 18 }).join("\n");
+
+    assert.match(first, /> 1 Allow once/);
+    assert.match(last, /> 3 Always allow/);
+  });
+
+  it("swaps the prompt sigil for one that is not a lie", () => {
+    const frame = renderFrame(authorising(), { columns: 70, rows: 18 });
+
+    // `!` rather than `>` or `?`: nothing can be sent, and nothing can be typed either. The
+    // difference between being asked something and being asked to allow something is the whole
+    // distinction between an Enquiry and this, and the sigil is the only place a terminal has to
+    // say it.
+    assert.match(frame.at(-1) ?? "", /^! \[1-3 to decide]/);
+  });
+
+  it("replaces the hints with the keys that work, and says Escape refuses", () => {
+    const frame = renderFrame(authorising(), { columns: 90, rows: 18 });
+
+    // Replaced rather than added to, because most of the usual hints are no longer true: nothing
+    // here sends a message, and `^K` is refused.
+    assert.match(frame.at(-2) ?? "", /enter decide/);
+    assert.match(frame.at(-2) ?? "", /esc deny/);
+    assert.doesNotMatch(frame.at(-2) ?? "", /\^S sessions/);
+  });
+
+  it("keeps the frame exactly as tall as the terminal", () => {
+    // The picker takes its rows off the transcript rather than replacing it, which is what keeps the
+    // message that motivated the call on screen — and the whole difference between this and an
+    // Overlay.
+    for (const cursor of [0, 1, 2]) {
+      assert.equal(renderFrame(authorising(cursor), { columns: 70, rows: 20 }).length, 20);
+    }
+  });
+
+  it("prints the decision on the tool row, and nothing on a row nobody was asked about", () => {
+    const decided = baseUi({
+      view: {
+        ...baseUi().view,
+        entries: [
+          { kind: "tool" as const, id: "c1", name: "Bash", input: {}, status: "complete" as const, authorisation: "denied" as const },
+          { kind: "tool" as const, id: "c2", name: "Read", input: {}, status: "complete" as const },
+        ],
+      },
+    });
+    const frame = renderFrame(decided, { columns: 70, rows: 18 }).join("\n");
+
+    assert.match(frame, /\[complete] Bash — refused/);
+    // Absent is the common case, and it must not read as a decision.
+    assert.match(frame, /\[complete] Read$/m);
   });
 });

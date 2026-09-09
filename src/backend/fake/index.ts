@@ -5,6 +5,7 @@ import type {
   BackendEvent,
   Capabilities,
   EffortLevel,
+  PermissionDecision,
   Question,
   Skill,
   Spend,
@@ -31,6 +32,10 @@ const FAKE_CAPABILITIES: Capabilities = {
   // host and reducer test needs to be able to drive, and the cannot-ask case stays reachable through
   // the overrides for the handful that assert on a backend which has no channel to ask through.
   enquiries: true,
+  // True for the reason `enquiries` is: a Permission Prompt is something the host, reducer and
+  // durability tests all need to drive, and the cannot-ask case stays reachable through the
+  // overrides for the few that assert on a backend which never asks.
+  permissions: true,
 };
 
 /**
@@ -49,12 +54,18 @@ export class FakeSession implements BackendSession {
   readonly resumedFrom: string | undefined;
   /** What this session was told the Agent Session had already spent, for asserting a Revive. */
   readonly priorSpend: Spend | undefined;
+  /** What this session was told the machine already authorises, for asserting the read-at-create. */
+  readonly standingAuthorisations: readonly string[];
   /** Every Subagent begun in this session, in the style of `prompts`. */
   readonly subagents: FakeSubagent[] = [];
   /** Every Enquiry asked in this session, open or not, in the style of `prompts`. */
   readonly enquiries: Array<{ askId: string; questions: Question[] }> = [];
   /** What was answered, so a test can assert what reached the backend rather than what it emitted. */
   readonly answered: Array<{ askId: string; answers: string[][] }> = [];
+  /** Every Permission Prompt raised in this session, open or not, in the style of `enquiries`. */
+  readonly permissionPrompts: Array<{ callId: string; tool: string }> = [];
+  /** What was decided, so a test can assert what reached the backend rather than what it emitted. */
+  readonly decided: Array<{ callId: string; decision: PermissionDecision }> = [];
   modelId: string;
   effort: EffortLevel | undefined;
   disposed = false;
@@ -77,6 +88,9 @@ export class FakeSession implements BackendSession {
    */
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
 
+  /** Present only when this session declares it can be asked before it acts. See `answerEnquiry`. */
+  answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
+
   /**
    * Leaves a requested compaction running — the turn opens and never closes.
    *
@@ -88,6 +102,7 @@ export class FakeSession implements BackendSession {
 
   constructor(options: BackendCreateOptions, overrides: FakeCapabilityOverrides = {}) {
     this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
+    this.standingAuthorisations = options.standingAuthorisations ?? [];
     if (this.capabilities.enquiries) {
       this.answerEnquiry = async (askId: string, answers: string[][]) => {
         const open = this.enquiries.find((enquiry) => enquiry.askId === askId);
@@ -96,6 +111,24 @@ export class FakeSession implements BackendSession {
         this.answered.push({ askId, answers });
         this.emit({ type: "enquiry", askId, questions: open.questions, state: "answered", answers });
         this.emit({ type: "tool_ended", callId: askId, result: "The user answered.", isError: false });
+        return true;
+      };
+    }
+    if (this.capabilities.permissions) {
+      this.answerPermission = async (callId: string, decision: PermissionDecision) => {
+        const open = this.permissionPrompts.find((prompt) => prompt.callId === callId);
+        // Decided twice is an ordinary race, not a fault — the host turns the false into a refusal,
+        // and a false is also what tells it to persist nothing.
+        if (!open || this.decided.some((seen) => seen.callId === callId)) return false;
+        this.decided.push({ callId, decision });
+        this.emit({ type: "permission", callId, tool: open.tool, state: "decided", decision });
+        // A denial still ends the tool call, which is the whole reason a Deny is not an Abort.
+        this.emit({
+          type: "tool_ended",
+          callId,
+          result: decision === "deny" ? `${open.tool} is not enabled for this session.` : "ok",
+          isError: decision === "deny",
+        });
         return true;
       };
     }
@@ -224,6 +257,25 @@ export class FakeSession implements BackendSession {
     this.emit({ type: "tool_started", callId: askId, name: "AskUserQuestion", input: { questions } });
     this.emit({ type: "enquiry", askId, questions, state: "asked" });
     return askId;
+  }
+
+  /**
+   * Raise a Permission Prompt, as a real backend would: the tool call awaiting authorisation, and
+   * the prompt snapshot sharing its id.
+   *
+   * Both, and here the tool call matters more than it does for an Enquiry — the front-ends fold the
+   * decision *onto* that row rather than adding one of their own, so a prompt whose call never
+   * appeared is a prompt with nowhere to render. Returns the `callId` so a test can decide it.
+   *
+   * `completeTurn()` deliberately does not close an open one: that is the torn fixture the Session
+   * Host has to cope with, the contract `ask` and `beginSubagent` already set.
+   */
+  askPermission(tool: string, input: unknown = {}): string {
+    const callId = randomUUID();
+    this.permissionPrompts.push({ callId, tool });
+    this.emit({ type: "tool_started", callId, name: tool, input });
+    this.emit({ type: "permission", callId, tool, state: "asked" });
+    return callId;
   }
 
   /**
@@ -357,7 +409,9 @@ export class FakeSubagent {
  * Off by default so the existing suite keeps asserting against a backend that serves neither, which
  * is the case clients must hide a control for. A test that wants the other side asks for it.
  */
-export type FakeCapabilityOverrides = Partial<Pick<Capabilities, "compaction" | "fork" | "enquiries">>;
+export type FakeCapabilityOverrides = Partial<
+  Pick<Capabilities, "compaction" | "fork" | "enquiries" | "permissions">
+>;
 
 export class FakeBackend implements AgentBackend {
   readonly name = "fake";

@@ -382,3 +382,118 @@ describe("a retention change reaches a running host", () => {
     assert.deepEqual(await host.reap(wellPast), [sessionId], "the sweep read the new window");
   });
 });
+
+describe("the Standing Authorisations", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "flow-permissions-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const file = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as Record<string, unknown>;
+
+  it("is absent on a machine that has granted nothing", () => {
+    const store = new ConfigStore(root);
+
+    // A real state, not a defaulted value — every installation starts here, and it is what makes
+    // "no Standing Authorisations" distinguishable from "an empty list somebody saved".
+    assert.equal(store.view().permissions, undefined);
+    assert.deepEqual(store.standingAuthorisations(), []);
+  });
+
+  it("reads a list off the file", () => {
+    writeFileSync(
+      join(root, "config.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__github__list_issues", " Bash "] } }),
+    );
+    const store = new ConfigStore(root);
+
+    // Trimmed but never otherwise normalised: a tool name is an identifier the backend chose, and
+    // lower-casing `mcp__gdrive__trash_file` would silently stop matching it.
+    assert.deepEqual(store.standingAuthorisations(), ["mcp__github__list_issues", "Bash"]);
+  });
+
+  it("authorises nothing when the section is unreadable, and says why", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ permissions: { allow: "Bash" } }));
+    const store = new ConfigStore(root);
+
+    /*
+     * The file's lenient manner, and here it matters more than anywhere else: a malformed section
+     * must cost *nothing but itself*. Falling back to anything would either authorise a tool nobody
+     * granted or be read as having done so.
+     */
+    assert.deepEqual(store.standingAuthorisations(), []);
+    assert.match(store.warning ?? "", /permissions\.allow/);
+  });
+
+  it("drops an entry that is not a tool name, and keeps the rest", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ permissions: { allow: ["Bash", 7, ""] } }));
+    const store = new ConfigStore(root);
+
+    assert.deepEqual(store.standingAuthorisations(), ["Bash"]);
+    assert.match(store.warning ?? "", /not a tool name/);
+  });
+
+  it("adds one grant at a time without erasing another", () => {
+    const store = new ConfigStore(root);
+
+    // Additive, unlike every other write on this store: `update` replaces the list wholesale, which
+    // is right for a client sending the list it wants and wrong for a single click, where two
+    // sessions granting different tools would each erase the other's.
+    store.allowTool("Bash");
+    store.allowTool("WebFetch");
+
+    assert.deepEqual(store.standingAuthorisations(), ["Bash", "WebFetch"]);
+    assert.deepEqual(file()["permissions"], { allow: ["Bash", "WebFetch"] });
+  });
+
+  it("writes nothing for a tool already granted", () => {
+    const store = new ConfigStore(root);
+    store.allowTool("Bash");
+    store.allowTool("Bash");
+
+    assert.deepEqual(store.standingAuthorisations(), ["Bash"]);
+  });
+
+  it("replaces the list on a patch rather than merging it", () => {
+    const store = new ConfigStore(root);
+    store.allowTool("Bash");
+    store.allowTool("WebFetch");
+
+    // A merged list would make a revocation indistinguishable from an omission — and here the thing
+    // left un-revoked is a tool the machine goes on running unasked.
+    store.update({ permissions: { allow: ["Bash"] } });
+
+    assert.deepEqual(store.standingAuthorisations(), ["Bash"]);
+  });
+
+  it("clears the section, and the key, when the last grant is revoked", () => {
+    const store = new ConfigStore(root);
+    store.allowTool("Bash");
+
+    store.update({ permissions: { allow: [] } });
+
+    // The key has to be *deleted*, not merely left unwritten: the read-modify-write preserves
+    // whatever the file already holds, so a section left behind would keep a grant the human had
+    // just taken back.
+    assert.deepEqual(store.standingAuthorisations(), []);
+    assert.equal("permissions" in file(), false);
+    assert.equal(store.view().permissions, undefined);
+  });
+
+  it("refuses an unusable patch outright, having changed nothing", () => {
+    const store = new ConfigStore(root);
+    store.allowTool("Bash");
+
+    // The opposite manner to the file: there is a person on the other end who can fix it, and
+    // silently keeping the old value while reporting success is what a settings page must never do.
+    assert.throws(() => store.update({ permissions: { allow: [""] } } as never), /tool name/);
+    assert.throws(() => store.update({ permissions: { allow: "Bash" } } as never), /list of tool names/);
+    assert.deepEqual(store.standingAuthorisations(), ["Bash"]);
+  });
+});

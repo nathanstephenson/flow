@@ -45,6 +45,22 @@ export type EnquiryStatus = "asked" | "answered" | "aborted";
  */
 export type OpenEnquiry = { askId: string; questions: Question[] };
 
+/** Flattened from PermissionState, for the reason EnquiryStatus is flattened from EnquiryState. */
+export type Authorisation = "asked" | "allowed" | "always" | "denied";
+
+/**
+ * The Permission Prompt blocking this turn: which tool wants to run, and the id to decide it under.
+ *
+ * The whole thing rather than an id, for the reason `OpenEnquiry` is whole — the composer is handed
+ * Chrome and nothing else. Which is *all* it is: what the call would do reads off the `tool` Entry
+ * this shares an id with, and `toolSummary` already turns that into a line both front-ends print.
+ *
+ * Maintained under the same contract as `asking`, and it has to be: minted once when the prompt is
+ * first raised and then held by reference, so a repeated `asked` snapshot cannot republish a
+ * shallow-compared chrome.
+ */
+export type OpenPermission = { callId: string; tool: string };
+
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   | { kind: "user"; id: string; text: string; attachments?: string[] }
@@ -58,6 +74,25 @@ export type Entry =
       update?: unknown;
       result?: unknown;
       status: ToolStatus;
+      /**
+       * What a human decided about this call, where they were asked at all (ADR 0017).
+       *
+       * **Absent is the common case and means nobody was asked** — the tool was pre-approved or
+       * carried a Standing Authorisation. It is not "denied", and a front-end must not render it as
+       * a decision: most rows in most transcripts have none.
+       *
+       * Folded onto this Entry rather than given one of its own, which is the whole shape of the
+       * feature in the reducer. A Permission Prompt is *about* this call and shares its id, and the
+       * row a reader needs is the one already naming the tool and précising its arguments — a second
+       * row would print `WebFetch https://…` and then `Permission: allowed` underneath it. The
+       * alternative was an Entry kind that suppressed this one, the way an Enquiry's does, at the
+       * cost of a case in four exhaustive switches to say less.
+       *
+       * `status` stays what the *call* did, and the two are independent readings: a denied call ends
+       * `error`, because it did (the model got a refusal it can read), and an allowed one that then
+       * failed says so too. Neither can be derived from the other.
+       */
+      authorisation?: Authorisation;
       producer?: Producer;
     }
   /**
@@ -175,6 +210,21 @@ export type ViewState = {
    * ceremony than the distinction earns, since nothing reads "absent" differently from "undefined".
    */
   asking?: OpenEnquiry | undefined;
+  /**
+   * The Permission Prompt blocking this turn, or absent.
+   *
+   * Drives the same lockout `asking` does and is cleared by the same five paths, for the same reason:
+   * a prompt left set over a torn turn locks the composer on buttons that settle nothing.
+   *
+   * **The oldest open one, not a list.** One assistant message can carry several tool calls, so
+   * several prompts can be open at once — they are decided oldest-first, and deciding one promotes
+   * the next. Kept as a single value rather than a queue because this reaches a chrome compared by
+   * identity per key: an array rebuilt on each arrival could never compare equal, and would
+   * re-render the chrome on every streamed token. That is what `activeSubagents` is a number to
+   * avoid. Held `undefined` rather than empty for the same reason, so a session that never sees a
+   * prompt never republishes on the five clearing paths either.
+   */
+  authorising?: OpenPermission | undefined;
   /**
    * Set while the backend is summarising the Conversation Context.
    *
@@ -360,11 +410,39 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       };
     }
 
+    case "permission": {
+      const open = event.state === "asked";
+      /*
+       * Held by reference exactly as `asking` is, and for the same reason — a repeated `asked`
+       * snapshot must not mint a fresh object, or the web client's chrome republishes on each one.
+       *
+       * The difference is the promotion. Several prompts can be open at once, so a decision on the
+       * one in hand hands over to the next still-open call rather than clearing outright: `entries`
+       * is scanned for a `tool` row still `asked`, which is the transcript's own record of what is
+       * waiting. That scan runs a few times a turn, not per frame. A prompt arriving while another is
+       * in hand changes nothing here — it is already in `entries`, and will be promoted in its turn.
+       */
+      const authorising = open
+        ? (state.authorising ?? { callId: event.callId, tool: event.tool })
+        : state.authorising?.callId === event.callId
+          ? nextAwaiting(state.entries, event.callId)
+          : state.authorising;
+
+      return {
+        ...state,
+        ...(authorising === undefined ? { authorising: undefined } : { authorising }),
+        entries: patchTool(state.entries, event.callId, (tool) => ({
+          ...tool,
+          authorisation: authorisationOf(event),
+        })),
+      };
+    }
+
     case "turn_ended":
-      // `asking` cleared here as well as on the Enquiry's own terminal snapshot. A backend that tore
-      // down without emitting one would otherwise leave the composer locked out for good — see
-      // ViewState.asking. Clearing twice costs nothing; clearing never is unrecoverable.
-      return { ...state, status: "idle", asking: undefined };
+      // `asking` and `authorising` cleared here as well as on their own terminal snapshots. A backend
+      // that tore down without emitting one would otherwise leave the composer locked out for good —
+      // see ViewState.asking. Clearing twice costs nothing; clearing never is unrecoverable.
+      return { ...state, status: "idle", asking: undefined, authorising: undefined };
 
     case "queue_changed":
       return { ...state, queue: [...event.pending] };
@@ -418,9 +496,10 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         ...state,
         status: "dormant",
         queue: [],
-        // An Enquiry cannot survive its Backend Session: the promise a human would have answered
-        // died with it. Same for the two below.
+        // Neither an Enquiry nor a Permission Prompt can survive its Backend Session: the promise a
+        // human would have settled died with it. Same for the two below.
         asking: undefined,
+        authorising: undefined,
         entries: [
           ...state.entries,
           { kind: "marker", id: `dormant-${state.entries.length}`, marker: "dormant", text: `Dormant: ${event.reason}` },
@@ -433,6 +512,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         status: "settled",
         queue: [],
         asking: undefined,
+        authorising: undefined,
         entries: [
           ...state.entries,
           { kind: "marker", id: `settled-${state.entries.length}`, marker: "settled", text: "Settled" },
@@ -450,7 +530,13 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       };
 
     case "session_ended":
-      return { ...state, status: "ended", endedReason: event.reason, asking: undefined };
+      return {
+        ...state,
+        status: "ended",
+        endedReason: event.reason,
+        asking: undefined,
+        authorising: undefined,
+      };
   }
 }
 
@@ -480,6 +566,38 @@ function compactedLabel(trigger: "auto" | "manual", before: number, after: numbe
   const how = trigger === "auto" ? "Compacted automatically" : "Compacted";
   if (after === undefined) return `${how}, from ${compactTokens(before)} tokens`;
   return `${how}, ${compactTokens(before)} → ${compactTokens(after)} tokens`;
+}
+
+/**
+ * One `permission` snapshot as the word that goes on the tool row.
+ *
+ * `always` is kept apart from `allow` rather than flattened to it, because they are not the same
+ * thing to a reader scrolling back: one authorised a call, the other authorised every call of that
+ * tool on this machine, and only the transcript ever says which click did that.
+ */
+function authorisationOf(event: Extract<AgentEvent, { type: "permission" }>): Authorisation {
+  if (event.state === "asked") return "asked";
+  // An abandoned prompt *is* a refusal, and the model was told so — see `abandonAll` in the adapter.
+  // Recording it as anything softer would leave a row saying "waiting" over a session that has gone.
+  if (event.state === "aborted") return "denied";
+  return event.decision === "deny" ? "denied" : event.decision === "always" ? "always" : "allowed";
+}
+
+/**
+ * The next call still waiting to be authorised, once the one in hand is decided.
+ *
+ * Read off `entries` rather than tracked, because the transcript is already the record of what is
+ * open: a `tool` row still marked `asked` is a prompt nobody has answered. `except` is the call just
+ * decided, whose own patch has not been applied yet at the point this runs.
+ *
+ * Returns the *first* such row, so prompts are decided oldest-first — which is the order they were
+ * raised in and the order a human works through them.
+ */
+function nextAwaiting(entries: Entry[], except: string): OpenPermission | undefined {
+  const next = entries.find(
+    (entry) => entry.kind === "tool" && entry.id !== except && entry.authorisation === "asked",
+  );
+  return next?.kind === "tool" ? { callId: next.id, tool: next.name } : undefined;
 }
 
 /** Spread onto an Entry, so an unattributed event does not carry an explicit `producer: undefined`. */

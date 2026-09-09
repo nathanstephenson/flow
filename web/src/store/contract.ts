@@ -65,6 +65,19 @@ export type Chrome = {
    * channel for a single object.
    */
   asking: ViewState["asking"];
+  /**
+   * The Permission Prompt blocking this turn, whole, or undefined.
+   *
+   * Held to the same contract as `asking` and safe for the same reason: `reduce` mints it once and
+   * carries the reference until something terminal drops it. It is deliberately *not* a list even
+   * though several prompts can be open at once — an array rebuilt on each arrival is precisely what
+   * the `activeSubagents` note above refuses. The reducer promotes the next one instead.
+   *
+   * All it carries is the id and the tool name. What the call would actually do reads off the
+   * transcript surface, from the `tool` Entry sharing that id — the one place a component may go
+   * looking, because the row is already on screen above the composer.
+   */
+  authorising: ViewState["authorising"];
   /** Set while the backend is summarising the Conversation Context. A boolean, so it compares. */
   compacting: boolean;
   /** Transport state, so the UI can say the Session Host has gone rather than appear idle. */

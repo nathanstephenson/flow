@@ -1,6 +1,6 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
-import type { Capabilities, EffortLevel } from "./events.ts";
+import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -26,8 +26,9 @@ export type SessionSummary = {
    * git in would have three adapters answering a question about a directory none of them looked at.
    *
    * Read when there is reason to — at create, on Revive, after a switch, and at the end of a turn,
-   * since tools are pre-approved (ADR 0004) and so the model itself can move the branch. Never
-   * polled, so this is the last branch observed rather than a live one.
+   * since the tools that can move a branch are pre-approved (ADR 0004) and so the model itself can
+   * do it without being asked. Never polled, so this is the last branch observed rather than a live
+   * one.
    */
   branch?: Branch;
   /**
@@ -146,4 +147,21 @@ export type Command =
    * one — so reviving here would start a process and spend money to answer nothing.
    */
   | { type: "answer_enquiry"; sessionId: string; askId: string; answers: string[][] }
+  /**
+   * Authorise, or refuse, one tool call held open on a Permission Prompt.
+   *
+   * Its own command for every reason `answer_enquiry` is one — it is not message text, the session is
+   * `running` the whole time it waits, and it is **refused rather than Revived** because the promise
+   * it settles died with the Backend Session that held it.
+   *
+   * `callId` is the tool call's own id, which is what a client read off the `permission` event. One
+   * decision settles one call: there is no partial state to record, and no arity to check.
+   *
+   * `always` is the one member with an effect outside the turn. It authorises this call *and* grants
+   * a Standing Authorisation for the tool — a Setting, and so a fact about every Agent Session on the
+   * machine rather than about this one. A client offering it must say so in the label, because the
+   * hazard `Settings` names is exactly this: a browser window showing one Scope inviting a decision
+   * that is not scoped to it.
+   */
+  | { type: "answer_permission"; sessionId: string; callId: string; decision: PermissionDecision }
   | { type: "list" };

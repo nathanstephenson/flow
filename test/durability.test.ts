@@ -135,6 +135,46 @@ describe("durability and revive", () => {
     assert.equal(enquiry?.kind === "enquiry" && enquiry.status, "answered", "no second terminal state");
   });
 
+  it("closes a Permission Prompt torn by a restart, exactly once", async () => {
+    /*
+     * The same daemon-restart case, and here the stakes are higher than for an Enquiry. A prompt
+     * left `asked` in a replayed transcript locks the composer on buttons whose promise died with
+     * the process — a decision the human cannot make and cannot dismiss, over a session that has
+     * already gone Dormant.
+     */
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    first.backend.latest.askPermission("mcp__gdrive__trash_file", { fileId: "abc" });
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const call = state.entries.find((entry) => entry.kind === "tool");
+
+    // Recorded as refused, because that is what it was: nobody authorised it and nothing ran.
+    assert.equal(call?.kind === "tool" && call.authorisation, "denied");
+    assert.equal(
+      second.host.logFor(id).since(0).filter((entry) => entry.event.type === "permission").length,
+      2,
+      "one asked, one terminal — not two terminals",
+    );
+    assert.equal(state.authorising, undefined, "a replayed transcript must not lock the composer");
+  });
+
+  it("leaves a Permission Prompt decided before the crash alone", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "hello", "now");
+    const callId = first.backend.latest.askPermission("Bash", { command: "gt log" });
+    await first.host.answerPermission(id, callId, "allow");
+
+    const second = await freshHost();
+    const state = reduceAll(second.host.logFor(id).since(0));
+    const call = state.entries.find((entry) => entry.kind === "tool");
+
+    assert.equal(call?.kind === "tool" && call.authorisation, "allowed", "no second terminal state");
+  });
+
   it("leaves a Subagent that finished before the crash alone", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

@@ -43,6 +43,16 @@ function options(over: Partial<ComposerExtensionOptions> = {}): ComposerExtensio
     editable: new Compartment(),
     hint: new Compartment(),
     menu: () => menu(),
+    permission: () => ({
+      // Closed, as `enquiry` below is, and for the same reason: `permissionAction` returns undefined
+      // throughout, so every binding in that group declines and the keys fall through exactly as
+      // they did before this group existed.
+      context: () => ({ open: false, composing: false, rows: 0 }),
+      move: () => {},
+      pick: () => {},
+      commit: () => {},
+      deny: () => {},
+    }),
     enquiry: () => ({
       // Closed, which is every existing test's world: `enquiryAction` returns undefined throughout,
       // so every binding above declines and the keys fall through exactly as they did before.
@@ -92,34 +102,45 @@ describe("the Composer's extensions", () => {
    * `state.facet(keymap)` returns the groups in the order CodeMirror will consult them, so this is
    * the real resolution order rather than a claim about it.
    */
-  it("consults the Enquiry's keys, then the menu's, then the editor's own", () => {
+  it("consults the Permission Prompt's keys, then the Enquiry's, then the menu's, then the editor's own", () => {
     const groups = stateFrom().facet(keymap);
 
     /*
-     * The Enquiry outranks the menu, and both outrank the editor.
+     * A Permission Prompt outranks an Enquiry, an Enquiry outranks the menu, and all three outrank
+     * the editor.
      *
-     * Two groups rather than one array with duplicate keys, so the order between them is a fact
+     * Three groups rather than one array with duplicate keys, so the order between them is a fact
      * about facet position that this assertion reads back — rather than a claim about how CodeMirror
-     * chains same-key bindings within a single group. The two surfaces can never be open at once (an
-     * Enquiry locks the composer, and a locked composer opens no menu), so this order is
-     * unobservable at runtime; asserting it anyway is what stops the lockout depending on that.
+     * chains same-key bindings within a single group. No two of the three can be open at once (the
+     * CLI is blocked on one callback at a time, and a locked composer opens no menu), so the order
+     * is unobservable at runtime; asserting it anyway is what stops the lockout depending on that.
+     *
+     * Three digits for the prompt against the Enquiry's five, which is the visible difference and
+     * the deliberate one: a prompt has exactly three choices, and a fourth binding would take a
+     * character out of the editor to reach a row that is not there.
      */
     assert.deepEqual(
       (groups[0] ?? []).map((binding) => binding.key),
-      ["Escape", "ArrowUp", "ArrowDown", "Enter", "Space", "1", "2", "3", "4", "5"],
-      "the Enquiry's keymap must be the first group CodeMirror consults",
+      ["Escape", "ArrowUp", "ArrowDown", "Enter", "1", "2", "3"],
+      "the Permission Prompt's keymap must be the first group CodeMirror consults",
     );
 
     assert.deepEqual(
       (groups[1] ?? []).map((binding) => binding.key),
+      ["Escape", "ArrowUp", "ArrowDown", "Enter", "Space", "1", "2", "3", "4", "5"],
+      "the Enquiry's keymap must be the second",
+    );
+
+    assert.deepEqual(
+      (groups[2] ?? []).map((binding) => binding.key),
       ["Escape", "ArrowUp", "ArrowDown", "Tab", "Enter"],
-      "the menu's keymap must be the second",
+      "the menu's keymap must be the third",
     );
   });
 
   it("still has the editor's own Enter, below the menu's", () => {
     const groups = stateFrom().facet(keymap);
-    const rest = groups.slice(2).flat();
+    const rest = groups.slice(3).flat();
 
     assert.ok(
       rest.some((binding) => binding.key === "Enter"),

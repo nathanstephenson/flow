@@ -595,3 +595,165 @@ describe("an Enquiry the model asked", () => {
     assert.deepEqual(queued.at(-1)?.type === "queue_changed" ? queued.at(-1)?.pending : [], ["meanwhile"]);
   });
 });
+
+describe("a Permission Prompt the model raised", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+  /** What was granted a Standing Authorisation, in place of the ConfigStore the daemon passes. */
+  let granted: string[];
+  /** Set to make the grant fail, which is the interesting failure — see `answerPermission`. */
+  let refuseToRemember: Error | undefined;
+
+  const permissionStates = (): string[] =>
+    events(host, sessionId)
+      .filter((event) => event.type === "permission")
+      .map((event) => (event.type === "permission" ? event.state : ""));
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    granted = [];
+    refuseToRemember = undefined;
+    host = new SessionHost({
+      standingAuthorisations: () => granted,
+      allowTool: (name) => {
+        if (refuseToRemember) throw refuseToRemember;
+        granted.push(name);
+      },
+    });
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    await host.send(sessionId, "go", "now");
+  });
+
+  it("forwards a decision to the backend and writes no user_message", async () => {
+    const callId = backend.latest.askPermission("mcp__github__list_issues");
+    const before = typesOf(host, sessionId).filter((type) => type === "user_message").length;
+
+    await host.answerPermission(sessionId, callId, "allow");
+
+    assert.deepEqual(backend.latest.decided, [{ callId, decision: "allow" }]);
+    assert.deepEqual(permissionStates(), ["asked", "decided"]);
+    // A decision is about a tool call the model itself made, and a turn is already in flight — so
+    // there is nothing to occupy and nothing to queue.
+    assert.equal(
+      typesOf(host, sessionId).filter((type) => type === "user_message").length,
+      before,
+      "a decision is not a message",
+    );
+  });
+
+  it("hands the standing list to each Backend Session it starts", async () => {
+    granted.push("mcp__graphite__run_gt_cmd");
+    const revived = await host.create({ scope: "/tmp/scope", backend: "fake" });
+
+    // Read at create rather than watched: ADR 0009 rejected the observer shape a live-updating list
+    // would need, so a grant reaches an older session on its next Revive and no sooner.
+    assert.deepEqual(backend.latest.standingAuthorisations, ["mcp__graphite__run_gt_cmd"]);
+    assert.ok(revived);
+  });
+
+  it("remembers an Always as a Standing Authorisation", async () => {
+    const callId = backend.latest.askPermission("mcp__gdrive__search_files");
+
+    await host.answerPermission(sessionId, callId, "always");
+
+    assert.deepEqual(granted, ["mcp__gdrive__search_files"]);
+  });
+
+  it("remembers nothing for an Allow or a Deny", async () => {
+    const allowed = backend.latest.askPermission("Bash");
+    await host.answerPermission(sessionId, allowed, "allow");
+    const denied = backend.latest.askPermission("WebFetch");
+    await host.answerPermission(sessionId, denied, "deny");
+
+    assert.deepEqual(granted, [], "only Always is durable");
+  });
+
+  it("reports a failed grant as a notice, not as a refusal", async () => {
+    refuseToRemember = new Error("EACCES: config.json");
+    const callId = backend.latest.askPermission("Bash");
+
+    /*
+     * Partial success, and the register `applyEffort` already uses for this shape. The tool *ran* —
+     * the callback was settled before the grant was attempted — so reporting a refusal would be a
+     * lie about what happened, and the human would try again against a call that is already gone.
+     */
+    await host.answerPermission(sessionId, callId, "always");
+
+    const notice = events(host, sessionId).findLast((event) => event.type === "notice");
+    assert.match(notice?.type === "notice" ? notice.text : "", /Allowed Bash once/);
+    assert.match(notice?.type === "notice" ? notice.text : "", /EACCES/);
+    assert.deepEqual(permissionStates(), ["asked", "decided"], "the decision still stands");
+  });
+
+  it("refuses a callId nothing is waiting under", async () => {
+    backend.latest.askPermission("Bash");
+    await assert.rejects(
+      () => host.answerPermission(sessionId, "nobody", "allow"),
+      /no longer waiting to be authorised/,
+    );
+  });
+
+  it("refuses a second decision on the same call, and remembers nothing for it", async () => {
+    const callId = backend.latest.askPermission("Bash");
+    await host.answerPermission(sessionId, callId, "allow");
+
+    // The adapter answers `false`, which is both an ordinary race and the signal to persist nothing:
+    // a stale Always must not leave a Standing Authorisation behind.
+    await assert.rejects(
+      () => host.answerPermission(sessionId, callId, "always"),
+      /no longer waiting to be authorised/,
+    );
+    assert.deepEqual(granted, []);
+  });
+
+  it("refuses a decision for a backend that cannot be asked before it acts", async () => {
+    const cannot = new FakeBackend({ permissions: false });
+    const other = new SessionHost();
+    other.registerBackend(cannot);
+    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+
+    // The flag, never the method — so an adapter cannot be half-capable and a client that hides its
+    // affordance on the flag cannot reach a method that is not there.
+    assert.equal(cannot.latest.answerPermission, undefined);
+    await assert.rejects(() => other.answerPermission(id, "c1", "allow"), /cannot be asked before it acts/);
+  });
+
+  it("closes an open prompt as aborted before the session_settled line", async () => {
+    backend.latest.askPermission("Bash");
+
+    await host.settle(sessionId);
+
+    const types = typesOf(host, sessionId);
+    const aborted = types.lastIndexOf("permission");
+    // Ordering, not merely presence: a terminal state arriving after the marker would reduce a pane
+    // back out of Settled, and a prompt left `asked` would lock the composer on a replayed
+    // transcript.
+    assert.ok(aborted < types.indexOf("session_settled"), "the prompt is closed first");
+    assert.deepEqual(permissionStates(), ["asked", "aborted"]);
+  });
+
+  it("leaves one that was already decided alone", async () => {
+    const callId = backend.latest.askPermission("Bash");
+    await host.answerPermission(sessionId, callId, "allow");
+    await host.shutdown();
+
+    assert.deepEqual(permissionStates(), ["asked", "decided"], "no second terminal state");
+  });
+
+  it("refuses a decision once the session is Dormant, and does not Revive to take one", async () => {
+    const callId = backend.latest.askPermission("Bash");
+    await host.shutdown();
+    const sessions = backend.sessions.length;
+
+    // The mirror of `answerEnquiry`, and for the same reason: this settles a promise that died with
+    // the old Backend Session, so reviving would spend money to authorise nothing.
+    await assert.rejects(
+      () => host.answerPermission(sessionId, callId, "allow"),
+      /can no longer be authorised/,
+    );
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.status, "dormant");
+    assert.equal(backend.sessions.length, sessions, "no Backend Session was started to decide it");
+  });
+});

@@ -36,6 +36,44 @@ with the capability flag, so a pi adapter that found a channel would need the me
 nothing else. What is unresolved is whether pi has such a channel at all, which is the same
 documentation question the Subagent entry above is waiting on, and worth answering once for both.
 
+## Decide whether pi can be asked before it acts
+
+`src/backend/pi/index.ts` declares `permissions: false`, and **the reason is not the one written
+twice above.** The Subagent and Enquiry entries both rest on `createAgentSession`'s `tools` option
+being a `string[]` filter over pi's built-ins, with nowhere to register a host-side tool. An approval
+hook is a different surface, and that argument does not transfer to it — nobody has looked.
+
+What is true today: pi's adapter has no permission handling at all, and its event union has no
+permission or approval member, so `translate()` sees `tool_execution_start` with no pre-execution
+hook to hang anything off. So the standing consequence, until this is answered, is an asymmetry worth
+naming: **a Claude Agent Session asks before running an unauthorised tool, and a pi one runs it
+silently.** Clients hide the affordance on the flag, so nothing breaks — but nothing warns either.
+
+Same documentation question as the two entries above, and worth answering once for all three.
+
+## Run the two spikes ADR 0017 is still owed
+
+Both are one file beside `spikes/ask-user-question.ts`, and neither blocks anything shipped — the
+design is correct either way. They are owed because two things are currently *reasoned about* rather
+than measured, which is the standard ADR 0016 set for itself.
+
+- **Does `tool_started` reliably precede the permission callback for a fall-through tool?** This is
+  what licenses folding the decision onto the `tool` Entry with `patchTool` instead of giving it an
+  Entry of its own: `patchTool` silently no-ops when the row is absent, so an inverted ordering is a
+  prompt that vanishes from the transcript. The ~4 ms lead was measured for `AskUserQuestion` and has
+  never been measured for anything else.
+- **Does the CLI issue concurrent permission requests, or serialise them?** Prompt for two
+  non-allowlisted tools in one turn, logging on entry *and* on settle, holding each callback five
+  seconds. If the second entry line lands before the first settle line they are concurrent. The
+  reducer decides oldest-first either way, so this only settles whether the promotion path is ever
+  exercised — and therefore whether it is dead code.
+
+A third, smaller, and the one with something to gain: log `title`, `description`, `suggestions` and
+`matchedAskRule` off the callback's options bag on a real fall-through. If the CLI is already writing
+prompt text for a human, or already saying *why* it is asking, that beats précising the arguments
+ourselves — and `updatedPermissions` on the allow branch is the rule-grained Standing Authorisation
+ADR 0017 declined without knowing what it does.
+
 ## Drop straggler events from a Dormant Agent Session
 
 `onBackendEvent` in `src/daemon/host.ts` drops events for a record that is `ended` or `settled`, but
@@ -113,3 +151,15 @@ backend does not supply. Recorded in ADR 0015.
 
 If it is wanted, the only honest route is accumulating `apiUsage` deltas here and attributing them
 via `parent_tool_use_id` — worth a probe first to confirm those deltas are attributable at all.
+
+## Attribute a Subagent's Permission Prompt to it
+
+`SubagentWait`'s `"permission"` has now been reserved by two decisions — ADR 0015 put it in the union
+ahead of the feature, and ADR 0017 shipped the feature without populating it. The blocker is the same
+one ADR 0016 recorded: the SDK's permission callback carries an `agentID`, and nothing has ever been
+observed filling it in. So `producer` is on the `permission` event and always unset, and a Subagent
+blocked on a prompt reports `running` rather than what it is actually waiting for.
+
+Worth one line in whichever spike above gets run: log `agentID` on a fall-through raised from inside
+a Subagent. If it is populated, this is a one-line change in the adapter and the union member finally
+means something.

@@ -79,6 +79,29 @@ the vocabulary does not distinguish, because the Options sit in the transcript b
 reader can see for themselves.
 _Avoid_: choice, poll, and `option` for the whole of one.
 
+**Permission Prompt**:
+One tool call held open on a human's authorisation, inside the turn that made it. Identified by that
+call, so it is addressable without a new id space, and answered once with one of three decisions —
+allow it, refuse it, or authorise the tool for good. It occupies the Agent Session while it waits and
+cannot outlive its turn: one left open by an unclean shutdown is closed as refused, the way a torn
+turn, its Subagents and an open Enquiry are. Only raised for a tool nothing has already authorised,
+which is what makes it rare. It is what CONTEXT.md's Enquiry entry says an Enquiry is not: here
+something *is* being authorised, and the human is not supplying a tool's input but deciding whether
+it runs at all. Only a backend that can be asked before it acts has them: `Capabilities.permissions`
+says which, and pi has none — so a pi Agent Session runs whatever pi runs.
+_Avoid_: approval, confirmation, gate, dialog; and **enquiry**, which is the other thing a turn can
+wait on a person for.
+
+**Standing Authorisation**:
+A tool a human has authorised for every Agent Session on the machine, so no Permission Prompt is
+raised for it again. A fact about the Settings rather than about any Agent Session: granted by
+answering a Permission Prompt with Always, listed and revoked in the Settings, and read by a Backend
+Session when it opens rather than watched — so one granted now reaches an older session on its next
+Revive. A name and not a rule, which is the whole of its coarseness: it cannot say "this tool with
+these arguments", so one grant covers every future call.
+_Avoid_: permission, allowlist, trust, whitelist — and note the *pre-approved* set a Backend Adapter
+ships with is not one of these: nobody was asked for it.
+
 **Skill**:
 A named prompt the **backend** expands when a message begins with it — `/tdd`, `/code-review`. Unlike
 a Command it is ordinary text all the way down: it enters the Presentation Transcript and the
@@ -185,7 +208,9 @@ _Avoid_: transcript, history, log, buffer
 **Settings**:
 Values the Session Host reads from its state root, governing every Agent Session on the machine
 rather than one Scope. Read leniently and written strictly: a value it cannot use costs only its own
-default on the way up, but one offered by a client is refused.
+default on the way up, but one offered by a client is refused. Machine-wide is the fact most easily
+got wrong from a browser window showing one Scope, and the Standing Authorisations are where getting
+it wrong costs the most.
 _Avoid_: config, preferences, options, profile
 
 **Effort**:
