@@ -206,17 +206,24 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
             * `ml-auto` here rather than on the running label, so the two cannot both claim the right
             * edge — a call awaiting authorisation is running, and would otherwise print both.
             *
-            * `denied` and `asked` are the two worth colouring: one is a refusal a reader is looking
-            * for when the answer came back thin, and the other is the row the composer is waiting
-            * on. An ordinary authorised call is a footnote and is styled as one.
+            * `denied` and `asked` are the two worth colouring, and they take different hues because
+            * they are different things. `denied` is a refusal, which is what `--destructive` is for.
+            * `asked` is the reader's turn — the state that sits there until they come back — so it
+            * wears `--status-awaiting`, the same purple the rail's Awaiting dot spends for exactly
+            * that meaning (web/src/components/status-indicator.tsx). Colouring it as a refusal read
+            * as though something had gone wrong, when nothing has: the turn is simply waiting.
+            *
+            * An ordinary authorised call is a footnote and is styled as one.
             */}
           {authorised ? (
             <span
               className={cn(
                 "ml-auto shrink-0 text-xs",
-                entry.authorisation === "denied" || entry.authorisation === "asked"
+                entry.authorisation === "denied"
                   ? "text-destructive"
-                  : "text-muted-foreground",
+                  : entry.authorisation === "asked"
+                    ? "text-status-awaiting"
+                    : "text-muted-foreground",
               )}
             >
               {authorised}
