@@ -1,12 +1,1 @@
 * text=auto eol=lf
-
-# The embedded web bundle is a build output that happens to be TypeScript, and git treating it as
-# reviewable text helps nobody. It is 2.5 MB of minified JS and base64'd wasm and fonts, and Vite
-# content-hashes the filenames, so a rebuild rewrites whole keys rather than lines.
-#
-# `-diff` keeps it out of a diff nobody can read. `linguist-generated` collapses it in a pull
-# request and keeps it out of the language stats. `merge=binary` stops git splicing two rebuilds
-# together line by line and producing a manifest that came from neither — every concurrent branch
-# touching `web/` conflicts here, and the only correct resolution is to discard both sides and run
-# `npm run build:assets`, which ADR 0007 leaves as the cost of committing this file at all.
-src/web/assets.generated.ts -diff linguist-generated=true merge=binary

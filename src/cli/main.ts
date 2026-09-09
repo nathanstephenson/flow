@@ -8,6 +8,7 @@ import { ConfigStore } from "../daemon/config-store.ts";
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
+import { EMBEDDED } from "../web/embedded.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { answerLines } from "../client/enquiry.ts";
@@ -158,6 +159,7 @@ async function startHost(
     shells,
     config,
     store,
+    assets: EMBEDDED,
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),

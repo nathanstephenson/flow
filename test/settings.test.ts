@@ -206,7 +206,7 @@ describe("the Settings over the wire", () => {
     root = mkdtempSync(join(tmpdir(), "flow-settings-http-"));
     token = readOrCreateToken(root);
     config = new ConfigStore(root);
-    running = await serve({ host: new SessionHost(), token, config });
+    running = await serve({ host: new SessionHost(), token, config, assets: {} });
   });
 
   afterEach(async () => {

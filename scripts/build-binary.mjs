@@ -8,11 +8,34 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
+import { manifestOf } from "./build-assets.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "build");
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
+
+/**
+ * This build is the only one that embeds a web client, so it is the only place the manifest enters
+ * the program (ADR 0017). src/web/embedded.ts exports an empty manifest and is replaced here, which
+ * is what keeps a 2.5 MB build output out of src/ and out of git.
+ *
+ * Generated as data rather than as TypeScript: it is JSON.stringify of a plain object, so it cannot
+ * be syntactically invalid, and nothing needs to typecheck it. What stands behind it is
+ * test/assets-embedding.test.ts, which pins manifestOf() against a tree it builds itself.
+ */
+const embedded = join(out, "embedded.generated.js");
+writeFileSync(
+  embedded,
+  `export const EMBEDDED = ${JSON.stringify(manifestOf(join(root, "web/dist")))};\n`,
+);
+
+const embedAssets = {
+  name: "flow-embedded-assets",
+  setup: (builder) =>
+    builder.onResolve({ filter: /\/web\/embedded\.ts$/ }, () => ({ path: embedded })),
+};
 
 const result = await build({
   entryPoints: [join(root, "src/cli/main.ts")],
@@ -43,6 +66,7 @@ const result = await build({
     "bufferutil",
     "utf-8-validate",
   ],
+  plugins: [embedAssets],
   metafile: true,
 });
 

@@ -10,7 +10,6 @@
     "flow": "./dist/cli/main.js"
   },
   "scripts": {
-    "prebuild": "npm run build:assets",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.presentation.json && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit",
     "dev": "vite --config web/vite.config.ts",
@@ -18,8 +17,8 @@
     "spike:auth": "node --experimental-strip-types spikes/subscription-auth.ts",
     "start": "node --experimental-strip-types src/cli/main.ts",
     "spike:adapter": "node --experimental-strip-types spikes/adapter-smoke.ts",
-    "build:assets": "node scripts/build-web.mjs",
-    "prebuild:binary": "npm run build:assets",
+    "build:web": "node scripts/build-web.mjs",
+    "prebuild:binary": "npm run build:web",
     "build:binary": "node scripts/build-binary.mjs"
   },
   "dependencies": {

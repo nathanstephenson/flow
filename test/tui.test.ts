@@ -291,7 +291,7 @@ describe("TUI branches over the wire", () => {
     backend = new FakeBackend();
     host = new SessionHost({ store: new TranscriptStore(root) });
     host.registerBackend(backend);
-    running = await serve({ host, token: "test-token" });
+    running = await serve({ host, token: "test-token", assets: {} });
 
     stdin = new PassThrough();
     Object.assign(stdin, { setRawMode: () => undefined, isTTY: true });
@@ -381,7 +381,7 @@ describe("TUI over the wire", () => {
     backend = new FakeBackend();
     const host = new SessionHost();
     host.registerBackend(backend);
-    running = await serve({ host, token: "test-token" });
+    running = await serve({ host, token: "test-token", assets: {} });
 
     stdin = new PassThrough();
     Object.assign(stdin, { setRawMode: () => undefined, isTTY: true });

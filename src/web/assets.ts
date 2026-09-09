@@ -1,8 +1,11 @@
 /**
- * The shape of the embedded web assets. Hand-written, and deliberately separate from
- * assets.generated.ts: the root program emits declarations (tsconfig.json:20), so typing the
- * generated manifest by annotation rather than by inference keeps a half-megabyte string literal
- * out of the emitted `.d.ts`.
+ * The shape of the embedded web assets: what the Session Host is entitled to assume about a manifest
+ * it is handed, and the contract scripts/build-assets.mjs is written against.
+ *
+ * The manifest itself is a build artifact and never appears under src/ — the binary build generates
+ * it and injects it in place of src/web/embedded.ts (ADR 0017), so nothing typechecks the bytes.
+ * These types are the whole of the agreement, and test/assets-embedding.test.ts is what holds the
+ * generator to them.
  */
 
 export type EmbeddedAsset = {

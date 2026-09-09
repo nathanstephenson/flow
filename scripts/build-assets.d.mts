@@ -1,5 +1,4 @@
-/** Regenerate the embedded web asset module from web/dist. Needs a Vite build to have run first. */
-export function buildAssets(sharedModules: readonly string[]): string;
+import type { AssetManifest } from "../src/web/assets.ts";
 
-/** sha256 over every source the embedded module is built from; used by the staleness test. */
-export function sourceHash(): string;
+/** The embedded manifest for a directory of Vite output. Throws unless it holds an Entry Document. */
+export function manifestOf(dist: string): AssetManifest;
