@@ -48,4 +48,29 @@ describe("a run of adjacent tool calls", () => {
       entries("tool:1", "tool:2", "subagent:a", "tool:3", "tool:4"),
     );
   });
+
+  it("reaches across the thinking a model does between its calls", () => {
+    assert.deepEqual(
+      toolChains(["tool:1", "thinking:a", "tool:2", "thinking:b", "tool:3"]),
+      [{ kind: "chain", keys: ["tool:1", "thinking:a", "tool:2", "thinking:b", "tool:3"] }],
+    );
+  });
+
+  it("still breaks on prose between two bursts of thinking and tools", () => {
+    assert.deepEqual(
+      toolChains(["tool:1", "thinking:a", "tool:2", "assistant:3", "tool:4", "thinking:b", "tool:5"]),
+      [
+        { kind: "chain", keys: ["tool:1", "thinking:a", "tool:2"] },
+        { kind: "entry", key: "assistant:3" },
+        { kind: "chain", keys: ["tool:4", "thinking:b", "tool:5"] },
+      ],
+    );
+  });
+
+  it("leaves thinking alone when no tool call ran beside it", () => {
+    assert.deepEqual(
+      toolChains(["thinking:a", "thinking:b", "thinking:c"]),
+      entries("thinking:a", "thinking:b", "thinking:c"),
+    );
+  });
 });
