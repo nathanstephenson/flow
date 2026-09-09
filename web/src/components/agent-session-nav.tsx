@@ -6,7 +6,9 @@ import type { LinkState } from "@client/connection.ts";
 import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { scopeKindLabel } from "@client/scope-kind.ts";
+import { projectName } from "@client/project-name.ts";
 import { canSettle } from "@client/status.ts";
+import { BackendIcon } from "@/components/backend-icon.tsx";
 import { StatusDot } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -311,13 +313,20 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
            * shape say the state now, and a row that spelled it out as well was spending a third of
            * its second line agreeing with the dot.
            *
-           * The dot is `aria-hidden`, so the word it replaced survives here for anyone not looking
-           * at colour. Nothing is lost visually — the two states worth reacting to are the two with
-           * a hue.
+           * The Backend is a mark rather than its name, and the width that buys goes to the Project
+           * — which is the thing a reader scanning a rail of Agent Sessions across several
+           * repositories is actually looking for, and which until now only the pane header said.
+           * With the branch on the line above, the two together are the whole of where an Agent
+           * Session is working.
+           *
+           * The dot and the mark are both `aria-hidden`, so the two words they replaced survive
+           * here for anyone not looking at colour or shape.
            */}
-          <span className="flex items-baseline gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="sr-only">{status}</span>
-            <span className="truncate">{summary.backend}</span>
+            <BackendIcon backend={summary.backend} />
+            <span className="sr-only">{summary.backend}</span>
+            <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
             <span className="ml-auto shrink-0">{relativeTime(summary.updatedAt, now)}</span>
           </span>
         </span>
