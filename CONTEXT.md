@@ -17,12 +17,13 @@ _Avoid_: session, process, connection
 
 **Subagent**:
 One unit of work a model handed off to be done apart from its own conversation, wholly inside one
-turn of one Backend Session. Identified by the tool call that spawned it, so it is addressable
-without a new id space — its **name is not its identity**, and two Subagents of the same kind
-routinely run at once. It owns no Presentation Transcript, is never Revived, and cannot outlive the
-turn: one left running by an unclean shutdown is closed as aborted, the way a torn turn is. Its
-conversation never enters the parent's Conversation Context, so it costs Spend without costing
-occupancy.
+Backend Session. Identified by the tool call that spawned it, so it is addressable without a new id
+space — its **name is not its identity**, and two Subagents of the same kind routinely run at once.
+It owns no Presentation Transcript and is never Revived. One the model backgrounds outlives the turn
+that spawned it and reports back into a later one, so a running Subagent is not occupancy and does
+not hold the Steering Queue; what it cannot outlive is its Backend Session, and one left running by
+an unclean shutdown is closed as aborted, the way a torn turn is. Its conversation never enters the
+parent's Conversation Context, so it costs Spend without costing occupancy.
 _Avoid_: subagent session, child session, sub-session, task, sidechain, delegation; and `agent` in
 code, which collides with Agent Session — "Agents" is the label a reader sees, not the term.
 

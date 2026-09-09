@@ -7,6 +7,7 @@ import {
   describeCompaction,
   describeContextUsage,
   describeSpend,
+  isAsyncLaunch,
 } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
@@ -294,6 +295,50 @@ describe("what the Agent tool says a Subagent is", () => {
 
   it("omits a description that is not a string rather than printing one", () => {
     assert.deepEqual(briefOf({ subagent_type: "Explore", description: 42 }), { name: "Explore" });
+  });
+});
+
+/**
+ * Telling a launch receipt from an answer, which is the whole of what went wrong before ADR 0016: a
+ * backgrounded Subagent's `tool_result` arrives at once, and reading it as a result closed the card
+ * on a Subagent that had not started and released the turn while it ran.
+ *
+ * Asserted against `tool_use_result` — the structured `AgentOutput` the SDK asks callers to render
+ * from — rather than the result text, which is prose written for the model and free to change.
+ */
+describe("whether an Agent tool result is a launch or an answer", () => {
+  it("reads a backgrounded launch as a launch", () => {
+    assert.equal(
+      isAsyncLaunch({
+        status: "async_launched",
+        isAsync: true,
+        agentId: "agent_1",
+        description: "read a.ts",
+        prompt: "Read a.ts and report",
+        outputFile: "/tmp/agent_1.output",
+        canReadOutputFile: true,
+      }),
+      true,
+    );
+  });
+
+  it("reads a remote launch as one too, being the same promise about another machine", () => {
+    assert.equal(isAsyncLaunch({ status: "remote_launched", agentId: "agent_1" }), true);
+  });
+
+  it("reads a finished Subagent as an answer", () => {
+    assert.equal(
+      isAsyncLaunch({ status: "completed", agentId: "agent_1", content: [{ type: "text", text: "a.ts holds..." }] }),
+      false,
+      "a foreground Subagent must still close on its tool_result",
+    );
+  });
+
+  it("reads an ordinary tool, which has no status at all, as an answer", () => {
+    assert.equal(isAsyncLaunch(undefined), false);
+    assert.equal(isAsyncLaunch(null), false);
+    assert.equal(isAsyncLaunch("contents of a.ts"), false);
+    assert.equal(isAsyncLaunch({ ok: true }), false);
   });
 });
 

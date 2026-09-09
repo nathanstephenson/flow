@@ -238,6 +238,66 @@ describe("a Subagent the turn left behind", () => {
 });
 
 /**
+ * A backgrounded Subagent outlives its turn (ADR 0016), so the Steering Queue must not treat it as
+ * occupancy: the parent model has stopped and is waiting to be woken, and a session that refuses to
+ * dispatch through that window is idle while claiming to be busy.
+ */
+describe("steering past a backgrounded Subagent", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    await host.send(sessionId, "one", "now");
+  });
+
+  it("dispatches the next message while the Subagent is still running", async () => {
+    const subagent = backend.latest.beginSubagent("explorer");
+    subagent.launch();
+    backend.latest.completeTurn();
+
+    await host.send(sessionId, "two", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, ["one", "two"], "the launch must not hold the queue");
+    assert.deepEqual(
+      events(host, sessionId).filter((event) => event.type === "queue_changed"),
+      [],
+      "nothing was ever queued, so nothing was ever pending",
+    );
+  });
+
+  it("still closes the Subagent when it reports, turns later", async () => {
+    const subagent = backend.latest.beginSubagent("explorer");
+    subagent.launch();
+    backend.latest.completeTurn();
+    await host.send(sessionId, "two", "after_turn");
+    subagent.finish("complete");
+
+    const states = events(host, sessionId)
+      .filter((event) => event.type === "subagent")
+      .map((event) => (event.type === "subagent" ? event.state : ""));
+    assert.deepEqual(states, ["running", "complete"]);
+  });
+
+  it("occupies the session again for a turn the backend opened on its own", async () => {
+    backend.latest.beginSubagent("explorer").launch();
+    backend.latest.completeTurn();
+
+    // What the Claude adapter mints when a settled Subagent wakes the model: a turn nobody asked
+    // for. The host has to see it as occupancy or the next send jumps into it.
+    backend.latest.startTurn();
+    await host.send(sessionId, "two", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, ["one"], "the minted turn must hold the queue");
+    assert.equal(host.statusOf(sessionId), "running");
+  });
+});
+
+/**
  * Compaction, and the three states the host refuses it in.
  *
  * Each refusal is a case where compacting would be a lie rather than a failure, so each is asserted

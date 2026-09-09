@@ -153,6 +153,29 @@ export function briefOf(input: unknown): SubagentBrief {
   return description === undefined ? { name } : { name, description };
 }
 
+/**
+ * Whether an `Agent` tool result is a launch receipt rather than the Subagent's answer.
+ *
+ * A backgrounded agent — which the SDK documents as the default — returns its `tool_result` at
+ * once, carrying an id and an output file instead of a report. Read from `tool_use_result`, the
+ * structured `AgentOutput` the SDK asks callers to render from, rather than sniffed out of the
+ * result text, which is prose written for the model and free to change.
+ *
+ * `remote_launched` counts too: it is the same promise about a different machine.
+ */
+export function isAsyncLaunch(result: unknown): boolean {
+  const status = (result as { status?: unknown } | null | undefined)?.status;
+  return status === "async_launched" || status === "remote_launched";
+}
+
+/** How a settled task reports itself, in the three words a Subagent and a turn already share. */
+function outcomeOf(status: string): TurnEndReason | undefined {
+  if (status === "completed") return "complete";
+  if (status === "failed") return "error";
+  if (status === "stopped" || status === "killed") return "aborted";
+  return undefined;
+}
+
 const DEFAULT_ALLOWED_TOOLS = [
   "Read",
   "Write",
@@ -526,6 +549,9 @@ class ClaudeSession implements BackendSession {
     // the teardown leaves an unterminated tool call in the CLI's record, and the Agent Session this
     // belongs to is going Dormant — so that record is exactly what the next Revive resumes onto.
     this.abandonEnquiries("the session stopped");
+    // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
+    // Session Host records that from the transcript, the way it does a torn turn.
+    this.subagents.abandon();
     this.inbox.close();
     try {
       await this.stream.close();
@@ -567,6 +593,26 @@ class ClaudeSession implements BackendSession {
         }
         if (sdkMessage.subtype === "compact_boundary") {
           this.emit(describeCompaction(sdkMessage.compact_metadata));
+          return;
+        }
+        // The only message carrying both ids, and so the only chance to learn which Subagent a
+        // later notification is about. `noteTask` ignores a task that is not one's, which is what
+        // keeps a backgrounded Bash or Monitor out of Subagent bookkeeping.
+        if (sdkMessage.subtype === "task_started") {
+          if (sdkMessage.tool_use_id) this.subagents.noteTask(sdkMessage.task_id, sdkMessage.tool_use_id);
+          return;
+        }
+        // What actually closes a detached Subagent. `tool_use_id` where the SDK supplies it, the
+        // task map where it does not.
+        if (sdkMessage.subtype === "task_notification") {
+          this.settleTask(sdkMessage.task_id, sdkMessage.tool_use_id, outcomeOf(sdkMessage.status));
+          return;
+        }
+        // A task that died without notifying still has to stop its card spinning.
+        if (sdkMessage.subtype === "task_updated") {
+          const status = sdkMessage.patch.status;
+          // No `tool_use_id` on this one, so the task map is the only way back to the Subagent.
+          if (status) this.settleTask(sdkMessage.task_id, undefined, outcomeOf(status));
         }
         return;
 
@@ -574,6 +620,7 @@ class ClaudeSession implements BackendSession {
         // A local command's reply is not the model talking, so none of it may reach the transcript
         // as a partial assistant message either. See `compact`.
         if (this.compacting) return;
+        this.ensureTurn(producerOf(sdkMessage));
         this.translateStreamEvent(sdkMessage.event, producerOf(sdkMessage));
         return;
 
@@ -589,6 +636,7 @@ class ClaudeSession implements BackendSession {
         // The streamed copy and this one are the same Entry, and StreamedMessage is what guarantees
         // it. Tool calls stay here: they have nothing to do with the partial-message state.
         const producer = producerOf(sdkMessage);
+        this.ensureTurn(producer);
         const finished = this.streamed.finish(producer, sdkMessage.message.id, sdkMessage.message.content);
         for (const event of finished) this.emit(event);
         for (const block of sdkMessage.message.content) {
@@ -621,6 +669,14 @@ class ClaudeSession implements BackendSession {
               isError,
               ...attribution(producerOf(sdkMessage)),
             });
+            // A launch receipt, not an answer: the Subagent is only now starting work, so it gets
+            // no terminal snapshot and its card stays running. What it does give up is its hold on
+            // the turn, which is what keeps the Steering Queue live while it runs (ADR 0016).
+            if (isAsyncLaunch(sdkMessage.tool_use_result)) {
+              const released = this.subagents.background(block.tool_use_id);
+              if (released) this.endTurn(released);
+              continue;
+            }
             // Before closeSubagent, which forgets the brief this snapshot needs.
             const brief = this.subagents.describe(block.tool_use_id);
             if (brief) {
@@ -714,6 +770,42 @@ class ClaudeSession implements BackendSession {
   private closeSubagent(callId: string): void {
     const released = this.subagents.returned(callId);
     if (released) this.endTurn(released);
+  }
+
+  /**
+   * Close the Subagent a settled task belongs to, if it is one's.
+   *
+   * Silent for a task that is not a Subagent's — a backgrounded Bash or Monitor settles through the
+   * same messages, and neither has a card to close.
+   */
+  private settleTask(taskId: string, toolUseId: string | undefined, outcome: TurnEndReason | undefined): void {
+    if (outcome === undefined) return;
+    const callId = toolUseId ?? this.subagents.callIdOf(taskId);
+    if (callId === undefined) return;
+    const brief = this.subagents.describe(callId);
+    if (brief === undefined) return;
+    this.emit({ type: "subagent", subagentId: callId, ...brief, state: outcome });
+    this.closeSubagent(callId);
+  }
+
+  /**
+   * Open a turn for work the CLI started on its own.
+   *
+   * A backgrounded Subagent settling wakes the model without anyone prompting it: the CLI injects
+   * the notification and the model speaks again, turns after the one that spawned it. Those words
+   * are a turn — they cost money and occupy the session — and without one minted here they would
+   * reduce into whatever turn happened to be last, or into none at all.
+   *
+   * Only for the Agent Session's own model. A detached Subagent goes on streaming its own rows after
+   * the turn that launched it has ended, and minting a turn for those would occupy the session for
+   * as long as it runs — which is the blocking this decision exists to avoid. ADR 0015 keeps
+   * `producer` off `turn_started` for the same reason: a Subagent is not a turn and does not open one.
+   */
+  private ensureTurn(producer: string): void {
+    if (producer !== "") return;
+    if (this.turnId) return;
+    this.turnId = randomUUID();
+    this.emit({ type: "turn_started", turnId: this.turnId });
   }
 
   private endTurn(reason: TurnEndReason): void {

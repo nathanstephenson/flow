@@ -186,6 +186,19 @@ export class FakeSession implements BackendSession {
     return callId;
   }
 
+  /**
+   * Test affordance: open a turn nobody prompted for.
+   *
+   * What a real adapter mints when a backgrounded Subagent settles and the CLI wakes the model on
+   * its own (ADR 0016). No `user_message` precedes it, which is the whole point: the Session Host
+   * has to take occupancy from the event rather than from having dispatched.
+   */
+  startTurn(): void {
+    if (this.turnId) return;
+    this.turnId = randomUUID();
+    this.emit({ type: "turn_started", turnId: this.turnId });
+  }
+
   /** Test affordance: end the turn in flight. */
   completeTurn(reason: "complete" | "aborted" | "error" = "complete"): void {
     if (!this.turnId) return;
@@ -194,17 +207,6 @@ export class FakeSession implements BackendSession {
     this.emit({ type: "turn_ended", turnId, reason });
   }
 
-  /**
-   * Test affordance: begin a Subagent, and get a handle whose emissions are attributed to it.
-   *
-   * The only way a test can produce an interleaved parent-and-child stream, which is the case that
-   * breaks anything assuming one producer per turn. Emits the spawning `tool_started` as well as the
-   * first snapshot, because ADR 0015 has the two share an id and a Subagent whose tool call never
-   * appeared would be a shape no real backend can produce.
-   *
-   * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
-   * torn-Subagent fixture, and the Session Host is what has to cope with it.
-   */
   /**
    * Ask the human something, as a real backend would: the tool call that asks, and the Enquiry
    * snapshot sharing its id.
@@ -224,6 +226,17 @@ export class FakeSession implements BackendSession {
     return askId;
   }
 
+  /**
+   * Test affordance: begin a Subagent, and get a handle whose emissions are attributed to it.
+   *
+   * The only way a test can produce an interleaved parent-and-child stream, which is the case that
+   * breaks anything assuming one producer per turn. Emits the spawning `tool_started` as well as the
+   * first snapshot, because ADR 0015 has the two share an id and a Subagent whose tool call never
+   * appeared would be a shape no real backend can produce.
+   *
+   * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
+   * torn-Subagent fixture, and the Session Host is what has to cope with it.
+   */
   beginSubagent(name: string, description?: string): FakeSubagent {
     const subagentId = randomUUID();
     const subagent = new FakeSubagent(subagentId, name, description, this.emit);
@@ -243,6 +256,7 @@ export class FakeSubagent {
   readonly name: string;
   readonly description: string | undefined;
   finished = false;
+  launched = false;
 
   private readonly emit: (event: BackendEvent) => void;
   /** Bumped when a message finalises, so a partial and its finished half share one id. */
@@ -295,11 +309,32 @@ export class FakeSubagent {
     this.snapshot({ state: "running" });
   }
 
+  /**
+   * Background it: return the spawning tool call now, and go on running (ADR 0016).
+   *
+   * The launch receipt, which is what a real adapter reads to tell a backgrounded Subagent from a
+   * finished one. Emits no snapshot — the card stays running — so the turn may end with this
+   * Subagent still open, and `finish` closes it however many turns later.
+   */
+  launch(): void {
+    if (this.launched || this.finished) return;
+    this.launched = true;
+    this.emit({
+      type: "tool_ended",
+      callId: this.subagentId,
+      result: `${this.name} launched in the background`,
+      isError: false,
+    });
+  }
+
   finish(reason: "complete" | "aborted" | "error" = "complete"): void {
     if (this.finished) return;
     this.finished = true;
     this.snapshot({ state: reason });
-    // The tool result is what returns a Subagent, the same way a real backend closes one.
+    // The tool result is what returns a foreground Subagent, the same way a real backend closes one.
+    // A backgrounded one already returned it at launch, and returning it twice is a shape no adapter
+    // produces.
+    if (this.launched) return;
     this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error" });
   }
 

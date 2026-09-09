@@ -8,8 +8,9 @@ paint time.
 
 **A Subagent is neither kind of session, which is why it is neither word.** CONTEXT.md reserves
 Agent Session for the durable thing GoodHarness owns and Backend Session for the SDK's ephemeral one.
-A subagent is a third thing: it owns no Presentation Transcript, it is never Revived, it dies with
-the turn that spawned it, and it lives wholly inside one Backend Session. Calling it a session would
+A subagent is a third thing: it owns no Presentation Transcript, it is never Revived, and it lives
+wholly inside one Backend Session. (This ADR also said it dies with the turn that spawned it, which
+ADR 0016 repealed for a backgrounded one — nothing else here rests on it.) Calling it a session would
 make `_Avoid_: session` in two glossary entries a lie, and would invite someone to ask the Session
 Host to Revive one.
 

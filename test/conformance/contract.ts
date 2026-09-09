@@ -102,8 +102,12 @@ export function runContract(target: ConformanceTarget): void {
      * Gated on `capabilities.subagents`, the way the Effort assertions gate on
      * `effortLevels.length`: an adapter that does not report Subagents is not a broken one, and
      * these must skip rather than fail for it.
+     *
+     * Deliberately not "before the turn ends" any more. A backgrounded Subagent outlives the turn
+     * that spawned it (ADR 0016), so pairing is what an adapter owes and turn-scoped pairing is not
+     * — what this rules out is the card left spinning with nothing that will ever close it.
      */
-    it("pairs every Subagent with a terminal snapshot before the turn ends", async () => {
+    it("pairs every Subagent with a terminal snapshot", async () => {
       const { session, events, dispose } = await start(target);
       try {
         if (!session.capabilities.subagents) return;
@@ -116,7 +120,7 @@ export function runContract(target: ConformanceTarget): void {
           if (terminal.has(event.state)) open.delete(event.subagentId);
           else open.add(event.subagentId);
         }
-        assert.deepEqual([...open], [], "a Subagent left open outlives the turn that spawned it");
+        assert.deepEqual([...open], [], "a Subagent was left running with nothing to ever close it");
       } finally {
         await dispose();
       }

@@ -885,10 +885,11 @@ export class SessionHost {
   /**
    * Close every Subagent the transcript still has running.
    *
-   * A Subagent cannot outlive the turn that spawned it (ADR 0015), so one still running when the
-   * turn is gone is a record of something that will never finish — on a Revive it renders as a
-   * subagent working forever, with a spinner nothing will ever stop. Aborted for the same reason a
-   * torn turn is: the work stopped, and nobody can say whether it had succeeded.
+   * A backgrounded Subagent outlives the turn that spawned it (ADR 0016), but none outlives its
+   * Backend Session — they are children of the CLI process. So one still running when that session
+   * is gone is a record of something that will never finish: on a Revive it renders as a subagent
+   * working forever, with a spinner nothing will ever stop. Aborted for the same reason a torn turn
+   * is: the work stopped, and nobody can say whether it had succeeded.
    */
   private closeOpenSubagents(record: SessionRecord, entries: LoggedEvent[]): void {
     for (const open of openSubagents(entries)) {
@@ -987,6 +988,18 @@ export class SessionHost {
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
     // counts only its own run.
     if (event.type === "context_usage" && event.spend) record.spend = event.spend;
+
+    /*
+     * Ordinarily redundant — `dispatch` and `compact` both set this before the adapter acknowledges,
+     * for the race the field's own comment describes. It matters for the turn nobody asked for: a
+     * backgrounded Subagent settling wakes the model on its own (ADR 0016), and the adapter mints a
+     * turn for what it says. Without this the Steering Queue would believe the session idle and
+     * dispatch into it, which is the very thing holding the turn open used to prevent.
+     */
+    if (event.type === "turn_started") {
+      record.turnInFlight = true;
+      record.status = "running";
+    }
 
     if (event.type === "turn_ended") {
       record.turnInFlight = false;

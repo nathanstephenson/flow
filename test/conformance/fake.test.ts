@@ -12,6 +12,11 @@ runContract({
    * exercised rather than skipped. The Fake is the only adapter certain to report one, which is
    * what makes those assertions worth writing at all — and interleaving the child's text with the
    * parent's is the case that breaks anything assuming one producer per turn.
+   *
+   * Two Subagents, because the two now end differently: a foreground one closes on its own
+   * `tool_result`, and a backgrounded one returns at launch and reports back after the turn has
+   * ended (ADR 0016). The second is what stops the pairing assertion quietly only ever seeing the
+   * easy case.
    */
   async runTurn(session, text) {
     const fake = session as FakeSession;
@@ -27,7 +32,14 @@ runContract({
     subagent.say("reading a.ts: contents", true);
     subagent.finish("complete");
 
+    const detached = fake.beginSubagent("watcher", "watch b.ts");
+    detached.launch();
+
     fake.useTool("Read", { path: "a.ts" }, "contents");
     fake.completeTurn();
+
+    // After the turn end, which is the point: its card is still running, and this is what closes it.
+    detached.say("b.ts is unchanged", true);
+    detached.finish("complete");
   },
 });
