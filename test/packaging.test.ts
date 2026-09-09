@@ -7,7 +7,7 @@ import { SessionHost } from "../src/daemon/host.ts";
 
 describe("packaging", () => {
   afterEach(() => {
-    delete process.env["GOODHARNESS_CLAUDE_PATH"];
+    delete process.env["FLOW_CLAUDE_PATH"];
   });
 
   it("leaves CLI resolution to the SDK when running from source", () => {
@@ -15,7 +15,7 @@ describe("packaging", () => {
   });
 
   it("honours an explicit Claude Code path", () => {
-    process.env["GOODHARNESS_CLAUDE_PATH"] = "/somewhere/claude";
+    process.env["FLOW_CLAUDE_PATH"] = "/somewhere/claude";
     assert.equal(resolveClaudeExecutable(), "/somewhere/claude");
   });
 
@@ -37,8 +37,8 @@ describe("packaging", () => {
 
 describe("spawning the CLI from a single executable", () => {
   it("runs a JS install directly instead of through process.execPath", () => {
-    // Inside a SEA, process.execPath is the GoodHarness binary, so the SDK's default spawn would
-    // re-invoke GoodHarness with the CLI's arguments.
+    // Inside a SEA, process.execPath is the Flow binary, so the SDK's default spawn would
+    // re-invoke Flow with the CLI's arguments.
     const target = seaSpawnTarget({
       command: process.execPath,
       args: ["/usr/local/bin/claude", "--output-format", "stream-json"],

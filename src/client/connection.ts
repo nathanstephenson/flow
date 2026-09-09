@@ -14,7 +14,7 @@ export type Connection = {
    *
    * Here rather than left to each front-end's own fetch because the TUI has no other way to reach a
    * GET, and the alternative — making the list a Command — would put a query that changes outside
-   * GoodHarness through the door meant for things that change it.
+   * Flow through the door meant for things that change it.
    */
   branches(scope: string): Promise<BranchList>;
   /** Replay from `since`, then follow. Returns an unsubscribe. */

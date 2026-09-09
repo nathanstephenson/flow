@@ -140,7 +140,7 @@ function Candidates({
   return (
     <SettingsGroup
       title={`Found beneath the Project Root · ${candidates.length}`}
-      description="Repositories GoodHarness can see but is not offering. Add the ones you work in."
+      description="Repositories Flow can see but is not offering. Add the ones you work in."
     >
       {candidates.length === 0 ? (
         <p className="text-sm text-muted-foreground">
@@ -320,7 +320,7 @@ function ProjectRootField({
       title="Project Root"
       description={
         <>
-          The directory GoodHarness looks beneath for candidates, and the one it reports as its
+          The directory Flow looks beneath for candidates, and the one it reports as its
           default Scope. Absolute, or starting with{" "}
           <code className="font-mono text-xs">~</code>. A Project outside it can still be added by
           path.

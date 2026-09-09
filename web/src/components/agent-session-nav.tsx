@@ -206,8 +206,8 @@ function RailHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
  * segment — the leading directories stay legible but recede.
  *
  * Deliberately *not* `dir="rtl"`. That is the usual trick for truncating a path from the left, but
- * bidi reordering moves leading punctuation to the visual end, so `/workspace/GoodHarness` rendered
- * as `workspace/GoodHarness/` — a path that does not exist. The directory truncates from the left
+ * bidi reordering moves leading punctuation to the visual end, so `/workspace/Flow` rendered
+ * as `workspace/Flow/` — a path that does not exist. The directory truncates from the left
  * with a plain `text-ellipsis` instead, and the basename is never truncated because it is the part
  * that identifies the Scope. The full path is in the tooltip either way.
  */

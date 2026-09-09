@@ -3,10 +3,10 @@ import { runContract } from "./contract.ts";
 
 /**
  * Live contract run against the Claude Agent SDK. Spawns the real CLI and spends real tokens, so
- * it is opt-in: GOODHARNESS_E2E=1 npm test
+ * it is opt-in: FLOW_E2E=1 npm test
  */
-if (process.env["GOODHARNESS_E2E"] !== "1") {
-  console.log("# skipping Claude conformance (set GOODHARNESS_E2E=1 to run)");
+if (process.env["FLOW_E2E"] !== "1") {
+  console.log("# skipping Claude conformance (set FLOW_E2E=1 to run)");
 } else {
   const backend = new ClaudeBackend({ allowedTools: [] });
   const TURN_TIMEOUT_MS = 120_000;

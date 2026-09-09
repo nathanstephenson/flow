@@ -92,7 +92,7 @@ function SidebarProvider({
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
   }, [isMobile, setOpen, setOpenMobile])
 
-  // GOODHARNESS: upstream's own ⌘B/Ctrl-B window listener is removed here.
+  // FLOW: upstream's own ⌘B/Ctrl-B window listener is removed here.
   //
   // This app resolves every keystroke through one window listener asking one pure function what the
   // key meant (web/src/presentation/bindings.ts and components/keyboard-layer.tsx). A second

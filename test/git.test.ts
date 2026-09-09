@@ -33,7 +33,7 @@ let root: string;
 const newRepo = (name: string, branches: string[] = []) => repository(root, name, branches);
 
 before(() => {
-  root = mkdtempSync(join(tmpdir(), "goodharness-git-"));
+  root = mkdtempSync(join(tmpdir(), "flow-git-"));
 });
 
 after(() => {
@@ -166,7 +166,7 @@ describe("flattenBranch", () => {
   });
 
   it("drops the namespace, which the directory's position already says", () => {
-    assert.equal(flattenBranch("goodharness/main-2026-09-04"), "main-2026-09-04");
+    assert.equal(flattenBranch("flow/main-2026-09-04"), "main-2026-09-04");
   });
 
   // Lossy on purpose: nothing reads a branch back out of a path, so collisions are settled by
@@ -183,15 +183,15 @@ describe("flattenBranch", () => {
 describe("derivedBranchName", () => {
   it("names the base branch's leaf and the date, in exactly two segments", () => {
     const name = derivedBranchName({ from: "main", now: new Date("2026-09-04T10:00:00Z") });
-    assert.equal(name, "goodharness/main-2026-09-04");
+    assert.equal(name, "flow/main-2026-09-04");
     assert.equal(name.split("/").length, 2);
   });
 
-  // Git refs are files: a third segment would make `goodharness/release/2.1` unable to coexist
-  // with `goodharness/release`, which is a trap that fires on the second worktree of the day.
+  // Git refs are files: a third segment would make `flow/release/2.1` unable to coexist
+  // with `flow/release`, which is a trap that fires on the second worktree of the day.
   it("stays two segments even when the base branch is itself slashed", () => {
     const name = derivedBranchName({ from: "release/2.1", now: new Date("2026-09-04T10:00:00Z") });
-    assert.equal(name, "goodharness/2.1-2026-09-04");
+    assert.equal(name, "flow/2.1-2026-09-04");
     assert.equal(name.split("/").length, 2);
   });
 });
@@ -199,11 +199,11 @@ describe("derivedBranchName", () => {
 describe("planWorktree", () => {
   it("bumps a derived name that is already taken, inside the last segment", async () => {
     const now = new Date("2026-09-04T10:00:00Z");
-    const repo = newRepo("planning", ["goodharness/main-2026-09-04"]);
+    const repo = newRepo("planning", ["flow/main-2026-09-04"]);
     const planned = await planWorktree({ repo, from: "main", under: join(root, "plans"), now });
     assert.equal(planned.ok, true);
     if (!planned.ok) return;
-    assert.equal(planned.value.branch, "goodharness/main-2026-09-04-2");
+    assert.equal(planned.value.branch, "flow/main-2026-09-04-2");
   });
 
   // Someone who typed a name and got a different one has been ignored, so a supplied name is

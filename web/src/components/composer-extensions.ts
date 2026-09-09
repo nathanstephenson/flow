@@ -74,7 +74,7 @@ const catalogueField = StateField.define<Triggerable[]>({
 });
 
 /**
- * The pill under a leading `/name` that GoodHarness or the backend will actually act on.
+ * The pill under a leading `/name` that Flow or the backend will actually act on.
  *
  * Derived from the text rather than remembered from a menu choice, and that is the point: someone
  * who types `/tdd` from memory gets the same pill as someone who picked it from the list, because
@@ -469,7 +469,7 @@ const THEME = EditorView.theme({
   "&:not(.cm-focused) .cm-content[contenteditable='false']": { opacity: "0.5", cursor: "not-allowed" },
   /*
    * Two colours because they are two different things, not for decoration. Blue is a Command:
-   * GoodHarness performs it, and it never reaches a model. Purple is a Skill: the backend expands it,
+   * Flow performs it, and it never reaches a model. Purple is a Skill: the backend expands it,
    * and it goes as the message it already is. Someone about to press Enter can tell which of those
    * is about to happen without having learned the difference first.
    *

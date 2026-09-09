@@ -36,7 +36,7 @@ describe("attachments", () => {
   let sessionId: string;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-"));
+    root = mkdtempSync(join(tmpdir(), "flow-"));
     store = new TranscriptStore(root);
     backend = new FakeBackend();
     host = new SessionHost({ store });

@@ -14,7 +14,7 @@ describe("what a Scope is called", () => {
     assert.equal(scopeKindLabel({ worktree: true }), "Worktree");
   });
 
-  // "Local checkout" would contrast with a remote one, and GoodHarness has no such thing — so it
+  // "Local checkout" would contrast with a remote one, and Flow has no such thing — so it
   // would distinguish nothing now and be wrong on the day it does.
   it("calls an ordinary Scope the Project's checkout, not a local one", () => {
     assert.equal(scopeKindLabel({}), "Project checkout");

@@ -32,7 +32,7 @@ describe("web assets", () => {
   });
 
   const get = (path: string, headers: Record<string, string> = {}) =>
-    fetch(`${running.url}${path}`, { headers: { cookie: `goodharness=${TOKEN}`, ...headers } });
+    fetch(`${running.url}${path}`, { headers: { cookie: `flow=${TOKEN}`, ...headers } });
 
   /**
    * The relocated anti-drift guarantee. Byte-equality between the served reducer and the TUI's is
@@ -117,15 +117,15 @@ describe("web assets", () => {
 /**
  * The tier that catches what SOURCE_HASH cannot: a hand-edited manifest, or an input set too narrow
  * to notice a change. Rebuilds with Vite and compares filenames and per-file digests. Opt-in because
- * it needs Vite and its platform binding, which the two-second loop should not: GOODHARNESS_ASSETS=1 npm test
+ * it needs Vite and its platform binding, which the two-second loop should not: FLOW_ASSETS=1 npm test
  */
-if (process.env["GOODHARNESS_ASSETS"] !== "1") {
-  console.log("# skipping embedded asset rebuild (set GOODHARNESS_ASSETS=1 to run)");
+if (process.env["FLOW_ASSETS"] !== "1") {
+  console.log("# skipping embedded asset rebuild (set FLOW_ASSETS=1 to run)");
 } else {
   describe("embedded assets", () => {
     it("are Vite's actual output for the sources on disk", async () => {
       const { build } = await import("vite");
-      const outDir = mkdtempSync(join(tmpdir(), "goodharness-assets-"));
+      const outDir = mkdtempSync(join(tmpdir(), "flow-assets-"));
       let emitted: Map<string, string>;
       try {
         await build({

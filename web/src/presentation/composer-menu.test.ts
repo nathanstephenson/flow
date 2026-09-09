@@ -116,7 +116,7 @@ describe("the Commands on offer", () => {
     assert.deepEqual(commandsFor(undefined), []);
   });
 
-  it("lead the Skills, so the one GoodHarness performs does not sink into a list of twenty", () => {
+  it("lead the Skills, so the one Flow performs does not sink into a list of twenty", () => {
     const all = triggerables(true, [{ name: "tdd", description: "Red, green, refactor" }]);
     assert.deepEqual(all.map((candidate) => candidate.kind), ["command", "skill"]);
   });

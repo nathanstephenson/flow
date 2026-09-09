@@ -185,13 +185,13 @@ describe("TUI rendering", () => {
         view: {
           ...initialState(),
           capabilities: CAPABILITIES,
-          branch: { name: "goodharness/main-2026-09-04" },
+          branch: { name: "flow/main-2026-09-04" },
           worktree: true,
         },
       }),
       { columns: 120, rows: 10 },
     );
-    assert.match(header ?? "", /goodharness\/main-2026-09-04 · Worktree/);
+    assert.match(header ?? "", /flow\/main-2026-09-04 · Worktree/);
   });
 
   // The default case is not worth a line's width in a client with one header line, and the web
@@ -278,7 +278,7 @@ describe("TUI branches over the wire", () => {
   let finished: Promise<void>;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-tui-git-"));
+    root = mkdtempSync(join(tmpdir(), "flow-tui-git-"));
     repo = repository(root, "api", ["feature"]);
     // A commit on `feature` so `--sort=-committerdate` has a defined answer: without it both
     // branches share one commit date and the list order — and so which row `up` reaches — is
@@ -351,7 +351,7 @@ describe("TUI branches over the wire", () => {
     const cut = host.list().find((session) => session.worktree === true);
     assert.ok(cut, "the new Agent Session is bound to a worktree");
     assert.notEqual(cut.scope, repo);
-    assert.match(cut.branch?.name ?? "", /^goodharness\//);
+    assert.match(cut.branch?.name ?? "", /^flow\//);
   });
 
   // The refusal has to reach the reader, or a switch that did not happen looks like one that did.

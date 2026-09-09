@@ -13,7 +13,7 @@ one that is forgotten is reaped. The clock starts at the Settle rather than at t
 activity, so settling something untouched for a week still grants a full window instead of making it
 eligible for deletion on the next sweep.
 
-This is the only operation in GoodHarness that destroys a Presentation Transcript, which sits close
+This is the only operation in Flow that destroys a Presentation Transcript, which sits close
 enough to ADR 0001 to be worth separating: that ADR makes a transcript append-only so what a human
 saw is never quietly altered, and deleting one wholesale on an explicit instruction is a different
 act from rewriting it. Reaping sweeps on host load and hourly thereafter, so a daemon that was off

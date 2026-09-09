@@ -4,12 +4,12 @@ import { runContract } from "./contract.ts";
 /**
  * Live contract run against the pi SDK. pi keeps its own credential store, separate from Claude
  * Code's, so this needs a provider configured in pi (`pi` then `/login`, or a provider API key in
- * the environment). Opt in with: GOODHARNESS_E2E_PI=1 npm test
+ * the environment). Opt in with: FLOW_E2E_PI=1 npm test
  *
  * The translation logic itself is covered without credentials in test/backend/pi-mapping.test.ts.
  */
-if (process.env["GOODHARNESS_E2E_PI"] !== "1") {
-  console.log("# skipping pi conformance (set GOODHARNESS_E2E_PI=1 with pi credentials to run)");
+if (process.env["FLOW_E2E_PI"] !== "1") {
+  console.log("# skipping pi conformance (set FLOW_E2E_PI=1 with pi credentials to run)");
 } else {
   const backend = new PiBackend({ tools: [] });
   const TURN_TIMEOUT_MS = 120_000;

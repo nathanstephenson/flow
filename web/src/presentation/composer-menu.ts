@@ -7,7 +7,7 @@ import type { Skill } from "../../../src/protocol/events.ts";
  * which is the only way anything in this front end gets verified today (see TODO.md).
  *
  * **A Command and a Skill are different things and the composer treats them differently.** A Command
- * is GoodHarness's own and is dispatched as a Command; a Skill is text the backend expands, and is
+ * is Flow's own and is dispatched as a Command; a Skill is text the backend expands, and is
  * sent as the message it already is. That difference is what the two pill colours mean.
  */
 export type Triggerable =
@@ -17,7 +17,7 @@ export type Triggerable =
 /**
  * The Commands this Agent Session can be offered, given what its backend declares.
  *
- * One today. It is derived rather than fetched because a Command is GoodHarness's own — the host is
+ * One today. It is derived rather than fetched because a Command is Flow's own — the host is
  * what performs it, and nothing about it is a fact the backend could report beyond whether it can
  * serve one at all.
  */
@@ -90,7 +90,7 @@ export function menuQuery(text: string, caret: number): string | undefined {
  *
  * Prefix matches lead, because someone typing `/co` means a name starting with those letters far
  * more often than one containing them. Beyond that the order is the catalogue's own — Commands
- * before Skills — rather than alphabetical, so the one thing GoodHarness performs itself does not
+ * before Skills — rather than alphabetical, so the one thing Flow performs itself does not
  * sink into a list of twenty Skills.
  */
 export function matching(catalogue: Triggerable[], query: string): Triggerable[] {

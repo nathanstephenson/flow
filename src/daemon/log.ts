@@ -5,7 +5,7 @@ export type LogListener = (entry: LoggedEvent) => void;
 /**
  * A Presentation Transcript: append-only, sequence-numbered, never rewritten (ADR 0001).
  *
- * Every transcript write in GoodHarness goes through this module. Keeping it in one place is what
+ * Every transcript write in Flow goes through this module. Keeping it in one place is what
  * makes a different storage backing a local change later rather than a sweep.
  */
 export class SessionLog {

@@ -6,7 +6,7 @@ import type { BranchList } from "../../src/protocol/git.ts";
  * Asking the Session Host what a Scope could be switched to.
  *
  * A query rather than state (ADR 0011's reasoning for `/api/directories`): the answer changes
- * outside GoodHarness whenever someone commits in a terminal, so it is asked when it is wanted and
+ * outside Flow whenever someone commits in a terminal, so it is asked when it is wanted and
  * never held. Which is also why this is a hook rather than part of `HostConfig` — the branch a
  * session is *on* arrives on the stream as `branch_changed`, and only the list of alternatives has
  * to be fetched.

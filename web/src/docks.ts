@@ -35,7 +35,7 @@ import { killShell, listShells } from "@/shell-connection.ts";
  * and a Dock that closed itself on every glance at another Agent Session would be a bug — the same
  * reason the Shell split's open-set lived in the app shell.
  */
-const KEY = "goodharness.docks";
+const KEY = "flow.docks";
 
 export type DockAction =
   | { type: "toggle"; side: DockSide }

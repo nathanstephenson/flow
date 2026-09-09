@@ -453,7 +453,7 @@ describe("listing the Skills an Agent Session offers", () => {
 });
 
 /**
- * An Enquiry is the first thing GoodHarness holds a turn open on a human for, so what this block is
+ * An Enquiry is the first thing Flow holds a turn open on a human for, so what this block is
  * really testing is that a turn can always end: every path that takes the Backend Session away also
  * closes the question, and no path revives a session to answer one.
  *

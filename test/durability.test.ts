@@ -15,7 +15,7 @@ describe("durability and revive", () => {
   let store: TranscriptStore;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "goodharness-"));
+    root = mkdtempSync(join(tmpdir(), "flow-"));
     store = new TranscriptStore(root);
   });
 

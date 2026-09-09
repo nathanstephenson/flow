@@ -12,7 +12,7 @@ import { clampRailWidth, parseRailWidth, railWidthStep } from "@/presentation/ra
  * (src/protocol/settings.ts) — how wide you like a rail is per browser and per screen, and putting
  * it on the daemon would mean a laptop and a desktop fighting over one number.
  */
-const KEY = "goodharness.rail-width";
+const KEY = "flow.rail-width";
 
 export type RailWidth = {
   width: number;

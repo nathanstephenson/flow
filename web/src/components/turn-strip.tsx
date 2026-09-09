@@ -85,7 +85,7 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
  * a Scope is fixed for an Agent Session's whole life, and a different directory is a different Agent
  * Session — so spending a label on it every time cost a reading that never changes. The cost of
  * moving it here is real and worth naming: **a Worktree is no longer distinguishable at a glance**,
- * only on hover and by its branch happening to be named `goodharness/…`.
+ * only on hover and by its branch happening to be named `flow/…`.
  */
 function BranchPicker({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();

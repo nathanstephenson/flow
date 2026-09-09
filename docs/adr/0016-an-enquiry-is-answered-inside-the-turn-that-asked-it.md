@@ -13,7 +13,7 @@ and the tool call does not return until they are answered. Until now the Claude 
 along with everything else outside its allowlist, so a model that wanted to ask its human something
 was told the tool was unavailable.
 
-Serving it is the first time GoodHarness holds a turn open on a person. Everything else the harness
+Serving it is the first time Flow holds a turn open on a person. Everything else the harness
 waits for is a machine and comes back on its own: a model call returns, a compaction finishes, a
 Subagent ends. A human may take five minutes, or may close the laptop.
 

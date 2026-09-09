@@ -63,12 +63,12 @@ launch directory, and `n`, a few letters, Enter, Enter now starts one somewhere 
 offers no Projects the old dialog is kept exactly, prefill and focus included, because an empty
 field with nothing to choose from would be strictly worse than what it replaced.
 
-`goodharness tui` reads the Project Root too when `--scope` is absent, which required removing
+`flow tui` reads the Project Root too when `--scope` is absent, which required removing
 `parseArgs`' `default: process.cwd()` — with it, an absent flag and a typed one were
 indistinguishable and the root had nowhere to sit between them. It reads the file directly rather
 than asking the daemon, because the TUI may be attached to one it did not start and that daemon's
 `/api/config` falls back to *its* working directory, which is not this reader's. A one-shot
-`goodharness "<prompt>"` keeps `process.cwd()`: it is run in a directory, and binding it to the
+`flow "<prompt>"` keeps `process.cwd()`: it is run in a directory, and binding it to the
 Project Root instead would silently move a common workflow up a level. So the asymmetry here is not
 the usual one — the TUI is not left behind, it simply has a cwd of its own that the browser does
 not, and the Projects list itself stays a web-only affordance because a picker in the TUI would mean

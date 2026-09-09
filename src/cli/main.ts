@@ -16,10 +16,10 @@ import type { EffortLevel } from "../protocol/events.ts";
 import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
-  goodharness tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
-  goodharness serve [--port N] [--address HOST]                run the Session Host in the foreground
-  goodharness list                                             list Agent Sessions
-  goodharness [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
+  flow tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
+  flow serve [--port N] [--address HOST]                run the Session Host in the foreground
+  flow list                                             list Agent Sessions
+  flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
                                                                one prompt, then exit
 
   tui without --scope uses the Project Root from config.json, else this directory.

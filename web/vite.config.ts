@@ -10,7 +10,7 @@ import { defineConfig, type Plugin } from "vite";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 
-/** What `goodharness serve` writes: `{ url, token }` at mode 0600 (src/cli/main.ts). */
+/** What `flow serve` writes: `{ url, token }` at mode 0600 (src/cli/main.ts). */
 type Handoff = { url: string; token: string };
 
 /**
@@ -19,7 +19,7 @@ type Handoff = { url: string; token: string };
  * types for two lines is not a coupling worth having. Keep the two in step.
  */
 function stateRoot(): string {
-  return process.env["GOODHARNESS_STATE_DIR"] ?? join(homedir(), ".goodharness");
+  return process.env["FLOW_STATE_DIR"] ?? join(homedir(), ".flow");
 }
 
 function readHandoff(): Handoff | undefined {
@@ -37,12 +37,12 @@ function readHandoff(): Handoff | undefined {
  * daemon.json on every request.
  */
 function daemonProxy(): { target: string; changeOrigin: boolean; ws: boolean } {
-  const target = process.env["GOODHARNESS_URL"] ?? readHandoff()?.url;
+  const target = process.env["FLOW_URL"] ?? readHandoff()?.url;
   if (!target) {
     throw new Error(
-      `nothing to proxy to: no GOODHARNESS_URL, and no daemon.json under ${stateRoot()}. Start a ` +
+      `nothing to proxy to: no FLOW_URL, and no daemon.json under ${stateRoot()}. Start a ` +
         "Session Host with `npm start -- serve --port 4318`, or set " +
-        "GOODHARNESS_URL=http://127.0.0.1:4318.",
+        "FLOW_URL=http://127.0.0.1:4318.",
     );
   }
   return {
@@ -69,7 +69,7 @@ function daemonProxy(): { target: string; changeOrigin: boolean; ws: boolean } {
  */
 function devHandoff(): Plugin {
   return {
-    name: "goodharness-dev-handoff",
+    name: "flow-dev-handoff",
     apply: "serve",
     configureServer(server) {
       const printUrls = server.printUrls.bind(server);

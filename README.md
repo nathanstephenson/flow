@@ -1,4 +1,4 @@
-# GoodHarness
+# Flow
 
 Run and watch coding-agent sessions from a terminal or a browser, over more than one agent SDK.
 
@@ -51,12 +51,12 @@ we always send `streamingBehavior: "steer"` and never touch pi's native follow-u
 **M2 (durability and revive) complete.** Agent Sessions outlive the process that started them.
 
 ```bash
-goodharness --backend claude "Remember the word marmalade"   # prints a session id
-goodharness --session <id> "What word did I ask you to remember?"   # → marmalade
-goodharness --list
+flow --backend claude "Remember the word marmalade"   # prints a session id
+flow --session <id> "What word did I ask you to remember?"   # → marmalade
+flow --list
 ```
 
-Transcripts live at `$GOODHARNESS_STATE_DIR` (default `~/.goodharness`), one directory per Agent
+Transcripts live at `$FLOW_STATE_DIR` (default `~/.flow`), one directory per Agent
 Session: `meta.json` plus append-only `transcript.jsonl`. Writes are synchronous and happen before
 any client is notified — a client must never see an event a restart would lose.
 
@@ -75,9 +75,9 @@ Claude's `resumeDropsTurn` takes a message id rather than a boolean, so there is
 never to a session object.
 
 ```bash
-goodharness serve          # Session Host on 127.0.0.1, prints the web handoff URL
-goodharness tui            # terminal client; connects to a running host or embeds one
-goodharness list
+flow serve          # Session Host on 127.0.0.1, prints the web handoff URL
+flow tui            # terminal client; connects to a running host or embeds one
+flow list
 ```
 
 TUI keys: `^S` sessions · `^P` models (grouped by provider) · `^E` effort · `esc` abort · `^C` quit.
@@ -98,8 +98,8 @@ Two bugs the tests caught that a manual try would likely have missed:
 **M4 (web UI) complete.** A richer surface than the TUI, on the same transport and the same reducer.
 
 ```bash
-goodharness serve   # prints http://127.0.0.1:PORT/auth?token=… — open that once
-goodharness serve --port 3000 --address 0.0.0.0   # containers reached via a published port
+flow serve   # prints http://127.0.0.1:PORT/auth?token=… — open that once
+flow serve --port 3000 --address 0.0.0.0   # containers reached via a published port
 ```
 
 Several Agent Sessions on screen at once, collapsible tool calls, file edits rendered as diffs,
@@ -122,13 +122,13 @@ The `/auth` handoff exists because a browser cannot put an `Authorization` heade
 an `EventSource`: the token goes into an HttpOnly cookie once, and the UI itself — not just the API
 — requires it.
 
-**M5 (single executable) complete.** `npm run build:binary` produces `build/goodharness`: an esbuild
+**M5 (single executable) complete.** `npm run build:binary` produces `build/flow`: an esbuild
 bundle injected into a copy of the `node` binary via Node SEA.
 
 **Claude Code is a prerequisite for the binary, not a payload.** The Agent SDK spawns the CLI as a
 child process, and a child needs a real file on disk, which a SEA blob cannot provide. Install it
 separately (`npm i -g @anthropic-ai/claude-code`); the binary resolves `claude` from PATH, or from
-`GOODHARNESS_CLAUDE_PATH`. Running from source is unaffected — the SDK finds its own copy.
+`FLOW_CLAUDE_PATH`. Running from source is unaffected — the SDK finds its own copy.
 
 Building on macOS additionally needs Xcode command line tools: injection invalidates the `node`
 binary's code signature, so the build strips it, injects into a `NODE_SEA` Mach-O segment, then
@@ -145,7 +145,7 @@ Five things the build needed:
   installed alongside it.
 - **The CLI is spawned directly, not through `process.execPath`.** The SDK runs the CLI as
   `<node> <cli-path> …` using `process.execPath` as the interpreter — but inside a single executable
-  that *is* the GoodHarness binary, so the spawn re-invokes GoodHarness with the CLI's arguments,
+  that *is* the Flow binary, so the spawn re-invokes Flow with the CLI's arguments,
   argument parsing rejects them, and it surfaces as `Claude Code process exited with code 1`. A
   `spawnClaudeCodeProcess` override executes the CLI path itself. It rewrites *only* interpreter
   spawns: a native Claude Code install is spawned with no interpreter at all, so the binary is
@@ -217,9 +217,9 @@ npm run typecheck   # four programs: host, web presentation logic, web app, its 
 npm test
 npm run spike:auth   # re-verify subscription auth
 
-GOODHARNESS_ASSETS=1 npm test    # adds a Vite rebuild, to prove the embedded module is its output
-GOODHARNESS_E2E=1 npm test       # adds the live Claude contract (spends tokens)
-GOODHARNESS_E2E_PI=1 npm test    # adds the live pi contract (needs pi credentials)
+FLOW_ASSETS=1 npm test    # adds a Vite rebuild, to prove the embedded module is its output
+FLOW_E2E=1 npm test       # adds the live Claude contract (spends tokens)
+FLOW_E2E_PI=1 npm test    # adds the live pi contract (needs pi credentials)
 ```
 
 All three stay out of the default loop for the same reason: `npm test` should need no credentials,
@@ -246,7 +246,7 @@ desktop fight over one number.
 
 ⌘B is what shadcn's Sidebar binds and the muscle memory is worth matching, but it is resolved by
 `web/src/presentation/bindings.ts` like every other key rather than by the component's own `window`
-listener, which is removed. See the GOODHARNESS note in `web/src/components/ui/sidebar.tsx`.
+listener, which is removed. See the FLOW note in `web/src/components/ui/sidebar.tsx`.
 
 ### Settings
 
@@ -273,7 +273,7 @@ Settings are machine-wide: they govern every Agent Session on the machine, not o
 | `retention.settled` | How long a Settled Agent Session survives before it is reaped. A duration — `90m`, `36h`, `1d` — or `never`. | `1d` |
 | `fonts.chrome` | The interface typeface: labels, transcript prose, buttons. | `'Inter Variable', sans-serif` |
 | `fonts.monospace` | The Shell's terminal, and the chrome that aligns character by character. | a Nerd Font stack (below) |
-| `projects.root` | The Project Root: where Candidates are looked for, and what GoodHarness opens on. Absolute or `~`-relative. | none |
+| `projects.root` | The Project Root: where Candidates are looked for, and what Flow opens on. Absolute or `~`-relative. | none |
 | `projects.include` | The Projects, opted into. Each entry is relative to the Project Root, or absolute. | none |
 
 Any section may be omitted and keeps its default. The file is read **leniently** and written
@@ -291,7 +291,7 @@ confirm before saving. Only Settled Agent Sessions are ever reaped; an Ended one
 #### Projects
 
 A **Project** is a directory you have opted into starting Agent Sessions from — a *candidate* Scope,
-not a Scope. `projects.include` is the list, and it is the whole of it. A repository GoodHarness can
+not a Scope. `projects.include` is the list, and it is the whole of it. A repository Flow can
 see beneath the Project Root is a **Candidate** until it appears there:
 
 ```
@@ -330,8 +330,8 @@ with a Project picker, the Scope field starts empty, and `n` opens with the pick
 a few letters, Enter, Enter starts a session in the right repository. The Scope field stays
 editable throughout, for the directory you did not opt in.
 
-`goodharness tui` uses the Project Root when `--scope` is absent. A one-shot
-`goodharness "<prompt>"` does not: it is run *in* a directory, so that directory is the right
+`flow tui` uses the Project Root when `--scope` is absent. A one-shot
+`flow "<prompt>"` does not: it is run *in* a directory, so that directory is the right
 default and `--scope` is how you say otherwise.
 
 #### Fonts
@@ -360,7 +360,7 @@ npm start -- serve --port 4318   # terminal one: the Session Host
 npm run dev                      # terminal two: Vite on 127.0.0.1:5173
 ```
 
-The dev server finds the host through `daemon.json`, or `GOODHARNESS_URL` if you set it, and it
+The dev server finds the host through `daemon.json`, or `FLOW_URL` if you set it, and it
 resolves that target once at startup — which is why the host wants a fixed `--port` rather than the
 ephemeral one it picks by default. It proxies `/api` and `/auth` through, so the browser stays on
 one origin; that single origin is what lets the Session Host go on checking `Origin` strictly with
