@@ -1,6 +1,7 @@
 import { Layers } from "lucide-react";
-import { useCallback, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
+import { isToolKey } from "@client/tool-chains.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useEntry } from "@/agent-session-view.tsx";
 import { ToolStatusDot } from "@/components/transcript-entry.tsx";
@@ -33,9 +34,12 @@ export function ToolChain({
   keys: readonly string[];
   children: ReactNode;
 }) {
+  // A chain carries the thinking between its calls, but the header speaks about tools: it counts
+  // them and names the last one, so a trailing thought does not leave the line anonymous.
+  const toolKeys = useMemo(() => keys.filter(isToolKey), [keys]);
   // One hook, not one per member: a chain grows as tools land, and a hook per key would change the
   // hook count between renders.
-  const latest = useEntry(view, keys[keys.length - 1] ?? "");
+  const latest = useEntry(view, toolKeys[toolKeys.length - 1] ?? "");
   const failed = useChainFailures(view, keys);
   const precis = latest?.kind === "tool" ? toolSummary(latest.input) : undefined;
 
@@ -44,7 +48,7 @@ export function ToolChain({
       <details className="rounded-lg border bg-card text-card-foreground">
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="shrink-0 text-sm text-muted-foreground">{keys.length} tools</span>
+          <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>
           {latest?.kind === "tool" ? (
             <>
               <span className="shrink-0 text-muted-foreground" aria-hidden>
