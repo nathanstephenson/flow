@@ -128,9 +128,17 @@ function BranchPicker({ sessionId, chrome }: { sessionId: string; chrome: Chrome
             })();
           }}
         >
-          <SelectTrigger aria-label="Branch" className={cn(QUIET_TRIGGER, "font-mono")}>
+          {/*
+           * `min-w-0` on both the trigger and the value, or neither clips: the base trigger is
+           * `w-fit whitespace-nowrap`, so a worktree branch — a prefix, a ticket, a description and
+           * a date — sets its own width and spills out of the grid track and past the panel edge.
+           * The whole name is still one hover away in the tooltip.
+           */}
+          <SelectTrigger aria-label="Branch" className={cn(QUIET_TRIGGER, "min-w-0 font-mono")}>
             <GitBranch aria-hidden className="size-3.5 shrink-0" />
-            <SelectValue>{() => branch.name}</SelectValue>
+            <SelectValue className="min-w-0">
+              {() => <span className="truncate">{branch.name}</span>}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {/*
