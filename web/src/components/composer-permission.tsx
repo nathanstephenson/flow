@@ -114,17 +114,7 @@ export function ComposerPermission({
                       <span aria-hidden className="w-3 shrink-0 font-mono text-xs text-muted-foreground">
                         {index + 1}
                       </span>
-                      <span
-                        className={cn(
-                          "shrink-0 font-medium",
-                          // Deny reads as the destructive one, which is backwards for a permission
-                          // and deliberately not done: refusing is the safe answer here, and the
-                          // colour is spent on the row that widens what the machine will run.
-                          choice.decision === "always" && "text-destructive",
-                        )}
-                      >
-                        {choice.label}
-                      </span>
+                      <span className="shrink-0 font-medium">{choice.label}</span>
                       {index !== cursor ? (
                         <span className="min-w-0 truncate text-xs text-muted-foreground">
                           {choice.description}
