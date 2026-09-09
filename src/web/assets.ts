@@ -1,6 +1,6 @@
 /**
  * The shape of the embedded web assets: what the Session Host is entitled to assume about a manifest
- * it is handed, and the contract scripts/build-assets.mjs is written against.
+ * it is handed, and the contract src/web/manifest.ts is written against.
  *
  * The manifest itself is a build artifact and never appears under src/ — the binary build generates
  * it and injects it in place of src/web/embedded.ts (ADR 0017), so nothing typechecks the bytes.

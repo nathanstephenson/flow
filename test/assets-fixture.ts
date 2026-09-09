@@ -3,12 +3,13 @@ import type { AssetManifest } from "../src/web/assets.ts";
 /**
  * A hand-written stand-in for the embedded web client.
  *
- * The real manifest is a build artifact that only scripts/build-binary.mjs produces (ADR 0017), so
- * it is not on disk during `npm test` and the HTTP tier serves this instead. Nothing is lost: those
- * tests are about the Session Host's routing — content types, cache-control, the token gate, the SPA
- * fallback — and none of them is a property of the real bundle.
+ * The real manifest is built from web/dist and nothing commits it (ADR 0017), so `npm test` cannot
+ * assume one exists — the suite has to pass on a fresh clone with no build and under --omit=dev with
+ * no Vite. The HTTP tier serves this instead, and nothing is lost: those tests are about the Session
+ * Host's routing — content types, cache-control, the token gate, the SPA fallback — and none of them
+ * is a property of the real bundle.
  *
- * Every field mirrors a rule in scripts/build-assets.mjs, and the pairing is held honest from the
+ * Every field mirrors a rule in src/web/manifest.ts, and the pairing is held honest from the
  * other end by test/assets-embedding.test.ts, which pins those rules against a tree it builds
  * itself: `; charset=utf-8` on text types, base64 for anything else, and `immutable` iff the
  * basename carries an 8-character content hash.

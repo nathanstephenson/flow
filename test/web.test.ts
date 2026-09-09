@@ -81,10 +81,10 @@ describe("web assets", () => {
 });
 
 /**
- * The shape a source run takes: `npm start` embeds nothing, because development serves the client
- * from the Vite dev server and only the binary embeds one. That makes an empty manifest a supported
- * deployment rather than a mistake, so the fallback has to stay a 404 instead of reaching for an
- * Entry Document that is not there.
+ * A Session Host with no web client. `flow serve` refuses to reach this state — it builds first and
+ * fails loudly if it cannot — but serve() is handed an empty manifest by every test that is about
+ * the API rather than the UI, so the routing has to hold: the fallback stays a 404 instead of
+ * reaching for an Entry Document that is not there.
  */
 describe("a deployment with no web client", () => {
   it("404s the UI without disturbing the API", async () => {

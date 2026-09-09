@@ -112,10 +112,11 @@ as `/reduce.js` and `/diff.js`, no bundler — and a test loaded what the Sessio
 and asserted it produced state identical to the TypeScript reducer. **Superseded by M6**, which has
 the browser import the reducer instead of being handed it.
 
-Assets are embedded as strings, so the host never reads them from disk and a single-executable build
-has nothing to find at runtime. Nothing generated is committed: `src/web/embedded.ts` exports an
-empty manifest and `npm run build:binary` replaces it at bundle time with the real one (ADR 0017), so
-the only build that embeds a web client is the only one that carries it.
+Assets are served from a manifest held in memory, so a single-executable build has nothing to find on
+disk at runtime. Nothing generated is committed: `src/web/embedded.ts` exports an empty manifest that
+`npm run build:binary` replaces at bundle time, and a source run builds `web/dist` (`prestart`) and
+reads it through the same `manifestOf()` the binary build uses (ADR 0017). Starting without a build
+is refused rather than silently serving nothing.
 
 The `/auth` handoff exists because a browser cannot put an `Authorization` header on a navigation or
 an `EventSource`: the token goes into an HttpOnly cookie once, and the UI itself — not just the API
@@ -370,8 +371,8 @@ Do the cookie handoff on **the URL the dev server prints**, not the one the host
 `localhost`, `127.0.0.1` and `[::1]` are three different cookie hosts on one machine, so a cookie
 taken on the host's is not sent to the dev origin, which then answers 401. And `/auth` redirects to
 a relative `/` — which is what makes it work through a proxy at all — so following the host's own
-URL lands you on a 404: a source run embeds no web client, and the dev server is the one serving it
-(ADR 0017).
+URL lands you on the built client rather than on the dev server, with none of your unbuilt changes
+in it.
 
 Do not install with `npm ci --omit=optional`. Rolldown, lightningcss and esbuild all resolve their
 native bindings through optional dependencies, so omitting them installs cleanly and then fails at

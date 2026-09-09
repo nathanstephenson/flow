@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { manifestOf } from "../scripts/build-assets.mjs";
+import { manifestOf, NoWebBuild } from "../src/web/manifest.ts";
 import { SHARED_MODULES, assertSharedModules } from "../scripts/shared-modules.mjs";
 
 const CONTENT_HASHED = /-[A-Za-z0-9_-]{8}\.[^.]+$/;
@@ -67,8 +67,8 @@ describe("the embedded manifest", () => {
     }
   });
 
-  it("refuses a directory that was never built", () => {
-    assert.throws(() => manifestOf(join(tmpdir(), "flow-not-built-at-all")), /no Vite output/);
+  it("refuses a directory that was never built, as the error the CLI turns into advice", () => {
+    assert.throws(() => manifestOf(join(tmpdir(), "flow-not-built-at-all")), NoWebBuild);
   });
 });
 
@@ -134,7 +134,7 @@ if (process.env["FLOW_ASSETS"] !== "1") {
           assert.notEqual(
             asset.type,
             "application/octet-stream",
-            `${path}: add its extension to CONTENT_TYPES in scripts/build-assets.mjs`,
+            `${path}: add its extension to CONTENT_TYPES in src/web/manifest.ts`,
           );
           assert.equal(asset.immutable, CONTENT_HASHED.test(basename(path)), path);
         }

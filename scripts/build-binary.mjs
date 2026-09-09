@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
-import { manifestOf } from "./build-assets.mjs";
+import { manifestOf } from "../src/web/manifest.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "build");
@@ -24,6 +24,9 @@ mkdirSync(out, { recursive: true });
  * Generated as data rather than as TypeScript: it is JSON.stringify of a plain object, so it cannot
  * be syntactically invalid, and nothing needs to typecheck it. What stands behind it is
  * test/assets-embedding.test.ts, which pins manifestOf() against a tree it builds itself.
+ *
+ * manifestOf() is the same function src/cli/main.ts calls at startup, so the binary and a source run
+ * serve the same bytes for the same web/dist.
  */
 const embedded = join(out, "embedded.generated.js");
 writeFileSync(

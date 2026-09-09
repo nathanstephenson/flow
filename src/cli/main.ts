@@ -9,11 +9,13 @@ import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
 import { EMBEDDED } from "../web/embedded.ts";
+import { manifestOf, NoWebBuild } from "../web/manifest.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { answerLines } from "../client/enquiry.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
+import type { AssetManifest } from "../web/assets.ts";
 import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
@@ -27,6 +29,24 @@ const USAGE = `usage:
   A one-shot prompt always uses this directory unless --scope names another.`;
 
 type Daemon = { url: string; token: string };
+
+/**
+ * The web client to serve. The binary carries its own, injected in place of src/web/embedded.ts at
+ * bundle time; a source run has an empty one and reads the Vite build off disk instead.
+ *
+ * Missing is fatal rather than a silent API-only host: `npm start` builds first (prestart), so an
+ * absent web/dist means something skipped that, and a Session Host answering 404 for every page is a
+ * far worse thing to debug than a refusal that names the command to run.
+ */
+function webClient(): AssetManifest {
+  if (Object.keys(EMBEDDED).length > 0) return EMBEDDED;
+  try {
+    return manifestOf(join(import.meta.dirname, "../../web/dist"));
+  } catch (error) {
+    if (!(error instanceof NoWebBuild)) throw error;
+    throw new Error(`${error.message}; run \`npm run build:web\``);
+  }
+}
 
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
@@ -159,7 +179,7 @@ async function startHost(
     shells,
     config,
     store,
-    assets: EMBEDDED,
+    assets: webClient(),
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),

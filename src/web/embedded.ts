@@ -1,15 +1,14 @@
 import type { AssetManifest } from "./assets.ts";
 
 /**
- * The web client this build serves, and the one place a build artifact enters the program.
+ * The web client baked into this build, and the one place a build artifact enters the program.
  *
- * Empty in a source run, which is not a gap: development serves the client from the Vite dev server,
- * which proxies /api and /auth to a Session Host started separately (web/vite.config.ts), so the
- * host has no client to serve and browsing it directly is the documented mistake. The single
- * executable is the only build that embeds one, and scripts/build-binary.mjs replaces this module at
- * bundle time with the manifest built from web/dist (ADR 0017).
+ * Empty here and replaced wholesale by scripts/build-binary.mjs at bundle time, because the single
+ * executable is the only build that can carry its assets — a SEA blob has no filesystem to read them
+ * from. A source run finds this empty and loads web/dist from disk instead (src/cli/main.ts), so
+ * both serve the same bytes by the same manifestOf(); only where they come from differs.
  *
  * Nothing generated is committed under src/ as a consequence, which is the whole point: the manifest
- * is 2.5 MB that Vite content-hashes, so every branch touching web/ used to collide on it.
+ * is 2.5 MB that Vite content-hashes, so every branch touching web/ used to collide on it (ADR 0017).
  */
 export const EMBEDDED: AssetManifest = {};
