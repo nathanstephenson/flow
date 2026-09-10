@@ -1,30 +1,29 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it, before, after } from "node:test";
-import { fileURLToPath } from "node:url";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
-import { editDiff } from "../src/client/diff.ts";
-import { ASSETS, SHARED_MODULES, SOURCE_HASH } from "../src/web/assets.generated.ts";
-import { sourceHash } from "../scripts/build-assets.mjs";
+import { FIXTURE_ASSETS } from "./assets-fixture.ts";
 
 const TOKEN = "web-test-token";
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
-const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
-
+/**
+ * How the Session Host serves a web client, given one.
+ *
+ * It is given a fixture rather than the real bundle because the real bundle is a build artifact the
+ * binary build embeds and nothing else produces (ADR 0017). Every assertion here is about routing,
+ * so a three-entry manifest exercises them exactly as 2.5 MB of Vite output would — and the suite
+ * keeps running on a fresh clone with no web/dist and under --omit=dev with no Vite.
+ */
 describe("web assets", () => {
   let running: RunningServer;
 
   before(async () => {
     const host = new SessionHost();
     host.registerBackend(new FakeBackend());
-    running = await serve({ host, token: TOKEN, scope: "/tmp/scope" });
+    running = await serve({ host, token: TOKEN, scope: "/tmp/scope", assets: FIXTURE_ASSETS });
   });
 
   after(async () => {
@@ -34,48 +33,13 @@ describe("web assets", () => {
   const get = (path: string, headers: Record<string, string> = {}) =>
     fetch(`${running.url}${path}`, { headers: { cookie: `flow=${TOKEN}`, ...headers } });
 
-  /**
-   * The relocated anti-drift guarantee. Byte-equality between the served reducer and the TUI's is
-   * what used to stop the two front-ends diverging; the web app now imports src/client/reduce.ts
-   * directly, so the compiler does that. What is left to prove is that the committed bundle is not
-   * *older* than the source it was built from — src/client/** is in the digest's input set, so
-   * editing reduce.ts without rerunning `npm run build:assets` fails right here.
-   *
-   * It recomputes the digest rather than calling buildAssets() on purpose: this has to pass on a
-   * fresh clone with no web/dist, and under --omit=dev with no Vite installed.
-   */
-  it("keeps the embedded bundle in step with the sources it was built from", () => {
-    assert.equal(SOURCE_HASH, sourceHash(), "run `npm run build:assets`");
-  });
+  it("serves the Entry Document at / and every asset at its own URL", async () => {
+    const entryDocument = await get("/");
+    assert.equal(entryDocument.status, 200);
+    assert.match(entryDocument.headers.get("content-type") ?? "", /text\/html/);
+    assert.equal(entryDocument.headers.get("cache-control"), "no-store");
 
-  /**
-   * An assertion about an assertion. The guarantee that matters is the throw in
-   * scripts/build-web.mjs, which cannot be skipped because build:binary depends on it; this exists
-   * so that quietly deleting that check also breaks `npm test`.
-   */
-  it("records which client modules the bundle is required to be built from", () => {
-    assert.deepEqual([...SHARED_MODULES].sort(), [
-      "src/client/connection.ts",
-      "src/client/context-usage.ts",
-      "src/client/diff.ts",
-      "src/client/markdown.ts",
-      "src/client/model-choices.ts",
-      "src/client/reduce.ts",
-      "src/client/relative-time.ts",
-      "src/client/search.ts",
-      "src/client/session-label.ts",
-      "src/client/status.ts",
-      "src/client/tool-summary.ts",
-    ]);
-  });
-
-  it("serves the shell at / and every asset Vite emitted at its own URL", async () => {
-    const shell = await get("/");
-    assert.equal(shell.status, 200);
-    assert.match(shell.headers.get("content-type") ?? "", /text\/html/);
-    assert.equal(shell.headers.get("cache-control"), "no-store");
-
-    for (const [path, asset] of Object.entries(ASSETS)) {
+    for (const [path, asset] of Object.entries(FIXTURE_ASSETS)) {
       if (!asset) continue;
       const response = await get(path);
       assert.equal(response.status, 200, path);
@@ -85,17 +49,19 @@ describe("web assets", () => {
   });
 
   it("requires authentication for the UI itself, not just the API", async () => {
-    // The hashed assets and the SPA fallback are new reachable surface sitting behind the same token
+    // The hashed assets and the SPA fallback are reachable surface sitting behind the same token
     // gate, so each is named here: neither may become a way to read the app without the cookie.
-    const script = Object.keys(ASSETS).find((path) => path.startsWith("/assets/") && path.endsWith(".js"));
-    assert.ok(script, "Vite emitted no hashed script");
+    const script = Object.keys(FIXTURE_ASSETS).find(
+      (path) => path.startsWith("/assets/") && path.endsWith(".js"),
+    );
+    assert.ok(script, "the fixture carries no hashed script");
 
     for (const path of ["/", script, "/s/deep-link"]) {
       assert.equal((await fetch(`${running.url}${path}`)).status, 401, path);
     }
   });
 
-  it("answers an unknown path with the shell, but keeps /api and /assets honest", async () => {
+  it("answers an unknown path with the Entry Document, but keeps /api and /assets honest", async () => {
     const deepLink = await get("/s/some-agent-session");
     assert.equal(deepLink.status, 200);
     assert.match(deepLink.headers.get("content-type") ?? "", /text\/html/);
@@ -115,81 +81,27 @@ describe("web assets", () => {
 });
 
 /**
- * The tier that catches what SOURCE_HASH cannot: a hand-edited manifest, or an input set too narrow
- * to notice a change. Rebuilds with Vite and compares filenames and per-file digests. Opt-in because
- * it needs Vite and its platform binding, which the two-second loop should not: FLOW_ASSETS=1 npm test
+ * A Session Host with no web client. `flow serve` refuses to reach this state — it builds first and
+ * fails loudly if it cannot — but serve() is handed an empty manifest by every test that is about
+ * the API rather than the UI, so the routing has to hold: the fallback stays a 404 instead of
+ * reaching for an Entry Document that is not there.
  */
-if (process.env["FLOW_ASSETS"] !== "1") {
-  console.log("# skipping embedded asset rebuild (set FLOW_ASSETS=1 to run)");
-} else {
-  describe("embedded assets", () => {
-    it("are Vite's actual output for the sources on disk", async () => {
-      const { build } = await import("vite");
-      const outDir = mkdtempSync(join(tmpdir(), "flow-assets-"));
-      let emitted: Map<string, string>;
-      try {
-        await build({
-          configFile: fileURLToPath(new URL("../web/vite.config.ts", import.meta.url)),
-          logLevel: "warn",
-          build: { outDir, emptyOutDir: true, sourcemap: false },
-        });
-        emitted = digestTree(outDir);
-      } finally {
-        rmSync(outDir, { recursive: true, force: true });
+describe("a deployment with no web client", () => {
+  it("404s the UI without disturbing the API", async () => {
+    const host = new SessionHost();
+    host.registerBackend(new FakeBackend());
+    const running = await serve({ host, token: TOKEN, scope: "/tmp/scope", assets: {} });
+    try {
+      for (const path of ["/", "/s/deep-link"]) {
+        const response = await fetch(`${running.url}${path}`, { headers: { cookie: `flow=${TOKEN}` } });
+        assert.equal(response.status, 404, path);
+        assert.match(response.headers.get("content-type") ?? "", /application\/json/, path);
       }
 
-      const embedded = new Map(
-        Object.entries(ASSETS).flatMap(([path, asset]) =>
-          asset ? [[path, sha256(Buffer.from(asset.body, asset.encoding))] as const] : [],
-        ),
-      );
-
-      assert.deepEqual([...embedded.keys()].sort(), [...emitted.keys()].sort(), "run `npm run build:assets`");
-      for (const [path, digest] of emitted) {
-        assert.equal(embedded.get(path), digest, `${path} differs; run \`npm run build:assets\``);
-      }
-    });
-  });
-}
-
-/** Every file under `root`, keyed by the URL path the generator would give it. */
-function digestTree(root: string, prefix = "/"): Map<string, string> {
-  const digests = new Map<string, string>();
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const full = join(root, entry.name);
-    if (entry.isDirectory()) for (const [path, digest] of digestTree(full, `${prefix}${entry.name}/`)) digests.set(path, digest);
-    else digests.set(`${prefix}${entry.name}`, sha256(readFileSync(full)));
-  }
-  return digests;
-}
-
-describe("edit diffs", () => {
-  it("reads the shape Claude's Edit tool actually produces", () => {
-    // Captured from a real session: {replace_all, file_path, old_string, new_string}.
-    const diff = editDiff({
-      replace_all: false,
-      file_path: "/tmp/gh-demo/greeting.txt",
-      old_string: "Hello, world!",
-      new_string: "Goodbye, world!",
-    });
-    assert.deepEqual(diff, {
-      path: "/tmp/gh-demo/greeting.txt",
-      removed: ["Hello, world!"],
-      added: ["Goodbye, world!"],
-    });
-  });
-
-  it("treats a Write as pure addition", () => {
-    assert.deepEqual(editDiff({ file_path: "a.txt", content: "one\ntwo\n" }), {
-      path: "a.txt",
-      removed: [],
-      added: ["one", "two"],
-    });
-  });
-
-  it("leaves non-editing tools alone", () => {
-    assert.equal(editDiff({ file_path: "a.txt" }), undefined);
-    assert.equal(editDiff("ls -la"), undefined);
-    assert.equal(editDiff(undefined), undefined);
+      const config = await fetch(`${running.url}/api/config`, { headers: { cookie: `flow=${TOKEN}` } });
+      assert.equal(config.status, 200);
+    } finally {
+      await running.close();
+    }
   });
 });

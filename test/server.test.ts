@@ -30,7 +30,7 @@ describe("Session Host transport", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    running = await serve({ host, token });
+    running = await serve({ host, token, assets: {} });
     client = connect({ url: running.url, token });
   });
 
@@ -309,7 +309,7 @@ describe("attachments over the wire", () => {
     store = new TranscriptStore(root);
     const host = new SessionHost({ store });
     host.registerBackend(new FakeBackend());
-    running = await serve({ host, token, store });
+    running = await serve({ host, token, store, assets: {} });
     sessionId = await host.create({ scope: "/tmp/scope", backend: "fake", modelId: "fake-1" });
     attachmentId = store.writeAttachment(sessionId, "image/png", pixel);
   });

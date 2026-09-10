@@ -163,11 +163,18 @@ open on. Configured, never discovered. It bounds what is suggested, not what a P
 Project outside it is named by its own path.
 _Avoid_: workspace, workspace root, home, cwd
 
+**Entry Document**:
+The HTML document the Session Host serves for `/` and for every deep-linked Agent Session. Served
+`no-store`, which is what lets every asset it names be cached forever. A build may embed none, in
+which case that deployment serves no web client at all.
+_Avoid_: shell, app shell, index, page
+
 **Shell**:
 A shell process serving an Agent Session, started in its Scope. Ephemeral: unlike a Backend Session
 it is never Revived, and it does not survive a daemon restart. An Agent Session may own several, and
 they exit when it is Settled, Ended or Reaped.
-_Avoid_: terminal, pty, console, session
+_Avoid_: terminal, pty, console, session — and note it is unrelated to the Entry Document, which
+older prose also called a shell.
 
 **Scrollback**:
 The bounded ring of recent Shell output the Session Host keeps so a reattaching client sees a

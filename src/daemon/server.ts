@@ -11,8 +11,7 @@ import type { LoggedEvent } from "../protocol/events.ts";
 import type { Project } from "../protocol/projects.ts";
 import { discoverProjects, includedProjects, searchDirectories } from "./projects.ts";
 import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
-import type { EmbeddedAsset } from "../web/assets.ts";
-import { ASSETS } from "../web/assets.generated.ts";
+import type { AssetManifest, EmbeddedAsset } from "../web/assets.ts";
 import type { BranchList } from "../protocol/git.ts";
 import { gitAvailable, head, isRepository, localBranches, MAX_BRANCHES } from "./git.ts";
 import { tokenMatches } from "./auth.ts";
@@ -56,6 +55,14 @@ export type ServeOptions = {
    * same reason.
    */
   store?: TranscriptStore;
+  /**
+   * The web client to serve, injected rather than imported so that nothing under src/ depends on a
+   * build output (ADR 0017). Required rather than optional, unlike the omissions above: forgetting
+   * it would serve no client at all, and the SPA fallback would degrade to a 404 with every test
+   * still green, so the compiler is made to ask. An empty manifest is the honest way to say this
+   * deployment has no client, which is what a source run passes.
+   */
+  assets: AssetManifest;
 };
 
 export type RunningServer = {
@@ -245,8 +252,8 @@ async function handle(
 
   // Assets are served from the embedded manifest rather than disk, so a single-executable build has
   // nothing to find at runtime. The manifest is keyed by the path Vite emitted each file at, so `/`
-  // has to be spelled out as the shell.
-  const asset = ASSETS[url.pathname === "/" ? "/index.html" : url.pathname];
+  // has to be spelled out as the Entry Document.
+  const asset = options.assets[url.pathname === "/" ? "/index.html" : url.pathname];
   if (request.method === "GET" && asset) {
     sendAsset(response, asset);
     return;
@@ -293,14 +300,14 @@ async function handle(
   // An Agent Session is deep-linkable, so an unknown path is the client router's business — except
   // under /api, where a 404 must stay JSON, and under /assets, where a missing hashed file is a bug
   // and must not be answered with HTML the browser will try to execute.
-  const shell = ASSETS["/index.html"];
+  const entryDocument = options.assets["/index.html"];
   if (
     request.method === "GET" &&
-    shell &&
+    entryDocument &&
     !url.pathname.startsWith("/api/") &&
     !url.pathname.startsWith("/assets/")
   ) {
-    sendAsset(response, shell);
+    sendAsset(response, entryDocument);
     return;
   }
 
