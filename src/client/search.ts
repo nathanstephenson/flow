@@ -43,6 +43,13 @@ export function entryHaystack(entry: Entry): string {
       .filter((part) => part !== "")
       .join("\n");
   }
+  /*
+   * A Background Call has no `text` either, and only its tool name to be remembered by. Its
+   * arguments are deliberately not repeated here — they are on the `tool` row sharing its id, which
+   * this same function already indexes through the stringified input, so the command stays findable
+   * without being stored twice.
+   */
+  if (entry.kind === "background_call") return entry.tool;
   if (entry.kind !== "tool") return entry.text;
   const diff = editDiff(entry.input);
   // The diff's path is already inside the stringified input; it is repeated here so that a query

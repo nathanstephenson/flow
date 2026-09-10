@@ -30,6 +30,19 @@ happening without saying the model is busy.
 _Avoid_: subagent session, child session, sub-session, task, sidechain, delegation; and `agent` in
 code, which collides with Agent Session — "Agents" is the label a reader sees, not the term.
 
+**Background Call**:
+A tool call the Backend Session goes on running past the turn that made it, reporting back into a
+later one. Identified by that call, so it needs no id space of its own, and named by it — a reader
+sees the tool. It owns no conversation and produces no work of its own, which is what separates it
+from a Subagent: there is nothing to read, only something to wait for, so it is watched rather than
+opened. Like a Subagent it is not occupancy and holds nothing, so an Agent Session whose only work
+is Background Calls is Idle and steering into it dispatches; and like a Subagent it cannot outlive
+its Backend Session, so one left running by an unclean shutdown is closed as aborted. What a reader
+sees is two rows sharing one identity: the call, which carries what was asked for, and the Call,
+which carries how it is going.
+_Avoid_: background task, background job, async tool, deferred call; and Subagent, which is the
+other thing that outlives a turn and the one this is most often mistaken for.
+
 **Spend**:
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
@@ -163,12 +176,13 @@ _Avoid_: active, open, attached, running
 
 **Idle**:
 The activity of a Live Agent Session with no turn in flight: its owner's turn, to type. Its
-Backend Session is attached, which is what separates it from Dormant.
+Backend Session is attached, which is what separates it from Dormant. Says nothing about whether
+work is happening — a backgrounded Subagent or a Background Call leaves it Idle, which is the point.
 _Avoid_: ready, waiting, free, dormant
 
 **Running**:
 The activity of a Live Agent Session whose model holds the turn. This is occupancy, and nothing
-else: a backgrounded Subagent working is not Running, because the model is not.
+else: a backgrounded Subagent or a Background Call working is not Running, because the model is not.
 _Avoid_: busy, working, active, thinking
 
 **Awaiting**:
@@ -192,8 +206,9 @@ Which tier of the rail an Agent Session sits in, ordered by how alive it is: Awa
 then Idle, then Dormant, then Settled and Ended together. A row moves when its Band changes and at
 no other time, which is what lets a turn stream for an hour without reordering the list. Working is
 the one Band that is not simply a status — an Agent Session whose only work is backgrounded
-Subagents is Idle and sits there anyway, because sinking it below something that finished yesterday
-would hide the thing its owner wanted to watch.
+Subagents or Background Calls is Idle and sits there anyway, because sinking it below something that
+finished yesterday would hide the thing its owner wanted to watch. It is the one question that does
+not care which kind of work it is.
 _Avoid_: group, tier, section, bucket
 
 **Dormant**:

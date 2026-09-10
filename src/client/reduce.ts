@@ -31,6 +31,9 @@ export type SubagentStatus = "running" | "waiting" | "complete" | "aborted" | "e
 /** Flattened from EnquiryState, for the reason SubagentStatus is flattened from SubagentState. */
 export type EnquiryStatus = "asked" | "answered" | "aborted";
 
+/** Flattened from BackgroundCallState, for the same reason. No `waiting`: nothing reports one. */
+export type BackgroundCallStatus = "running" | "complete" | "aborted" | "error";
+
 /**
  * The Enquiry blocking this turn: what is being asked, and the id to answer it under.
  *
@@ -126,6 +129,33 @@ export type Entry =
       endedAt?: string;
     }
   /**
+   * One Background Call (ADR 0021). `id` is the id of the tool call the Backend Session is running
+   * past the turn that made it, so this Entry and the `tool` Entry beside it are two views of one
+   * thing — that row is the launch, and this is the work it started.
+   *
+   * Unlike a Subagent's, **the tool row is kept rather than suppressed.** A Subagent's row repeats
+   * the brief its card already carries; a backgrounded `Bash`'s row carries the command, which is
+   * nowhere else in the transcript, and its result well carries the launch receipt that `BashOutput`
+   * is later pointed at. See `ownKeys` in web/src/presentation/subagent-rows.ts.
+   */
+  | {
+      kind: "background_call";
+      id: string;
+      tool: string;
+      status: BackgroundCallStatus;
+      producer?: Producer;
+      /**
+       * When the Call was launched, and when it stopped.
+       *
+       * Carried for the reason a Subagent's are, and needed more: this is the only surface a
+       * Background Call has, and "running" without "for how long" is what ADR 0016 recorded as the
+       * gap — a Call working for minutes while the Agent Session reads Idle.
+       */
+      startedAt: string;
+      /** Absent while it is still running. Set once, by the snapshot that ends it. */
+      endedAt?: string;
+    }
+  /**
    * One Enquiry: every Question one `AskUserQuestion` call asked, and what came of them.
    *
    * `id` is the `askId`, which is the asking tool call's id — so this Entry and the `tool` Entry
@@ -207,6 +237,17 @@ export type ViewState = {
    */
   activeSubagents: number;
   /**
+   * Background Calls running right now (ADR 0021).
+   *
+   * A second count rather than folded into `activeSubagents`, because the two are shown in different
+   * places: that one drives the Subagents surface, and a backgrounded `Bash` counted there would
+   * promise a card in a pane that has none. Both feed `working()`, which is the one question that
+   * does not care which of them is busy.
+   *
+   * A number for the reason `activeSubagents` is one.
+   */
+  activeBackgroundCalls: number;
+  /**
    * The Enquiry blocking this turn, or absent.
    *
    * Drives the lockout: while this is set the composer may only answer it, in both front-ends. So
@@ -269,6 +310,7 @@ export function initialState(): ViewState {
     entries: [],
     queue: [],
     activeSubagents: 0,
+    activeBackgroundCalls: 0,
     lastSeq: 0,
   };
 }
@@ -421,6 +463,31 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.
           ...(event.state === "waiting" ? { waitingOn: event.on } : {}),
+          startedAt: previous?.startedAt ?? at,
+          ...(endedAt === undefined ? {} : { endedAt }),
+        }),
+      };
+    }
+
+    case "background_call": {
+      const previous = state.entries.find(
+        (entry): entry is Extract<Entry, { kind: "background_call" }> =>
+          entry.kind === "background_call" && entry.id === event.callId,
+      );
+      // The same transition rule the arm above spells out, and for the same reason: a Background
+      // Call settles through two messages in one tick, so a terminal snapshot arrives twice.
+      const wasActive = previous?.status === "running";
+      const nowActive = event.state === "running";
+      const endedAt = nowActive ? undefined : (previous?.endedAt ?? at);
+      return {
+        ...state,
+        activeBackgroundCalls: state.activeBackgroundCalls + (nowActive ? 1 : 0) - (wasActive ? 1 : 0),
+        entries: upsert(state.entries, {
+          kind: "background_call",
+          id: event.callId,
+          tool: event.tool,
+          status: event.state,
+          ...producerOf(event),
           startedAt: previous?.startedAt ?? at,
           ...(endedAt === undefined ? {} : { endedAt }),
         }),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { composerPlaceholder, sendLabel, subagentStripLabel } from "./composer-hint.ts";
+import { composerPlaceholder, sendLabel } from "./composer-hint.ts";
 import type { Chrome } from "../store/contract.ts";
 
 const chrome = (over: Partial<Chrome>): Chrome => ({
@@ -17,6 +17,7 @@ const chrome = (over: Partial<Chrome>): Chrome => ({
   endedReason: undefined,
   queueDepth: 0,
   activeSubagents: 0,
+  activeBackgroundCalls: 0,
   asking: undefined,
   authorising: undefined,
   compacting: false,
@@ -79,27 +80,5 @@ describe("what the composer promises about the next message", () => {
     // The idle "Enter sends, Shift+Enter for a newline" boilerplate is gone: read once, noise after.
     assert.equal(composerPlaceholder(chrome({})), "Message…");
     assert.equal(sendLabel(chrome({})), "Send this message");
-  });
-});
-
-describe("the strip above the Composer", () => {
-  it("says nothing when no Subagent is working", () => {
-    // Undefined rather than "", so the caller asks "is there a strip" rather than inspecting text.
-    assert.equal(subagentStripLabel(chrome({ activeSubagents: 0 })), undefined);
-  });
-
-  it("counts one without pluralising it", () => {
-    assert.equal(subagentStripLabel(chrome({ activeSubagents: 1 })), "1 agent running");
-  });
-
-  it("pluralises more than one", () => {
-    assert.equal(subagentStripLabel(chrome({ activeSubagents: 2 })), "2 agents running");
-    assert.equal(subagentStripLabel(chrome({ activeSubagents: 11 })), "11 agents running");
-  });
-
-  it("says nothing on a count that has somehow gone negative", () => {
-    // The count is maintained by transitions, so a bug upstream could underflow it. A strip reading
-    // "-1 agents running" is worse than no strip.
-    assert.equal(subagentStripLabel(chrome({ activeSubagents: -1 })), undefined);
   });
 });

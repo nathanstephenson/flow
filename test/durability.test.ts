@@ -317,6 +317,28 @@ describe("durability and revive", () => {
     assert.equal(second.host.list().find((summary) => summary.id === id)?.activeSubagents, 0);
   });
 
+  it("closes a Background Call torn by a restart, exactly once", async () => {
+    // A Background Call is a child of the CLI process, so one still open on disk is a record of
+    // something that will never finish (ADR 0021). Left alone it would render on the next load as a
+    // job running forever, with nothing that could ever stop it.
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "go", "now");
+    first.backend.latest.backgroundCall();
+    assert.equal(first.host.list().find((summary) => summary.id === id)?.activeBackgroundCalls, 1);
+
+    // No shutdown: the daemon died with the Call open.
+    const second = await freshHost();
+
+    const aborted = second.host
+      .logFor(id)
+      .since(0)
+      .map((entry) => entry.event)
+      .filter((event) => event.type === "background_call" && event.state === "aborted");
+    assert.equal(aborted.length, 1, "the Call must be closed exactly once");
+    assert.equal(second.host.list().find((summary) => summary.id === id)?.activeBackgroundCalls, 0);
+  });
+
   it("loads an Agent Session written before the lifecycle/activity split", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

@@ -331,6 +331,82 @@ describe("counting the Subagents that are still working", () => {
 });
 
 /**
+ * The same counting for Background Calls (ADR 0021), plus the one question that is not a mirror:
+ * whether the two counts can contaminate each other.
+ */
+describe("counting the Background Calls that are still running", () => {
+  const at = (seq: number, event: AgentEvent): LoggedEvent => ({ seq, sessionId: "s1", at: "2026-01-01T00:00:00Z", event });
+  const run = (...events: AgentEvent[]): ViewState =>
+    reduceAll(events.map((event, index) => at(index + 1, event)));
+  const snap = (id: string, state: "running" | "complete" | "aborted" | "error"): AgentEvent => ({
+    type: "background_call",
+    callId: id,
+    tool: "Bash",
+    state,
+  });
+
+  it("starts at zero", () => {
+    assert.equal(initialState().activeBackgroundCalls, 0);
+  });
+
+  it("counts one that is running, and drops it on each terminal word", () => {
+    assert.equal(run(snap("a", "running")).activeBackgroundCalls, 1);
+    assert.equal(run(snap("a", "running"), snap("a", "complete")).activeBackgroundCalls, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "aborted")).activeBackgroundCalls, 0);
+    assert.equal(run(snap("a", "running"), snap("a", "error")).activeBackgroundCalls, 0);
+  });
+
+  it("does not count a repeated snapshot twice", () => {
+    assert.equal(run(snap("a", "running"), snap("a", "running")).activeBackgroundCalls, 1);
+  });
+
+  it("does not go negative when a terminal snapshot repeats", () => {
+    // Not hypothetical: a Call settles through `task_updated` *and* `task_notification`, so the
+    // terminal snapshot really does arrive twice.
+    assert.equal(run(snap("a", "running"), snap("a", "complete"), snap("a", "complete")).activeBackgroundCalls, 0);
+  });
+
+  it("counts several at once, and each one leaving", () => {
+    assert.equal(run(snap("a", "running"), snap("b", "running")).activeBackgroundCalls, 2);
+    assert.equal(run(snap("a", "running"), snap("b", "running"), snap("a", "complete")).activeBackgroundCalls, 1);
+  });
+
+  it("keeps the two counts apart", () => {
+    /*
+     * The adapter routes a settled task to one lifecycle or the other on a single predicate, and
+     * that routing has no client-side counterpart — so if the arms ever shared a counter, nothing
+     * downstream would catch it.
+     */
+    const call = run(snap("a", "running"));
+    assert.equal(call.activeSubagents, 0, "a Background Call is not a Subagent");
+
+    const agent = reduceAll([
+      at(1, { type: "subagent", subagentId: "a", name: "Explore", state: "running" }),
+    ]);
+    assert.equal(agent.activeBackgroundCalls, 0, "and a Subagent is not a Background Call");
+  });
+
+  it("takes no occupancy, so the Agent Session stays Idle", () => {
+    // ADR 0016's guarantee, restated for ADR 0021: the model is idle and the Steering Queue may
+    // dispatch. A Background Call that made this `running` would block steering.
+    assert.equal(run(snap("a", "running")).status, "idle");
+  });
+
+  it("holds when a Call started rather than resetting it on every snapshot", () => {
+    const view = run(snap("a", "running"), snap("a", "running"));
+    const entry = view.entries.find((candidate) => candidate.kind === "background_call");
+    assert.equal(entry?.kind === "background_call" ? entry.startedAt : undefined, "2026-01-01T00:00:00Z");
+    assert.equal(entry?.kind === "background_call" ? entry.endedAt : "unset", undefined, "still running");
+  });
+
+  it("stamps an end once the Call stops", () => {
+    const view = run(snap("a", "running"), snap("a", "complete"));
+    const entry = view.entries.find((candidate) => candidate.kind === "background_call");
+    assert.equal(entry?.kind === "background_call" ? entry.endedAt : undefined, "2026-01-01T00:00:00Z");
+  });
+});
+
+/**
  * An event this build has never heard of.
  *
  * A Presentation Transcript is durable and replayed in full forever (ADR 0001), so it outlives the

@@ -19,9 +19,10 @@ import { cn } from "@/lib/utils.ts";
  * Awaiting is produced by an open Enquiry (ADR 0016) or an open Permission Prompt (ADR 0018). It
  * sat here unreachable for two decisions before the Session Host had a word for it.
  *
- * Background Subagents are deliberately *not* a hue here. They are not occupancy (ADR 0016) — the
- * session really is Idle and steering into it works — so the rail draws them as their own small
- * mark from `activeSubagents` rather than by lying about the status.
+ * Background Subagents wear Running's hue through `working`. They are still not occupancy (ADR 0016)
+ * — the status stays Idle and steering into it works — but the dot answers "is something happening
+ * here?", and that is one question with one answer. A second smaller mark elsewhere in the row said
+ * the same thing in a place nothing else was a status, and read as an unexplained speck.
  *
  * So everything else is the monochrome the rest of this app is. Idle is plain `foreground` and
  * filled; Dormant the same `foreground` as a ring; Settled a muted ring; Ended keeps `--destructive`,
@@ -56,13 +57,21 @@ function isAttached(status: SessionStatus): boolean {
   return status === "running" || status === "idle" || status === "awaiting";
 }
 
-export function StatusDot({ status, className }: { status: SessionStatus; className?: string | undefined }) {
+export function StatusDot({
+  status,
+  working,
+  className,
+}: {
+  status: SessionStatus;
+  working?: boolean | undefined;
+  className?: string | undefined;
+}) {
   return (
     <span
       aria-hidden
       className={cn(
         "inline-block size-2 shrink-0 rounded-full",
-        DOT_TEXT[status],
+        working ? "text-status-active" : DOT_TEXT[status],
         isAttached(status) ? "bg-current" : "border-[1.5px] border-current",
         className,
       )}

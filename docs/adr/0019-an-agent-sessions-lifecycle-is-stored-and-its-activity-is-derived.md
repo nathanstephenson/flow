@@ -69,13 +69,19 @@ creates is real and cost a change to five call sites: widening `SessionStatus` m
 was `switchBranch`, which would have stopped refusing and moved a working tree out from under a live
 tool call; it now reads `turnInFlight` directly, which is the question it was always asking.
 
-**A background Subagent gets a count, not a colour.** Making `running` mean "work is happening
-somewhere" was the obvious way to answer the first complaint and was rejected, because it repeals
-ADR 0016 by the back door: the model would be idle, the Steering Queue would dispatch, and the
-status would say otherwise — and `switchBranch` and the compaction guard would then refuse work that
-is perfectly safe. `SessionSummary.activeSubagents` carries the true and narrower fact instead, and
-the rail draws it as its own mark beside the status dot. The trade ADR 0016 accepted stands; what
-changes is that the rail now has a second surface on which to say what it gave up.
+**A background Subagent gets a count, not a status.** Making `running` mean "work is happening
+somewhere" was rejected, because it repeals ADR 0016 by the back door: the model would be idle, the
+Steering Queue would dispatch, and the status would say otherwise — and `switchBranch` and the
+compaction guard would then refuse work that is perfectly safe. `SessionSummary.activeSubagents`
+carries the true and narrower fact instead, and `working()` is the one place the two are combined
+for presentation.
+
+**Presentation spends the count on the status dot, not on a mark of its own.** A second smaller dot
+beside the Project name was tried and removed: it sat on a line that carries no other status, so it
+read as an unexplained speck, while the dot that a reader actually looks at said "finished". The dot
+answers "is something happening here?" and that is one question with one answer. Only the hue moves
+— `working()` never touches `SessionStatus`, so `switchBranch`, the compaction guard and the
+composer all still see `idle` and all still let work through.
 
 **The rail is banded by how alive an Agent Session is, then ordered by `restingAt` inside each
 band.** The bands are Awaiting, working, Idle, Dormant, and Settled with Ended. A single recency key
@@ -113,13 +119,13 @@ prompts rare by construction — only a tool nothing has already authorised rais
 not stamping `restingAt` on Awaiting means the row returns to the position it left rather than to
 the top of its band.
 
-**`activeSubagents` is load-bearing for the order now, not only for a mark.** It decides a band, so
-a count that drifts moves a row rather than only mis-drawing a dot. `railBand` lifts on it only when
+**`activeSubagents` is load-bearing for the order now, not only for a hue.** It decides a band, so
+a count that drifts moves a row rather than only mis-drawing a dot. `working` lifts on it only when
 the status is `idle`, because a Subagent cannot outlive its Backend Session and a count on a Dormant
 or Settled Agent Session is a stale index rather than live work.
 
 **`activeSubagents` refreshes on the two-second poll for unfocused rows.** A Subagent that starts and
-finishes inside one poll never draws its mark. That is a miss rather than a flicker, and it is the
+finishes inside one poll never colours its dot. That is a miss rather than a flicker, and it is the
 cost of the rail not holding an event stream per Agent Session (ADR 0008).
 
 **A latent retention bug is fixed on the way past.** `setModel`, `setEffort` and `abort` all call

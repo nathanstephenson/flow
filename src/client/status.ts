@@ -51,21 +51,37 @@ export function occupied(status: SessionStatus): boolean {
  * Ended has no band of its own. An Ended Agent Session is not reaped and stays in the list, and it
  * is as finished as a Settled one, so it sits with them at the bottom.
  */
-export function railBand(of: { status: SessionStatus; activeSubagents: number }): number {
+export function railBand(of: WorkLoad): number {
   if (of.status === "awaiting") return 0;
-  if (of.status === "running") return 1;
-  /*
-   * Working, but not occupancy. A backgrounded Subagent leaves the status `idle` (ADR 0016) and
-   * must not change it — but something is running, and a rail that sank it below an Agent Session
-   * that finished yesterday would hide the very thing its owner wanted to watch.
-   *
-   * Only `idle` is liftable. A Subagent cannot outlive its Backend Session, so a count on anything
-   * else is a stale index rather than live work, and lifting a Dormant Agent Session above a
-   * working one on the strength of it would be a plain lie.
-   */
-  if (of.status === "idle") return of.activeSubagents > 0 ? 1 : 2;
+  if (of.status === "running" || working(of)) return 1;
+  if (of.status === "idle") return 2;
   if (of.status === "dormant") return 3;
   return 4;
+}
+
+/**
+ * What both the rail's banding and its status dot are asked about: work, whoever is doing it.
+ *
+ * Both counts are required rather than optional. `exactOptionalPropertyTypes` would let a call site
+ * that forgot one compile and silently under-report work, in exactly the place the dot is drawn —
+ * so the compiler is made to find every caller instead.
+ */
+export type WorkLoad = { status: SessionStatus; activeSubagents: number; activeBackgroundCalls: number };
+
+/**
+ * Working, but not occupancy. A backgrounded Subagent or an open Background Call leaves the status
+ * `idle` (ADR 0016, ADR 0021) and must not change it — the Steering Queue really will dispatch — but
+ * something *is* running, and both the rail's banding and its status dot answer "is it working?"
+ * rather than "is the model holding a turn?".
+ *
+ * The two counts are summed here and nowhere else: this is the only question that does not care
+ * which of them is working.
+ *
+ * Only `idle` is liftable. Neither a Subagent nor a Background Call can outlive its Backend Session,
+ * so a count on anything else is a stale index rather than live work.
+ */
+export function working(of: WorkLoad): boolean {
+  return of.status === "idle" && of.activeSubagents + of.activeBackgroundCalls > 0;
 }
 
 /** Nothing to Settle once it is Settled, and an Ended Agent Session cannot be. */

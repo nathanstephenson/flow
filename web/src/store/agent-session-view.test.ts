@@ -289,6 +289,7 @@ describe("the Chrome shallow compare", () => {
     endedReason: undefined,
     queueDepth: 0,
     activeSubagents: 0,
+    activeBackgroundCalls: 0,
     asking: undefined,
     authorising: undefined,
     compacting: false,
@@ -307,6 +308,8 @@ describe("the Chrome shallow compare", () => {
     // changes nothing about the Subagents cannot force a chrome publish.
     assert.equal(sameChrome(chrome, { ...chrome, activeSubagents: 2 }), false);
     assert.equal(sameChrome(chrome, { ...chrome, activeSubagents: 0 }), true);
+    assert.equal(sameChrome(chrome, { ...chrome, activeBackgroundCalls: 1 }), false);
+    assert.equal(sameChrome(chrome, { ...chrome, activeBackgroundCalls: 0 }), true);
     assert.equal(sameChrome(chrome, { ...chrome, link: "gone" }), false);
   });
 

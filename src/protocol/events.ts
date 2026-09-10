@@ -169,6 +169,17 @@ export type SubagentState =
   | { state: TurnEndReason };
 
 /**
+ * A Background Call's whole state, as a snapshot (ADR 0021).
+ *
+ * Terminal states reuse TurnEndReason's three words for the reason SubagentState does, and there is
+ * deliberately no `waiting`: the three `system` messages a Background Call settles through report a
+ * status the adapter already collapses to these four words, and none of them says what a
+ * backgrounded shell is blocked on. A variant nothing can populate is a variant a front-end renders
+ * never.
+ */
+export type BackgroundCallState = { state: "running" } | { state: TurnEndReason };
+
+/**
  * One choice offered for a Question.
  *
  * `label` is what the choice is and `description` is why someone would pick it; both are the model's
@@ -287,6 +298,31 @@ export type AgentEvent =
    * `since: N` holds a lifecycle it can complete.
    */
   | ({ type: "subagent"; subagentId: string; name: string; description?: string } & SubagentState)
+  /**
+   * One Background Call, wholly — a tool call the Backend Session goes on running past the turn that
+   * made it, reporting back into a later one (ADR 0021).
+   *
+   * `callId` is that tool call's own id, so this and the `tool_started` beside it address the same
+   * thing: ADR 0015's single id space, which `subagent` and `permission` already follow. Not the
+   * CLI's `task_id`, which is mapped to this rather than adopted.
+   *
+   * `tool` is the name, and **nothing else is carried**. Not the input: `tool_started` already put
+   * it in this transcript under this id, and a Presentation Transcript is read in full on every load
+   * (ADR 0001) — the same reason `permission` carries only a name. Which is also why a front-end
+   * *keeps* the tool row here rather than suppressing it as it does a Subagent's: for a backgrounded
+   * `Bash` that row is the only place the command lives.
+   *
+   * Repeated on every transition, latest-wins — never a launched/settled pair. A client joining at
+   * `since: N` sees one snapshot and holds a lifecycle it can complete; with a pair it would either
+   * miss the launch and never know the Call existed, or see the launch, never the end, and spin
+   * forever with nothing addressable to stop it. It is also what lets the Session Host append a
+   * terminal snapshot for a Call nothing was left to close.
+   *
+   * `producer` is carried on **every** snapshot including the terminal one — a Subagent can
+   * background a `Bash` — because `producerKey` in the web client decides which surface the card
+   * belongs to, and a snapshot that dropped it would move the card as it settled.
+   */
+  | ({ type: "background_call"; callId: string; tool: string; producer?: Producer } & BackgroundCallState)
   /**
    * One Enquiry, wholly — every Question of one `AskUserQuestion` call and what came of them.
    *
