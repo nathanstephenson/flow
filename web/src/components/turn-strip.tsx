@@ -51,9 +51,11 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-t border-border/40 px-2 py-1">
       <div className="flex min-w-0 items-center gap-0.5">
         <ModelPicker
-          capabilities={chrome.capabilities}
+          models={chrome.capabilities?.models}
           model={chrome.model}
           disabled={ended}
+          // A reading in the strip, not a form field: see `ModelPickerProps.quiet`.
+          quiet
           onSelect={(modelId) => void run({ type: "set_model", sessionId, modelId })}
         />
         <EffortPicker

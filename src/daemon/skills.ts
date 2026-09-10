@@ -10,12 +10,14 @@ import type { ScopeSkills } from "../protocol/events.ts";
  * throwaway one, the same device the Summary Model uses (ADR 0020), tools and all off, and disposes
  * of it.
  *
- * **What this costs, established rather than assumed.** The 24–44 seconds ./summariser.ts reports is
- * `prompt → turn_ended` — a spawn *and* a full inference round-trip — and none of it applies here.
- * Reading a Skill list is a control request: `ClaudeBackend.create` awaits nothing, and
- * `supportedModels()` next door is documented as answering before the first prompt. The applicable
- * measurement is the one on `PROBE_TIMEOUT_MS` in ./models.ts — Claude spawns its CLI and answers in
- * about nine seconds — and pi spawns no process at all, its `skills()` being a directory scan.
+ * **What this costs: measured, and it is not what ./summariser.ts says.** That file's 24–44 seconds
+ * times `prompt → turn_ended`, a spawn *and* a full inference round-trip, and its remark about
+ * "thirty seconds before it can be asked anything" is true of the *model* path only. Reading a Skill
+ * list is a control request, which the CLI answers long before it is ready to be prompted:
+ * `ClaudeBackend.create` awaits nothing, and `supportedModels()` next door is documented as
+ * answering before the first prompt. **A cold Claude probe against a real CLI took 5.7 seconds**,
+ * comfortably under the nine that `PROBE_TIMEOUT_MS` in ./models.ts records for the model list. pi
+ * spawns no process at all, its `skills()` being a directory scan, and answers in milliseconds.
  *
  * **Nothing here is cached, which is the whole point.** A Skill directory changes between one
  * keystroke and the next, which is why `BackendSession.skills` is "asked each time rather than

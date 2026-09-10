@@ -79,6 +79,40 @@ export type PermissionKeys = {
   deny: () => void;
 };
 
+/**
+ * The two keymaps a composer outside an Agent Session cannot use.
+ *
+ * The New Agent Session view has an editor and no session, so nothing can ask it a Question or hold
+ * a tool call on its authorisation — both of those live inside a turn, and there is no turn. Passing
+ * these beats making the props optional all the way down: `open: false` is the first thing both
+ * `enquiryAction` and `permissionAction` check, so every key falls straight through to the editor,
+ * and the plumbing keeps one shape for both callers.
+ */
+export const INERT_ENQUIRY_KEYS: EnquiryKeys = {
+  context: (composing: boolean) => ({
+    open: false,
+    composing,
+    multiSelect: false,
+    typing: false,
+    multiline: false,
+    hasPrevious: false,
+    rows: 0,
+  }),
+  move: () => {},
+  toggle: () => {},
+  pick: () => {},
+  commit: () => {},
+  back: () => {},
+};
+
+export const INERT_PERMISSION_KEYS: PermissionKeys = {
+  context: (composing: boolean) => ({ open: false, composing, rows: 0 }),
+  move: () => {},
+  pick: () => {},
+  commit: () => {},
+  deny: () => {},
+};
+
 /** The catalogue the pill decoration resolves names against. Replaced, never mutated. */
 export const setCatalogue = StateEffect.define<Triggerable[]>();
 

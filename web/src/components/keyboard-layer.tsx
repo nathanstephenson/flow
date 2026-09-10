@@ -24,12 +24,10 @@ export type KeyboardHandlers = Partial<Record<Binding, () => void>>;
 
 export function KeyboardLayer({
   handlers,
-  modalOpen,
   view,
   children,
 }: {
   handlers: KeyboardHandlers;
-  modalOpen: boolean;
   view: Route["view"];
   children: ReactNode;
 }) {
@@ -66,7 +64,7 @@ export function KeyboardLayer({
           shiftKey: event.shiftKey,
           repeat: event.repeat,
         },
-        { modalOpen, typing, view },
+        { typing, view },
       );
       if (binding === undefined) return;
 
@@ -87,7 +85,7 @@ export function KeyboardLayer({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handlers, modalOpen, view]);
+  }, [handlers, view]);
 
   return <>{children}</>;
 }

@@ -12,9 +12,21 @@ export type ModelChoice = { provider: string; model: ModelInfo };
 
 /** Models grouped by provider. Claude offers one group, pi offers dozens; the list is the same. */
 export function modelChoices(capabilities: Capabilities | undefined): ModelChoice[] {
-  if (!capabilities) return [];
+  return modelChoicesOf(capabilities?.models);
+}
+
+/**
+ * The same grouping, from a bare list.
+ *
+ * `Capabilities` is how a model list arrives inside an Agent Session, and `GET /api/models` is how
+ * it arrives before there is one (ADR 0020) — the New Agent Session view reads the second. Only
+ * `.models` was ever used here, so taking the list is the whole of the generalisation, and
+ * `modelChoices` keeps its signature so the TUI is untouched.
+ */
+export function modelChoicesOf(models: readonly ModelInfo[] | undefined): ModelChoice[] {
+  if (!models) return [];
   const byProvider = new Map<string, ModelInfo[]>();
-  for (const model of capabilities.models) {
+  for (const model of models) {
     const provider = model.provider ?? "other";
     byProvider.set(provider, [...(byProvider.get(provider) ?? []), model]);
   }

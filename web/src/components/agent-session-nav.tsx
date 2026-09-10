@@ -67,7 +67,6 @@ export type AgentSessionNavProps = {
   /** Where the keyboard is in the rail, which is not the same thing as what is in the pane. */
   cursorId: string | undefined;
   link: LinkState | undefined;
-  scope: string;
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
   onNew: () => void;
@@ -102,7 +101,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
 
   return (
     <>
-      <RailHeader scope={props.scope} onNew={props.onNew} />
+      <RailHeader onNew={props.onNew} />
 
       {/*
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
@@ -172,63 +171,31 @@ function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
   next.focus();
 }
 
-function RailHeader({ scope, onNew }: { scope: string; onNew: () => void }) {
+function RailHeader({ onNew }: { onNew: () => void }) {
   return (
-    <SidebarHeader className="flex-row items-center gap-1 border-b border-sidebar-border">
+    <SidebarHeader className="border-b border-sidebar-border">
       {/*
-       * The Scope takes whatever is left rather than a fixed maximum. A 16rem rail cannot fit a
-       * filesystem path *and* a labelled button, and reserving width for the label pushed the button
-       * off the edge entirely — so the button is an icon and the path gets the remainder.
+       * One full-width labelled button, which is what removing the Project Root path made possible.
+       *
+       * The path used to take whatever width was left here, and the note this replaces recorded the
+       * consequence: a 16rem rail cannot fit a filesystem path *and* a labelled button, so the
+       * button was an icon with an `sr-only` label and a tooltip to explain it. The path is now a
+       * field on the New Agent Session view, where it is editable rather than merely printed — which
+       * is the better place for it, since reading the launch directory told nobody anything they
+       * could act on.
+       *
+       * No tooltip either: the button says what it does.
        */}
-      <Tooltip>
-        {/*
-         * A plain span is the trigger rather than `render={<ScopeLabel/>}`: upstream's Trigger hands
-         * its own props to whatever it renders, and ScopeLabel does not forward unknown props, so
-         * rendering it directly would silently drop them and the tooltip would never open.
-         */}
-        <TooltipTrigger render={<span className="flex min-w-0 flex-1" />}>
-          <ScopeLabel scope={scope} className="min-w-0 flex-1" />
-        </TooltipTrigger>
-        <TooltipContent>{scope}</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={<Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={onNew} />}
-        >
-          <Plus aria-hidden />
-          <span className="sr-only">New Agent Session</span>
-        </TooltipTrigger>
-        <TooltipContent>New Agent Session</TooltipContent>
-      </Tooltip>
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full justify-start gap-2"
+        onClick={onNew}
+      >
+        <Plus aria-hidden className="size-4 shrink-0" />
+        New Agent Session
+      </Button>
     </SidebarHeader>
-  );
-}
-
-/**
- * A Scope is a filesystem path, so it is mono, and the part anyone actually reads is the last
- * segment — the leading directories stay legible but recede.
- *
- * Deliberately *not* `dir="rtl"`. That is the usual trick for truncating a path from the left, but
- * bidi reordering moves leading punctuation to the visual end, so `/workspace/Flow` rendered
- * as `workspace/Flow/` — a path that does not exist. The directory truncates from the left
- * with a plain `text-ellipsis` instead, and the basename is never truncated because it is the part
- * that identifies the Scope. The full path is in the tooltip either way.
- */
-export function ScopeLabel({ scope, className }: { scope: string; className?: string | undefined }) {
-  const cut = scope.lastIndexOf("/");
-  const directory = cut <= 0 ? "" : `${scope.slice(0, cut)}/`;
-  // A Scope of "/" has no basename to fall back to, and splitting it naively rendered the header
-  // empty. Anything that leaves nothing to show falls back to the Scope verbatim.
-  const basename = (cut < 0 ? scope : scope.slice(cut + 1)) || scope;
-  return (
-    <span className={cn("flex min-w-0 items-baseline font-mono text-xs", className)}>
-      {directory === "" ? null : (
-        <span className="truncate text-muted-foreground/70" style={{ direction: "ltr" }}>
-          {directory}
-        </span>
-      )}
-      <span className="shrink-0 text-foreground">{basename}</span>
-    </span>
   );
 }
 

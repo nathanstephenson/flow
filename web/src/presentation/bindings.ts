@@ -85,8 +85,6 @@ export type BindingEvent = {
 };
 
 export type BindingContext = {
-  /** A dialog, the palette or the keyboard sheet is open, and owns the keyboard while it is. */
-  modalOpen: boolean;
   /** Focus is on a typing surface — see `isTypingTarget`. */
   typing: boolean;
   /**
@@ -122,10 +120,17 @@ export function resolveBinding(event: BindingEvent, context: BindingContext): Bi
 }
 
 function resolveKey(event: BindingEvent, context: BindingContext): Binding | undefined {
-  // An open dialog owns the keyboard, Escape included: Base UI closes itself on Escape, and letting
-  // `s` through to Settle an Agent Session while someone types a Scope into a dialog is indefensible.
-  if (context.modalOpen) return undefined;
-
+  /*
+   * `modalOpen` used to be here, suppressing everything while a dialog owned the keyboard. Its only
+   * supplier was the New Agent Session dialog, which is a routed view now, so the field could only
+   * ever have been a hardwired `false`.
+   *
+   * One exposure this makes visible rather than introduces, worth stating so a reader does not have
+   * to find it: `s` reaches Settle while a Base UI `Select` or the End Agent Session `AlertDialog`
+   * has focus. That was already true — the pane header's model picker never told this table it was
+   * open either — and closing it means asking every popup to report itself, which is a different
+   * change from this one.
+   */
   // ⌘ on a Mac, Ctrl everywhere else, from one table. A chord survives a typing surface because it
   // cannot be typed into one.
   if (event.ctrlKey || event.metaKey) {

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { BackendModels } from "../../../src/protocol/events.ts";
 import { useHost } from "@/host.tsx";
+import { useModelCatalogue } from "@/models.ts";
 import { SaveRow, SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
@@ -256,37 +257,4 @@ function ModelField({
       )}
     </div>
   );
-}
-
-function useModelCatalogue(): {
-  catalogue: BackendModels[] | undefined;
-  loading: boolean;
-  refresh: () => Promise<void>;
-} {
-  const [catalogue, setCatalogue] = useState<BackendModels[] | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-
-  const load = async (refresh: boolean): Promise<void> => {
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/models${refresh ? "?refresh=1" : ""}`, {
-        credentials: "same-origin",
-      });
-      setCatalogue((await response.json()) as BackendModels[]);
-    } catch {
-      // Every field falls back to a text input, which is a usable page. A toast here would be one
-      // more thing to dismiss on the way to typing the id you already knew.
-      setCatalogue([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void load(false);
-    // On mount only: the host caches the answer, so re-asking on every render would be a request
-    // per keystroke for a list that cannot have moved. "Check again" is the way to re-ask.
-  }, []);
-
-  return { catalogue, loading, refresh: () => load(true) };
 }

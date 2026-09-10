@@ -67,6 +67,17 @@ transcript and is never reachable without it.
 _Avoid_: upload, file, blob, paste, and above all **image** — a markdown image in model output is
 already a different thing, and the one kind Flow refuses to fetch (ADR 0012).
 
+**Draft**:
+A message a reader has typed into a composer and not sent — the text and any Attachments, held for
+the life of the page and never written to disk. Distinct from a Steering Queue message, which **has**
+been sent: the Session Host owns that one and its Attachment bytes are already on disk, while a Draft
+has been committed to nothing and exists only in the browser holding it. One per Agent Session, plus
+one bound to none, for the Agent Session not yet created. It is the message alone — the Scope the New
+Agent Session view remembers beside it is a form field, not part of the Draft.
+_Avoid_: composer state, unsaved message, buffer, autosave, and **pending message**, which is the one
+that matters: it reads equally as a Steering Queue entry, and the difference between the two is
+whether anything durable exists yet.
+
 **Command**:
 Something a human triggers by name from the composer and **Flow itself performs** — compacting
 the Conversation Context today. Never reaches a model and is the whole of the message it appears in,

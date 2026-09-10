@@ -214,7 +214,7 @@ async function handle(
    * every client polls, and a cache would need a filesystem watcher in order to be more often
    * wrong.
    *
-   * Answers for a *Scope* rather than for an Agent Session, because the New Agent Session dialog
+   * Answers for a *Scope* rather than for an Agent Session, because the New Agent Session view
    * has to ask before there is a session to ask about: picking the branch to cut a worktree from
    * happens first. `head` is reported here as well as on `SessionSummary`, and the two cannot
    * disagree, because both are `head()` in `src/daemon/git.ts`.
@@ -381,7 +381,7 @@ async function handle(
  * What `/api/branches` answers.
  *
  * The `isRepository` gate comes first so a Scope that is not a repository costs one `statSync` and
- * spawns nothing — which is most of the calls, since the New Agent Session dialog asks on every
+ * spawns nothing — which is most of the calls, since the New Agent Session view asks on every
  * settled keystroke of a free-text Scope field.
  *
  * A repository git cannot list is reported as a repository with no branches rather than as no

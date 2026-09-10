@@ -8,6 +8,7 @@ import {
   routedSessionId,
   SETTINGS_SECTIONS,
   type Route,
+  returnPoint,
 } from "./route.ts";
 
 describe("deep links to an Agent Session", () => {
@@ -84,5 +85,27 @@ describe("deep links to the Settings", () => {
   it("names no Agent Session", () => {
     assert.equal(routedSessionId(parseRoute("#/settings/appearance")), undefined);
     assert.equal(formatRoute({ view: "settings", section: "general" }).includes("/s/"), false);
+  });
+});
+
+/**
+ * Where leaving the Settings comes back to.
+ *
+ * The case worth pinning is the one that shipped broken: the New Agent Session view is the Agent
+ * Session route naming none, so `undefined` has to be remembered as a real destination. Recording
+ * only defined ids sent a reader who pressed `?` mid-message to an unrelated transcript.
+ */
+describe("the place leaving the Settings returns to", () => {
+  it("remembers the Agent Session on screen", () => {
+    assert.equal(returnPoint({ view: "session", sessionId: "abc" }, undefined), "abc");
+  });
+
+  it("remembers the New Agent Session view, which names no Agent Session", () => {
+    assert.equal(returnPoint({ view: "session", sessionId: undefined }, "abc"), undefined);
+  });
+
+  it("leaves the last answer standing while the Settings are on screen", () => {
+    assert.equal(returnPoint({ view: "settings", section: "keyboard" }, "abc"), "abc");
+    assert.equal(returnPoint({ view: "settings", section: "keyboard" }, undefined), undefined);
   });
 });

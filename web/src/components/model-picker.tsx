@@ -1,5 +1,5 @@
 import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol/events.ts";
-import { effortChoices, modelChoices, type ModelChoice } from "@client/model-choices.ts";
+import { effortChoices, modelChoicesOf, type ModelChoice } from "@client/model-choices.ts";
 import { initialState } from "@client/reduce.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
@@ -48,14 +48,28 @@ const COMBOBOX_THRESHOLD = 30;
 const RENDER_LIMIT = 100;
 
 export type ModelPickerProps = {
-  capabilities: Capabilities | undefined;
+  /**
+   * The models on offer.
+   *
+   * A bare list rather than `Capabilities`, because there are now two ways one arrives: on
+   * `session_started` for an Agent Session that exists, and from `GET /api/models` for the New Agent
+   * Session view, which has no session to read (ADR 0020). Only `.models` was ever used.
+   */
+  models: readonly ModelInfo[] | undefined;
   model: ModelInfo | undefined;
   disabled?: boolean | undefined;
+  /**
+   * Set where this sits in the composer's bottom strip, which is a row of readings rather than a row
+   * of controls. The New Agent Session view leaves it off: there the picker is a form field somebody
+   * is meant to notice, and inheriting the quiet styling would hide the control the page is built
+   * around.
+   */
+  quiet?: boolean | undefined;
   onSelect: (modelId: string) => void;
 };
 
 export function ModelPicker(props: ModelPickerProps) {
-  const choices = modelChoices(props.capabilities);
+  const choices = modelChoicesOf(props.models);
   // A backend that reports no models has no picker, the same rule Effort follows.
   if (choices.length === 0) return null;
   return choices.length <= COMBOBOX_THRESHOLD ? <ModelSelect {...props} choices={choices} /> : <ModelCombobox {...props} choices={choices} />;
@@ -63,7 +77,7 @@ export function ModelPicker(props: ModelPickerProps) {
 
 type WithChoices = ModelPickerProps & { choices: ModelChoice[] };
 
-function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
+function ModelSelect({ choices, model, disabled, quiet, onSelect }: WithChoices) {
   return (
     <Select
       value={model?.id ?? null}
@@ -72,7 +86,7 @@ function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
         if (typeof value === "string") onSelect(value);
       }}
     >
-      <SelectTrigger aria-label="Model" size="sm" className={QUIET_TRIGGER}>
+      <SelectTrigger aria-label="Model" size="sm" className={quiet ? QUIET_TRIGGER : undefined}>
         <SelectValue placeholder="model">{() => modelLabel(model)}</SelectValue>
       </SelectTrigger>
       <SelectContent>
@@ -98,7 +112,7 @@ function ModelSelect({ choices, model, disabled, onSelect }: WithChoices) {
  * here and no Popover+Command scaffolding: the grouping, the filtering and the empty state are all
  * parts of the component.
  */
-function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
+function ModelCombobox({ choices, model, disabled, quiet, onSelect }: WithChoices) {
   const groups = groupByProvider(choices);
   // The value is the choice object rather than the id, because the items *are* choice objects — and
   // the model in force arrives from the stream as a fresh ModelInfo, so identity comparison would
@@ -127,7 +141,13 @@ function ModelCombobox({ choices, model, disabled, onSelect }: WithChoices) {
        */}
       <ComboboxTrigger
         aria-label="Model"
-        render={<Button variant="ghost" size="sm" className={QUIET_TRIGGER} />}
+        render={
+          quiet ? (
+            <Button variant="ghost" size="sm" className={QUIET_TRIGGER} />
+          ) : (
+            <Button variant="outline" className="w-full justify-between font-normal" />
+          )
+        }
       >
         <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
       </ComboboxTrigger>
