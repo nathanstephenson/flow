@@ -11,8 +11,8 @@ import { displayKey, SHORTCUTS } from "./shortcuts.ts";
  * documented.
  */
 
-const SESSION: BindingContext = { modalOpen: false, typing: false, view: "session" };
-const SETTINGS: BindingContext = { modalOpen: false, typing: false, view: "settings" };
+const SESSION: BindingContext = { typing: false, view: "session" };
+const SETTINGS: BindingContext = { typing: false, view: "settings" };
 
 const documented = SHORTCUTS.flatMap((group) => group.shortcuts);
 

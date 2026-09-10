@@ -90,7 +90,7 @@ export type HostValue = {
    *
    * The Projects are derived rather than saved, so a `PUT` cannot report them back: saving a new
    * Project Root tells you the root took, not what is beneath it. This is also what makes a
-   * repository cloned five minutes ago appear in the New Agent Session dialog without a reload —
+   * repository cloned five minutes ago appear in the New Agent Session view without a reload —
    * the payoff for the host walking uncached.
    */
   refresh: () => Promise<void>;

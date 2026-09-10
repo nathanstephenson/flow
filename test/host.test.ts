@@ -453,6 +453,144 @@ describe("listing the Skills an Agent Session offers", () => {
 });
 
 /**
+ * The same question for a Scope with no Agent Session in it — what the New Agent Session view asks.
+ *
+ * The pair above it is the point of comparison: that one is free, because the Backend Session is
+ * already running. This one has to open one, which is why it alone dedupes concurrent askers — and
+ * why it deliberately holds nothing once they have been answered. A Skill directory changes when
+ * somebody saves a file, so an answer kept is an answer that has stopped being true; the spawn is
+ * made affordable by the client asking early, not by the host remembering.
+ */
+describe("listing the Skills a Scope offers", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+
+  beforeEach(() => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+  });
+
+  it("answers from a throwaway session that runs no tools and is disposed of", async () => {
+    assert.deepEqual(await host.skillsFor("/tmp/scope", "fake"), {
+      backend: "fake",
+      scope: "/tmp/scope",
+      skills: [
+        { name: "tdd", description: "Red, green, refactor" },
+        { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+      ],
+    });
+
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]?.toolless, true, "a probe runs no tools (ADR 0020)");
+    assert.equal(backend.sessions[0]?.disposed, true);
+    assert.deepEqual(host.list(), [], "a probe must not become an Agent Session");
+  });
+
+  it("spawns one backend for two callers asking at once", async () => {
+    backend.holdCreate = true;
+    const both = Promise.all([
+      host.skillsFor("/tmp/scope", "fake"),
+      host.skillsFor("/tmp/scope", "fake"),
+    ]);
+    backend.releaseCreate();
+    const [left, right] = await both;
+
+    assert.equal(backend.sessions.length, 1, "the second caller joined the first one's probe");
+    assert.deepEqual(left, right);
+  });
+
+  /*
+   * The deliberate absence of a cache, and the one behaviour a reader would otherwise assume away
+   * given `models` directly above it holds its probes for the daemon's life.
+   */
+  it("asks again once the first answer has settled", async () => {
+    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor("/tmp/scope", "fake");
+
+    assert.equal(backend.sessions.length, 2);
+  });
+
+  /*
+   * Concurrent, deliberately: sequential asks re-probe anyway, so only an overlapping pair can tell
+   * a key that includes the Scope from one that does not. Without the Scope in the key, the second
+   * caller here would be handed the first Scope's Skills.
+   */
+  it("does not let two Scopes asking at once share one probe", async () => {
+    backend.holdCreate = true;
+    const both = Promise.all([
+      host.skillsFor("/tmp/one", "fake"),
+      host.skillsFor("/tmp/two", "fake"),
+    ]);
+    backend.releaseCreate();
+    const [left, right] = await both;
+
+    assert.equal(backend.sessions.length, 2);
+    assert.equal(left?.scope, "/tmp/one");
+    assert.equal(right?.scope, "/tmp/two");
+  });
+
+  it("reports a problem rather than an empty catalogue when the backend cannot start", async () => {
+    host.registerBackend({
+      name: "broken",
+      create: async () => {
+        throw new Error("not logged in");
+      },
+    });
+
+    assert.deepEqual(await host.skillsFor("/tmp/scope", "broken"), {
+      backend: "broken",
+      scope: "/tmp/scope",
+      skills: [],
+      problem: "not logged in",
+    });
+  });
+
+  // Holding a failure would tell somebody who has just logged their CLI in that it is still broken.
+  it("holds no failure, so a backend that starts working answers on the next ask", async () => {
+    let attempts = 0;
+    host.registerBackend({
+      name: "flaky",
+      create: async (options) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("not logged in");
+        return await backend.create(options);
+      },
+    });
+
+    assert.equal((await host.skillsFor("/tmp/scope", "flaky")).problem, "not logged in");
+    assert.equal((await host.skillsFor("/tmp/scope", "flaky")).problem, undefined);
+  });
+
+  // A different answer from "there are none here", which is the reason `ScopeSkills` is an envelope
+  // rather than a bare list. pi and Claude both have Skills; a later adapter need not.
+  it("reports a problem for an adapter with no notion of Skills", async () => {
+    host.registerBackend({
+      name: "plain",
+      create: async (options) => {
+        const session = await backend.create(options);
+        // Shadows the prototype's method with an own property, which is the whole of "absent" here.
+        return Object.assign(session, { skills: undefined });
+      },
+    });
+
+    const answer = await host.skillsFor("/tmp/scope", "plain");
+    assert.deepEqual(answer.skills, []);
+    assert.match(answer.problem ?? "", /no notion of Skills/);
+  });
+
+  // What keeps the route off `serve`'s blanket 500 — see `GET /api/skills`.
+  it("names an unknown Backend Adapter rather than throwing", async () => {
+    assert.deepEqual(await host.skillsFor("/tmp/scope", "nope"), {
+      backend: "nope",
+      scope: "/tmp/scope",
+      skills: [],
+      problem: "No backend named nope",
+    });
+  });
+});
+
+/**
  * An Enquiry is the first thing Flow holds a turn open on a human for, so what this block is
  * really testing is that a turn can always end: every path that takes the Backend Session away also
  * closes the question, and no path revives a session to answer one.

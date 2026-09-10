@@ -82,6 +82,28 @@ export type Skill = {
 };
 
 /**
+ * The Skills one Scope offers through one Backend Adapter, as `GET /api/skills` reports it.
+ *
+ * An envelope with a reason rather than a bare `Skill[]`, which is the difference between this and
+ * the `list_skills` Command beside it. That one reads a Backend Session that is *already there*, so
+ * its only failures are "Dormant" and "this adapter has no notion of Skills" — and for both, an empty
+ * list is the true answer. This has a failure class that one never had: it opens a Backend Session of
+ * its own, which fails when a CLI is not logged in, is not on PATH, or does not come up in time.
+ * Answering `[]` for those would be a confident lie told to somebody who may have just written a
+ * Skill, so the shape follows `BackendModels`: a 200 carrying a `problem`, never a status code.
+ *
+ * The Scope travels back with the answer because the client asked about a path it is still typing.
+ * A reply that did not name its own Scope could be applied to the next one by a slow round trip.
+ */
+export type ScopeSkills = {
+  backend: string;
+  scope: string;
+  skills: Skill[];
+  /** Why the list is empty, when it is empty for a reason. Prose for a reader, as `BackendModels`. */
+  problem?: string;
+};
+
+/**
  * What a Backend Adapter can be asked to do, declared per Agent Session. Clients hide controls a
  * backend cannot serve rather than breaking on them. `providers` is what distinguishes the two
  * backends in practice: Claude reports one, pi reports several.

@@ -132,6 +132,77 @@ describe("Session Host transport", () => {
 
       assert.deepEqual(broken, { backend: "broken", models: [], problem: "not logged in" });
     });
+  });
+
+  /**
+   * The same catalogue for a Scope with no Agent Session in it — what the New Agent Session view
+   * asks, and the half `list_skills` above cannot answer because it reads a live Backend Session.
+   */
+  describe("the Skill catalogue for a Scope", () => {
+    const get = async (path: string) =>
+      await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
+
+    it("answers the Skills a Scope offers before any Agent Session exists", async () => {
+      const response = await get(
+        `/api/skills?scope=${encodeURIComponent(root)}&backend=fake`,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        backend: "fake",
+        scope: root,
+        skills: [
+          { name: "tdd", description: "Red, green, refactor" },
+          { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
+        ],
+      });
+      assert.deepEqual(host.list(), [], "asking must not create an Agent Session");
+    });
+
+    it("refuses a request with no scope", async () => {
+      assert.equal((await get("/api/skills?backend=fake")).status, 400);
+    });
+
+    // Defaulting would answer with a different adapter's menu than the session is created on: the
+    // two adapters disagree about what a Skill is.
+    it("refuses a request with no backend", async () => {
+      assert.equal((await get(`/api/skills?scope=${encodeURIComponent(root)}`)).status, 400);
+    });
+
+    /*
+     * The status is the whole point of this one. `CommandRefused` → 409 is wired only for
+     * `POST /api/command`, so anything thrown in this handler reaches the reader as a bare 500 —
+     * which is what a menu must never do to the view holding it.
+     */
+    it("answers 200 with a reason for a backend that cannot start", async () => {
+      host.registerBackend({
+        name: "broken",
+        create: async () => {
+          throw new Error("not logged in");
+        },
+      });
+
+      const response = await get(
+        `/api/skills?scope=${encodeURIComponent(root)}&backend=broken`,
+      );
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), {
+        backend: "broken",
+        scope: root,
+        skills: [],
+        problem: "not logged in",
+      });
+    });
+
+    it("answers 200 naming a Backend Adapter it does not know", async () => {
+      const response = await get(
+        `/api/skills?scope=${encodeURIComponent(root)}&backend=nope`,
+      );
+
+      assert.equal(response.status, 200);
+      assert.match(((await response.json()) as { problem: string }).problem, /No backend named/);
+    });
 
     /**
      * A refusal is the caller's to fix, so it must not arrive as a 500.

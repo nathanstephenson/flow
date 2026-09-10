@@ -1,12 +1,14 @@
-import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
+import { ArrowUp, ChevronRight, Loader2, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
-import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
+import { attachPasted } from "@/attachments.ts";
+import type { ComposerActions } from "@/composer-actions.ts";
+import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
+import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
 import { activityLabel, stripOpensSubagents } from "@/presentation/activity.ts";
-import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
+import { AttachmentTray } from "@/components/attachment-tray.tsx";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
 import { ComposerEnquiry } from "@/components/composer-enquiry.tsx";
 import { ComposerPermission } from "@/components/composer-permission.tsx";
@@ -60,13 +62,66 @@ import { cn } from "@/lib/utils.ts";
  * spins, and a rejection puts the text back and says why.
  */
 export function Composer({
-  sessionId,
+  id,
   chrome,
+  actions,
+  floating = true,
+  unavailable,
+  placeholder,
+  drafts,
   authorisingSummary,
   onShowSubagents,
 }: {
-  sessionId: string;
+  /**
+   * What this composer's Draft is filed under, and what its listbox ids are built from — an Agent
+   * Session id for a session, and a reserved key for the one on the New Agent Session view.
+   *
+   * Not `sessionId`, because there need not be a session: the verbs arrive on `actions` instead, so
+   * this is the only thing left that has to be unique per composer.
+   */
+  id: string;
   chrome: Chrome;
+  /** What sending, choosing a model and switching branch actually do here. */
+  actions: ComposerActions;
+  /**
+   * Whether this hangs over a scrolling transcript.
+   *
+   * True in a pane, where the panel is pinned to the bottom edge and a gradient fades the text
+   * scrolling behind it. False on the New Agent Session view, where there is no transcript to hang
+   * over: pinned to the bottom there, it would sit at the foot of whatever box contained it with a
+   * dead gap above, and the gradient would fade nothing.
+   */
+  floating?: boolean | undefined;
+  /**
+   * Why nothing can be typed, where something outside this component makes that so.
+   *
+   * Set on the New Agent Session view when the host advertises no Backend Adapter, which is the one
+   * state there in which no Agent Session could be created at all. It is *not* set merely because
+   * the model catalogue has not answered: a send with no `modelId` is a send the host resolves
+   * against the machine-wide Default Model (ADR 0020), so the box works, and locking it for the
+   * seconds `/api/models` takes on a cold daemon would buy nothing. The Attachment guard is
+   * independent and stands on its own — an unresolved model refuses a paste (ADR 0014) whether the
+   * box is locked or not.
+   */
+  unavailable?: string | undefined;
+  /**
+   * What the empty box says, where the derived hint would be wrong.
+   *
+   * `composerPlaceholder` reads the status, the queue and the model, which is the whole answer for a
+   * session that exists. It has no way to say "Enter starts the Agent Session", because a Chrome
+   * describing a session that does not exist yet is still an Idle one — so that copy is passed in
+   * rather than inferred from a flag added to the store's contract for one view's benefit.
+   */
+  placeholder?: string | undefined;
+  /**
+   * Where this Composer's unsent message lives between mounts.
+   *
+   * Passed in rather than reached for, because the pane above remounts on every change of focus and
+   * so this component cannot be the thing that owns a Draft (web/src/drafts.ts). The whole stash
+   * rather than one Draft plus a setter: `write` is keyed, and a send that resolves after the reader
+   * has moved on still has to clear the Draft it came from.
+   */
+  drafts: DraftStash;
   /**
    * The précis of the call awaiting authorisation, passed in rather than looked up.
    *
@@ -79,9 +134,14 @@ export function Composer({
    * stays ignorant that Docks exist — it knows there is somewhere to go, not where. */
   onShowSubagents: () => void;
 }) {
-  const run = useCommand();
-  const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  /*
+   * Seeded from the stash and written back on unmount, which is what makes a Draft survive a glance
+   * at another Agent Session. A read rather than a take — see web/src/drafts.ts for why StrictMode
+   * requires that — and `useRef` so the seed is taken once rather than on every render.
+   */
+  const seed = useRef(drafts.read(id)).current;
+  const [text, setText] = useState(seed.text);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>(seed.attachments);
   const [sending, setSending] = useState(false);
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
@@ -118,6 +178,8 @@ export function Composer({
   const blocked = asking !== undefined || authorising !== undefined;
 
   const ended = chrome.status === "ended";
+  // Locked either because the Agent Session is over, or because the view above says so.
+  const locked = ended || unavailable !== undefined;
   // `occupied`, not `=== "running"`: a turn blocked on a Permission Prompt is Awaiting, and the
   // button there must stay Abort rather than flipping back to Send on a turn still open.
   const running = occupied(chrome.status);
@@ -153,31 +215,49 @@ export function Composer({
   }, []);
 
   /*
-   * Object URLs are the only thing here React cannot clean up for us, so they are released the
-   * moment an attachment leaves the list and on unmount. A leaked one pins the whole image in memory
-   * for the life of the tab, which for a run of pasted screenshots is not a rounding error.
+   * Object URLs are the only thing here React cannot clean up for us, and who owns them is stated in
+   * web/src/drafts.ts. This half: what leaves the *live* list is revoked here, the moment it leaves.
+   * A leaked one pins the whole image in memory for the life of the tab, which for a run of pasted
+   * screenshots is not a rounding error.
    */
   const forget = useCallback((pending: PendingAttachment[]): void => {
     for (const attachment of pending) URL.revokeObjectURL(attachment.url);
   }, []);
 
   /*
-   * The unmount sweep reads a ref rather than closing over the state, and the effect's dependency
-   * list is empty on purpose. An effect depending on `attachments` runs its *previous* cleanup every
-   * time the list changes, so pasting a second image would revoke the first one's URL and leave a
-   * broken thumbnail above the box — which is why this is two effects and not one.
+   * Hand the unsent message to the stash on the way out — and deliberately do *not* revoke its
+   * object URLs, which is what this effect used to do.
+   *
+   * That sweep was correct while the Composer owned the Draft and is a bug now that it does not: it
+   * would revoke the very URLs the surviving Draft still points at, so coming back to an Agent
+   * Session would show broken thumbnails above the text that survived. What is left behind belongs
+   * to the stash, which revokes it when the Draft is replaced by one dropping it or pruned with a
+   * Reaped Agent Session.
+   *
+   * Reads a ref rather than closing over the state, and the dependency list is empty on purpose: an
+   * effect depending on `text` or `attachments` would run its *previous* cleanup on every keystroke,
+   * writing a stale Draft back over a fresher one.
    */
-  const live = useRef<PendingAttachment[]>([]);
+  const latest = useRef<Draft>(seed);
   useEffect(() => {
-    live.current = attachments;
-  }, [attachments]);
-  useEffect(() => () => forget(live.current), [forget]);
+    latest.current = { text, attachments };
+  }, [text, attachments]);
+  useEffect(
+    () => () => {
+      drafts.write(id, latest.current);
+    },
+    [drafts, id],
+  );
 
   /*
    * Returns synchronously whether the paste was ours, because that is what decides whether the
    * editor inserts anything — a promise resolves long after the event has been let through. The
    * files themselves are read and attached afterwards. Filtering the clipboard for files is the
    * editor's job now, so this is handed the ones it found.
+   *
+   * The caps, the toasts and the base64 are in web/src/attachments.ts, shared with the New Agent
+   * Session view. The *policy* above stays here, because that view disagrees with it: it chooses the
+   * model itself and so always knows, where this treats an unknown model as one that cannot.
    */
   const paste = useCallback(
     (files: File[]): boolean => {
@@ -185,23 +265,7 @@ export function Composer({
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
         return true;
       }
-
-      const verdicts = sortPastedItems(
-        files.map((file) => ({ type: file.type, size: file.size, file })),
-        attachments.length,
-      );
-      for (const refusal of refusalsIn(verdicts)) toast.error(refusalMessage(refusal));
-
-      void Promise.all(
-        verdicts
-          .filter((verdict) => verdict.accepted)
-          .map(async (verdict) => ({
-            key: crypto.randomUUID(),
-            mediaType: verdict.mediaType,
-            data: await base64Of(verdict.item.file),
-            url: URL.createObjectURL(verdict.item.file),
-          })),
-      ).then((accepted) => {
+      void attachPasted(files, attachments.length).then((accepted) => {
         if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
       });
       return true;
@@ -237,17 +301,17 @@ export function Composer({
   useEffect(() => {
     if (query === undefined) return;
     let live = true;
-    void run<Skill[]>({ type: "list_skills", sessionId }).then((found) => {
-      // `?? []` and not `if (found)`: a host that cannot answer this command at all replies with
-      // null and a 200, so a truthiness check left the menu saying "Looking for Skills…" forever
-      // rather than admitting it had none. An empty answer is still an answer.
-      if (live) setSkills(found ?? []);
+    void actions.listSkills().then((found) => {
+      // An empty answer is still an answer: a host that cannot answer at all says so with an empty
+      // list, and a truthiness check left the menu saying "Looking for Skills…" forever instead of
+      // admitting it had none.
+      if (live) setSkills(found);
     });
     return () => {
       live = false;
     };
     // Deliberately not `query`: this fires when the menu opens, not as it filters.
-  }, [query === undefined, run, sessionId]);
+  }, [query === undefined, actions]);
 
   /*
    * Start again whenever the Enquiry changes identity, including when it goes away. Done in render
@@ -292,14 +356,9 @@ export function Composer({
       setHint(undefined);
       setAnswering(next);
       if (!isFinished(next, asking.questions)) return;
-      void run({
-        type: "answer_enquiry",
-        sessionId,
-        askId: asking.askId,
-        answers: answersOf(next, asking.questions),
-      });
+      actions.answerEnquiry?.(asking.askId, answersOf(next, asking.questions));
     },
-    [answering, asking, run, sessionId],
+    [actions, answering, asking],
   );
 
   /** Choose or toggle the row at `index`, which is what both a digit and a click mean. */
@@ -334,9 +393,9 @@ export function Composer({
   const decide = useCallback(
     (decision: PermissionDecision): void => {
       if (!authorising) return;
-      void run({ type: "answer_permission", sessionId, callId: authorising.callId, decision });
+      actions.answerPermission?.(authorising.callId, decision);
     },
-    [authorising, run, sessionId],
+    [actions, authorising],
   );
 
   /** Take the choice at `index`, which is what both a digit and a click mean. */
@@ -453,7 +512,7 @@ export function Composer({
     if (command?.kind === "command") {
       const instructions = message.slice(command.name.length + 1).trim();
       setText("");
-      await run({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+      await actions.compact?.(instructions === "" ? undefined : instructions);
       return;
     }
 
@@ -461,23 +520,7 @@ export function Composer({
     setText("");
     setAttachments([]);
     setSending(true);
-    const result = await run<{ queued?: boolean }>({
-      type: "send",
-      sessionId,
-      text: message,
-      ...(sent.length > 0 ? { attachments: sent.map(outgoing) } : {}),
-      /*
-       * Always `after_turn`, never `now`.
-       *
-       * `after_turn` already means "queue if a turn is in flight, else dispatch now", so this is
-       * identical to deriving `when` from the status in every non-racy case and correct in the racy
-       * one: the host sets `turnInFlight` before the backend acknowledges the turn, so a client that
-       * believes it is idle can send `now` into a busy backend and jump the Steering Queue that
-       * ADR 0002 exists to own. `now` is a real, tested interrupt — it is simply not what a plain
-       * send means.
-       */
-      when: "after_turn",
-    });
+    const result = await actions.send(message, sent.map(outgoing));
     setSending(false);
 
     // Put it back rather than lose it. useCommand has already said what went wrong. The attachments
@@ -490,7 +533,7 @@ export function Composer({
     } else {
       forget(sent);
     }
-  }, [asking, attachments, catalogue, ended, forget, run, sending, sessionId, text]);
+  }, [actions, attachments, blocked, catalogue, ended, forget, sending, text]);
 
   /**
    * Put the highlighted name in the box.
@@ -573,32 +616,39 @@ export function Composer({
 
   const abort = useCallback((): void => {
     const dropped = chrome.queueDepth;
-    void run({ type: "abort", sessionId }).then(() => {
+    void actions.abort?.().then(() => {
       // Aborting means stop, not stop-then-continue, so the queue goes with it. Saying exactly what
       // was discarded is the difference between a stop and a surprise.
       toast.info(
         dropped > 0 ? `aborted · ${dropped} queued message${dropped === 1 ? "" : "s"} discarded` : "aborted",
       );
     });
-  }, [chrome.queueDepth, run, sessionId]);
+  }, [actions, chrome.queueDepth]);
 
   return (
     /*
      * The gradient is what makes floating legible: transcript text scrolling up fades into the
      * background instead of colliding with the panel's edge. `pointer-events-none` on the wrapper so
      * the faded strip is not a dead zone over a scrollable document — the panel turns them back on.
+     *
+     * Both are dropped where this is not floating: there is nothing behind it to fade, and a wrapper
+     * that swallowed pointer events would need the panel to hand them back for no reason.
      */
     <div
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-8 pb-3",
-        "bg-gradient-to-t from-background via-background to-transparent",
+        floating
+          ? [
+              "pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-8 pb-3",
+              "bg-gradient-to-t from-background via-background to-transparent",
+            ]
+          : "relative",
       )}
     >
       <div
         ref={panel}
         className={cn(
-          "pane-measure pointer-events-auto",
-          "rounded-xl border bg-card/85 shadow-lg backdrop-blur-sm",
+          "pane-measure rounded-xl border shadow-lg",
+          floating ? "pointer-events-auto bg-card/85 backdrop-blur-sm" : "bg-card",
         )}
       >
         {/*
@@ -641,8 +691,8 @@ export function Composer({
           authorising={authorising}
           summary={authorisingSummary}
           cursor={deciding}
-          listboxId={`permission-${sessionId}`}
-          rowId={(index) => `permission-${sessionId}-${index}`}
+          listboxId={`permission-${id}`}
+          rowId={(index) => `permission-${id}-${index}`}
           onChoose={decideRow}
           onHighlight={setDeciding}
         />
@@ -654,8 +704,8 @@ export function Composer({
           chosen={chosen}
           progress={asking && answering ? progressLabel(answering, asking.questions) : undefined}
           hint={hint}
-          listboxId={`enquiry-${sessionId}`}
-          rowId={(index) => `enquiry-${sessionId}-${index}`}
+          listboxId={`enquiry-${id}`}
+          rowId={(index) => `enquiry-${id}-${index}`}
           onChoose={answerRow}
           onHighlight={(index) =>
             setAnswering((current) => (current === undefined ? current : { ...current, cursor: index }))
@@ -683,17 +733,21 @@ export function Composer({
             */}
           <ComposerInput
             value={text}
-            placeholder={composerPlaceholder(
-              chrome,
-              asking && answering
-                ? {
-                    index: answering.index,
-                    count: asking.questions.length,
-                    multiSelect: question?.multiSelect === true,
-                  }
-                : undefined,
-            )}
-            disabled={ended}
+            placeholder={
+              unavailable ??
+              placeholder ??
+              composerPlaceholder(
+                chrome,
+                asking && answering
+                  ? {
+                      index: answering.index,
+                      count: asking.questions.length,
+                      multiSelect: question?.multiSelect === true,
+                    }
+                  : undefined,
+              )
+            }
+            disabled={locked}
             catalogue={catalogue}
             menu={menuKeys}
             enquiry={enquiryKeys}
@@ -718,48 +772,10 @@ export function Composer({
           </div>
         </div>
 
-        <TurnStrip sessionId={sessionId} chrome={chrome} />
+        <TurnStrip chrome={chrome} actions={actions} />
       </div>
     </div>
   );
-}
-
-/**
- * An Attachment waiting to be sent.
- *
- * Holds both the base64 the command needs and an object URL for the thumbnail, rather than deriving
- * one from the other. A data URL would serve both, but it is the base64 again with a prefix, so
- * every thumbnail would cost a second copy of the whole image in the DOM.
- */
-type PendingAttachment = {
-  /** React's key. Not the id the Session Host will mint — that does not exist until this is sent. */
-  key: string;
-  mediaType: IncomingAttachment["mediaType"];
-  data: string;
-  url: string;
-};
-
-function outgoing(attachment: PendingAttachment): IncomingAttachment {
-  return { mediaType: attachment.mediaType, data: attachment.data };
-}
-
-/**
- * A `File` as base64, without the data-URL prefix.
- *
- * Through FileReader rather than `btoa` over the bytes: the `String.fromCharCode(...bytes)` spread
- * that makes `btoa` usable on an ArrayBuffer overflows the call stack somewhere in the low hundreds
- * of kilobytes, which every screenshot clears.
- */
-function base64Of(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error(`Could not read ${file.type}`));
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      resolve(result.slice(result.indexOf(",") + 1));
-    };
-    reader.readAsDataURL(file);
-  });
 }
 
 /**
@@ -801,52 +817,6 @@ function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void 
       {label}
       <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0" />
     </button>
-  );
-}
-
-/**
- * The Attachments this message will carry, above the box rather than below it.
- *
- * Above, because everything below the input describes the *next turn* — which model, how hard, how
- * much room is left — while these are the message itself. Putting them in the `TurnStrip` would file
- * content among readings.
- *
- * Deliberately small. A thumbnail here answers "did the right thing land?" and nothing else; the
- * transcript is where the image is shown at a size worth looking at.
- */
-function AttachmentTray({
-  attachments,
-  onRemove,
-}: {
-  attachments: PendingAttachment[];
-  onRemove: (key: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2 px-3 pt-3">
-      {attachments.map((attachment) => (
-        <div key={attachment.key} className="group relative">
-          <img
-            src={attachment.url}
-            alt=""
-            className="size-14 rounded-md border border-border object-cover"
-          />
-          <Button
-            variant="secondary"
-            size="icon"
-            aria-label="Remove this attachment"
-            onClick={() => onRemove(attachment.key)}
-            className={cn(
-              "absolute -top-1.5 -right-1.5 size-5 rounded-full shadow",
-              // Shown on hover and on focus — keyboard-only removal must not depend on a pointer
-              // ever being over the thumbnail.
-              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
-            )}
-          >
-            <X className="size-3" aria-hidden />
-          </Button>
-        </div>
-      ))}
-    </div>
   );
 }
 

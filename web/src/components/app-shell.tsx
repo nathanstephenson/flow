@@ -4,14 +4,15 @@ import { canSettle, occupied } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
+import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
 import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
-import { AgentSessionNav, Kbd } from "@/components/agent-session-nav.tsx";
+import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
 import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-layer.tsx";
-import { NewAgentSessionDialog } from "@/components/new-agent-session-dialog.tsx";
+import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsNav } from "@/components/settings-nav.tsx";
 import { SettingsPage } from "@/components/settings-page.tsx";
@@ -21,9 +22,11 @@ import { toast } from "@/components/ui/toaster.tsx";
 /**
  * The frame: one rail, and whatever is beside it.
  *
- * There are two things it can be showing — an Agent Session's pane, or the Settings — and the route
- * decides which (web/src/route.ts). The rail is the same `Sidebar` either way and swaps only its
- * contents, so the two views cannot drift into looking like two designs.
+ * There are three things it can be showing — an Agent Session's pane, the New Agent Session view, or
+ * the Settings — and the route decides which (web/src/route.ts). Only two of those are `Route`
+ * members: the New Agent Session view is the Agent Session route naming none, which is the same
+ * thing the empty state used to be. The rail is the same `Sidebar` throughout and swaps only its
+ * contents, so the views cannot drift into looking like several designs.
  *
  * `SidebarProvider` lives here rather than inside the rail, which is what makes that possible: the
  * width comes from `--sidebar-width` on the provider, so the rail can be dragged wider and hidden
@@ -32,24 +35,30 @@ import { toast } from "@/components/ui/toaster.tsx";
  * The provider is *controlled* — this owns whether the rail is open — for one reason: ⌘B has to be
  * resolved by web/src/presentation/bindings.ts like every other key. Upstream binds it with its own
  * `window` listener inside the component, which would have been a second keyboard listener this app
- * could neither document nor suppress while a dialog had the keyboard, so that listener is removed
- * (see the FLOW note in components/ui/sidebar.tsx).
+ * could neither document nor suppress, so that listener is removed (see the FLOW note in
+ * components/ui/sidebar.tsx).
  *
  * Whether the rail is open is deliberately *not* remembered across reloads, though its width is:
  * reloading into an app with no visible navigation is a bad first frame, and hiding the rail is a
  * momentary "give me the width" rather than a preference.
  *
- * It owns the route, and the two pieces of state that are about the *app* rather than about any
- * Agent Session: whether the New Agent Session dialog is open, and where the keyboard cursor is in
- * the rail. Plus the auto-open rule below.
+ * It owns the route, and the state that is about the *app* rather than about any one Agent Session:
+ * where the keyboard cursor is in the rail, the Docks, and the Drafts. Plus the auto-open rule
+ * below.
  */
 export function AppShell() {
   const { config } = useHost();
-  const { sessions } = useAgentSessions();
-  const { route, sessionId: focusedId, focus, openSettings, leaveSettings } = useRoute();
+  const { sessions, loaded } = useAgentSessions();
+  const {
+    route,
+    sessionId: focusedId,
+    focus,
+    openNewAgentSession,
+    openSettings,
+    leaveSettings,
+  } = useRoute();
   const run = useCommand();
 
-  const [newOpen, setNewOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
   const [railOpen, setRailOpen] = useState(true);
   /**
@@ -74,6 +83,15 @@ export function AppShell() {
   const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
   const docks = useDocks(focusedId, sessionIds);
 
+  /*
+   * The unsent messages, for the same reason the Docks are here: the pane remounts when the focus
+   * moves, and a message someone was halfway through typing must not be destroyed by a glance at
+   * another Agent Session. The ids are passed in so the Drafts of Reaped Agent Sessions are
+   * forgotten — and unlike the Docks this is held in memory only, never in `localStorage`
+   * (web/src/drafts.ts says why).
+   */
+  const drafts = useDraftStash(sessionIds);
+
   /**
    * The focused Agent Session's live chrome, which the rail and the shortcuts both read.
    *
@@ -83,8 +101,8 @@ export function AppShell() {
   const chrome = useAgentSessionChrome(focusedId);
 
   /**
-   * Open the freshest Agent Session on arrival, as the old UI did — but only when the URL did not
-   * already name one, and not when the candidate is Settled.
+   * Open the freshest Agent Session on arrival — but only when the URL did not already name one, and
+   * not when the candidate is Settled.
    *
    * The Session Host bands the list most alive first (`railBand`), so `sessions[0]` is the one most
    * worth landing on — whatever is awaiting a decision, else whatever is working, else the freshest
@@ -93,20 +111,35 @@ export function AppShell() {
    *
    * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold
    * load into `#/settings` must not be answered by silently navigating away from them.
+   *
+   * **State rather than a ref, now that something renders differently while it is undecided.** The
+   * empty state used to be a sentence and could be shown while this made up its mind; it is a form
+   * now, and a form that appears for two frames before a transcript replaces it is worse than a
+   * blank. So this has a third exit — it is decided once the list has answered, even when the answer
+   * is that there was nothing worth opening.
    */
-  const autoOpened = useRef(false);
+  const [landed, setLanded] = useState(false);
   useEffect(() => {
-    if (autoOpened.current || route.view !== "session") return;
+    if (landed || route.view !== "session") return;
     if (focusedId !== undefined) {
-      autoOpened.current = true;
+      setLanded(true);
       return;
     }
+    /*
+     * Nothing is decided until the list has answered. Before this, `sessions` is empty because
+     * nobody has asked — see `SessionsValue.loaded` — and treating that as "there are none" would
+     * show the New Agent Session form for a frame or two and then replace it with a transcript,
+     * which is a worse first paint than a brief blank.
+     */
+    if (!loaded) return;
+    setLanded(true);
     const candidate = sessions[0];
-    if (!candidate) return;
-    autoOpened.current = true;
-    if (candidate.status === "settled") return;
+    // Nothing worth opening, so the New Agent Session view stands: either there are none, or every
+    // one of them is Settled and putting a finished transcript in front of somebody who came to
+    // start work is not an improvement on offering them the form.
+    if (!candidate || candidate.status === "settled") return;
     focus(candidate.id);
-  }, [sessions, focusedId, focus, route.view]);
+  }, [landed, loaded, sessions, focusedId, focus, route.view]);
 
   // The cursor addresses the rail as it is rendered, so it cannot point past the end of it.
   useEffect(() => {
@@ -140,7 +173,7 @@ export function AppShell() {
 
   const handlers = useMemo<KeyboardHandlers>(
     () => ({
-      "new-agent-session": () => setNewOpen(true),
+      "new-agent-session": openNewAgentSession,
       "sidebar-next": () => setCursor((current) => Math.min(current + 1, sessions.length - 1)),
       "sidebar-previous": () => setCursor((current) => Math.max(current - 1, 0)),
       "sidebar-first": () => setCursor(0),
@@ -202,6 +235,7 @@ export function AppShell() {
       focusInPane,
       focusedId,
       leaveSettings,
+      openNewAgentSession,
       openSettings,
       run,
       sessions,
@@ -212,7 +246,7 @@ export function AppShell() {
   const settings = route.view === "settings";
 
   return (
-    <KeyboardLayer handlers={handlers} modalOpen={newOpen} view={route.view}>
+    <KeyboardLayer handlers={handlers} view={route.view}>
       {/* min-h-0 beats upstream's min-h-svh through twMerge: this app is exactly the viewport tall
           and its scrollers are internal, so a minimum height would push them off the bottom.
           `style` is spread after upstream's own custom properties, so this is the supported way to
@@ -247,10 +281,9 @@ export function AppShell() {
               focusedStatus={chrome?.status}
               cursorId={sessions[cursor]?.id}
               link={chrome?.link}
-              scope={config.scope}
               onFocus={focus}
               onSettle={settle}
-              onNew={() => setNewOpen(true)}
+              onNew={openNewAgentSession}
               onOpenSettings={openSettings}
             />
           )}
@@ -270,34 +303,28 @@ export function AppShell() {
           {settings ? (
             <SettingsPage section={route.section} />
           ) : focusedId === undefined ? (
-            <NothingFocused />
+            /*
+             * The New Agent Session view *is* the empty state — nothing focused and "you are
+             * starting one" were always the same moment. Held back until the auto-open rule above has
+             * had its say, so a reader with work waiting is not shown a form on the way to it.
+             */
+            landed ? (
+              <NewAgentSessionPage drafts={drafts} onCreated={focus} />
+            ) : (
+              <div className="min-h-0" />
+            )
           ) : (
             <AgentSessionPane
               sessionId={focusedId}
               searchOpen={searchOpen}
               onCloseSearch={() => setSearchOpen(false)}
               docks={docks}
+              drafts={drafts}
               shells={config.shell === true}
             />
           )}
         </SidebarInset>
       </SidebarProvider>
-
-      <NewAgentSessionDialog open={newOpen} onOpenChange={setNewOpen} onCreated={focus} />
     </KeyboardLayer>
-  );
-}
-
-/**
- * Nothing focused. The copy is in the ubiquitous language — "session" on its own is banned as a
- * synonym for Agent Session, and this is the string that used to break that rule most visibly.
- */
-function NothingFocused() {
-  return (
-    <div className="flex min-h-0 items-center justify-center">
-      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-        Select an Agent Session, or press <Kbd>n</Kbd> to start one.
-      </p>
-    </div>
   );
 }

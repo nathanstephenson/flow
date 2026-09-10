@@ -50,9 +50,9 @@ export const SHORTCUTS: ShortcutGroup[] = [
   {
     title: "Doing things",
     description:
-      "Nothing here spends money or sends text on a single unmodified key: n opens a dialog rather than starting an Agent Session, and no shortcut sends a message or Revives one.",
+      "Nothing here spends money or sends text on a single unmodified key: n opens the New Agent Session view rather than starting one, and no shortcut sends a message or Revives one.",
     shortcuts: [
-      { binding: "new-agent-session", keys: ["n"], description: "New Agent Session — opens the dialog" },
+      { binding: "new-agent-session", keys: ["n"], description: "New Agent Session — opens the view" },
       { binding: "settle", keys: ["s"], description: "Settle the Agent Session on screen" },
       {
         binding: "toggle-bottom-dock",

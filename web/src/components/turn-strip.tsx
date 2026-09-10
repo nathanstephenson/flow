@@ -1,11 +1,10 @@
 import { GitBranch } from "lucide-react";
 import { useState } from "react";
 
-import type { EffortLevel } from "../../../src/protocol/events.ts";
 import { scopeKindHint, scopeKindLabel } from "@client/scope-kind.ts";
 import { occupied } from "@client/status.ts";
-import { useCommand } from "@/agent-sessions.tsx";
 import { useBranches } from "@/branches.ts";
+import type { ComposerActions } from "@/composer-actions.ts";
 import type { Chrome } from "@/store/contract.ts";
 import { ContextUsageMeter } from "@/components/context-usage-meter.tsx";
 import { EffortPicker, ModelPicker } from "@/components/model-picker.tsx";
@@ -37,8 +36,7 @@ import { cn } from "@/lib/utils.ts";
  * The branch half is absent for a Scope that is not a repository; the rest of the row is not, which
  * is why this renders unconditionally. A Project need not be a repository at all (ADR 0011).
  */
-export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
-  const run = useCommand();
+export function TurnStrip({ chrome, actions }: { chrome: Chrome; actions: ComposerActions }) {
   const ended = chrome.status === "ended";
 
   return (
@@ -51,17 +49,19 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-t border-border/40 px-2 py-1">
       <div className="flex min-w-0 items-center gap-0.5">
         <ModelPicker
-          capabilities={chrome.capabilities}
+          models={chrome.capabilities?.models}
           model={chrome.model}
           disabled={ended}
-          onSelect={(modelId) => void run({ type: "set_model", sessionId, modelId })}
+          // A reading in the strip, not a form field: see `ModelPickerProps.quiet`.
+          quiet
+          onSelect={actions.setModel}
         />
         <EffortPicker
           capabilities={chrome.capabilities}
           model={chrome.model}
           effort={chrome.effort}
           disabled={ended}
-          onSelect={(effort: EffortLevel) => void run({ type: "set_effort", sessionId, effort })}
+          onSelect={actions.setEffort}
         />
       </div>
 
@@ -73,7 +73,7 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
        * would put the branch in the middle track and leave it centred.
        */}
       <div className="col-start-3 flex min-w-0 items-center justify-end">
-        <BranchPicker sessionId={sessionId} chrome={chrome} />
+        <BranchPicker chrome={chrome} actions={actions} />
       </div>
     </div>
   );
@@ -88,8 +88,7 @@ export function TurnStrip({ sessionId, chrome }: { sessionId: string; chrome: Ch
  * moving it here is real and worth naming: **a Worktree is no longer distinguishable at a glance**,
  * only on hover and by its branch happening to be named `flow/…`.
  */
-function BranchPicker({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
-  const run = useCommand();
+function BranchPicker({ chrome, actions }: { chrome: Chrome; actions: ComposerActions }) {
   const branches = useBranches(chrome.scope);
   const [failure, setFailure] = useState<string | undefined>(undefined);
 
@@ -125,8 +124,7 @@ function BranchPicker({ sessionId, chrome }: { sessionId: string; chrome: Chrome
             if (typeof value !== "string" || value === branch.name) return;
             setFailure(undefined);
             void (async () => {
-              const moved = await run({ type: "switch_branch", sessionId, branch: value });
-              if (moved === undefined) setFailure(`could not switch to ${value}`);
+              if (!(await actions.switchBranch(value))) setFailure(`could not switch to ${value}`);
             })();
           }}
         >

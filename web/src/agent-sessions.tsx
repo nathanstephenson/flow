@@ -26,6 +26,16 @@ const BACKOFF_MAX_MS = 30_000;
 
 type SessionsValue = {
   sessions: SessionSummary[];
+  /**
+   * Whether the list has been answered at all yet.
+   *
+   * `sessions` starts empty, so without this "there are no Agent Sessions" and "nobody has asked
+   * yet" are the same value — and the app shell has to tell them apart, because the first means
+   * showing the New Agent Session view and the second means showing nothing for one more tick. Set
+   * by the first poll that *settles*, answered or failed: a host that is down must not leave the
+   * pane blank forever.
+   */
+  loaded: boolean;
   /** Poll now. Called after every command, because a command is the thing most likely to change it. */
   nudge: () => void;
 };
@@ -41,6 +51,7 @@ export function useAgentSessions(): SessionsValue {
 export function SessionsProvider({ children }: { children: ReactNode }) {
   const { connection } = useHost();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const nudgeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -68,9 +79,13 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         delivered = ticket;
         failures = 0;
         setSessions(next);
+        setLoaded(true);
         schedule(POLL_MS);
       } catch {
         if (stopped) return;
+        // Loaded on a failure too: an unreachable host is an answer, and the alternative is a pane
+        // that never renders anything at all.
+        setLoaded(true);
         failures += 1;
         // A host that has gone away should not be asked twice a second forever.
         schedule(Math.min(BACKOFF_MAX_MS, POLL_MS * 2 ** failures));
@@ -96,7 +111,11 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
 
   const nudge = useCallback(() => nudgeRef.current(), []);
 
-  return <SessionsContext.Provider value={{ sessions, nudge }}>{children}</SessionsContext.Provider>;
+  return (
+    <SessionsContext.Provider value={{ sessions, loaded, nudge }}>
+      {children}
+    </SessionsContext.Provider>
+  );
 }
 
 /**

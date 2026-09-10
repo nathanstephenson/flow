@@ -64,7 +64,8 @@ describe("worktrees", () => {
 
     const summary = host.list().find((entry) => entry.id === id);
     assert.ok(summary?.branch);
-    assert.match(summary.branch.name, /^flow\/main-\d{4}-\d{2}-\d{2}$/);
+    // `flow/<base leaf>-<ms into the UTC day>`, in exactly two segments — see `derivedBranchName`.
+    assert.match(summary.branch.name, /^flow\/main-\d+$/);
     // The base branch is cut from, never checked out: the repository is still on main.
     assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "main");
   });

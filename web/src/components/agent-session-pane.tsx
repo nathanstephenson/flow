@@ -4,7 +4,9 @@ import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions } from "@/agent-sessions.tsx";
+import { useSessionActions } from "@/composer-actions.ts";
 import type { Docks } from "@/docks.ts";
+import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
 import { Composer } from "@/components/composer.tsx";
@@ -42,9 +44,14 @@ export type AgentSessionPaneProps = {
    */
   searchOpen: boolean;
   onCloseSearch: () => void;
+  /**
+   * Where the Composer's unsent message lives between mounts. Owned by the app shell for the reason
+   * the Docks are: this pane remounts whenever the focus moves, and a Draft must not.
+   */
+  drafts: DraftStash;
 };
 
-export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onCloseSearch }: AgentSessionPaneProps) {
+export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onCloseSearch, drafts }: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
   // One frame at most: the acquire happens in a layout effect, so this does not reach the screen.
@@ -58,6 +65,7 @@ export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onClose
       onCloseSearch={onCloseSearch}
       docks={docks}
       shells={shells}
+      drafts={drafts}
     />
   );
 }
@@ -84,9 +92,13 @@ function AttachedPane({
   shells,
   searchOpen,
   onCloseSearch,
+  drafts,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const { sessions } = useAgentSessions();
+  // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
+  // no longer knows there is a session behind it — see web/src/composer-actions.ts.
+  const actions = useSessionActions(sessionId);
   const [query, setQuery] = useState("");
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
@@ -135,8 +147,10 @@ function AttachedPane({
       </SubagentOpenProvider>
 
       <Composer
-        sessionId={sessionId}
+        id={sessionId}
         chrome={chrome}
+        actions={actions}
+        drafts={drafts}
         /*
          * What an open Permission Prompt is actually asking about, read here rather than in the
          * Composer.

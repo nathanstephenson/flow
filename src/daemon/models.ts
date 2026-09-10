@@ -7,8 +7,8 @@ import type { BackendEvent, BackendModels, ModelInfo } from "../protocol/events.
  * This exists because of an awkward fact the Settings run into: **model ids are only known from a
  * live Backend Session**. Claude's list comes from `supportedModels()`, a control request on a
  * running stream; pi's comes off a constructed session's registry. `Capabilities` is declared per
- * Agent Session for exactly that reason, and the New Agent Session dialog already refuses to offer
- * a model because at that moment there is no list.
+ * Agent Session for exactly that reason, and the New Agent Session view refused to offer a model at
+ * all until this existed.
  *
  * A machine-wide Default Model and Summary Model cannot wait for a session that does not exist yet.
  * So this opens a throwaway one — the same device the Summary Model uses (ADR 0020), tools and all

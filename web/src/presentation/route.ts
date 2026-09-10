@@ -68,6 +68,23 @@ export function routedSessionId(route: Route): string | undefined {
   return route.view === "session" ? route.sessionId : undefined;
 }
 
+/**
+ * Where leaving the Settings should return to, as the route on screen changes.
+ *
+ * `undefined` is a **destination and not the absence of one**: the Agent Session route naming none is
+ * the New Agent Session view, which is somewhere a reader can be halfway through typing a first
+ * message. Recording only defined ids — which is what this replaced — sent them to an unrelated
+ * transcript on the way back out of the Settings, and left them looking for words that were still
+ * held.
+ *
+ * Here rather than inline in the hook because that distinction is the whole of the rule and is
+ * invisible at the call site, where it reads as an ordinary null check.
+ */
+export function returnPoint(route: Route, remembered: string | undefined): string | undefined {
+  // The Settings are not a place to come back to, so they leave the last answer standing.
+  return route.view === "session" ? route.sessionId : remembered;
+}
+
 function asSection(part: string | undefined): SettingsSection | undefined {
   return SETTINGS_SECTIONS.find((section) => section === decode(part ?? ""));
 }

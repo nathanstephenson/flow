@@ -83,8 +83,8 @@ function IncludedProjects({
       title={`Projects · ${included.length}`}
       description={
         included.length === 0
-          ? "Nothing yet. A Project is one you have opted into — add one below, and it becomes an option in the New Agent Session dialog."
-          : "What the New Agent Session dialog offers, in this order."
+          ? "Nothing yet. A Project is one you have opted into — add one below, and it becomes an option in the New Agent Session view."
+          : "What the New Agent Session view offers, in this order."
       }
     >
       {included.length === 0 ? null : (
