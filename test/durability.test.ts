@@ -327,7 +327,7 @@ describe("durability and revive", () => {
     // the split added.
     const meta = store.readMeta(id);
     assert.ok(meta);
-    const { lifecycle: _l, yourTurnAt: _y, settledAt: _s, ...legacy } = meta;
+    const { lifecycle: _l, restingAt: _y, settledAt: _s, ...legacy } = meta;
     store.writeMeta({ ...legacy, status: "settled" });
 
     const second = await freshHost();
@@ -337,7 +337,7 @@ describe("durability and revive", () => {
     const migrated = store.readMeta(id);
     assert.equal(migrated?.lifecycle, "settled");
     assert.equal(migrated?.settledAt, legacy.updatedAt, "the old updatedAt is what the clock ran from");
-    assert.ok(migrated?.yourTurnAt);
+    assert.ok(migrated?.restingAt);
   });
 
   it("does not restart the retention clock when a Settled Agent Session is touched", async () => {

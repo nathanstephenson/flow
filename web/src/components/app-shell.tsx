@@ -86,8 +86,9 @@ export function AppShell() {
    * Open the freshest Agent Session on arrival, as the old UI did — but only when the URL did not
    * already name one, and not when the candidate is Settled.
    *
-   * The Session Host sorts Settled last, so `sessions[0]` is the freshest *active* Agent Session in
-   * the normal case and only Settled when every one of them is. Opening a Settled Agent Session
+   * The Session Host bands the list most alive first (`railBand`), so `sessions[0]` is the one most
+   * worth landing on — whatever is awaiting a decision, else whatever is working, else the freshest
+   * Idle one — and it is Settled only when every one of them is. Opening a Settled Agent Session
    * unasked would put a finished transcript in front of someone who came to start work.
    *
    * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold

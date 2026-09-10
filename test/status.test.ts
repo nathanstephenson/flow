@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { canRevive, canSettle, deriveStatus, occupied } from "../src/client/status.ts";
+import { canRevive, canSettle, deriveStatus, occupied, railBand } from "../src/client/status.ts";
 import type { SessionLifecycle, SessionStatus } from "../src/protocol/commands.ts";
 
 /**
@@ -52,5 +52,35 @@ describe("what a status means", () => {
     // away is still allowed, which is how someone escapes a prompt they do not want to answer.
     assert.equal(canSettle("awaiting"), true);
     assert.equal(canRevive("awaiting"), false);
+  });
+
+  describe("banding the rail", () => {
+    const band = (status: SessionStatus, activeSubagents = 0) => railBand({ status, activeSubagents });
+
+    it("orders the bands most alive first", () => {
+      assert.deepEqual(
+        [band("awaiting"), band("running"), band("idle"), band("dormant"), band("settled")],
+        [0, 1, 2, 3, 4],
+      );
+    });
+
+    it("bands an Ended Agent Session with the Settled ones", () => {
+      // It is not Reaped and stays in the list, and it is as finished as a Settled one.
+      assert.equal(band("ended"), band("settled"));
+    });
+
+    it("counts background Subagents as working without touching the status", () => {
+      // ADR 0016: the model is idle and the Steering Queue may dispatch, so the status stays `idle`
+      // and only the ordering treats this Agent Session as live.
+      assert.equal(band("idle", 2), band("running"));
+      assert.notEqual(band("idle", 2), band("idle", 0));
+    });
+
+    it("does not let a Subagent lift an Agent Session that is not live", () => {
+      // A Subagent cannot outlive its Backend Session, so a count here would be a stale index —
+      // and lifting a Dormant Agent Session above a working one would be a plain lie.
+      assert.equal(band("dormant", 3), band("dormant", 0));
+      assert.equal(band("settled", 3), band("settled", 0));
+    });
   });
 });

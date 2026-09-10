@@ -160,12 +160,23 @@ will sit there until they come back. It is occupancy like Running: nothing offer
 offered while it holds.
 _Avoid_: blocked, waiting, paused, stuck; and idle, which is the other way it can be your turn.
 
-**Your Turn**:
-The moment an Agent Session last became something its owner has to act on, by going Idle or
-Awaiting. What the rail orders its rows by and prints beside them, in place of a last-activity time
-that every streamed token restamped — which floated whichever Agent Session was busiest to the top
-of the list and reordered it under anyone trying to read it.
+**Resting**:
+The moment an Agent Session last came to rest, by going Idle. What the rail prints beside a row and
+orders rows by *within* a Band, in place of a last-activity time that every streamed token
+restamped — which floated whichever Agent Session was busiest to the top of the list and reordered
+it under anyone trying to read it. Awaiting does not restamp it, though it is equally its owner's
+turn: the Band already surfaces it, and a stamp would let a turn that hit two un-authorised tools
+jump the working Band on its way back out.
 _Avoid_: last activity, updated, touched, modified
+
+**Band**:
+Which tier of the rail an Agent Session sits in, ordered by how alive it is: Awaiting, then working,
+then Idle, then Dormant, then Settled and Ended together. A row moves when its Band changes and at
+no other time, which is what lets a turn stream for an hour without reordering the list. Working is
+the one Band that is not simply a status — an Agent Session whose only work is backgrounded
+Subagents is Idle and sits there anyway, because sinking it below something that finished yesterday
+would hide the thing its owner wanted to watch.
+_Avoid_: group, tier, section, bucket
 
 **Dormant**:
 The state of an Agent Session with no Backend Session running. Its transcript is readable and it can

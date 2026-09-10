@@ -35,9 +35,9 @@ two-second poll and pushed every other row down. The one ordering rule anyone ha
 `list()`'s comment that Settled must sink because "settling is itself the most recent activity" — was
 already an admission of this bug shape in a narrower case.
 
-Measured by `spikes/status-rail.ts`, which parks four Agent Sessions in the four states the rail has
-to tell apart and streams into one of them: 95 events accumulated on the Running row across three
-polls without moving it, where the old key would have held it at the top for the whole turn.
+Measured by `spikes/status-rail.ts`, which parks four Agent Sessions in the states the rail has to
+tell apart and streams into one of them: 95 events accumulated on the Running row across three polls
+without moving it, where `updatedAt` would have held it at the top for the whole turn.
 
 Underneath all three: `status` conflated a fact that survives a restart with one that does not.
 ADR 0003 fixed that Agent Sessions "that were running load as Dormant" and a restart "drops any turn
@@ -46,10 +46,10 @@ restart, and `running` and `idle` are annihilated by it.
 
 ## Decision
 
-**An Agent Session stores a Lifecycle and derives its activity, and the rail is ordered by when each
-Agent Session last became its owner's turn.**
+**An Agent Session stores a Lifecycle and derives its activity, and the rail is banded by how alive
+each Agent Session is rather than ordered by one timestamp.**
 
-Five things follow, and they are the decision:
+Six things follow, and they are the decision:
 
 **The cut is what a wrong answer costs.** ADR 0013 set the rule when it recorded the worktree flag
 rather than deriving it from a path: "a wrong group shows a wrong heading, while a wrong answer here
@@ -77,13 +77,23 @@ is perfectly safe. `SessionSummary.activeSubagents` carries the true and narrowe
 the rail draws it as its own mark beside the status dot. The trade ADR 0016 accepted stands; what
 changes is that the rail now has a second surface on which to say what it gave up.
 
-**`yourTurnAt` orders the rail, and it moves only on the transition into Idle or Awaiting.** Those
-two are what Idle and Awaiting share — one is your turn to type, the other your turn to decide — and
-naming that is what makes a single sort key honest. Stamped on the transition rather than on the
-state, because `onBackendEvent` runs per streamed token and stamping on the state would reproduce
-exactly the churn this replaces. `updatedAt` leaves `SessionSummary` altogether rather than staying
-on as a field with no reader, and the rail and the TUI both print `yourTurnAt` — a list that shows
-one time while sorting by another reads as broken the first time they disagree.
+**The rail is banded by how alive an Agent Session is, then ordered by `restingAt` inside each
+band.** The bands are Awaiting, working, Idle, Dormant, and Settled with Ended. A single recency key
+was tried first and rejected in review: it put an Agent Session that finished ten minutes ago above
+one that was still working, and the top of a list is where a reader looks for what is happening.
+Banding fixes the order without giving back the stability the key was introduced for — a row moves
+when its band changes and at no other time, so a turn streams for an hour without touching the list.
+Working is the one band that is not simply a status: `activeSubagents > 0` lifts an Idle Agent
+Session into it, which is how ADR 0016's trade is paid for rather than repealed.
+
+**`restingAt` is stamped on the transition into Idle, and nowhere else.** Stamped on the transition
+rather than on the state, because `onBackendEvent` runs per streamed token and stamping on the state
+would reproduce exactly the churn this replaces. Awaiting deliberately does not stamp, though it is
+equally its owner's turn: the band already surfaces it, so a stamp would buy nothing and would cost
+real churn — a turn that hit two un-authorised tools would come back out of Awaiting with a fresh
+timestamp and jump the working band. `updatedAt` leaves `SessionSummary` altogether rather than
+staying on as a field with no reader, and the rail and the TUI both print `restingAt`, because a
+list that shows one time while ordering by another reads as broken the first time they disagree.
 
 **The open-prompt index is an index; the transcript stays the truth.** `statusOf` cannot scan a
 transcript, because `list()` runs for every Agent Session on every poll and that is the budget
@@ -96,15 +106,17 @@ that replays into a composer nobody can unlock.
 
 ## Consequences
 
-**A long-running Agent Session sinks in the rail, and that is the trade.** Its `yourTurnAt` is
-frozen while it works, so anything that comes to rest passes above it. This is the requested
-behaviour — rows stop moving while you read them — but it inverts the usual instinct that the top of
-a list is where the action is. The action is now on the rows with a hue and a Subagent count, not on
-the rows at the top.
+**A Permission Prompt now moves a row between bands, which is the one motion this adds.** A turn
+that hits several un-authorised tools bounces `running → awaiting → running`, and each leg is a jump
+to and from the top of the rail rather than a dot changing colour. Accepted because ADR 0018 makes
+prompts rare by construction — only a tool nothing has already authorised raises one — and because
+not stamping `restingAt` on Awaiting means the row returns to the position it left rather than to
+the top of its band.
 
-**An Agent Session with background Subagents shows a mark and may still reorder.** It can accept a
-message without queueing, so it is at rest by the rule above. Both halves follow from ADR 0016 being
-taken seriously: the model is idle, and only the Subagent count says otherwise.
+**`activeSubagents` is load-bearing for the order now, not only for a mark.** It decides a band, so
+a count that drifts moves a row rather than only mis-drawing a dot. `railBand` lifts on it only when
+the status is `idle`, because a Subagent cannot outlive its Backend Session and a count on a Dormant
+or Settled Agent Session is a stale index rather than live work.
 
 **`activeSubagents` refreshes on the two-second poll for unfocused rows.** A Subagent that starts and
 finishes inside one poll never draws its mark. That is a miss rather than a flicker, and it is the
@@ -124,7 +136,7 @@ axes, and the host and the reducer derive through the same function, so the two 
 construction rather than by two hand-maintained switch statements happening to line up.
 
 **Metas written before this decision load correctly and are rewritten on the first boot.**
-`lifecycle` falls back to the deprecated `status` mirror, `settledAt` and `yourTurnAt` to
+`lifecycle` falls back to the deprecated `status` mirror, `settledAt` and `restingAt` to
 `updatedAt`, which is exactly what both used to mean. `persist` keeps writing the `status` mirror so
 that rolling the daemon back does not read every Settled Agent Session as Dormant and quietly stop
 reaping them; it can be dropped once no shipped daemon reads it.

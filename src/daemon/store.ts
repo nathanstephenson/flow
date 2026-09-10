@@ -50,8 +50,8 @@ export type SessionMeta = {
    * @deprecated Read `lifecycle`.
    */
   status?: SessionStatus;
-  /** When this Agent Session last became its owner's turn. See `SessionSummary.yourTurnAt`. */
-  yourTurnAt?: string;
+  /** When this Agent Session last became its owner's turn. See `SessionSummary.restingAt`. */
+  restingAt?: string;
   /** When this Agent Session was Settled, and so what ADR 0006's retention window runs from. */
   settledAt?: string;
   /**

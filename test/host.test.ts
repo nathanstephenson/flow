@@ -878,72 +878,126 @@ describe("counting Subagents without taking occupancy", () => {
 });
 
 /**
- * The rail's sort key. It moves when an Agent Session becomes its owner's turn and at no other
- * time, which is what stops a streaming session reordering the list under a reader.
+ * How the rail is ordered: banded by how alive an Agent Session is, then by when it last came to
+ * rest inside each band. Nothing may move a row while a turn merely streams.
  */
-describe("when an Agent Session became your turn", () => {
-  const turnAt = (id: string) => host.list().find((summary) => summary.id === id)?.yourTurnAt;
+describe("ordering the rail", () => {
+  const restAt = (id: string) => host.list().find((summary) => summary.id === id)?.restingAt;
+  const order = () => host.list().map((summary) => summary.id);
+  // Two stamps inside one ISO millisecond tie, and the sort then falls back to insertion order.
+  // Real work is never that close together; these tests are.
+  const gap = () => new Promise((resolve) => setTimeout(resolve, 2));
 
   it("does not move while a turn streams, though updatedAt does", async () => {
-    const atRest = turnAt(sessionId);
+    const atRest = restAt(sessionId);
     await host.send(sessionId, "go", "now");
     for (let index = 0; index < 50; index += 1) backend.latest.say(`chunk ${index}`, false);
 
-    assert.equal(turnAt(sessionId), atRest, "a streaming turn must not reorder the rail");
+    assert.equal(restAt(sessionId), atRest, "a streaming turn must not restamp anything");
   });
 
-  it("moves when the turn ends, and again when a prompt wants a decision", async () => {
-    // The stamp is an ISO string, so a whole turn inside one millisecond writes the value that was
-    // already there and this could not tell a stamp from a no-op. Each gap buys a distinguishable
-    // stamp; nothing in the assertions depends on how long they are.
-    const gap = () => new Promise((resolve) => setTimeout(resolve, 2));
-
-    const atRest = turnAt(sessionId);
+  it("stamps when the turn ends, and not when a prompt wants a decision", async () => {
+    const atRest = restAt(sessionId);
     await gap();
     await host.send(sessionId, "go", "now");
     backend.latest.completeTurn();
     await new Promise((resolve) => setImmediate(resolve));
 
-    const afterTurn = turnAt(sessionId);
+    const afterTurn = restAt(sessionId);
     assert.ok(afterTurn !== undefined && atRest !== undefined && afterTurn > atRest);
-    assert.notEqual(afterTurn, atRest, "going Idle is becoming your turn to type");
 
     await gap();
     await host.send(sessionId, "again", "now");
     backend.latest.askPermission("Bash");
-    // Awaiting is your turn too — to decide rather than to type — so it surfaces immediately.
-    assert.notEqual(turnAt(sessionId), afterTurn);
+    // Awaiting is its owner's turn, but the band is what surfaces it. Stamping here would mean this
+    // Agent Session jumped the running band on its way back out of the prompt.
+    assert.equal(restAt(sessionId), afterTurn, "Awaiting must not restamp");
   });
 
-  it("orders the rail by it, so a working Agent Session holds its place", async () => {
-    // `yourTurnAt` is an ISO string, so two stamps inside one millisecond tie and the sort falls
-    // back to insertion order. Real work is never that close together; this test is.
-    await new Promise((resolve) => setTimeout(resolve, 2));
+  it("keeps a working Agent Session above one that has finished", async () => {
+    await gap();
     const other = await host.create({ scope: "/tmp/other", backend: "fake" });
-    const first = backend.sessions.at(-2);
-    assert.ok(first);
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
 
-    // `other` was created last, so it is your turn most recently and sorts first.
-    assert.deepEqual(host.list().map((summary) => summary.id), [other, sessionId]);
+    // Both Idle, so recency alone decides and the newer one leads.
+    assert.deepEqual(order(), [other, sessionId]);
 
     await host.send(sessionId, "long turn", "now");
-    for (let index = 0; index < 20; index += 1) first.say(`chunk ${index}`, false);
-    // `yourTurnAt` is an ISO string, so two stamps inside one millisecond tie and the sort keeps
-    // insertion order. A real turn cannot be that short; this one is.
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    for (let index = 0; index < 20; index += 1) mine.say(`chunk ${index}`, false);
+    await gap();
     assert.deepEqual(
-      host.list().map((summary) => summary.id),
-      [other, sessionId],
-      "a turn in flight must not lift a row above one that is resting",
+      order(),
+      [sessionId, other],
+      "a Running Agent Session sits above an Idle one however stale it is",
     );
 
-    first.completeTurn();
+    mine.completeTurn();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(
-      host.list().map((summary) => summary.id),
-      [sessionId, other],
-      "and it rises the moment it is your turn again",
-    );
+    assert.deepEqual(order(), [sessionId, other], "and holds its place on finishing, now by recency");
+  });
+
+  it("lifts an Agent Session awaiting a person above everything working", async () => {
+    await gap();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
+
+    // `other` is Running, and would lead on both band and recency.
+    await host.send(other, "work", "now");
+    await gap();
+    assert.deepEqual(order(), [other, sessionId]);
+
+    // `sessionId` is older and its restingAt is staler, so only the band can lift it.
+    await host.send(sessionId, "go", "now");
+    mine.askPermission("Bash");
+    assert.equal(host.statusOf(sessionId), "awaiting");
+    assert.deepEqual(order(), [sessionId, other], "the one that needs a person comes first");
+  });
+
+  it("bands background Subagents as working, though the status stays idle", async () => {
+    await gap();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
+    assert.deepEqual(order(), [other, sessionId], "precondition: the newer one leads");
+
+    await host.send(sessionId, "explore", "now");
+    const explore = mine.beginSubagent("Explore");
+    explore.launch();
+    mine.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // ADR 0016 keeps the status honest — the model is idle — and the band keeps the row where its
+    // owner can watch it, which is the whole reason the count travels separately.
+    assert.equal(host.statusOf(sessionId), "idle");
+    assert.deepEqual(order(), [sessionId, other], "work happening beats an Idle Agent Session");
+
+    explore.finish();
+
+    // Give `other` the newer rest stamp, so recency alone would put it first. While the Subagent
+    // was working the band overrode that; now that it is done, nothing does.
+    await gap();
+    await host.send(other, "something", "now");
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order(), [other, sessionId], "and it drops back once the Subagent is done");
+  });
+
+  it("sinks Dormant below Idle, and Settled below both", async () => {
+    await gap();
+    const dormant = await host.create({ scope: "/tmp/dormant", backend: "fake" });
+    await gap();
+    const settled = await host.create({ scope: "/tmp/settled", backend: "fake" });
+    await host.settle(settled);
+    await host.shutdown();
+    // shutdown() takes every Backend Session away, so revive the one that must read as Idle.
+    await host.revive(sessionId);
+
+    assert.equal(host.statusOf(sessionId), "idle");
+    assert.equal(host.statusOf(dormant), "dormant");
+    assert.equal(host.statusOf(settled), "settled");
+    assert.deepEqual(order(), [sessionId, dormant, settled]);
   });
 });
 

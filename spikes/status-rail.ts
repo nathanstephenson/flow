@@ -82,7 +82,7 @@ console.log(
       title: s.title,
       status: s.status,
       activeSubagents: s.activeSubagents,
-      yourTurnAt: s.yourTurnAt,
+      restingAt: s.restingAt,
     })),
     null,
     2,

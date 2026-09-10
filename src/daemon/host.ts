@@ -8,7 +8,7 @@ import {
   MAX_ATTACHMENT_BASE64_BYTES,
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
-import { deriveStatus } from "../client/status.ts";
+import { deriveStatus, railBand } from "../client/status.ts";
 import type {
   Command,
   SendWhen,
@@ -104,10 +104,10 @@ type SessionRecord = {
   /** Never affects occupancy: a backgrounded Subagent holds nothing (ADR 0016). */
   openSubagentIds: Set<string>;
   /**
-   * When this Agent Session last became its owner's turn — what the rail sorts by and prints. See
-   * `SessionSummary.yourTurnAt` for why it is not `updatedAt`.
+   * When this Agent Session last came to rest — what orders the rail inside a band, and what its
+   * row prints. See `SessionSummary.restingAt` for why it is not `updatedAt`.
    */
-  yourTurnAt: string;
+  restingAt: string;
   /** Set while Settled. What ADR 0006's retention window is measured from. */
   settledAt: string | undefined;
   /**
@@ -282,7 +282,7 @@ export class SessionHost {
         backend: record.backendName,
         status: this.activityOf(record),
         title: record.title,
-        yourTurnAt: record.yourTurnAt,
+        restingAt: record.restingAt,
         activeSubagents: record.openSubagentIds.size,
         ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
         lastSeq: record.log.lastSeq,
@@ -290,19 +290,27 @@ export class SessionHost {
         ...(record.branch ? { branch: record.branch } : {}),
         ...(record.worktree ? { worktree: true as const } : {}),
       }))
-      // Settled Agent Sessions sink to the bottom: they are the ones their owner is done with, and
-      // they would otherwise sort to the top, since settling is itself the most recent activity.
-      //
-      // Within that group the key is when they were filed away, not `yourTurnAt` — which for a
-      // Settled Agent Session is whenever it happened to go idle beforehand, and so would order
-      // them by something their owner never did.
+      /*
+       * Banded by how alive an Agent Session is, then by recency inside each band.
+       *
+       * One recency key alone put an Agent Session that finished ten minutes ago above one still
+       * working, which is backwards: the top of a list is where a reader looks for what is
+       * happening. Bands fix the order without giving back the stability they were introduced for —
+       * a row moves when its band changes and at no other time, so a turn streams for an hour
+       * without touching the list.
+       *
+       * Settled and Ended sort by when they were filed away rather than by `restingAt`, which for
+       * them is whenever they happened to go idle beforehand — ordering them by something their
+       * owner never did.
+       */
       .sort((left, right) => {
-        const settled = Number(left.status === "settled") - Number(right.status === "settled");
-        if (settled !== 0) return settled;
-        if (left.status === "settled") {
-          return (right.settledAt ?? right.yourTurnAt).localeCompare(left.settledAt ?? left.yourTurnAt);
-        }
-        return right.yourTurnAt.localeCompare(left.yourTurnAt);
+        const band = railBand(left) - railBand(right);
+        if (band !== 0) return band;
+        // `?? restingAt` on both sides rather than a branch on whether each has been Settled: the
+        // bottom band holds Settled and Ended together and only one of them carries `settledAt`, so
+        // comparing different fields per row would make this comparator non-transitive.
+        const by = (summary: SessionSummary): string => summary.settledAt ?? summary.restingAt;
+        return by(right).localeCompare(by(left));
       });
   }
 
@@ -330,7 +338,7 @@ export class SessionHost {
         openEnquiryIds: new Set(openEnquiries(entries).map((open) => open.askId)),
         openSubagentIds: new Set(openSubagents(entries).map((open) => open.subagentId)),
         // A meta written before the split has neither, and `updatedAt` is what both used to be.
-        yourTurnAt: meta.yourTurnAt ?? meta.updatedAt,
+        restingAt: meta.restingAt ?? meta.updatedAt,
         settledAt: meta.settledAt ?? (lifecycleFrom(meta) === "settled" ? meta.updatedAt : undefined),
         buffered: undefined,
         queue: [],
@@ -395,7 +403,7 @@ export class SessionHost {
       openSubagentIds: new Set(),
       // A brand new Agent Session is its owner's turn from the moment it exists, which is what puts
       // it at the top of the rail.
-      yourTurnAt: now,
+      restingAt: now,
       settledAt: undefined,
       buffered: undefined,
       queue: [],
@@ -485,7 +493,7 @@ export class SessionHost {
     // Un-settled, so the retention window starts again from the next Settle rather than from the
     // one this Revive just undid.
     record.settledAt = undefined;
-    record.yourTurnAt = new Date().toISOString();
+    record.restingAt = new Date().toISOString();
     record.log.append({ type: "revived", fromSeq });
     this.flushBuffered(record);
     // A Dormant Agent Session may have sat for a week while its Scope was moved by hand.
@@ -1224,7 +1232,7 @@ export class SessionHost {
       void this.drain(record);
     }
 
-    this.noteYourTurn(record, before);
+    this.noteResting(record, before);
   }
 
   /**
@@ -1258,17 +1266,22 @@ export class SessionHost {
   }
 
   /**
-   * Stamp `yourTurnAt` when the derived activity *enters* one of the two states that are waiting on
-   * a person — `idle` to type at, `awaiting` to decide.
+   * Stamp `restingAt` when the derived activity *enters* `idle` — the moment this Agent Session
+   * came to rest and became something to type at.
    *
    * On the transition rather than on the state, because `onBackendEvent` runs for every streamed
    * token: stamping on the state would restamp continuously and reproduce the `updatedAt` churn
    * this field exists to escape.
+   *
+   * Awaiting deliberately does not stamp, though it is equally its owner's turn. The rail surfaces
+   * it by band now, so a stamp would buy nothing — and it would cost: a turn that hits two
+   * un-authorised tools would come back out of Awaiting with a fresh timestamp and jump the running
+   * band, which is the churn all of this exists to stop.
    */
-  private noteYourTurn(record: SessionRecord, before: SessionStatus): void {
+  private noteResting(record: SessionRecord, before: SessionStatus): void {
     const after = this.activityOf(record);
     if (after === before) return;
-    if (after === "idle" || after === "awaiting") record.yourTurnAt = new Date().toISOString();
+    if (after === "idle") record.restingAt = new Date().toISOString();
   }
 
   private captureResumeToken(record: SessionRecord): void {
@@ -1328,7 +1341,7 @@ export class SessionHost {
       // Mirrored for a daemon rolled back to before the split, which reads only this. Without it
       // every Settled Agent Session would load as Dormant there and stop being reaped.
       status: record.lifecycle === "live" ? "idle" : record.lifecycle,
-      yourTurnAt: record.yourTurnAt,
+      restingAt: record.restingAt,
       ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),

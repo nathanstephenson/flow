@@ -34,18 +34,19 @@ export type SessionSummary = {
   status: SessionStatus;
   title: string;
   /**
-   * When this Agent Session last became its owner's turn — the rail's sort key, and the time its
-   * row prints.
+   * When this Agent Session last came to rest — the time its row prints, and what orders the rail
+   * *within* a band. Which band it is in comes from `railBand`, not from here.
    *
-   * Stamped when the derived activity *enters* `idle` or `awaiting`, which are the two states that
-   * are waiting on a person: one to type, one to decide. Deliberately not `updatedAt`, which every
-   * streamed token restamps and which therefore floated whichever Agent Session was busiest to the
-   * top of the rail on each poll — reordering the list under a reader trying to follow it.
+   * Stamped when the derived activity enters `idle`, and at no other time. Deliberately not
+   * `updatedAt`, which every streamed token restamps and which therefore floated whichever Agent
+   * Session was busiest to the top of the rail on each poll, reordering the list under a reader
+   * trying to follow it.
    *
-   * The consequence to accept is that a long turn sinks: an Agent Session working for an hour holds
-   * the position it had when it started, and anything that comes to rest passes above it.
+   * Awaiting does not stamp it, though it is equally its owner's turn: the band already puts it at
+   * the top, and stamping would mean a turn that hit two un-authorised tools jumped the running
+   * band on its way back out.
    */
-  yourTurnAt: string;
+  restingAt: string;
   /**
    * How many Subagents are running or waiting, whatever the status says.
    *

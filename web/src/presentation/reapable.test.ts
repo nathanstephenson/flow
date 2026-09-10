@@ -21,7 +21,7 @@ function summary(id: string, status: SessionStatus, agoHours: number): SessionSu
     backend: "fake",
     status,
     title: id,
-    yourTurnAt: new Date(NOW - agoHours * HOUR).toISOString(),
+    restingAt: new Date(NOW - agoHours * HOUR).toISOString(),
     activeSubagents: 0,
     settledAt: new Date(NOW - agoHours * HOUR).toISOString(),
     lastSeq: 0,

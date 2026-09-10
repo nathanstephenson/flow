@@ -75,7 +75,7 @@ export type AgentSessionNavProps = {
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
   const now = useNow();
-  // The Session Host sorts Settled last, so this partition costs nothing and cannot reorder.
+  // Settled is the Session Host's bottom band, so this partition costs nothing and cannot reorder.
   const active = props.sessions.filter((session) => session.status !== "settled");
   const settled = props.sessions.filter((session) => session.status === "settled");
 
@@ -329,11 +329,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             <SubagentMark count={summary.activeSubagents} />
             <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
             {/*
-             * `yourTurnAt`, which is what the Session Host orders this list by. Showing `updatedAt`
+             * `restingAt`, which is what the Session Host orders this list by. Showing `updatedAt`
              * here instead would print one time while sorting by another, and the first row whose
              * age disagreed with its position would read as a bug.
              */}
-            <span className="ml-auto shrink-0">{relativeTime(summary.yourTurnAt, now)}</span>
+            <span className="ml-auto shrink-0">{relativeTime(summary.restingAt, now)}</span>
           </span>
         </span>
       </SidebarMenuButton>
