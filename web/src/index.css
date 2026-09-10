@@ -188,6 +188,47 @@
   --font-sans: 'Inter Variable', sans-serif;
   --font-mono: 'MesloLGS NF', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font',
     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /*
+   * The running hairline, travelling. The segment is two fifths of the header and it compresses into
+   * each wall, so the turn is a thing that happens to it rather than a direction flag flipping.
+   * `alternate` walks it back, which is what the old slide-in never did — that one reached two fifths
+   * across, vanished, and restarted, and the empty half of every cycle read as a stall.
+   *
+   * The numbers are the compression solved backwards. Percentages on `translate` are of the segment's
+   * own width, `scale` is about its centre, so at 0.55 the visible band is 0.22 of the header and its
+   * centre has to sit 0.11 from the wall to touch it: -22.5% at the left, 172.5% at the right. Take
+   * the squash out and those endpoints would hang the segment over each edge — which is why the ends
+   * of the travel are only ever reached squashed.
+   *
+   * Easing is per-keyframe and the animation itself is linear, because a single `ease-in-out` over
+   * the whole thing is re-applied between every pair of keyframes: the cruise would ease in and out
+   * of its own two ends and the segment would visibly hesitate mid-header. So: accelerate out of the
+   * squash, cross at a constant rate, decelerate into the far wall.
+   */
+  --animate-hairline-bounce: hairline-bounce 1.6s linear infinite alternate;
+
+  @keyframes hairline-bounce {
+    from {
+      translate: -22.5%;
+      scale: 0.55 1;
+      animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+    }
+    15% {
+      translate: 5%;
+      scale: 1 1;
+      animation-timing-function: linear;
+    }
+    85% {
+      translate: 145%;
+      scale: 1 1;
+      animation-timing-function: cubic-bezier(0, 0, 0.6, 1);
+    }
+    to {
+      translate: 172.5%;
+      scale: 0.55 1;
+    }
+  }
+
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
