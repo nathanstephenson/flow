@@ -74,12 +74,16 @@ export function StatusDot({ status, className }: { status: DotState; className?:
  * 2px hairline under the pane header answers it from across the room, and index.css already collapses
  * every animation to nothing under `prefers-reduced-motion` — at which point the dot's hue and shape
  * are still carrying the state.
+ *
+ * The segment travels the header and turns round rather than sliding off and reappearing at the left:
+ * the old slide spent part of every cycle with the segment part-way across and then gone, which read
+ * as a stall each time it restarted.
  */
 export function RunningHairline({ running }: { running: boolean }) {
   return (
     <div className="h-[2px] w-full overflow-hidden" aria-hidden>
       {running ? (
-        <div className="animate-in slide-in-from-left-full repeat-infinite ease-linear h-full w-2/5 duration-1000 bg-primary" />
+        <div className="animate-hairline-bounce h-full w-2/5 bg-primary" />
       ) : null}
     </div>
   );

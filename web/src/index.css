@@ -188,6 +188,22 @@
   --font-sans: 'Inter Variable', sans-serif;
   --font-mono: 'MesloLGS NF', 'JetBrainsMono Nerd Font', 'FiraCode Nerd Font', 'Hack Nerd Font',
     ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /*
+   * The running hairline, travelling. The segment is two fifths of the header, so 150% of its own
+   * width lands its right edge exactly on the header's right edge; `alternate` walks it back rather
+   * than snapping it home, which is what the old slide-in did and what read as a stall.
+   */
+  --animate-hairline-bounce: hairline-bounce 1.6s ease-in-out infinite alternate;
+
+  @keyframes hairline-bounce {
+    from {
+      translate: 0%;
+    }
+    to {
+      translate: 150%;
+    }
+  }
+
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
