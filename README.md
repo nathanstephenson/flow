@@ -26,7 +26,7 @@ Verified along the way:
   deadlocks. Capabilities therefore arrive late, via `capabilities_changed`.
 - **`bypassPermissions` shadows `canUseTool`.** Pre-approved tools are expressed as
   `permissionMode: "default"` plus `allowedTools`, leaving `canUseTool` to handle the fall-through —
-  where it raises a Permission Prompt for the human to decide (ADR 0017), or an Enquiry for
+  where it raises a Permission Prompt for the human to decide (ADR 0018), or an Enquiry for
   `AskUserQuestion` (ADR 0016). The SDK warns that allowlisted tools skip the callback; that is the
   intent, not a misconfiguration, and it is why `bypassPermissions` would take away the only place a
   tool can be held open on a person. What must never happen is a callback that neither settles nor

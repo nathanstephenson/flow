@@ -75,7 +75,7 @@ export type Entry =
       result?: unknown;
       status: ToolStatus;
       /**
-       * What a human decided about this call, where they were asked at all (ADR 0017).
+       * What a human decided about this call, where they were asked at all (ADR 0018).
        *
        * **Absent is the common case and means nobody was asked** — the tool was pre-approved or
        * carried a Standing Authorisation. It is not "denied", and a front-end must not render it as

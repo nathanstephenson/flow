@@ -29,7 +29,7 @@ already been decided.
 ## Screenshotting a change, not a stale build
 
 `npm start` builds `web/dist` first through its `prestart` hook, so a Session Host serves the client
-as it stood *when that host started* (`docs/adr/0017-the-embedded-web-client-belongs-to-the-binary-build.md`). The trap is the process,
+as it stood *when that host started* (ADR 0017). The trap is the process,
 not the artifact: a host someone left running before your branch existed serves that older client
 and runs that older `src/backend` and `src/daemon` code, so screenshotting it shows nothing you did.
 
@@ -53,7 +53,7 @@ read once at Vite config load, so repointing the proxy means restarting Vite.
 `DEFAULT_ALLOWED_TOOLS` in `src/backend/claude/index.ts` is the pre-approved set and is **not
 configurable** — no config key reaches `backendOptions.allowedTools`. To reach the `canUseTool`
 fall-through, ask for a tool genuinely outside that list. Any `mcp__*` tool works and is the case
-ADR 0017 exists for; `SlashCommand` is unreliable, because a request phrased as a slash command
+ADR 0018 exists for; `SlashCommand` is unreliable, because a request phrased as a slash command
 tends to arrive as `Skill`, which is pre-approved.
 
 A Standing Authorisation granted through the prompt persists to `config.json` under

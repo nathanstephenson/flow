@@ -51,7 +51,7 @@ silently.** Clients hide the affordance on the flag, so nothing breaks — but n
 
 Same documentation question as the two entries above, and worth answering once for all three.
 
-## Run the two spikes ADR 0017 is still owed
+## Run the two spikes ADR 0018 is still owed
 
 Both are one file beside `spikes/ask-user-question.ts`, and neither blocks anything shipped — the
 design is correct either way. They are owed because two things are currently *reasoned about* rather
@@ -72,7 +72,7 @@ A third, smaller, and the one with something to gain: log `title`, `description`
 `matchedAskRule` off the callback's options bag on a real fall-through. If the CLI is already writing
 prompt text for a human, or already saying *why* it is asking, that beats précising the arguments
 ourselves — and `updatedPermissions` on the allow branch is the rule-grained Standing Authorisation
-ADR 0017 declined without knowing what it does.
+ADR 0018 declined without knowing what it does.
 
 ## Drop straggler events from a Dormant Agent Session
 
@@ -155,7 +155,7 @@ via `parent_tool_use_id` — worth a probe first to confirm those deltas are att
 ## Attribute a Subagent's Permission Prompt to it
 
 `SubagentWait`'s `"permission"` has now been reserved by two decisions — ADR 0015 put it in the union
-ahead of the feature, and ADR 0017 shipped the feature without populating it. The blocker is the same
+ahead of the feature, and ADR 0018 shipped the feature without populating it. The blocker is the same
 one ADR 0016 recorded: the SDK's permission callback carries an `agentID`, and nothing has ever been
 observed filling it in. So `producer` is on the `permission` event and always unset, and a Subagent
 blocked on a prompt reports `running` rather than what it is actually waiting for.

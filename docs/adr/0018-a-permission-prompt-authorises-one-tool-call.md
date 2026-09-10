@@ -1,4 +1,4 @@
-# 17. A Permission Prompt authorises one tool call
+# 18. A Permission Prompt authorises one tool call
 
 Date: 2026-09-09
 

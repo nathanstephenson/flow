@@ -46,7 +46,7 @@ type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
  * Most tools are pre-approved, but `permissionMode: "bypassPermissions"` is still not what does it:
  * it auto-approves *before* `canUseTool` is consulted, which would take away the only place a tool
  * can be held open on a human. So the mode is `"default"`, `allowedTools` carries the pre-approved
- * set, and `canUseTool` catches the fall-through — where it raises a Permission Prompt (ADR 0017) or,
+ * set, and `canUseTool` catches the fall-through — where it raises a Permission Prompt (ADR 0018) or,
  * for `AskUserQuestion`, an Enquiry (ADR 0016). Either way it always settles, because a callback the
  * CLI is blocked on is a turn that cannot end.
  */

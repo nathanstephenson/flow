@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button.tsx";
  * **The list exists because the grant is coarse.** `permissions.allow` holds tool *names*, not
  * rules — it cannot say `Bash(git:*)` or "this MCP server, read tools only" — so one Allow on
  * `mcp__gdrive__trash_file` authorises every future deletion, in every Agent Session, for good. That
- * is the trade ADR 0017 made, and this page is the half of it that makes the trade honest: a grant
+ * is the trade ADR 0018 made, and this page is the half of it that makes the trade honest: a grant
  * nobody can see is a grant nobody can revoke.
  *
  * So there is no way to *add* one here, deliberately. A Standing Authorisation is granted by
