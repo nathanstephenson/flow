@@ -310,99 +310,24 @@ export function NewAgentSessionPage({
     // find a transcript, and there is none here. `data-new-session` is this view's own handle.
     <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-6 py-12">
-        <header className="flex flex-col gap-1 text-center">
-          <h1 className="text-lg font-medium">New Agent Session</h1>
-          <p className="text-sm text-muted-foreground">
-            It is bound to this Project for its whole life, and the backend cannot be changed
-            afterwards.
-          </p>
-        </header>
+        <h1 className="text-center text-lg font-medium">New Agent Session</h1>
 
         {projects.length === 0 ? (
           <NoProjects uncurated={uncurated} />
         ) : (
           <>
-            <label ref={projectField} className="flex flex-col gap-1">
-              <span className="text-sm font-medium">Project</span>
-              <Combobox
-                items={groups}
-                value={project ?? null}
-                isItemEqualToValue={(left: Project, right: Project) => left.path === right.path}
-                // The label carries the group, so typing "work" narrows to that folder and the two
-                // repositories both called `api` are told apart in the trigger.
-                itemToStringLabel={projectLabel}
-                itemToStringValue={(candidate: Project) => candidate.path}
-                onValueChange={(value) => {
-                  const picked = value as Project | null;
-                  if (!picked) return;
-                  setProjectPath(picked.path);
-                  // The old Project's answers do not describe the new one.
-                  setCutFrom(undefined);
-                  setInWorktree(false);
-                }}
-              >
-                {/*
-                 * The one and only Trigger in this subtree, which is load-bearing: Base UI anchors
-                 * the popup to a single trigger element, so a second one steals the anchor. See the
-                 * `showTrigger={false}` below.
-                 */}
-                <ComboboxTrigger
-                  render={<Button variant="outline" className="w-full justify-between font-normal" />}
-                >
-                  <ComboboxValue>
-                    {(picked: Project | null) =>
-                      picked === null ? (
-                        <span className="text-muted-foreground">Choose a Project</span>
-                      ) : (
-                        <span className="font-mono text-xs">{projectLabel(picked)}</span>
-                      )
-                    }
-                  </ComboboxValue>
-                </ComboboxTrigger>
-                <ComboboxContent>
-                  {/*
-                   * `showTrigger={false}` is not cosmetic. Left at its default, ComboboxInput
-                   * renders `render={<ComboboxTrigger />}` inside the popup — a *second* Trigger,
-                   * which mounts later than the real one and so becomes what Base UI anchors to.
-                   * The popup then measures a 28px icon button inside itself, `--anchor-width`
-                   * collapses, and it lands in the corner of the viewport at that width.
-                   */}
-                  <ComboboxInput
-                    showTrigger={false}
-                    placeholder={`Filter ${projects.length} ${projects.length === 1 ? "Project" : "Projects"}`}
-                  />
-                  <ComboboxList>
-                    {(group: ProjectGroup) => (
-                      <ComboboxGroup key={group.group ?? ""} items={group.items}>
-                        {/*
-                         * The Projects sitting directly in the Project Root get no heading. Naming
-                         * that group "Root" or "Other" would invent a folder its reader never made.
-                         */}
-                        {group.group === undefined ? null : (
-                          <ComboboxLabel>{group.group}</ComboboxLabel>
-                        )}
-                        <ComboboxCollection>
-                          {(candidate: Project) => (
-                            <ComboboxItem key={candidate.path} value={candidate}>
-                              <span className="font-mono text-xs">{candidate.name}</span>
-                            </ComboboxItem>
-                          )}
-                        </ComboboxCollection>
-                      </ComboboxGroup>
-                    )}
-                  </ComboboxList>
-                  <ComboboxEmpty>No Project matches.</ComboboxEmpty>
-                </ComboboxContent>
-              </Combobox>
-            </label>
-
             {/*
-              * The Backend Adapter, above the box and centred: it is the one choice here that can
-              * never be revisited, so it reads as a heading over the message rather than as a field
-              * beneath it. Quiet and compact, because in the common case nobody touches it — the
-              * host's first backend is almost always the answer.
+              * The two bindings an Agent Session can never change, on one quiet row above the
+              * message: which Backend Adapter runs it and which Project it runs in. Compact and
+              * centred because in the common case nobody touches either — the host's first backend
+              * and the Project you were last in are almost always the answer — so they read as a
+              * caption over the box rather than as a form to fill in.
+              *
+              * The prose that used to sit under the title said the same thing in a sentence nobody
+              * needed twice; the controls are the better place for it, and what is irreversible is
+              * legible from the fact that these two are the only things above the composer.
               */}
-            <div className="flex justify-center">
+            <div className="flex items-center justify-center gap-2">
               <Select
                 value={backend}
                 onValueChange={(value) => {
@@ -425,6 +350,79 @@ export function NewAgentSessionPage({
                   ))}
                 </SelectContent>
               </Select>
+              <label ref={projectField} className="flex">
+                <Combobox
+                  items={groups}
+                  value={project ?? null}
+                  isItemEqualToValue={(left: Project, right: Project) => left.path === right.path}
+                  // The label carries the group, so typing "work" narrows to that folder and the two
+                  // repositories both called `api` are told apart in the trigger.
+                  itemToStringLabel={projectLabel}
+                  itemToStringValue={(candidate: Project) => candidate.path}
+                  onValueChange={(value) => {
+                    const picked = value as Project | null;
+                    if (!picked) return;
+                    setProjectPath(picked.path);
+                    // The old Project's answers do not describe the new one.
+                    setCutFrom(undefined);
+                    setInWorktree(false);
+                  }}
+                >
+                  {/*
+                   * The one and only Trigger in this subtree, which is load-bearing: Base UI anchors
+                   * the popup to a single trigger element, so a second one steals the anchor. See the
+                   * `showTrigger={false}` below.
+                   */}
+                  <ComboboxTrigger
+                    aria-label="Project"
+                    render={<Button variant="ghost" size="sm" className={cn(QUIET_TRIGGER, "w-auto")} />}
+                  >
+                    <ComboboxValue>
+                      {(picked: Project | null) =>
+                        picked === null ? (
+                          <span className="text-muted-foreground">Choose a Project</span>
+                        ) : (
+                          <span className="font-mono text-xs">{projectLabel(picked)}</span>
+                        )
+                      }
+                    </ComboboxValue>
+                  </ComboboxTrigger>
+                  <ComboboxContent>
+                    {/*
+                     * `showTrigger={false}` is not cosmetic. Left at its default, ComboboxInput
+                     * renders `render={<ComboboxTrigger />}` inside the popup — a *second* Trigger,
+                     * which mounts later than the real one and so becomes what Base UI anchors to.
+                     * The popup then measures a 28px icon button inside itself, `--anchor-width`
+                     * collapses, and it lands in the corner of the viewport at that width.
+                     */}
+                    <ComboboxInput
+                      showTrigger={false}
+                      placeholder={`Filter ${projects.length} ${projects.length === 1 ? "Project" : "Projects"}`}
+                    />
+                    <ComboboxList>
+                      {(group: ProjectGroup) => (
+                        <ComboboxGroup key={group.group ?? ""} items={group.items}>
+                          {/*
+                           * The Projects sitting directly in the Project Root get no heading. Naming
+                           * that group "Root" or "Other" would invent a folder its reader never made.
+                           */}
+                          {group.group === undefined ? null : (
+                            <ComboboxLabel>{group.group}</ComboboxLabel>
+                          )}
+                          <ComboboxCollection>
+                            {(candidate: Project) => (
+                              <ComboboxItem key={candidate.path} value={candidate}>
+                                <span className="font-mono text-xs">{candidate.name}</span>
+                              </ComboboxItem>
+                            )}
+                          </ComboboxCollection>
+                        </ComboboxGroup>
+                      )}
+                    </ComboboxList>
+                    <ComboboxEmpty>No Project matches.</ComboboxEmpty>
+                  </ComboboxContent>
+                </Combobox>
+              </label>
             </div>
 
             <Composer
