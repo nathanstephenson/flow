@@ -343,6 +343,8 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
     }
     case "subagent":
       return `  ⤷ ${entry.name} (${entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status})`;
+    case "background_call":
+      return `  ⟳ ${entry.tool} in the background (${entry.status})`;
     case "enquiry": {
       // This runner takes no input, so an Enquiry it sees is one it aborts (see `oneShot`) — what
       // reaches here is therefore `aborted`, and what it prints is what was asked and went

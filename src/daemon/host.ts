@@ -23,6 +23,7 @@ import type {
   EffortLevel,
   LoggedEvent,
   PermissionDecision,
+  Producer,
   Question,
   Skill,
   Spend,
@@ -87,12 +88,13 @@ type SessionRecord = {
    */
   turnInFlight: boolean;
   /**
-   * The Permission Prompts, Enquiries and Subagents the transcript has open, indexed by id so the
-   * rail can be answered without reading it.
+   * The Permission Prompts, Enquiries, Subagents and Background Calls the transcript has open,
+   * indexed by id so the rail can be answered without reading it.
    *
-   * **An index, not the record of truth.** `openPermissions`, `openEnquiries` and `openSubagents`
-   * still scan the transcript wherever a terminal snapshot has to be written, and these three are
-   * kept alongside only because `list()` runs for every Agent Session on a two-second poll and a
+   * **An index, not the record of truth.** `openPermissions`, `openEnquiries`, `openSubagents` and
+   * `openBackgroundCalls` still scan the transcript wherever a terminal snapshot has to be written,
+   * and these are kept alongside only because `list()` runs for every Agent Session on a
+   * two-second poll and a
    * scan there is the whole transcript, per session, per poll. The asymmetry is deliberate: if the
    * index drifts, a dot is wrong until the next event; if the index were believed by the code that
    * closes torn prompts, a drift would leave a dangling `asked` on disk that replays into a
@@ -105,6 +107,8 @@ type SessionRecord = {
   openEnquiryIds: Set<string>;
   /** Never affects occupancy: a backgrounded Subagent holds nothing (ADR 0016). */
   openSubagentIds: Set<string>;
+  /** Never affects occupancy either: a Background Call holds nothing (ADR 0021). */
+  openBackgroundCallIds: Set<string>;
   /**
    * When this Agent Session last came to rest — what orders the rail inside a band, and what its
    * row prints. See `SessionSummary.restingAt` for why it is not `updatedAt`.
@@ -362,6 +366,7 @@ export class SessionHost {
         title: record.title,
         restingAt: record.restingAt,
         activeSubagents: record.openSubagentIds.size,
+        activeBackgroundCalls: record.openBackgroundCallIds.size,
         ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
         lastSeq: record.log.lastSeq,
         ...(record.capabilities ? { capabilities: record.capabilities } : {}),
@@ -415,6 +420,7 @@ export class SessionHost {
         openPermissionIds: new Set(openPermissions(entries).map((open) => open.callId)),
         openEnquiryIds: new Set(openEnquiries(entries).map((open) => open.askId)),
         openSubagentIds: new Set(openSubagents(entries).map((open) => open.subagentId)),
+        openBackgroundCallIds: new Set(openBackgroundCalls(entries).map((open) => open.callId)),
         // A meta written before the split has neither, and `updatedAt` is what both used to be.
         restingAt: meta.restingAt ?? meta.updatedAt,
         settledAt: meta.settledAt ?? (lifecycleFrom(meta) === "settled" ? meta.updatedAt : undefined),
@@ -485,6 +491,7 @@ export class SessionHost {
       openPermissionIds: new Set(),
       openEnquiryIds: new Set(),
       openSubagentIds: new Set(),
+      openBackgroundCallIds: new Set(),
       // A brand new Agent Session is its owner's turn from the moment it exists, which is what puts
       // it at the top of the rail.
       restingAt: now,
@@ -630,6 +637,7 @@ export class SessionHost {
     this.closeOpenEnquiries(record, record.log.since(0));
     this.closeOpenPermissions(record, record.log.since(0));
     this.closeOpenSubagents(record, record.log.since(0));
+    this.closeOpenBackgroundCalls(record, record.log.since(0));
     await this.startBackendSession(record);
     record.lifecycle = "live";
     // Un-settled, so the retention window starts again from the next Settle rather than from the
@@ -1055,6 +1063,7 @@ export class SessionHost {
     // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
     // the rail would say settled while the pane said idle.
     this.closeOpenSubagents(record, record.log.since(0));
+    this.closeOpenBackgroundCalls(record, record.log.since(0));
     this.closeOpenEnquiries(record, record.log.since(0));
     this.closeOpenPermissions(record, record.log.since(0));
     const openTurn = openTurnId(record.log.since(0));
@@ -1234,6 +1243,7 @@ export class SessionHost {
       record.turnInFlight = false;
       await session.dispose();
       this.closeOpenSubagents(record, record.log.since(0));
+      this.closeOpenBackgroundCalls(record, record.log.since(0));
       this.closeOpenEnquiries(record, record.log.since(0));
       this.closeOpenPermissions(record, record.log.since(0));
       record.log.append({ type: "session_dormant", reason: "host shutdown" });
@@ -1311,6 +1321,7 @@ export class SessionHost {
    */
   private closeTornTurn(record: SessionRecord, entries: LoggedEvent[]): void {
     this.closeOpenSubagents(record, entries);
+    this.closeOpenBackgroundCalls(record, entries);
     // The daemon-restart case for an Enquiry: nothing was in memory to abandon its callback, and the
     // process holding it is gone. All that is left is to record that nobody will ever answer it.
     this.closeOpenEnquiries(record, entries);
@@ -1334,6 +1345,25 @@ export class SessionHost {
       record.log.append({ type: "subagent", ...open, state: "aborted" });
     }
     record.openSubagentIds.clear();
+  }
+
+  /**
+   * Close every Background Call the transcript still has running.
+   *
+   * The same argument `closeOpenSubagents` makes, and it reaches the same place: a Background Call
+   * outlives the turn that made it (ADR 0021) but not its Backend Session, being a child of the CLI
+   * process. One still running when that session is gone would render on a Revive as a job working
+   * forever with nothing that could ever stop it.
+   *
+   * A remotely-launched call is the honest exception — it may really still be running on another
+   * machine — and is recorded aborted anyway, because Flow has no channel to hear about it again
+   * and a card spinning on a promise nothing can keep is the worse of the two lies.
+   */
+  private closeOpenBackgroundCalls(record: SessionRecord, entries: LoggedEvent[]): void {
+    for (const open of openBackgroundCalls(entries)) {
+      record.log.append({ type: "background_call", ...open, state: "aborted" });
+    }
+    record.openBackgroundCallIds.clear();
   }
 
   /**
@@ -1499,13 +1529,16 @@ export class SessionHost {
     if (event.type === "subagent") {
       toggle(record.openSubagentIds, event.subagentId, event.state === "running" || event.state === "waiting");
     }
+    if (event.type === "background_call") {
+      toggle(record.openBackgroundCallIds, event.callId, event.state === "running");
+    }
     /*
      * Mirrors the reducer's own `turn_ended` arm, and has to. Neither an Enquiry nor a Permission
      * Prompt can outlive the turn that raised it, so an adapter that tore one down without emitting
      * its terminal snapshot would otherwise pin this Agent Session at `awaiting` for good.
      *
-     * Subagents are deliberately not cleared: one the model backgrounded outlives the turn that
-     * spawned it and reports into a later one (ADR 0016).
+     * Subagents and Background Calls are deliberately not cleared: one the model backgrounded
+     * outlives the turn that started it and reports into a later one (ADR 0016, ADR 0021).
      */
     if (event.type === "turn_ended") {
       record.openEnquiryIds.clear();
@@ -1690,6 +1723,25 @@ function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string
     else open.delete(event.callId);
   }
   return [...open].map(([callId, tool]) => ({ callId, tool }));
+}
+
+/**
+ * The same scan for Background Calls (ADR 0021).
+ *
+ * `producer` comes back with the tool name because the terminal snapshot must carry it too: the web
+ * client decides from `producer` which surface a card belongs to, so one that dropped it would move
+ * the card as it settled.
+ */
+function openBackgroundCalls(entries: LoggedEvent[]): { callId: string; tool: string; producer?: Producer }[] {
+  const open = new Map<string, { tool: string; producer?: Producer }>();
+  for (const entry of entries) {
+    const event: AgentEvent = entry.event;
+    if (event.type !== "background_call") continue;
+    if (event.state === "running") {
+      open.set(event.callId, { tool: event.tool, ...(event.producer === undefined ? {} : { producer: event.producer }) });
+    } else open.delete(event.callId);
+  }
+  return [...open].map(([callId, brief]) => ({ callId, ...brief }));
 }
 
 function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {

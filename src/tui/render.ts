@@ -294,6 +294,11 @@ function entryLines(entry: Entry, width: number): string[] {
     case "subagent":
       // Indented past a tool call: a Subagent is what one of those is doing, not another of them.
       return [clip(`    ⤷ [${entry.waitingOn ?? entry.status}] ${entry.name}`, width)];
+    case "background_call":
+      // Indented for the same reason, and for the same relationship: this is what the tool call
+      // above it is still doing. Its own glyph, because the row above says `complete` — that call
+      // handed back a receipt, and this is the work the receipt promised (ADR 0021).
+      return [clip(`    ⟳ [${entry.status}] ${entry.tool}`, width)];
     case "enquiry": {
       // What was asked and what was chosen, which is the whole requirement of this row. The lines
       // come from the shared module, so the terminal and the browser cannot disagree about what an

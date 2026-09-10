@@ -37,7 +37,7 @@ const CAPABILITIES: Capabilities = {
 function baseUi(overrides: Partial<UiState> = {}): UiState {
   return {
     sessions: [
-      { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "First", restingAt: "", activeSubagents: 0, lastSeq: 0 },
+      { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "First", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
     ],
     selected: "s1",
     view: { ...initialState(), capabilities: CAPABILITIES },
@@ -63,9 +63,9 @@ describe("TUI rendering", () => {
       overlay: { kind: "sessions", index: 0 },
       now,
       sessions: [
-        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "Live one", restingAt: at(30_000), activeSubagents: 0, lastSeq: 0 },
-        { id: "s2", scope: "/tmp", backend: "fake", status: "dormant", title: "Older", restingAt: at(3 * 3_600_000), activeSubagents: 0, lastSeq: 0 },
-        { id: "s3", scope: "/tmp", backend: "fake", status: "settled", title: "Filed away", restingAt: at(5 * 60_000), activeSubagents: 0, lastSeq: 0 },
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "Live one", restingAt: at(30_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
+        { id: "s2", scope: "/tmp", backend: "fake", status: "dormant", title: "Older", restingAt: at(3 * 3_600_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
+        { id: "s3", scope: "/tmp", backend: "fake", status: "settled", title: "Filed away", restingAt: at(5 * 60_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
       ],
     });
 
@@ -85,7 +85,7 @@ describe("TUI rendering", () => {
     const ui = baseUi({
       overlay: { kind: "sessions", index: 0 },
       sessions: [
-        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "", restingAt: "", activeSubagents: 0, lastSeq: 0 },
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
       ],
     });
     const frame = renderFrame(ui, { columns: 80, rows: 12 });
@@ -735,5 +735,23 @@ describe("the TUI's Permission Prompt picker", () => {
     assert.match(frame, /\[complete] Bash — refused/);
     // Absent is the common case, and it must not read as a decision.
     assert.match(frame, /\[complete] Read$/m);
+  });
+
+  it("prints a Background Call under the tool row that started it", () => {
+    // The pair a reader has to be able to make sense of: the row above says `complete`, because the
+    // launch succeeded, and this says the work is still going (ADR 0021).
+    const running = baseUi({
+      view: {
+        ...baseUi().view,
+        entries: [
+          { kind: "tool" as const, id: "c1", name: "Bash", input: { command: "npm test" }, status: "complete" as const },
+          { kind: "background_call" as const, id: "c1", tool: "Bash", status: "running" as const, startedAt: "" },
+        ],
+      },
+    });
+    const frame = renderFrame(running, { columns: 70, rows: 18 }).join("\n");
+
+    assert.match(frame, /\[complete] Bash/);
+    assert.match(frame, /⟳ \[running] Bash/);
   });
 });

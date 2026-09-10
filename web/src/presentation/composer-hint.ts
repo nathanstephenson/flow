@@ -107,15 +107,3 @@ export function sendLabel(chrome: Chrome): string {
   return "Send this message";
 }
 
-/**
- * What the Composer's strip says while Subagents are working, or undefined when none are.
- *
- * Undefined rather than an empty string, so the caller's decision is "is there a strip" rather than
- * "is the strip's text empty" — the same shape `contextUsageDetail` uses for "nothing honest to
- * say". Waiting counts as working: a Subagent blocked on the provider, a child or a permission
- * prompt has not finished, and a count that excluded it would fall and rise for no visible reason.
- */
-export function subagentStripLabel(chrome: Chrome): string | undefined {
-  if (chrome.activeSubagents <= 0) return undefined;
-  return `${chrome.activeSubagents} agent${chrome.activeSubagents === 1 ? "" : "s"} running`;
-}

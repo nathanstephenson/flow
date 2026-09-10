@@ -26,7 +26,11 @@ const parentTool: Entry = { kind: "tool", id: "t2", name: "Bash", input: {}, sta
 /** The call that spawned the Subagent: same id as its `subagent` Entry, by design (ADR 0015). */
 const spawningCall: Entry = { kind: "tool", id: "call_1", name: "Agent", input: {}, status: "complete" };
 
-const ENTRIES = [parentSaid, spawningCall, subagentEntry, childSaid, childTool, parentTool];
+/** A backgrounded call and its own tool row, which share an id the way a Subagent's pair does. */
+const backgroundedCall: Entry = { kind: "tool", id: "call_2", name: "Bash", input: { command: "npm test -- --watch" }, status: "complete" };
+const backgroundCard: Entry = { kind: "background_call", id: "call_2", tool: "Bash", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
+
+const ENTRIES = [parentSaid, spawningCall, subagentEntry, childSaid, childTool, parentTool, backgroundedCall, backgroundCard];
 const KEYS = ENTRIES.map(entryKey);
 const getEntry = (key: string): Entry | undefined => ENTRIES.find((entry) => entryKey(entry) === key);
 
@@ -42,7 +46,22 @@ describe("splitting a Subagent's rows from the session's own", () => {
       entryKey(parentSaid),
       entryKey(subagentEntry),
       entryKey(parentTool),
+      entryKey(backgroundedCall),
+      entryKey(backgroundCard),
     ]);
+  });
+
+  it("keeps both rows of a Background Call, unlike a Subagent's pair", () => {
+    /*
+     * The assertion that stops someone completing the pattern. A Background Call shares its id with
+     * a `tool` row too, so the key arithmetic above would happily drop it — but that row carries the
+     * command and the launch receipt, which the card cannot, so it is not the same two views of one
+     * thing a Subagent's pair is (ADR 0021).
+     */
+    const kept = ownKeys(KEYS, getEntry);
+    assert.ok(kept.includes(entryKey(backgroundedCall)), "the command lives on the tool row and nowhere else");
+    assert.ok(kept.includes(entryKey(backgroundCard)), "and the status lives on the card");
+    assert.ok(!kept.includes(entryKey(spawningCall)), "while a Subagent's spawning row still goes");
   });
 
   it("drops the tool call that spawned a Subagent, keeping only the Subagent's own row", () => {

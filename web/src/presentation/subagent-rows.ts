@@ -50,6 +50,13 @@ export function producerKey(entry: Entry): string | undefined {
  * An Enquiry is dropped on the same rule, which is why this generalised rather than growing a second
  * function beside it: its `AskUserQuestion` row and its `enquiry` row are the same two views of one
  * thing, and the `enquiry` row is the one that says what was chosen.
+ *
+ * **A Background Call is deliberately not a third case, and completing the pattern here would delete
+ * information.** It shares its id with a `tool` row too (ADR 0021), so the arithmetic would work —
+ * but the middle clause of the rule above is false for it. That row does not carry the same brief:
+ * for a backgrounded `Bash` it carries the command, which is nowhere else in the transcript, and its
+ * result well carries the launch receipt that `BashOutput` is later pointed at. The card carries a
+ * status and a clock. Both rows say something, so both stay.
  */
 export function ownKeys(
   keys: readonly string[],

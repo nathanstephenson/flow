@@ -33,6 +33,7 @@ import { ASK_TOOL, PendingEnquiries, questionsOf } from "./enquiries.ts";
 import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
+import { BackgroundCalls } from "./background-calls.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -235,6 +236,8 @@ class ClaudeSession implements BackendSession {
   private readonly streamed = new StreamedMessages();
   /** Subagents open in this turn, and any turn end waiting on them. */
   private readonly subagents = new Subagents();
+  /** Tool calls announced this turn, and the ones the CLI is running past it (ADR 0021). */
+  private readonly calls = new BackgroundCalls();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
   /**
@@ -639,6 +642,8 @@ class ClaudeSession implements BackendSession {
     // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
     // Session Host records that from the transcript, the way it does a torn turn.
     this.subagents.abandon();
+    // Background Calls are children of that process too, and go the same way for the same reason.
+    this.calls.abandon();
     this.inbox.close();
     try {
       await this.stream.close();
@@ -683,11 +688,25 @@ class ClaudeSession implements BackendSession {
           this.emit(describeCompaction(sdkMessage.compact_metadata));
           return;
         }
-        // The only message carrying both ids, and so the only chance to learn which Subagent a
-        // later notification is about. `noteTask` ignores a task that is not one's, which is what
-        // keeps a backgrounded Bash or Monitor out of Subagent bookkeeping.
+        /*
+         * The only message carrying both ids, and so two things at once: the chance to learn which
+         * Subagent a later notification is about, and — for a call that is not a Subagent's — the
+         * signal that the CLI is running it in the background (ADR 0021).
+         *
+         * This is the whole of the Background Call detector, and it reads no tool-specific field.
+         * The launch receipt cannot serve: `spikes/background-call-messages.ts` captured a
+         * backgrounded `Bash` answering `{ backgroundTaskId }` and a `Monitor` answering
+         * `{ taskId }`, neither with the `status` `isAsyncLaunch` looks for, so reading the receipt
+         * would mean knowing every tool's own spelling.
+         */
         if (sdkMessage.subtype === "task_started") {
-          if (sdkMessage.tool_use_id) this.subagents.noteTask(sdkMessage.task_id, sdkMessage.tool_use_id);
+          const callId = sdkMessage.tool_use_id;
+          if (!callId) return;
+          // One or the other, never both, on the same predicate `settleTask` routes on — so a task
+          // id lives in exactly one map and a `task_updated` carrying nothing else cannot be
+          // routed to the wrong lifecycle.
+          if (this.subagents.describe(callId) !== undefined) this.subagents.noteTask(sdkMessage.task_id, callId);
+          else this.openBackgroundCall(sdkMessage.task_id, callId);
           return;
         }
         // What actually closes a detached Subagent. `tool_use_id` where the SDK supplies it, the
@@ -736,6 +755,11 @@ class ClaudeSession implements BackendSession {
             input: block.input,
             ...attribution(producer),
           });
+          // Every call, not the ones we recognise: this block is the only place a name is knowable,
+          // and whether the CLI backgrounds the call is read off a later `task_started` rather than
+          // guessed from that name. Recording only the names we expect to background would be the
+          // tool-name allowlist ADR 0021 refuses.
+          this.calls.called(block.id, { tool: block.name, ...attribution(producer) });
           if (block.name !== SUBAGENT_TOOL) continue;
           const brief = briefOf(block.input);
           this.subagents.spawn(block.id, brief);
@@ -861,19 +885,56 @@ class ClaudeSession implements BackendSession {
   }
 
   /**
-   * Close the Subagent a settled task belongs to, if it is one's.
+   * A tool call the CLI is running past the turn that made it gets a card of its own (ADR 0021).
    *
-   * Silent for a task that is not a Subagent's — a backgrounded Bash or Monitor settles through the
-   * same messages, and neither has a card to close.
+   * Emits and nothing else: it takes no hold, releases none, and cannot end a turn. A Background
+   * Call is not occupancy, and the turn this call belongs to ends on its own `result` exactly as it
+   * did before any of this existed.
+   */
+  private openBackgroundCall(taskId: string, callId: string): void {
+    const brief = this.calls.launch(callId);
+    // A call this never saw announced, or one already open because the CLI repeated itself. Either
+    // way there is nothing new to say, and a card named after a guess is worse than no card.
+    if (brief === undefined) return;
+    this.calls.noteTask(taskId, callId);
+    this.emit({ type: "background_call", callId, ...brief, state: "running" });
+  }
+
+  private closeBackgroundCall(callId: string, outcome: TurnEndReason): void {
+    const brief = this.calls.settled(callId);
+    if (brief === undefined) return;
+    this.emit({ type: "background_call", callId, ...brief, state: outcome });
+  }
+
+  /**
+   * Close whatever a settled task belongs to: a Subagent's card, or a Background Call's.
+   *
+   * Routed on `Subagents.describe`, the same predicate `task_started` uses, so the two cannot
+   * disagree about which lifecycle a call has. Deliberately *not* on what `Subagents.background`
+   * returns, which answers undefined both for a call that is not a Subagent's and for one that held
+   * no turn end — the second being the common case, so routing on it would drop nearly every card.
+   *
+   * The `??` chain over the two task maps is safe for the same reason: each only ever accepted its
+   * own callIds, so a task id is in one of them or neither, never both.
+   *
+   * Both closers are idempotent, which is load-bearing rather than defensive — a task settles
+   * through `task_updated` *and* `task_notification`, both in the same tick with the same outcome
+   * (`spikes/background-call-messages.ts`), and this runs for each.
+   *
+   * Silent for a task in neither: the `Agent` a `--resume` inherited, or a call whose `task_started`
+   * we never saw. That is the silence this had before Background Calls existed, not a new hole.
    */
   private settleTask(taskId: string, toolUseId: string | undefined, outcome: TurnEndReason | undefined): void {
     if (outcome === undefined) return;
-    const callId = toolUseId ?? this.subagents.callIdOf(taskId);
+    const callId = toolUseId ?? this.subagents.callIdOf(taskId) ?? this.calls.callIdOf(taskId);
     if (callId === undefined) return;
     const brief = this.subagents.describe(callId);
-    if (brief === undefined) return;
-    this.emit({ type: "subagent", subagentId: callId, ...brief, state: outcome });
-    this.closeSubagent(callId);
+    if (brief !== undefined) {
+      this.emit({ type: "subagent", subagentId: callId, ...brief, state: outcome });
+      this.closeSubagent(callId);
+      return;
+    }
+    this.closeBackgroundCall(callId, outcome);
   }
 
   /**
@@ -910,6 +971,9 @@ class ClaudeSession implements BackendSession {
     // permissions that also drops what the human refused: a no was about what was being attempted,
     // and the next turn is a different attempt.
     this.subagents.clear();
+    // Drops the calls this turn announced. Open Background Calls survive — one outlives the turn
+    // that made it, which is the whole of ADR 0021.
+    this.calls.clear();
     this.enquiries.clear();
     this.permissions.clear();
     if (!turnId) return;

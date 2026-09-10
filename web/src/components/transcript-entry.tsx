@@ -7,6 +7,8 @@ import { toolSummary } from "@client/tool-summary.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
+import { backgroundTiming } from "@/presentation/activity.ts";
+import { useNow } from "@/lib/use-now.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -44,6 +46,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return <ToolCallEntryView entry={entry} query={query} />;
     case "subagent":
       return <SubagentEntryView entry={entry} query={query} />;
+    case "background_call":
+      return <BackgroundCallEntryView entry={entry} />;
     case "enquiry":
       return <EnquiryEntryView entry={entry} query={query} />;
     case "notice":
@@ -339,6 +343,50 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
 
 /** Aborted is a stop, not a failure: only an error earns the one coloured token. */
 function subagentDot(status: Of<"subagent">["status"]): "running" | "complete" | "error" {
+  if (status === "error") return "error";
+  return status === "running" ? "running" : "complete";
+}
+
+/**
+ * One Background Call: the work the tool row above it is still doing (ADR 0021).
+ *
+ * **It reads as a continuation of that row, not as a free-standing notice**, and it has to. The row
+ * above ends `complete` the moment the call is backgrounded — which is true of the launch, and the
+ * only signal a launch *failed* — so this card is what corrects the impression that the work
+ * finished. Hence the same `pl-[2ch]` indent and card shell a Subagent gets.
+ *
+ * Never a button. A Subagent's card opens its own nested transcript; a Background Call has none, and
+ * what a reader wants next — the command, the shell id the launch handed back — is on the tool row
+ * they can already see.
+ *
+ * **Elapsed time, which a Subagent's card leaves to the Subagents Pane.** There is no second surface
+ * here, and the gap ADR 0016 recorded is precisely a call running for minutes while the Agent
+ * Session reads Idle: "running" without "for how long" is the still dot that gap was about.
+ *
+ * `now` comes from `useNow()` inside rather than a prop, because `TranscriptEntryProps` is
+ * `{ entry, query, sessionId }` by contract — a fourth prop would silently break `memo` for every
+ * row in the transcript.
+ */
+function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
+  const now = useNow();
+  const when = backgroundTiming(entry, now);
+
+  return (
+    <div className="py-0.5 pl-[2ch]">
+      <div className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground">
+        <ToolStatusDot status={backgroundDot(entry.status)} />
+        <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
+        <span className="shrink-0 font-mono text-sm text-foreground">{entry.tool}</span>
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+          {when.label} {when.at}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** The same reading `subagentDot` makes, for the same three outcomes. */
+function backgroundDot(status: Of<"background_call">["status"]): "running" | "complete" | "error" {
   if (status === "error") return "error";
   return status === "running" ? "running" : "complete";
 }

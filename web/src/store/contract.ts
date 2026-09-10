@@ -51,6 +51,14 @@ export type Chrome = {
    */
   activeSubagents: number;
   /**
+   * Background Calls running right now (ADR 0021).
+   *
+   * A count for the reason above, and a second one rather than added into `activeSubagents` because
+   * only that one has a pane behind it: a backgrounded `Bash` counted there would offer a reader a
+   * card that does not exist.
+   */
+  activeBackgroundCalls: number;
+  /**
    * The Enquiry blocking this turn, whole, or undefined.
    *
    * An object on a shallow-compared snapshot, which the note above appears to forbid — but what that

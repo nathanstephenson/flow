@@ -374,6 +374,53 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    /**
+     * The same three assertions for Background Calls (ADR 0021), and deliberately **ungated**.
+     *
+     * `capabilities.subagents` exists so a client can hide an affordance — the Subagents surface —
+     * rather than show an empty tree. A Background Call has no affordance behind it: it is a
+     * transcript row, so an adapter that emits none simply shows none, the shape `notice` already
+     * has. These therefore pass vacuously for such an adapter rather than skipping.
+     *
+     * What the first rules out is sharper than for a Subagent: the card is the *only* thing on
+     * screen claiming this work is in flight, and the Composer's strip counts the same events — so
+     * an unpaired Call leaves a session permanently reporting work that finished.
+     */
+    it("pairs every Background Call with a terminal snapshot", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const terminal = new Set(["complete", "aborted", "error"]);
+        const open = new Set<string>();
+        for (const event of events) {
+          if (event.type !== "background_call") continue;
+          if (terminal.has(event.state)) open.delete(event.callId);
+          else open.add(event.callId);
+        }
+        assert.deepEqual([...open], [], "a Background Call was left running with nothing to close it");
+      } finally {
+        await dispose();
+      }
+    });
+
+    it("gives a Background Call the id of the tool call that was backgrounded", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const calls = new Set(events.filter((event) => event.type === "tool_started").map((event) => event.callId));
+        for (const event of events) {
+          if (event.type !== "background_call") continue;
+          // What puts the card under its own tool row. A fresh id would scatter the two.
+          assert.ok(calls.has(event.callId), `background call ${event.callId} shares no id with any tool call`);
+          assert.notEqual(event.tool, "", "a client always needs something to print");
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it("gives a Subagent the id of the tool call that spawned it", async () => {
       const { session, events, dispose } = await start(target);
       try {

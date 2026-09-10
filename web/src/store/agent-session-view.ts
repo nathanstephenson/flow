@@ -199,6 +199,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     // a publish. See the note in contract.ts. Resume bookkeeping stays with `since` above.
     queueDepth: view.queue.length,
     activeSubagents: view.activeSubagents,
+    activeBackgroundCalls: view.activeBackgroundCalls,
     asking: view.asking,
     authorising: view.authorising,
     link,

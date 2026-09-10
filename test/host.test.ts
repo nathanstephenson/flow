@@ -878,6 +878,55 @@ describe("counting Subagents without taking occupancy", () => {
 });
 
 /**
+ * The same index for Background Calls (ADR 0021), and the same guarantee: a backgrounded `Bash`
+ * says work is happening without ever saying the model is busy.
+ */
+describe("counting Background Calls without taking occupancy", () => {
+  it("leaves a session with only Background Calls Idle, and counts them", async () => {
+    await host.send(sessionId, "go", "now");
+    backend.latest.backgroundCall();
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const summary = host.list().find((entry) => entry.id === sessionId);
+    assert.equal(summary?.status, "idle", "the model is idle, and steering into it must work");
+    assert.equal(summary?.activeBackgroundCalls, 1);
+    assert.equal(summary?.activeSubagents, 0, "a Background Call is not a Subagent");
+  });
+
+  it("dispatches the next message while a Background Call is still running", async () => {
+    /*
+     * The regression that matters most. If a Background Call ever took occupancy, this send would
+     * queue instead of dispatching — the human's message would sit there looking ignored until a
+     * `Bash` they launched minutes ago happened to report. `BackgroundCalls` has no counterpart to
+     * `Subagents.hold` by construction, and this is what asserts that stayed true.
+     */
+    await host.send(sessionId, "one", "now");
+    backend.latest.backgroundCall();
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await host.send(sessionId, "two", "after_turn");
+
+    assert.deepEqual(backend.latest.prompts, ["one", "two"], "the Call must not hold the queue");
+  });
+
+  it("counts several, dedupes a repeated snapshot, and drops each as it settles", async () => {
+    await host.send(sessionId, "go", "now");
+    const one = backend.latest.backgroundCall("Bash");
+    const two = backend.latest.backgroundCall("Monitor");
+    one.snapshot({ state: "running" });
+
+    assert.equal(host.list().find((entry) => entry.id === sessionId)?.activeBackgroundCalls, 2);
+
+    one.settle();
+    assert.equal(host.list().find((entry) => entry.id === sessionId)?.activeBackgroundCalls, 1);
+    two.settle("aborted");
+    assert.equal(host.list().find((entry) => entry.id === sessionId)?.activeBackgroundCalls, 0);
+  });
+});
+
+/**
  * How the rail is ordered: banded by how alive an Agent Session is, then by when it last came to
  * rest inside each band. Nothing may move a row while a turn merely streams.
  */

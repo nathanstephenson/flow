@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
 import type {
   BackendEvent,
+  BackgroundCallState,
   Capabilities,
   EffortLevel,
   PermissionDecision,
@@ -342,6 +343,60 @@ export class FakeSession implements BackendSession {
     this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description } });
     subagent.snapshot({ state: "running" });
     return subagent;
+  }
+
+  /**
+   * Test affordance: background a tool call, as a real adapter reports one (ADR 0021).
+   *
+   * All three emissions, because the shape everything downstream has to cope with is a `complete`
+   * tool row over a `running` card under one id — a fixture that skipped the receipt would test a
+   * transcript no backend produces. The input carries a `command` so `toolSummary` really produces
+   * a précis, which is what makes "the tool row is the only place the command lives" testable rather
+   * than vacuous.
+   *
+   * It emits **no** `subagent` event, which is what makes the counts-do-not-cross assertions real.
+   *
+   * `completeTurn` deliberately does not settle it: an open Background Call outliving its turn is
+   * the whole of ADR 0021, and one left open at shutdown is the torn fixture.
+   */
+  backgroundCall(tool = "Bash", input: unknown = { command: "npm test -- --watch" }): FakeBackgroundCall {
+    const callId = randomUUID();
+    const call = new FakeBackgroundCall(callId, tool, this.emit);
+    this.emit({ type: "tool_started", callId, name: tool, input });
+    // The receipt returns at once, which is why the row above the card reads `complete`.
+    this.emit({ type: "tool_ended", callId, result: { backgroundTaskId: callId }, isError: false });
+    call.snapshot({ state: "running" });
+    return call;
+  }
+}
+
+/** One Background Call under test. */
+export class FakeBackgroundCall {
+  private finished = false;
+
+  // Plain fields rather than constructor parameter properties: `node --experimental-strip-types`
+  // refuses those, and this module is loaded by tests that run under it.
+  readonly callId: string;
+  private readonly tool: string;
+  private readonly emit: (event: BackendEvent) => void;
+
+  constructor(callId: string, tool: string, emit: (event: BackendEvent) => void) {
+    this.callId = callId;
+    this.tool = tool;
+    this.emit = emit;
+  }
+
+  settle(reason: "complete" | "aborted" | "error" = "complete"): void {
+    if (this.finished) return;
+    this.finished = true;
+    // Only the snapshot. The receipt already returned at launch, and a second `tool_ended` is a
+    // shape no adapter produces — the same rule `FakeSubagent.finish` states.
+    this.snapshot({ state: reason });
+  }
+
+  /** @internal — used by FakeSession to emit the opening snapshot. */
+  snapshot(state: BackgroundCallState): void {
+    this.emit({ type: "background_call", callId: this.callId, tool: this.tool, ...state });
   }
 }
 

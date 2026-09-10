@@ -7,7 +7,8 @@ import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { scopeKindLabel } from "@client/scope-kind.ts";
 import { projectName } from "@client/project-name.ts";
-import { canSettle } from "@client/status.ts";
+import { canSettle, working } from "@client/status.ts";
+import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
 import { StatusDot } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -304,7 +305,9 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           cursored && "outline -outline-offset-1 outline-sidebar-ring",
         )}
       >
-        <StatusDot status={status} />
+        {/* Spread, so a third kind of background work never has to edit this line. `status` comes
+            last deliberately: the live one beats the polled one the summary carries. */}
+        <StatusDot status={status} working={working({ ...summary, status })} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm">{sessionLabel(summary)}</span>
           <ScopeLine summary={summary} />
@@ -319,14 +322,14 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
            * With the branch on the line above, the two together are the whole of where an Agent
            * Session is working.
            *
-           * The dot and the mark are both `aria-hidden`, so the two words they replaced survive
-           * here for anyone not looking at colour or shape.
+           * The dot and the Backend glyph are both `aria-hidden`, so the words they replaced —
+           * including that Subagents are working — survive here for anyone not looking at colour
+           * or shape.
            */}
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="sr-only">{status}</span>
+            <span className="sr-only">{activityStatusText({ ...summary, status })}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
-            <SubagentMark count={summary.activeSubagents} />
             <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
             {/*
              * `restingAt`, which is what the Session Host orders this list by. Showing `updatedAt`
@@ -391,28 +394,6 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
  * Mono, because a branch name is an identifier and this is the same reading as the Project name in
  * the pane header.
  */
-/**
- * That Subagents are working, whatever the status dot says.
- *
- * Its own mark rather than a hue on the status dot, because a backgrounded Subagent is not
- * occupancy (ADR 0016): the model really is idle, the Steering Queue really will dispatch, and
- * colouring the session Running would be a lie that the composer and the branch picker would then
- * have to act on. What is true is narrower — work is happening — and this is the whole of it.
- *
- * The count only refreshes on the rail's two-second poll for rows that are not focused, so a
- * Subagent that starts and finishes inside one poll never draws a mark. That is a miss, not a
- * flicker, and it is the cost of the rail not holding an event stream per Agent Session.
- */
-function SubagentMark({ count }: { count: number }) {
-  if (count <= 0) return null;
-  return (
-    <>
-      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-status-active" />
-      <span className="sr-only">{count} subagent{count === 1 ? "" : "s"} working</span>
-    </>
-  );
-}
-
 function ScopeLine({ summary }: { summary: SessionSummary }) {
   if (!summary.branch) return null;
   const Glyph = summary.worktree ? FolderGit2 : GitBranch;

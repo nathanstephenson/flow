@@ -57,6 +57,15 @@ export type SessionSummary = {
    */
   activeSubagents: number;
   /**
+   * How many Background Calls are running, whatever the status says (ADR 0021).
+   *
+   * Here for the reason `activeSubagents` is, and a second number rather than added into it because
+   * the two are shown in different places: `activeSubagents` drives the Subagents surface, and a
+   * backgrounded `Bash` counted there would promise a card in a pane that has none. What they share
+   * is `working()`, which is the one question that does not care which of them is busy.
+   */
+  activeBackgroundCalls: number;
+  /**
    * When this Agent Session was Settled, and so what the retention window is measured from
    * (ADR 0006). Absent unless `status` is `settled`.
    *

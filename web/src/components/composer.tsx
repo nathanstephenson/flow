@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import { refusalMessage, refusalsIn, sortPastedItems } from "@/presentation/attachments.ts";
-import { composerPlaceholder, sendLabel, subagentStripLabel } from "@/presentation/composer-hint.ts";
+import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
+import { activityLabel, stripOpensSubagents } from "@/presentation/activity.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
@@ -617,7 +618,7 @@ export function Composer({
           * clear of itself as it appears and goes away. Outside it, the last line of the transcript
           * would sit behind it.
           */}
-        <SubagentStrip chrome={chrome} onShow={onShowSubagents} />
+        <ActivityStrip chrome={chrome} onShow={onShowSubagents} />
 
         {/*
           * Above the Attachments and the input both, so the panel grows upward into the transcript
@@ -772,20 +773,31 @@ function base64Of(file: File): Promise<string> {
  * the panel that comes and goes, and a reserved empty row would make the Composer taller for no
  * reason for the whole of a session that never delegates.
  */
-function SubagentStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void }) {
-  const label = subagentStripLabel(chrome);
+function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void }) {
+  const label = activityLabel(chrome);
   if (label === undefined) return null;
+
+  const shell = "flex w-full items-center gap-2 rounded-t-xl border-b border-border/40 px-3 py-1.5 text-xs";
+  const dot = <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />;
+
+  // Inert where there is nowhere to send a reader — a Background Call has no pane of its own — the
+  // same reading `SubagentEntryView` makes of the same problem.
+  if (!stripOpensSubagents(chrome)) {
+    return (
+      <div className={cn(shell, "text-muted-foreground")}>
+        {dot}
+        {label}
+      </div>
+    );
+  }
 
   return (
     <button
       type="button"
       onClick={onShow}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-t-xl border-b border-border/40 px-3 py-1.5",
-        "text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
-      )}
+      className={cn(shell, "text-muted-foreground hover:bg-accent hover:text-foreground")}
     >
-      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />
+      {dot}
       {label}
       <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0" />
     </button>

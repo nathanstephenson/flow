@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { canRevive, canSettle, deriveStatus, occupied, railBand } from "../src/client/status.ts";
+import { canRevive, canSettle, deriveStatus, occupied, railBand, working } from "../src/client/status.ts";
 import type { SessionLifecycle, SessionStatus } from "../src/protocol/commands.ts";
 
 /**
@@ -55,7 +55,8 @@ describe("what a status means", () => {
   });
 
   describe("banding the rail", () => {
-    const band = (status: SessionStatus, activeSubagents = 0) => railBand({ status, activeSubagents });
+    const band = (status: SessionStatus, activeSubagents = 0, activeBackgroundCalls = 0) =>
+      railBand({ status, activeSubagents, activeBackgroundCalls });
 
     it("orders the bands most alive first", () => {
       assert.deepEqual(
@@ -81,6 +82,45 @@ describe("what a status means", () => {
       // and lifting a Dormant Agent Session above a working one would be a plain lie.
       assert.equal(band("dormant", 3), band("dormant", 0));
       assert.equal(band("settled", 3), band("settled", 0));
+    });
+
+    it("counts a Background Call as working too", () => {
+      // ADR 0021 takes the same trade ADR 0016 took: the model is idle, so the status stays `idle`
+      // and only the ordering treats this Agent Session as live.
+      assert.equal(band("idle", 0, 2), band("running"));
+      assert.notEqual(band("idle", 0, 2), band("idle", 0, 0));
+    });
+
+    it("does not let a Background Call lift an Agent Session that is not live", () => {
+      assert.equal(band("dormant", 0, 3), band("dormant", 0, 0));
+      assert.equal(band("settled", 0, 3), band("settled", 0, 0));
+    });
+  });
+
+  describe("working", () => {
+    it("is an Idle Agent Session with a Subagent still going", () => {
+      assert.equal(working({ status: "idle", activeSubagents: 1, activeBackgroundCalls: 0 }), true);
+      assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 0 }), false);
+    });
+
+    it("is not a status a running or non-live Agent Session can wear", () => {
+      // Running already says it, and a count on anything not live is a stale index.
+      assert.equal(working({ status: "running", activeSubagents: 1, activeBackgroundCalls: 0 }), false);
+      assert.equal(working({ status: "dormant", activeSubagents: 1, activeBackgroundCalls: 0 }), false);
+      assert.equal(working({ status: "settled", activeSubagents: 1, activeBackgroundCalls: 0 }), false);
+    });
+
+    it("is true for either kind of background work, and for both at once", () => {
+      // The one question that does not care which of them is busy, which is why the two counts are
+      // summed here and nowhere else.
+      assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 1 }), true);
+      assert.equal(working({ status: "idle", activeSubagents: 1, activeBackgroundCalls: 1 }), true);
+      assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 0 }), false);
+    });
+
+    it("is not a status a Background Call can give a non-live Agent Session", () => {
+      assert.equal(working({ status: "running", activeSubagents: 0, activeBackgroundCalls: 1 }), false);
+      assert.equal(working({ status: "dormant", activeSubagents: 0, activeBackgroundCalls: 1 }), false);
     });
   });
 });
