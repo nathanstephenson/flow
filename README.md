@@ -198,12 +198,12 @@ sources it was built from. Nothing typechecks the embedded bytes any more either
 
 The UI is master–detail: a sidebar of Agent Sessions and exactly one of them focused in a pane, where
 M4 opened a pane per Agent Session. One at a time is the design rather than a limitation of it — the
-rail carries the state of the others, and a dot, a running state, a queue depth and a relative time
-per row is enough to monitor any number of Agent Sessions without reading them. Ten modules are
+rail carries the state of the others, and a dot, a Subagent count, a queue depth and the time each
+Agent Session last became your turn is enough to monitor any number of them without reading them. Ten modules are
 shared with the terminal client rather than the three the old arrangement allowed, so the model and
 Effort pickers, the status predicates, transcript search and the relative clock are now one
 implementation each instead of two that had already drifted. Styling is stock shadcn/ui on Base UI
-primitives, with no bespoke palette to learn: the five states an Agent Session can be in are mapped
+primitives, with no bespoke palette to learn: the six states an Agent Session can be in are mapped
 onto shadcn's own chart tokens, and monospace is kept only where character alignment carries meaning
 — transcript text, tool output, diffs and Scope paths.
 

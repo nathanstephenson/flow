@@ -291,4 +291,67 @@ describe("durability and revive", () => {
     assert.equal(summary?.status, "dormant");
     assert.equal(summary?.title, "a title from the first message");
   });
+
+  /**
+   * The lifecycle/activity split across a restart. Lifecycle is the half worth writing down, so
+   * these check it survives — and that the derived half does not pretend to.
+   */
+  it("closes a Permission Prompt torn by a restart and loads with nothing open", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.send(id, "go", "now");
+    first.backend.latest.askPermission("Bash");
+    assert.equal(first.host.statusOf(id), "awaiting", "precondition: blocked on a person");
+
+    // No shutdown: the daemon died with the prompt open, which is the path `closeOpenPermissions`
+    // exists for and the one no adapter can clean up after itself.
+    const second = await freshHost();
+
+    const aborted = second.host
+      .logFor(id)
+      .since(0)
+      .map((entry) => entry.event)
+      .filter((event) => event.type === "permission" && event.state === "aborted");
+    assert.equal(aborted.length, 1, "the prompt must be closed exactly once");
+    assert.equal(second.host.statusOf(id), "dormant", "a restart annihilates the activity, not the Lifecycle");
+    assert.equal(second.host.list().find((summary) => summary.id === id)?.activeSubagents, 0);
+  });
+
+  it("loads an Agent Session written before the lifecycle/activity split", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.settle(id);
+    await first.host.shutdown();
+
+    // Rewrite the meta as a pre-split daemon left it: `status` only, and none of the three fields
+    // the split added.
+    const meta = store.readMeta(id);
+    assert.ok(meta);
+    const { lifecycle: _l, yourTurnAt: _y, settledAt: _s, ...legacy } = meta;
+    store.writeMeta({ ...legacy, status: "settled" });
+
+    const second = await freshHost();
+    assert.equal(second.host.statusOf(id), "settled", "the deprecated mirror is the fallback");
+
+    // And the meta is rewritten in the new shape, so the migration completes on one boot.
+    const migrated = store.readMeta(id);
+    assert.equal(migrated?.lifecycle, "settled");
+    assert.equal(migrated?.settledAt, legacy.updatedAt, "the old updatedAt is what the clock ran from");
+    assert.ok(migrated?.yourTurnAt);
+  });
+
+  it("does not restart the retention clock when a Settled Agent Session is touched", async () => {
+    const first = await freshHost();
+    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    await first.host.settle(id);
+    const settledAt = store.readMeta(id)?.settledAt;
+    assert.ok(settledAt);
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await first.host.setModel(id, "fake-2");
+
+    const after = store.readMeta(id);
+    assert.notEqual(after?.updatedAt, settledAt, "the command did touch the Agent Session");
+    assert.equal(after?.settledAt, settledAt, "but it must not grant it another retention window");
+  });
 });

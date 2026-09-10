@@ -21,7 +21,9 @@ function summary(id: string, status: SessionStatus, agoHours: number): SessionSu
     backend: "fake",
     status,
     title: id,
-    updatedAt: new Date(NOW - agoHours * HOUR).toISOString(),
+    yourTurnAt: new Date(NOW - agoHours * HOUR).toISOString(),
+    activeSubagents: 0,
+    settledAt: new Date(NOW - agoHours * HOUR).toISOString(),
     lastSeq: 0,
   };
 }
@@ -71,9 +73,16 @@ describe("what a retention window would reap", () => {
   });
 
   it("leaves an Agent Session whose age cannot be read", () => {
-    const broken: SessionSummary = { ...summary("broken", "settled", 0), updatedAt: "not a date" };
+    const broken: SessionSummary = { ...summary("broken", "settled", 0), settledAt: "not a date" };
     // Not knowing something's age is not a reason to delete it — the same safe failure reap() takes.
     assert.deepEqual(reapableAt([broken], "1s", NOW), []);
+  });
+
+  it("leaves an Agent Session with no Settle recorded at all", () => {
+    // A meta written before `settledAt` existed and never re-saved, or a summary that lost it in
+    // transit: absent is as unknowable as unparseable, and takes the same safe failure.
+    const { settledAt: _dropped, ...rest } = summary("nostamp", "settled", 48);
+    assert.deepEqual(reapableAt([rest], "1s", NOW), []);
   });
 
   it("counts one exactly at the boundary, as the sweep does", () => {

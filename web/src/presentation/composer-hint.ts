@@ -1,4 +1,4 @@
-import { canRevive } from "../../../src/client/status.ts";
+import { canRevive, occupied } from "../../../src/client/status.ts";
 import type { Chrome } from "../store/contract.ts";
 
 /**
@@ -85,7 +85,7 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
       : "Compacting the Conversation Context… — Enter queues your message until it is done";
   }
   if (canRevive(chrome.status)) return "Message… — this Revives the Agent Session";
-  if (chrome.status === "running") {
+  if (occupied(chrome.status)) {
     return chrome.queueDepth > 0
       ? `Message… — Enter queues it behind ${chrome.queueDepth}`
       : "Message… — Enter queues it after the current turn";

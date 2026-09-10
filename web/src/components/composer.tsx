@@ -10,6 +10,7 @@ import { ComposerInput, type ComposerInputHandle } from "@/components/composer-i
 import { ComposerEnquiry } from "@/components/composer-enquiry.tsx";
 import { ComposerPermission } from "@/components/composer-permission.tsx";
 import { PERMISSION_CHOICES } from "@client/permission.ts";
+import { occupied } from "@client/status.ts";
 import { ComposerMenu } from "@/components/composer-menu.tsx";
 import {
   answersOf,
@@ -116,7 +117,9 @@ export function Composer({
   const blocked = asking !== undefined || authorising !== undefined;
 
   const ended = chrome.status === "ended";
-  const running = chrome.status === "running";
+  // `occupied`, not `=== "running"`: a turn blocked on a Permission Prompt is Awaiting, and the
+  // button there must stay Abort rather than flipping back to Send on a turn still open.
+  const running = occupied(chrome.status);
   /*
    * An unknown model counts as one that cannot, which is the safe direction: this is the *positive*
    * check the Session Host cannot make — it has no way to name the model in force when nobody

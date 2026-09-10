@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { canSettle } from "@client/status.ts";
+import { canSettle, occupied } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
@@ -182,7 +182,8 @@ export function AppShell() {
       "blur-or-abort": () => {
         // Escape with nothing typing means abort — and aborting discards the Steering Queue, so it
         // says what it dropped rather than leaving the reader to notice.
-        if (focusedId === undefined || chrome === undefined || chrome.status !== "running") return;
+        // Awaiting counts: a turn stuck on a prompt is exactly when Escape has to still abort.
+        if (focusedId === undefined || chrome === undefined || !occupied(chrome.status)) return;
         const dropped = chrome.queueDepth;
         void run({ type: "abort", sessionId: focusedId }).then(() => {
           toast.info(

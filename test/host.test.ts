@@ -757,3 +757,204 @@ describe("a Permission Prompt the model raised", () => {
     assert.equal(backend.sessions.length, sessions, "no Backend Session was started to decide it");
   });
 });
+
+/**
+ * The lifecycle/activity split, from the outside: what `statusOf` and `list()` report, and when the
+ * rail's sort key moves. Its own fixture, because these turn on one Agent Session's whole history.
+ */
+describe("what an Agent Session is doing", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+
+/**
+ * Awaiting: the derived status for a turn held open on a person rather than on a model.
+ *
+ * The Lifecycle is stored and the activity is worked out, so these assert the derivation rather
+ * than a field anyone assigned — and in particular that `turnInFlight` is untouched by it, since
+ * that is what the Steering Queue reads.
+ */
+describe("awaiting a person", () => {
+  it("reports Awaiting while a Permission Prompt is open, without freeing the Steering Queue", async () => {
+    await host.send(sessionId, "go", "now");
+    backend.latest.askPermission("Bash");
+
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    // The turn is still in flight, so a second send queues rather than jumping into it. This is
+    // the assertion that the split did not disturb ADR 0002.
+    await host.send(sessionId, "second", "after_turn");
+    assert.deepEqual(backend.latest.prompts, ["go"], "the queued message must not reach the backend");
+  });
+
+  it("reports Awaiting while an Enquiry is open, and Running again once it is answered", async () => {
+    await host.send(sessionId, "go", "now");
+    const askId = backend.latest.ask([
+      { header: "Pick", question: "Which?", multiSelect: false, options: [{ label: "a" }, { label: "b" }] },
+    ]);
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    await host.answerEnquiry(sessionId, askId, [["a"]]);
+    assert.equal(host.statusOf(sessionId), "running", "the model has the turn back");
+
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(host.statusOf(sessionId), "idle");
+  });
+
+  it("stays Awaiting until the last of several Permission Prompts is decided", async () => {
+    await host.send(sessionId, "go", "now");
+    const first = backend.latest.askPermission("Bash");
+    const second = backend.latest.askPermission("Write");
+
+    await host.answerPermission(sessionId, first, "allow");
+    assert.equal(host.statusOf(sessionId), "awaiting", "one prompt is still open");
+
+    await host.answerPermission(sessionId, second, "allow");
+    assert.equal(host.statusOf(sessionId), "running");
+  });
+
+  it("returns to Idle when a turn ends with a prompt the adapter never closed", async () => {
+    await host.send(sessionId, "go", "now");
+    backend.latest.askPermission("Bash");
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    // No terminal snapshot for the prompt — only the turn ending. A torn turn that left the index
+    // set would pin this Agent Session at Awaiting for good.
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(host.statusOf(sessionId), "idle");
+  });
+});
+
+/**
+ * ADR 0016: a backgrounded Subagent is not occupancy. It travels as a count so a rail can say
+ * work is happening, and it must never make the Agent Session look busy — the Steering Queue
+ * would then refuse to dispatch into a model that is sitting idle.
+ */
+describe("counting Subagents without taking occupancy", () => {
+  it("counts running and waiting Subagents, and dedupes a repeated snapshot", async () => {
+    await host.send(sessionId, "go", "now");
+    const explore = backend.latest.beginSubagent("Explore");
+    const plan = backend.latest.beginSubagent("Plan");
+    explore.resume();
+    explore.resume();
+
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.activeSubagents, 2);
+
+    plan.wait("provider");
+    assert.equal(
+      host.list().find((summary) => summary.id === sessionId)?.activeSubagents,
+      2,
+      "waiting is still working",
+    );
+
+    explore.finish();
+    plan.finish();
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.activeSubagents, 0);
+  });
+
+  it("leaves a session with only background Subagents Idle, and counts them", async () => {
+    await host.send(sessionId, "go", "now");
+    const explore = backend.latest.beginSubagent("Explore");
+    explore.launch();
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const summary = host.list().find((entry) => entry.id === sessionId);
+    // The model really is idle and steering really does work, so the status says so (ADR 0016).
+    // What is true — that work is happening — is the count, and nothing else.
+    assert.equal(summary?.status, "idle");
+    assert.equal(summary?.activeSubagents, 1);
+  });
+});
+
+/**
+ * The rail's sort key. It moves when an Agent Session becomes its owner's turn and at no other
+ * time, which is what stops a streaming session reordering the list under a reader.
+ */
+describe("when an Agent Session became your turn", () => {
+  const turnAt = (id: string) => host.list().find((summary) => summary.id === id)?.yourTurnAt;
+
+  it("does not move while a turn streams, though updatedAt does", async () => {
+    const atRest = turnAt(sessionId);
+    await host.send(sessionId, "go", "now");
+    for (let index = 0; index < 50; index += 1) backend.latest.say(`chunk ${index}`, false);
+
+    assert.equal(turnAt(sessionId), atRest, "a streaming turn must not reorder the rail");
+  });
+
+  it("moves when the turn ends, and again when a prompt wants a decision", async () => {
+    // The stamp is an ISO string, so a whole turn inside one millisecond writes the value that was
+    // already there and this could not tell a stamp from a no-op. Each gap buys a distinguishable
+    // stamp; nothing in the assertions depends on how long they are.
+    const gap = () => new Promise((resolve) => setTimeout(resolve, 2));
+
+    const atRest = turnAt(sessionId);
+    await gap();
+    await host.send(sessionId, "go", "now");
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const afterTurn = turnAt(sessionId);
+    assert.ok(afterTurn !== undefined && atRest !== undefined && afterTurn > atRest);
+    assert.notEqual(afterTurn, atRest, "going Idle is becoming your turn to type");
+
+    await gap();
+    await host.send(sessionId, "again", "now");
+    backend.latest.askPermission("Bash");
+    // Awaiting is your turn too — to decide rather than to type — so it surfaces immediately.
+    assert.notEqual(turnAt(sessionId), afterTurn);
+  });
+
+  it("orders the rail by it, so a working Agent Session holds its place", async () => {
+    // `yourTurnAt` is an ISO string, so two stamps inside one millisecond tie and the sort falls
+    // back to insertion order. Real work is never that close together; this test is.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const first = backend.sessions.at(-2);
+    assert.ok(first);
+
+    // `other` was created last, so it is your turn most recently and sorts first.
+    assert.deepEqual(host.list().map((summary) => summary.id), [other, sessionId]);
+
+    await host.send(sessionId, "long turn", "now");
+    for (let index = 0; index < 20; index += 1) first.say(`chunk ${index}`, false);
+    // `yourTurnAt` is an ISO string, so two stamps inside one millisecond tie and the sort keeps
+    // insertion order. A real turn cannot be that short; this one is.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.deepEqual(
+      host.list().map((summary) => summary.id),
+      [other, sessionId],
+      "a turn in flight must not lift a row above one that is resting",
+    );
+
+    first.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      host.list().map((summary) => summary.id),
+      [sessionId, other],
+      "and it rises the moment it is your turn again",
+    );
+  });
+});
+
+it("refuses a branch switch while a Permission Prompt holds the turn", async () => {
+  // The regression this guards: `switchBranch` used to read `status === "running"`, which stops
+  // being true the moment a prompt makes the derived status Awaiting — so git would have moved
+  // the working tree out from under a live tool call.
+  await host.send(sessionId, "go", "now");
+  backend.latest.askPermission("Bash");
+  assert.equal(host.statusOf(sessionId), "awaiting");
+
+  await assert.rejects(() => host.switchBranch(sessionId, "other"), /abort the turn/);
+});
+});

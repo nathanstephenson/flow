@@ -8,7 +8,14 @@ import {
   MAX_ATTACHMENT_BASE64_BYTES,
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
-import type { Command, SendWhen, SessionStatus, SessionSummary } from "../protocol/commands.ts";
+import { deriveStatus } from "../client/status.ts";
+import type {
+  Command,
+  SendWhen,
+  SessionLifecycle,
+  SessionStatus,
+  SessionSummary,
+} from "../protocol/commands.ts";
 import type {
   AgentEvent,
   BackendEvent,
@@ -61,13 +68,48 @@ type SessionRecord = {
    * messages across two Backend Sessions.
    */
   reviving: Promise<void> | undefined;
-  status: SessionStatus;
+  /**
+   * The half of the old `status` worth writing down. The other half — running, awaiting, idle — is
+   * worked out by `activityOf` from the two fields below, because a restart destroys all three of
+   * them anyway (ADR 0003) and a stored copy could only be wrong.
+   */
+  lifecycle: SessionLifecycle;
   /**
    * Set by the host the moment it dispatches, not when the backend reports `turn_started`. A
    * backend may take a tick to acknowledge, and in that window a second `after_turn` send would
    * otherwise see an idle session and jump the queue.
+   *
+   * This, not the derived status, is what every "refuse it mid-turn" guard must read. An Agent
+   * Session blocked on a Permission Prompt derives `awaiting` rather than `running` while its turn
+   * is very much still open.
    */
   turnInFlight: boolean;
+  /**
+   * The Permission Prompts, Enquiries and Subagents the transcript has open, indexed by id so the
+   * rail can be answered without reading it.
+   *
+   * **An index, not the record of truth.** `openPermissions`, `openEnquiries` and `openSubagents`
+   * still scan the transcript wherever a terminal snapshot has to be written, and these three are
+   * kept alongside only because `list()` runs for every Agent Session on a two-second poll and a
+   * scan there is the whole transcript, per session, per poll. The asymmetry is deliberate: if the
+   * index drifts, a dot is wrong until the next event; if the index were believed by the code that
+   * closes torn prompts, a drift would leave a dangling `asked` on disk that replays into a
+   * composer nobody can unlock.
+   *
+   * Sets of ids rather than counters because snapshots repeat — a Subagent reports `running` many
+   * times, and counting arrivals rather than transitions would never come back down.
+   */
+  openPermissionIds: Set<string>;
+  openEnquiryIds: Set<string>;
+  /** Never affects occupancy: a backgrounded Subagent holds nothing (ADR 0016). */
+  openSubagentIds: Set<string>;
+  /**
+   * When this Agent Session last became its owner's turn — what the rail sorts by and prints. See
+   * `SessionSummary.yourTurnAt` for why it is not `updatedAt`.
+   */
+  yourTurnAt: string;
+  /** Set while Settled. What ADR 0006's retention window is measured from. */
+  settledAt: string | undefined;
   /**
    * Events an adapter emits while its Backend Session is still being created, held back so the
    * transcript opens with session_started (or revived) rather than with whatever the adapter
@@ -217,7 +259,19 @@ export class SessionHost {
   }
 
   statusOf(sessionId: string): SessionStatus {
-    return this.record(sessionId).status;
+    return this.activityOf(this.record(sessionId));
+  }
+
+  /**
+   * Three `Set.size` reads and a comparison, because this runs for every Agent Session on every
+   * `GET /api/sessions` — the same budget `branch` is held on the record to stay inside.
+   */
+  private activityOf(record: SessionRecord): SessionStatus {
+    return deriveStatus({
+      lifecycle: record.lifecycle,
+      turnInFlight: record.turnInFlight,
+      awaiting: record.openPermissionIds.size > 0 || record.openEnquiryIds.size > 0,
+    });
   }
 
   list(): SessionSummary[] {
@@ -226,9 +280,11 @@ export class SessionHost {
         id: record.id,
         scope: record.scope,
         backend: record.backendName,
-        status: record.status,
+        status: this.activityOf(record),
         title: record.title,
-        updatedAt: record.updatedAt,
+        yourTurnAt: record.yourTurnAt,
+        activeSubagents: record.openSubagentIds.size,
+        ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
         lastSeq: record.log.lastSeq,
         ...(record.capabilities ? { capabilities: record.capabilities } : {}),
         ...(record.branch ? { branch: record.branch } : {}),
@@ -236,9 +292,17 @@ export class SessionHost {
       }))
       // Settled Agent Sessions sink to the bottom: they are the ones their owner is done with, and
       // they would otherwise sort to the top, since settling is itself the most recent activity.
+      //
+      // Within that group the key is when they were filed away, not `yourTurnAt` — which for a
+      // Settled Agent Session is whenever it happened to go idle beforehand, and so would order
+      // them by something their owner never did.
       .sort((left, right) => {
         const settled = Number(left.status === "settled") - Number(right.status === "settled");
-        return settled !== 0 ? settled : right.updatedAt.localeCompare(left.updatedAt);
+        if (settled !== 0) return settled;
+        if (left.status === "settled") {
+          return (right.settledAt ?? right.yourTurnAt).localeCompare(left.settledAt ?? left.yourTurnAt);
+        }
+        return right.yourTurnAt.localeCompare(left.yourTurnAt);
       });
   }
 
@@ -260,8 +324,14 @@ export class SessionHost {
         log: this.newLog(meta.id, entries),
         session: undefined,
         reviving: undefined,
-        status: meta.status === "ended" || meta.status === "settled" ? meta.status : "dormant",
+        lifecycle: lifecycleFrom(meta),
         turnInFlight: false,
+        openPermissionIds: new Set(openPermissions(entries).map((open) => open.callId)),
+        openEnquiryIds: new Set(openEnquiries(entries).map((open) => open.askId)),
+        openSubagentIds: new Set(openSubagents(entries).map((open) => open.subagentId)),
+        // A meta written before the split has neither, and `updatedAt` is what both used to be.
+        yourTurnAt: meta.yourTurnAt ?? meta.updatedAt,
+        settledAt: meta.settledAt ?? (lifecycleFrom(meta) === "settled" ? meta.updatedAt : undefined),
         buffered: undefined,
         queue: [],
         title: meta.title,
@@ -281,10 +351,12 @@ export class SessionHost {
         updatedAt: meta.updatedAt,
       };
       this.sessions.set(id, record);
+      // Empties all three sets seeded above: a torn turn's prompts and Subagents are closed here,
+      // and nothing can be open on an Agent Session with no Backend Session attached.
       this.closeTornTurn(record, entries);
       // Dormancy has to be visible to a client reducing the transcript, or a session with nothing
       // running still looks ready to type at. A clean shutdown already recorded it.
-      if (record.status === "dormant" && lastEventType(record.log.since(0)) !== "session_dormant") {
+      if (record.lifecycle === "dormant" && lastEventType(record.log.since(0)) !== "session_dormant") {
         record.log.append({ type: "session_dormant", reason: "host restarted" });
       }
       this.persist(record);
@@ -316,8 +388,15 @@ export class SessionHost {
       log: this.newLog(id),
       session: undefined,
       reviving: undefined,
-      status: "idle",
+      lifecycle: "live",
       turnInFlight: false,
+      openPermissionIds: new Set(),
+      openEnquiryIds: new Set(),
+      openSubagentIds: new Set(),
+      // A brand new Agent Session is its owner's turn from the moment it exists, which is what puts
+      // it at the top of the rail.
+      yourTurnAt: now,
+      settledAt: undefined,
       buffered: undefined,
       queue: [],
       title: scope,
@@ -380,7 +459,7 @@ export class SessionHost {
   async revive(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
     if (record.session) return;
-    if (record.status === "ended") throw new Error(`Session ${sessionId} has ended`);
+    if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.reviving) return await record.reviving;
 
     const reviving = this.reviveOnce(record);
@@ -396,8 +475,17 @@ export class SessionHost {
   private async reviveOnce(record: SessionRecord): Promise<void> {
     const fromSeq = record.log.lastSeq;
     record.buffered = [];
+    // A backend that died without saying so can have left a prompt open with no path having run.
+    // Self-deduplicating, so on every ordinary Revive this appends nothing.
+    this.closeOpenEnquiries(record, record.log.since(0));
+    this.closeOpenPermissions(record, record.log.since(0));
+    this.closeOpenSubagents(record, record.log.since(0));
     await this.startBackendSession(record);
-    record.status = "idle";
+    record.lifecycle = "live";
+    // Un-settled, so the retention window starts again from the next Settle rather than from the
+    // one this Revive just undid.
+    record.settledAt = undefined;
+    record.yourTurnAt = new Date().toISOString();
     record.log.append({ type: "revived", fromSeq });
     this.flushBuffered(record);
     // A Dormant Agent Session may have sat for a week while its Scope was moved by hand.
@@ -546,7 +634,7 @@ export class SessionHost {
     const session = record.session;
     if (!session) {
       throw new CommandRefused(
-        `Agent Session ${sessionId} is ${record.status}; the question it was asked can no longer be answered`,
+        `Agent Session ${sessionId} is ${this.activityOf(record)}; the question it was asked can no longer be answered`,
       );
     }
     // The flag, never the method — the rule `compact` sets, so an adapter cannot be half-capable.
@@ -593,7 +681,7 @@ export class SessionHost {
     const session = record.session;
     if (!session) {
       throw new CommandRefused(
-        `Agent Session ${sessionId} is ${record.status}; what it was waiting to be allowed can no longer be authorised`,
+        `Agent Session ${sessionId} is ${this.activityOf(record)}; what it was waiting to be allowed can no longer be authorised`,
       );
     }
     // The flag, never the method — the rule `compact` sets, so an adapter cannot be half-capable.
@@ -640,7 +728,7 @@ export class SessionHost {
     const record = this.record(sessionId);
     // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
     // something it should be told plainly.
-    if (record.status === "ended") {
+    if (record.lifecycle === "ended") {
       throw new CommandRefused(`Agent Session ${sessionId} has Ended; it has no Conversation Context`);
     }
     if (!record.session) await this.revive(sessionId);
@@ -662,7 +750,6 @@ export class SessionHost {
     // occupies a session too: the host's own flag is what `send` consults, and it must be true
     // before this returns or the very next request races it.
     record.turnInFlight = true;
-    record.status = "running";
     await session.compact(instructions);
     this.touch(record);
   }
@@ -701,11 +788,16 @@ export class SessionHost {
    *
    * The refusal lives here rather than in the request handler because `execute` is not the only
    * door — the one-shot CLI and the tests call this directly — and because only the host holds
-   * `status` without a gap between reading it and acting on it.
+   * `turnInFlight` without a gap between reading it and acting on it.
+   *
+   * Reads `turnInFlight` rather than the derived status, and the difference is a working tree. An
+   * Agent Session blocked on a Permission Prompt derives `awaiting`, not `running`, while its turn
+   * is still open around a tool call — so a status comparison here would quietly stop refusing and
+   * move the branch under it.
    */
   async switchBranch(sessionId: string, branch: string): Promise<Branch> {
     const record = this.record(sessionId);
-    if (record.status === "running") {
+    if (record.turnInFlight) {
       throw new CommandRefused(
         `Agent Session ${sessionId} is running; abort the turn or wait for it to end before switching branch`,
       );
@@ -778,7 +870,8 @@ export class SessionHost {
     if (!record) return;
     const session = record.session;
     record.session = undefined;
-    record.status = "ended";
+    record.lifecycle = "ended";
+    record.turnInFlight = false;
     record.queue.length = 0;
     await session?.dispose();
     record.log.append({ type: "session_ended", reason });
@@ -796,12 +889,15 @@ export class SessionHost {
    */
   async settle(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
-    if (record.status === "ended") throw new Error(`Session ${sessionId} has ended`);
-    if (record.status === "settled") return;
+    if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
+    if (record.lifecycle === "settled") return;
 
     const session = record.session;
     record.session = undefined;
-    record.status = "settled";
+    record.lifecycle = "settled";
+    // The retention window runs from here, not from the last thing that happened: settling
+    // something untouched for a week still grants it a full window (ADR 0006).
+    record.settledAt = new Date().toISOString();
     record.queue.length = 0;
     record.turnInFlight = false;
     await session?.dispose();
@@ -833,8 +929,8 @@ export class SessionHost {
 
     const reaped: string[] = [];
     for (const record of [...this.sessions.values()]) {
-      if (record.status !== "settled") continue;
-      const settledAt = Date.parse(record.updatedAt);
+      if (record.lifecycle !== "settled") continue;
+      const settledAt = record.settledAt === undefined ? NaN : Date.parse(record.settledAt);
       // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
       if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
 
@@ -891,7 +987,8 @@ export class SessionHost {
       if (!record.session) continue;
       const session = record.session;
       record.session = undefined;
-      record.status = "dormant";
+      record.lifecycle = "dormant";
+      record.turnInFlight = false;
       record.queue.length = 0;
       record.turnInFlight = false;
       await session.dispose();
@@ -993,6 +1090,7 @@ export class SessionHost {
     for (const open of openSubagents(entries)) {
       record.log.append({ type: "subagent", ...open, state: "aborted" });
     }
+    record.openSubagentIds.clear();
   }
 
   /**
@@ -1012,6 +1110,7 @@ export class SessionHost {
     for (const open of openEnquiries(entries)) {
       record.log.append({ type: "enquiry", ...open, state: "aborted" });
     }
+    record.openEnquiryIds.clear();
   }
 
   /**
@@ -1028,6 +1127,7 @@ export class SessionHost {
     for (const open of openPermissions(entries)) {
       record.log.append({ type: "permission", ...open, state: "aborted" });
     }
+    record.openPermissionIds.clear();
   }
 
   private async dispatch(record: SessionRecord, message: QueuedMessage): Promise<void> {
@@ -1047,7 +1147,6 @@ export class SessionHost {
     const sent = note === undefined ? text : `${text}\n\n${note}`;
 
     record.turnInFlight = true;
-    record.status = "running";
     record.log.append({
       type: "user_message",
       id: randomUUID(),
@@ -1090,14 +1189,16 @@ export class SessionHost {
 
   private onBackendEvent(sessionId: string, event: BackendEvent): void {
     const record = this.sessions.get(sessionId);
-    if (!record || record.status === "ended" || record.status === "settled") return;
+    if (!record || record.lifecycle === "ended" || record.lifecycle === "settled") return;
     if (record.buffered) {
       record.buffered.push(event);
       return;
     }
 
+    const before = this.activityOf(record);
     record.log.append(event);
     this.touch(record);
+    this.indexOpen(record, event);
 
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
     // counts only its own run.
@@ -1112,18 +1213,62 @@ export class SessionHost {
      */
     if (event.type === "turn_started") {
       record.turnInFlight = true;
-      record.status = "running";
     }
 
     if (event.type === "turn_ended") {
       record.turnInFlight = false;
-      record.status = "idle";
       this.captureResumeToken(record);
       // Tools are pre-approved (ADR 0004), so the model can have run `git checkout` during the turn
       // it just finished. Off the critical path, and announces only on a difference.
       void this.refreshBranch(record);
       void this.drain(record);
     }
+
+    this.noteYourTurn(record, before);
+  }
+
+  /**
+   * Keep the open-prompt and open-Subagent index in step with the transcript.
+   *
+   * Only ever called from `onBackendEvent`, which is the one path every adapter event takes. The
+   * host's own terminal snapshots go through `closeOpen*`, which clear these sets themselves.
+   */
+  private indexOpen(record: SessionRecord, event: BackendEvent): void {
+    if (event.type === "permission") {
+      toggle(record.openPermissionIds, event.callId, event.state === "asked");
+    }
+    if (event.type === "enquiry") {
+      toggle(record.openEnquiryIds, event.askId, event.state === "asked");
+    }
+    if (event.type === "subagent") {
+      toggle(record.openSubagentIds, event.subagentId, event.state === "running" || event.state === "waiting");
+    }
+    /*
+     * Mirrors the reducer's own `turn_ended` arm, and has to. Neither an Enquiry nor a Permission
+     * Prompt can outlive the turn that raised it, so an adapter that tore one down without emitting
+     * its terminal snapshot would otherwise pin this Agent Session at `awaiting` for good.
+     *
+     * Subagents are deliberately not cleared: one the model backgrounded outlives the turn that
+     * spawned it and reports into a later one (ADR 0016).
+     */
+    if (event.type === "turn_ended") {
+      record.openEnquiryIds.clear();
+      record.openPermissionIds.clear();
+    }
+  }
+
+  /**
+   * Stamp `yourTurnAt` when the derived activity *enters* one of the two states that are waiting on
+   * a person — `idle` to type at, `awaiting` to decide.
+   *
+   * On the transition rather than on the state, because `onBackendEvent` runs for every streamed
+   * token: stamping on the state would restamp continuously and reproduce the `updatedAt` churn
+   * this field exists to escape.
+   */
+  private noteYourTurn(record: SessionRecord, before: SessionStatus): void {
+    const after = this.activityOf(record);
+    if (after === before) return;
+    if (after === "idle" || after === "awaiting") record.yourTurnAt = new Date().toISOString();
   }
 
   private captureResumeToken(record: SessionRecord): void {
@@ -1179,7 +1324,12 @@ export class SessionHost {
       title: record.title,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
-      status: record.status,
+      lifecycle: record.lifecycle,
+      // Mirrored for a daemon rolled back to before the split, which reads only this. Without it
+      // every Settled Agent Session would load as Dormant there and stop being reaped.
+      status: record.lifecycle === "live" ? "idle" : record.lifecycle,
+      yourTurnAt: record.yourTurnAt,
+      ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
@@ -1230,6 +1380,24 @@ function branchFrom(entries: LoggedEvent[]): Branch | undefined {
  * The whole `questions` array comes back with it, because a snapshot carries the whole state and the
  * terminal one the host is about to append needs it again.
  */
+function toggle(ids: Set<string>, id: string, open: boolean): void {
+  if (open) ids.add(id);
+  else ids.delete(id);
+}
+
+/**
+ * The Lifecycle a persisted Agent Session loads as.
+ *
+ * Anything that was live becomes Dormant: ADR 0003 drops the turn a restart tore, so there is
+ * nothing running to report. `lifecycle` is absent on a meta written before the split, and the
+ * deprecated `status` mirror is what stands in — including its own live values, which collapse the
+ * same way.
+ */
+function lifecycleFrom(meta: SessionMeta): SessionLifecycle {
+  const stored = meta.lifecycle ?? meta.status;
+  return stored === "ended" || stored === "settled" || stored === "dormant" ? stored : "dormant";
+}
+
 function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[] }[] {
   const open = new Map<string, Question[]>();
   for (const entry of entries) {

@@ -10,9 +10,10 @@ import type {
   Spend,
   SubagentWait,
 } from "../protocol/events.ts";
-import type { SessionStatus } from "../protocol/commands.ts";
+import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
 import type { Branch } from "../protocol/git.ts";
 import { compactTokens } from "./context-usage.ts";
+import { deriveStatus } from "./status.ts";
 
 /**
  * The reducer both front-ends share. The TUI and the web UI import this same function, which is
@@ -164,7 +165,18 @@ export type Entry =
   | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted"; text: string };
 
 export type ViewState = {
+  /**
+   * Derived, never assigned by an arm — `reduce` works it out from the three fields below through
+   * the same `deriveStatus` the Session Host calls.
+   *
+   * Held on the state rather than computed by every reader because the web client's Chrome is
+   * compared per key by identity, and a getter would be a fresh value each time.
+   */
   status: SessionStatus;
+  /** This reducer's mirror of `SessionRecord.lifecycle`. Not on the Chrome. */
+  lifecycle: SessionLifecycle;
+  /** This reducer's mirror of `SessionRecord.turnInFlight`. Not on the Chrome. */
+  turnInFlight: boolean;
   backend?: string;
   scope?: string;
   capabilities?: Capabilities;
@@ -237,7 +249,15 @@ export type ViewState = {
 };
 
 export function initialState(): ViewState {
-  return { status: "idle", entries: [], queue: [], activeSubagents: 0, lastSeq: 0 };
+  return {
+    status: "idle",
+    lifecycle: "live",
+    turnInFlight: false,
+    entries: [],
+    queue: [],
+    activeSubagents: 0,
+    lastSeq: 0,
+  };
 }
 
 /** Running and waiting are both live work; the three terminal states are not. */
@@ -267,7 +287,21 @@ export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
    */
   const next = applyEvent(state, entry.event, entry.at) as ViewState | undefined;
   if (next === undefined) return { ...state, lastSeq: entry.seq };
-  return next === state ? state : { ...next, lastSeq: entry.seq };
+  if (next === state) return state;
+  /*
+   * Derived here rather than in the arms, through the function the Session Host also calls, so the
+   * rail and the pane cannot disagree about what a session is doing. They used to be two switch
+   * statements maintained by hand, which is what let the rail say settled while the pane said idle.
+   */
+  return {
+    ...next,
+    status: deriveStatus({
+      lifecycle: next.lifecycle,
+      turnInFlight: next.turnInFlight,
+      awaiting: next.asking !== undefined || next.authorising !== undefined,
+    }),
+    lastSeq: entry.seq,
+  };
 }
 
 function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState {
@@ -296,7 +330,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       };
 
     case "turn_started":
-      return { ...state, status: "running" };
+      return { ...state, turnInFlight: true };
 
     case "message":
       return {
@@ -442,7 +476,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       // `asking` and `authorising` cleared here as well as on their own terminal snapshots. A backend
       // that tore down without emitting one would otherwise leave the composer locked out for good —
       // see ViewState.asking. Clearing twice costs nothing; clearing never is unrecoverable.
-      return { ...state, status: "idle", asking: undefined, authorising: undefined };
+      return { ...state, turnInFlight: false, asking: undefined, authorising: undefined };
 
     case "queue_changed":
       return { ...state, queue: [...event.pending] };
@@ -494,7 +528,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "session_dormant":
       return {
         ...state,
-        status: "dormant",
+        lifecycle: "dormant",
+        turnInFlight: false,
         queue: [],
         // Neither an Enquiry nor a Permission Prompt can survive its Backend Session: the promise a
         // human would have settled died with it. Same for the two below.
@@ -509,7 +544,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "session_settled":
       return {
         ...state,
-        status: "settled",
+        lifecycle: "settled",
+        turnInFlight: false,
         queue: [],
         asking: undefined,
         authorising: undefined,
@@ -522,7 +558,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "revived":
       return {
         ...state,
-        status: "idle",
+        lifecycle: "live",
+        turnInFlight: false,
         entries: [
           ...state.entries,
           { kind: "marker", id: `revived-${event.fromSeq}`, marker: "revived", text: `Revived from seq ${event.fromSeq}` },
@@ -532,7 +569,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "session_ended":
       return {
         ...state,
-        status: "ended",
+        lifecycle: "ended",
+        turnInFlight: false,
         endedReason: event.reason,
         asking: undefined,
         authorising: undefined,

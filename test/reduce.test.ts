@@ -668,4 +668,78 @@ describe("a Permission Prompt", () => {
       assert.equal(state.authorising, undefined);
     });
   }
+
+  /**
+   * The reducer derives `status` through the same `deriveStatus` the Session Host calls, so these
+   * are as much about the two agreeing as about the reducer itself.
+   */
+  describe("deriving what the Agent Session is doing", () => {
+    it("reports awaiting while a Permission Prompt is open, and running once it is decided", () => {
+      const asked = reduceAll(
+        transcript(
+          { type: "turn_started", turnId: "t1" },
+          { type: "tool_started", callId: "c1", name: "Bash", input: {} },
+          { type: "permission", callId: "c1", tool: "Bash", state: "asked" },
+        ).since(0),
+      );
+      assert.equal(asked.status, "awaiting");
+
+      const decided = reduceAll(
+        transcript({ type: "permission", callId: "c1", tool: "Bash", state: "decided", decision: "allow" }).since(0),
+        asked,
+      );
+      assert.equal(decided.status, "running", "the model has the turn back");
+
+      const ended = reduceAll(transcript({ type: "turn_ended", turnId: "t1", reason: "complete" }).since(0), decided);
+      assert.equal(ended.status, "idle");
+    });
+
+    it("reports awaiting while an Enquiry is open", () => {
+      const state = reduceAll(
+        transcript(
+          { type: "turn_started", turnId: "t1" },
+          { type: "tool_started", callId: "c1", name: "AskUserQuestion", input: {} },
+          {
+            type: "enquiry",
+            askId: "c1",
+            questions: [{ header: "Pick", question: "Which?", multiSelect: false, options: [{ label: "a" }] }],
+            state: "asked",
+          },
+        ).since(0),
+      );
+      assert.equal(state.status, "awaiting");
+    });
+
+    it("lets the Lifecycle beat an Enquiry nothing closed", () => {
+      // Going Dormant clears `asking`, so a torn Enquiry cannot leave a Dormant Agent Session
+      // reporting that it is waiting on a person who has no way to answer.
+      const state = reduceAll(
+        transcript(
+          { type: "turn_started", turnId: "t1" },
+          { type: "tool_started", callId: "c1", name: "AskUserQuestion", input: {} },
+          {
+            type: "enquiry",
+            askId: "c1",
+            questions: [{ header: "Pick", question: "Which?", multiSelect: false, options: [{ label: "a" }] }],
+            state: "asked",
+          },
+          { type: "session_dormant", reason: "host restarted" },
+        ).since(0),
+      );
+      assert.equal(state.status, "dormant");
+    });
+
+    it("leaves a backgrounded Subagent out of the status and in the count", () => {
+      // ADR 0016: the model is idle and the Steering Queue may dispatch, so the status says idle.
+      const state = reduceAll(
+        transcript(
+          { type: "turn_started", turnId: "t1" },
+          { type: "subagent", subagentId: "s1", name: "Explore", state: "running" },
+          { type: "turn_ended", turnId: "t1", reason: "complete" },
+        ).since(0),
+      );
+      assert.equal(state.status, "idle");
+      assert.equal(state.activeSubagents, 1);
+    });
+  });
 });
