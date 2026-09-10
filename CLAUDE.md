@@ -47,17 +47,3 @@ FLOW_URL=http://127.0.0.1:4318 FLOW_STATE_DIR=/tmp/scratch npm run dev
 `FLOW_STATE_DIR` is what keeps it isolated — its own token, `config.json`, and transcripts. Without
 it, a second host overwrites the `daemon.json` the real one and the TUI depend on. `FLOW_URL` is
 read once at Vite config load, so repointing the proxy means restarting Vite.
-
-## Provoking a Permission Prompt
-
-`DEFAULT_ALLOWED_TOOLS` in `src/backend/claude/index.ts` is the pre-approved set and is **not
-configurable** — no config key reaches `backendOptions.allowedTools`. To reach the `canUseTool`
-fall-through, ask for a tool genuinely outside that list. Any `mcp__*` tool works and is the case
-ADR 0018 exists for; `SlashCommand` is unreliable, because a request phrased as a slash command
-tends to arrive as `Skill`, which is pre-approved.
-
-A Standing Authorisation granted through the prompt persists to `config.json` under
-`permissions.allow`, so the same tool will not prompt twice. To get a second prompt out of it,
-revoke the grant in Settings → Permissions. Hand-editing `config.json` also works but needs the
-host restarted afterwards: `ConfigStore` loads the file in its constructor and holds it in memory,
-so it never notices a change made underneath it.
