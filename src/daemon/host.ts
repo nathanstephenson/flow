@@ -39,7 +39,9 @@ import {
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
-import type { SessionMeta, TranscriptStore } from "./store.ts";
+import { probeModels, type BackendModels } from "./models.ts";
+import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
+import { nameInput, SummaryModelSpare } from "./summariser.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -124,6 +126,24 @@ type SessionRecord = {
   queue: QueuedMessage[];
   title: string;
   /**
+   * Where the title came from, and so what may overwrite it.
+   *
+   * This used to be inferred — `title === scope` meant "still the placeholder". One writer could
+   * get away with that; two cannot. The Summary Model's name lands seconds after the first line is
+   * already in place, so the sentinel is false by the time it needs consulting, and there would be
+   * no way to tell a name a model produced from one a human is looking at.
+   *
+   * The order is one-way: a `"scope"` title yields to the first line, a `"first-line"` title yields
+   * to a summary, and a `"summary"` title yields to nothing but another rename.
+   */
+  titleSource: TitleSource;
+  /**
+   * Bumped every time someone sets out to name this Agent Session, so a slower answer cannot
+   * overwrite a newer one — the same hazard `branchGeneration` exists for, and for the same reason:
+   * naming is `void`ed at dispatch and can still be in flight when a human clicks Rename.
+   */
+  titleGeneration: number;
+  /**
    * The branch the Scope was on when last looked at, or undefined when it is not a repository.
    *
    * Held rather than asked for, because `list()` is synchronous and runs on every `GET
@@ -192,16 +212,47 @@ export type SessionHostOptions = {
    * host built without a Settings file can honestly offer.
    */
   allowTool?: (name: string) => void;
+  /**
+   * The Default Model for a Backend Adapter — the model a new Agent Session starts on when its
+   * creator named none.
+   *
+   * A function for the reason `retention` is one, and given by the daemon as `ConfigStore`'s
+   * `defaultModel`. Omitted means the adapter picks, which is what every test wants and what a host
+   * built without a Settings file can honestly offer.
+   */
+  defaultModel?: (backend: string) => string | undefined;
+  /**
+   * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
+   * Session (ADR 0020).
+   *
+   * A function for the reason the two above are. Omitted means no Agent Session is ever named by a
+   * model: the automatic naming does not run, and a `rename` is refused with something a human can
+   * read.
+   */
+  summaryModel?: () => { backend: string; modelId: string; automatic: boolean } | undefined;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
 export class SessionHost {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly backends = new Map<string, AgentBackend>();
+  /** Model probes by backend name, held in flight rather than resolved — see `models`. */
+  private readonly modelProbes = new Map<string, Promise<BackendModels>>();
+  /**
+   * One Summary Model session, booted before a naming needs it (ADR 0020).
+   *
+   * Belongs to no Agent Session, and is deliberately not wired to `announceClosed`, the reaper or
+   * `settle` — it is a throwaway that outlives any one of them, in the same way `modelProbes` is.
+   */
+  private readonly summarySpare = new SummaryModelSpare();
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
   private readonly allowTool: ((name: string) => void) | undefined;
+  private readonly defaultModel: ((backend: string) => string | undefined) | undefined;
+  private readonly summaryModel:
+    | (() => { backend: string; modelId: string; automatic: boolean } | undefined)
+    | undefined;
   private readonly closedListeners = new Set<(sessionId: string) => void>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
@@ -212,6 +263,8 @@ export class SessionHost {
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
     this.allowTool = options.allowTool;
+    this.defaultModel = options.defaultModel;
+    this.summaryModel = options.summaryModel;
   }
 
   /**
@@ -252,6 +305,31 @@ export class SessionHost {
 
   backendNames(): string[] {
     return [...this.backends.keys()];
+  }
+
+  /**
+   * What models each Backend Adapter can reach — what the Providers section offers to choose from.
+   *
+   * **Memoised for the life of the daemon**, which is a deliberate departure from `/api/branches`
+   * and `/api/directories`, the two other queries beside the Settings. Those are asked fresh
+   * because their answers change outside Flow between one keystroke and the next. This one changes
+   * when an account's entitlements do — rarely — and answering it spawns a process per backend, so
+   * asking on every render of a settings page would be a real cost for a list that had not moved.
+   * `refresh` is the Check again button, for the day it has.
+   *
+   * In flight rather than resolved is what is remembered, so two clients opening the page at once
+   * spawn one probe between them rather than one each.
+   */
+  async models(scope: string, refresh = false): Promise<BackendModels[]> {
+    if (refresh) this.modelProbes.clear();
+    const probes = [...this.backends.values()].map((backend) => {
+      const held = this.modelProbes.get(backend.name);
+      if (held) return held;
+      const probe = probeModels(backend, scope);
+      this.modelProbes.set(backend.name, probe);
+      return probe;
+    });
+    return await Promise.all(probes);
   }
 
   logFor(sessionId: string): SessionLog {
@@ -343,6 +421,12 @@ export class SessionHost {
         buffered: undefined,
         queue: [],
         title: meta.title,
+        // Read leniently, in config.json's manner: a meta.json written before Agent Sessions were
+        // named by a model has no `titleSource`, and the sentinel that used to stand in for one
+        // still answers correctly for it. So nothing has to be migrated, and an old session whose
+        // title is still its Scope is titled by its next message exactly as it always was.
+        titleSource: meta.titleSource ?? (meta.title === meta.scope ? "scope" : "first-line"),
+        titleGeneration: 0,
         // Recovered from the transcript rather than by asking git, for the reason capabilities are:
         // a daemon holding fifty Agent Sessions would otherwise spawn fifty processes on the way up,
         // to answer a question the next Revive or turn re-asks anyway.
@@ -408,6 +492,8 @@ export class SessionHost {
       buffered: undefined,
       queue: [],
       title: scope,
+      titleSource: "scope",
+      titleGeneration: 0,
       branch: undefined,
       branchGeneration: 0,
       worktree,
@@ -415,7 +501,16 @@ export class SessionHost {
       capabilities: undefined,
       spend: undefined,
       resumeToken: undefined,
-      modelId: options.modelId,
+      /*
+       * Resolved here and never again.
+       *
+       * Not in `startBackendSession`, which is the tempting place: that path also runs on a Revive,
+       * so reading the Default Model there would move a week-old Dormant Agent Session onto whatever
+       * the default is *today*, silently, on the turn its owner came back to write. Resolving once
+       * and persisting to `SessionMeta.modelId` is what makes the choice stick for this session's
+       * life — the same shape as the Standing Authorisations snapshot in BackendCreateOptions.
+       */
+      modelId: options.modelId ?? this.defaultModel?.(backend.name),
       effort: options.effort,
       createdAt: now,
       updatedAt: now,
@@ -435,7 +530,54 @@ export class SessionHost {
     this.flushBuffered(record);
     // After session_started, never before: the transcript has to open with it (see `buffered`).
     await this.refreshBranch(record);
+    /*
+     * Somebody who has just made an Agent Session is about to type into it, and naming what they
+     * type means booting a Summary Model session that takes the better part of a minute. Started
+     * here so that most of that is paid while they are still writing.
+     *
+     * Called unconditionally, including when no Summary Model is configured, because that is also
+     * how a spare gets dropped when somebody clears the Setting: nothing will ever *tell* us it
+     * changed (ADR 0009), so a read-through is the only moment it can be noticed.
+     */
+    this.warmSummaryModel();
     return id;
+  }
+
+  /**
+   * Boot a Summary Model session ahead of needing one, or drop the one held if the Setting is gone.
+   *
+   * The backend is resolved here rather than inside the spare because `backendFor` throws for a
+   * name it does not know: a typo in `providers.summary.backend` must cost a worse Agent Session
+   * *name*, never the Agent Session itself.
+   */
+  private warmSummaryModel(): void {
+    const model = this.summaryModel?.();
+
+    /*
+     * Three cases, and the middle one is the reason this is not a one-liner.
+     *
+     * No Summary Model at all: drop whatever is held. This is the only moment a Setting somebody
+     * cleared is ever noticed, because nothing pushes a change (ADR 0009).
+     *
+     * A Summary Model with automatic naming *off*: leave the spare exactly as it is. Not warmed,
+     * because nothing will need one until somebody clicks Rename — and that path warms its own
+     * replacement afterwards, so a second rename is fast without a daemon nobody is renaming in
+     * holding an idle process. And not dropped either: a spare a rename just warmed must survive
+     * the next Agent Session being created, or the two would fight over it.
+     */
+    if (!model) {
+      this.summarySpare.warm(undefined, undefined);
+      return;
+    }
+    if (!model.automatic) return;
+
+    let backend: AgentBackend | undefined;
+    try {
+      backend = this.backendFor(model.backend);
+    } catch {
+      backend = undefined;
+    }
+    this.summarySpare.warm(backend, model);
   }
 
   /**
@@ -989,8 +1131,99 @@ export class SessionHost {
     if (!removed.ok) kept(removed.failure.message);
   }
 
+  /**
+   * Name this Agent Session again, from its Presentation Transcript, with the Summary Model.
+   *
+   * **Never Revives** (ADR 0003). It reads the transcript, not the Conversation Context — two
+   * different records (ADR 0001), and only the first can be read with nothing running. So a Dormant
+   * Agent Session stays Dormant, no Backend Session is started on it, and no turn is opened on it:
+   * the work happens in a throwaway session somewhere else entirely.
+   *
+   * **Awaited**, unlike the naming at dispatch, because a human clicked this and is watching for the
+   * result. Every way it can fail is a refusal they can read rather than a silence.
+   */
+  async rename(sessionId: string): Promise<string> {
+    const record = this.record(sessionId);
+    const summary = this.summaryModel?.();
+    if (!summary) throw new CommandRefused("No Summary Model is configured — choose one in Settings");
+
+    const entries = record.log.since(0);
+    if (!entries.some((entry) => entry.event.type === "user_message")) {
+      throw new CommandRefused("This Agent Session has nothing to name yet");
+    }
+
+    // Refused readably rather than thrown as a 500: nothing validates a model id or a backend name
+    // when the Settings are saved (ADR 0020), so naming a backend this build lacks is an ordinary
+    // typo and the person who made it is the one reading this message.
+    let backend: AgentBackend;
+    try {
+      backend = this.backendFor(summary.backend);
+    } catch {
+      throw new CommandRefused(`No backend named ${summary.backend} — check the Summary Model in Settings`);
+    }
+
+    const generation = (record.titleGeneration += 1);
+    const name = await this.summarySpare.name(backend, summary, nameInput(entries));
+    if (name === undefined) throw new CommandRefused("Could not name this Agent Session");
+    // Refused rather than applied when something newer has already been asked for. A human who
+    // clicked twice wants the second answer, and the first arriving afterwards must not undo it.
+    if (record.titleGeneration !== generation) throw new CommandRefused("This Agent Session was renamed again");
+
+    record.title = name;
+    record.titleSource = "summary";
+    this.touch(record);
+    return name;
+  }
+
+  /**
+   * The automatic half: a name for the first message, applied if it is still wanted when it lands.
+   *
+   * Swallows everything. A name is a convenience and `firstLine` has already produced a usable one,
+   * so a Summary Model that is missing, slow or talking nonsense costs the better name and nothing
+   * else — least of all the turn the human is waiting on.
+   */
+  private async nameFromSummary(record: SessionRecord, text: string): Promise<void> {
+    const summary = this.summaryModel?.();
+    // `automatic` is the half of the Setting that governs *this* path only. A session whose owner
+    // turned it off keeps the first line of what they typed, and `rename` still works — which is
+    // the whole point of it being a switch rather than clearing the Summary Model.
+    if (!summary?.automatic) return;
+
+    const generation = (record.titleGeneration += 1);
+    let name: string | undefined;
+    try {
+      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, text);
+    } catch {
+      // An unknown backend named in the Settings, most likely. Silent, as everything on this path is.
+      return;
+    }
+    if (name === undefined) return;
+
+    /*
+     * Looked up again rather than trusted, because ten seconds is long enough for this Agent Session
+     * to have been Ended, Settled or reaped — and writing a title onto a record nobody holds any
+     * more would persist a meta.json for a session that no longer exists.
+     */
+    const current = this.sessions.get(record.id);
+    if (!current || current !== record) return;
+    // `lifecycle`, not the derived activity: what disqualifies a session from being renamed is
+    // that it is over, not that it happens to be mid-turn.
+    if (current.lifecycle === "ended" || current.lifecycle === "settled") return;
+    // Only a first-line name yields to this, and only if nothing newer has been asked for since.
+    if (current.titleSource !== "first-line" || current.titleGeneration !== generation) return;
+
+    current.title = name;
+    current.titleSource = "summary";
+    this.touch(current);
+  }
+
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
   async shutdown(): Promise<void> {
+    // First, so that a naming still in flight cannot warm a replacement on the way out — the
+    // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
+    // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
+    // `SummaryModelSpare.dispose`.
+    this.summarySpare.dispose();
     for (const record of this.sessions.values()) {
       if (!record.session) continue;
       const session = record.session;
@@ -1034,6 +1267,8 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
+      case "rename":
+        return await this.rename(command.sessionId);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
       case "answer_enquiry":
@@ -1163,9 +1398,22 @@ export class SessionHost {
     });
     // Titled from what its owner actually typed, never from `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename
-    // fires only while the title is still the Scope. An Attachment never titles anything either, so
-    // a wordless paste falls to firstLine's own "Untitled session" rather than to a filename.
-    if (record.title === record.scope) record.title = firstLine(text);
+    // fires only while the title is still the placeholder. An Attachment never titles anything
+    // either, so a wordless paste falls to firstLine's own "Untitled session" rather than a filename.
+    if (record.titleSource === "scope") {
+      record.title = firstLine(text);
+      record.titleSource = "first-line";
+      /*
+       * And then, seconds later, something better.
+       *
+       * `void`ed rather than awaited: this is a model call that can take ten seconds, and the human
+       * is waiting on their turn starting, not on its name. The first line is already in place, so
+       * what arrives replaces a usable title rather than filling an empty one — no spinner, no
+       * flicker into and out of blank. It can only happen on a first dispatch, so no *established*
+       * name ever changes under its reader.
+       */
+      void this.nameFromSummary(record, text);
+    }
     this.touch(record);
     await record.session.prompt(sent, this.loadAttachments(record.id, attachments));
   }
@@ -1335,6 +1583,7 @@ export class SessionHost {
       scope: record.scope,
       backend: record.backendName,
       title: record.title,
+      titleSource: record.titleSource,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       lifecycle: record.lifecycle,

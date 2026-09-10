@@ -9,7 +9,11 @@ export type ConformanceTarget = {
   name: string;
   /** Longest a single turn may take on this adapter. */
   turnTimeoutMs: number;
-  createSession(emit: (event: BackendEvent) => void): Promise<BackendSession>;
+  /**
+   * `tools` is passed through verbatim, so the contract can ask for a one-shot text call — the
+   * shape the Summary Model runs in (ADR 0020). An adapter that ignores it fails the case below.
+   */
+  createSession(emit: (event: BackendEvent) => void, tools?: "none"): Promise<BackendSession>;
   /** Drive one plain-text turn to completion, however this adapter needs to be driven. */
   runTurn(session: BackendSession, text: string): Promise<void>;
 };
@@ -22,6 +26,25 @@ const HOST_OWNED = new Set<string>(HOST_OWNED_EVENT_TYPES);
  */
 export function runContract(target: ConformanceTarget): void {
   describe(`Backend Adapter contract: ${target.name}`, () => {
+    /**
+     * A session that runs no tools still answers.
+     *
+     * Cheap on purpose: asserting against a real SDK that *no tool ran* would mean provoking one
+     * and waiting to be sure it did not. What this rules out is the failure that actually bites —
+     * an adapter that ignores the option, or worse honours it by *parking* the tool call it should
+     * have denied, which holds the turn open until its caller gives up.
+     */
+    it("answers a turn with no tools at all", async () => {
+      const { session, events, dispose } = await start(target, "none");
+      try {
+        await target.runTurn(session, "Reply with exactly: ok");
+        const types = events.map((event) => event.type);
+        assert.equal(count(types, "turn_ended"), 1, `saw: ${types.join(",")}`);
+      } finally {
+        await dispose();
+      }
+    });
+
     it("declares at least one provider", async () => {
       const { session, dispose } = await start(target);
       try {
@@ -461,13 +484,13 @@ export function runContract(target: ConformanceTarget): void {
   });
 }
 
-async function start(target: ConformanceTarget): Promise<{
+async function start(target: ConformanceTarget, tools?: "none"): Promise<{
   session: BackendSession;
   events: BackendEvent[];
   dispose: () => Promise<void>;
 }> {
   const events: BackendEvent[] = [];
-  const session = await target.createSession((event) => events.push(event));
+  const session = await target.createSession((event) => events.push(event), tools);
   return { session, events, dispose: () => session.dispose() };
 }
 

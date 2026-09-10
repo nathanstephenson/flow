@@ -392,8 +392,14 @@ export class PiBackend implements AgentBackend {
       agentDir,
       resourceLoader,
       ...(sessionManager ? { sessionManager } : {}),
-      ...(this.options.tools ? { tools: this.options.tools } : {}),
-      ...(this.options.tools?.length === 0 ? { noTools: "all" as const } : {}),
+      // A one-shot text call outranks the backend's own tool list — see
+      // `BackendCreateOptions.tools`. pi already has the switch this needs.
+      ...(options.tools === "none"
+        ? { noTools: "all" as const }
+        : {
+            ...(this.options.tools ? { tools: this.options.tools } : {}),
+            ...(this.options.tools?.length === 0 ? { noTools: "all" as const } : {}),
+          }),
     });
 
     const piSession = new PiSession(session, options.emit, sessionDir);

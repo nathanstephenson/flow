@@ -8,6 +8,7 @@ import {
   type Config,
   type Settings,
   type SettingsPatch,
+  type SummaryModel,
 } from "./config.ts";
 import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
@@ -94,6 +95,17 @@ export class ConfigStore {
   readonly standingAuthorisations = (): readonly string[] => this.config.permissions?.allow ?? [];
 
   /**
+   * The Default Model for one Backend Adapter, asked fresh, or undefined when none is configured.
+   *
+   * Read once when an Agent Session is created and never again — see `SessionHost.create`. A bound
+   * method rather than the store itself, for the reason `retention` is one.
+   */
+  readonly defaultModel = (backend: string): string | undefined => this.config.providers?.defaults?.[backend];
+
+  /** The Summary Model, asked fresh. Undefined means no Agent Session is named by a model. */
+  readonly summaryModel = (): SummaryModel | undefined => this.config.providers?.summary;
+
+  /**
    * Grant a Standing Authorisation for one tool — what an Always decision leaves behind.
    *
    * Additive, and the one write on this store that is: `update` replaces the list wholesale, which is
@@ -130,6 +142,7 @@ export class ConfigStore {
     // the human had just revoked.
     if (next.projects === undefined) delete document["projects"];
     if (next.permissions === undefined) delete document["permissions"];
+    if (next.providers === undefined) delete document["providers"];
 
     mkdirSync(this.root, { recursive: true });
     // Written beside the target and renamed over it: a crash mid-write leaves the old config intact
@@ -171,5 +184,6 @@ function settingsOf(config: Config): Settings {
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),
     ...(config.permissions === undefined ? {} : { permissions: config.permissions }),
+    ...(config.providers === undefined ? {} : { providers: config.providers }),
   };
 }

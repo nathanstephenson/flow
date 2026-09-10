@@ -33,7 +33,9 @@ code, which collides with Agent Session — "Agents" is the label a reader sees,
 **Spend**:
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
-fraction of a window, and a session routinely bills many times what its window holds.
+fraction of a window, and a session routinely bills many times what its window holds. One known
+exception, stated rather than fixed (ADR 0020): naming a session bills the Summary Model in a
+Backend Session that is thrown away, so that call appears in no Agent Session's Spend.
 _Avoid_: usage, cost, tokens, context
 
 **Presentation Transcript**:
@@ -120,8 +122,24 @@ _Avoid_: driver, provider, runtime, plugin
 
 **Provider**:
 An inference endpoint a Backend Adapter can reach — Anthropic, OpenAI, Google. A Provider serves
-models; it is not an agent harness.
+models; it is not an agent harness. The Settings section named for them is the one place the word
+stretches: it is keyed by Backend Adapter, because a model id is only reachable through the adapter
+that serves it.
 _Avoid_: backend, adapter, vendor
+
+**Default Model**:
+The model a new Agent Session starts on when its creator named none. A Setting, and so machine-wide,
+but declared per Backend Adapter, because a model id only means anything through the adapter that
+serves it. Read when the session is created and never on a Revive, so it can never move an existing
+Agent Session off the model it has been running on.
+_Avoid_: preferred model, fallback model
+
+**Summary Model**:
+The model the Session Host uses to name an Agent Session, chosen once for the machine rather than
+per Agent Session. Reached through an ordinary Backend Adapter, in a throwaway Backend Session that
+holds no Presentation Transcript, runs no tools, and is disposed of when it answers — so it is not
+an Agent Session, is never Revived, and nothing it says is ever seen (ADR 0020).
+_Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:
 The daemon process owning every Agent Session and the Steering Queue.

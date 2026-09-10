@@ -80,6 +80,11 @@ export type Chrome = {
   authorising: ViewState["authorising"];
   /** Set while the backend is summarising the Conversation Context. A boolean, so it compares. */
   compacting: boolean;
+  /**
+   * Whether anybody has said anything yet — what the overflow menu hides Rename on, since a Summary
+   * Model has nothing to name in an empty Agent Session. A boolean, so it compares.
+   */
+  spoken: boolean;
   /** Transport state, so the UI can say the Session Host has gone rather than appear idle. */
   link: LinkState;
 };

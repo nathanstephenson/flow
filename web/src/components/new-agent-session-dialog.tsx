@@ -57,9 +57,13 @@ import {
  * why the note about candidates below exists: without it, the way to turn the picker on would be
  * discoverable only by reading the Settings page on a hunch.
  *
- * **A model still cannot be offered here.** `create` accepts a `modelId`, but `Capabilities` arrive
- * on `session_started` *per Agent Session* — so at this moment the list of models does not exist
- * yet. The model picker in the pane header is the first honest moment to choose.
+ * **A model is still not offered here, but no longer because it cannot be.** `Capabilities` arrive
+ * on `session_started` *per Agent Session*, so this dialog has no list of its own — that was the
+ * whole objection. `GET /api/models` now answers the same question without a session (ADR 0020),
+ * which is what makes the Default Model in the Providers section possible, and that Setting is the
+ * machine-wide answer to "which model should a new Agent Session start on". Offering a per-session
+ * override *here* as well is a separate decision nobody has made: the picker in the pane header is
+ * still the first moment a reader has seen the session they are choosing for.
  */
 export function NewAgentSessionDialog({
   open,

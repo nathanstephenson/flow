@@ -22,6 +22,7 @@ export const SETTINGS_SECTIONS = [
   "general",
   "projects",
   "permissions",
+  "providers",
   "appearance",
   "keyboard",
 ] as const;

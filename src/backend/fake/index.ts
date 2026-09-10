@@ -56,6 +56,8 @@ export class FakeSession implements BackendSession {
   readonly priorSpend: Spend | undefined;
   /** What this session was told the machine already authorises, for asserting the read-at-create. */
   readonly standingAuthorisations: readonly string[];
+  /** Whether this session was created as a one-shot text call, for asserting the Summary Model's. */
+  readonly toolless: boolean;
   /** Every Subagent begun in this session, in the style of `prompts`. */
   readonly subagents: FakeSubagent[] = [];
   /** Every Enquiry asked in this session, open or not, in the style of `prompts`. */
@@ -100,9 +102,37 @@ export class FakeSession implements BackendSession {
    */
   holdCompaction = false;
 
-  constructor(options: BackendCreateOptions, overrides: FakeCapabilityOverrides = {}) {
+  /**
+   * Answer every prompt with this text and end the turn, instead of waiting to be driven.
+   *
+   * The whole fake is built the other way round — turns end when the test says so, which is what
+   * makes queue and lifecycle assertions deterministic. But a Summary Model session (ADR 0020) is
+   * prompted by the Session Host rather than by the test, so one that had to be driven would hang
+   * until the summariser's timeout. This is the one case that needs a fake answering by itself.
+   *
+   * A test *can* get a handle on the session first, now that naming is pre-warmed — the spare is
+   * `backend.sessions[0]` long before it is claimed — but it still cannot get between the host's
+   * `prompt` and the answer, which is what this is for.
+   *
+   * Set here it governs this session; left unset it falls through to the backend's, **read at
+   * prompt time rather than copied at create**. That matters now that sessions are warmed long
+   * before they are used: a test that sets `backend.autoReply` and then triggers a naming expects
+   * the new text, and a spare booted minutes earlier would otherwise answer with the old one. A
+   * real backend decides what it says when it is asked, not when it is started.
+   */
+  autoReply: string | undefined;
+
+  private readonly backendAutoReply: (() => string | undefined) | undefined;
+
+  constructor(
+    options: BackendCreateOptions,
+    overrides: FakeCapabilityOverrides = {},
+    backendAutoReply?: () => string | undefined,
+  ) {
     this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
     this.standingAuthorisations = options.standingAuthorisations ?? [];
+    this.toolless = options.tools === "none";
+    this.backendAutoReply = backendAutoReply;
     if (this.capabilities.enquiries) {
       this.answerEnquiry = async (askId: string, answers: string[][]) => {
         const open = this.enquiries.find((enquiry) => enquiry.askId === askId);
@@ -161,6 +191,10 @@ export class FakeSession implements BackendSession {
     this.promptedAttachments.push(attachments ?? []);
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
+    const reply = this.autoReply ?? this.backendAutoReply?.();
+    if (reply === undefined) return;
+    this.say(reply);
+    this.completeTurn("complete");
   }
 
   async abort(): Promise<void> {
@@ -199,6 +233,18 @@ export class FakeSession implements BackendSession {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+  }
+
+  /**
+   * Test affordance: report that this session has broken, as an adapter does when its process dies.
+   *
+   * What a pre-warmed Summary Model session looks like when its CLI crashes or its machine sleeps
+   * while it sits idle (ADR 0020). Nobody is reading its events, so this `notice` is the only
+   * evidence the spare is a corpse — and handing a corpse to a naming is worse than never having
+   * warmed one, because it burns the whole timeout.
+   */
+  fail(text = "the backend went away"): void {
+    this.emit({ type: "notice", level: "error", text });
   }
 
   /** Test affordance: emit assistant text for the turn in flight. */
@@ -421,14 +467,38 @@ export class FakeBackend implements AgentBackend {
   // types and cannot emit the assignment one implies.
   private readonly overrides: FakeCapabilityOverrides;
 
+  /** Given to every session this backend creates — see `FakeSession.autoReply`. Settable mid-test. */
+  autoReply: string | undefined;
+
+  /**
+   * Leave `create` unresolved until `releaseCreate()`, in the style of `holdCompaction`.
+   *
+   * A real adapter takes the better part of a minute to boot, and the failure that hides in that
+   * window is a Session Host that disposed a pre-warmed Summary Model session (ADR 0020) *while it
+   * was still starting* — which orphans a child process, since nothing holds a reference to hand
+   * back. A fake whose `create` resolves immediately cannot reproduce it.
+   */
+  holdCreate = false;
+
+  private readonly waiting: Array<() => void> = [];
+
   constructor(overrides: FakeCapabilityOverrides = {}) {
     this.overrides = overrides;
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
-    const session = new FakeSession(options, this.overrides);
+    if (this.holdCreate) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    }
+    const session = new FakeSession(options, this.overrides, () => this.autoReply);
     this.sessions.push(session);
     return session;
+  }
+
+  /** Let every held `create` finish. The sessions exist only after this. */
+  releaseCreate(): void {
+    this.holdCreate = false;
+    for (const resume of this.waiting.splice(0)) resume();
   }
 
   get latest(): FakeSession {

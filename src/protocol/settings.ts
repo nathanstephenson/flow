@@ -66,6 +66,32 @@ export type Settings = {
   permissions?: {
     allow?: string[];
   };
+  /**
+   * Which model to use when nobody has said otherwise.
+   *
+   * **Absent rather than defaulted**, as `projects` and `permissions` are: a machine nobody has
+   * configured has no right answer, and no Default Model is the state every installation starts in.
+   *
+   * Named for the Provider whose models it chooses between, and keyed by Backend Adapter, because a
+   * model id only means anything through the adapter that serves it — `opus[1m]` is a Claude alias
+   * and nothing else can be handed it. CONTEXT.md's Provider entry says so too.
+   */
+  providers?: {
+    /** The Default Model per Backend Adapter: the model a new Agent Session starts on. */
+    defaults?: Record<string, string>;
+    /**
+     * The Summary Model — the model that names an Agent Session.
+     *
+     * Both halves or neither. A model id without the Backend Adapter that serves it is unreachable,
+     * so there is no useful half-configured state to represent.
+     *
+     * `automatic` is *when*, not whether: false leaves a session named by the first line of what
+     * was typed, and leaves "Name this Agent Session again" working. Whether the feature exists at
+     * all is said by this section being absent — which is why the switch lives in here rather than
+     * beside it, where it could disagree with a model nobody configured.
+     */
+    summary?: { backend: string; modelId: string; automatic: boolean };
+  };
 };
 
 /**
@@ -90,6 +116,20 @@ export type SettingsPatch = {
    * omission — and here that failure mode is a grant nobody can take back.
    */
   permissions?: { allow?: string[] };
+  /**
+   * `defaults` **merges per backend**, unlike the two lists above, and `""` clears one entry the way
+   * `projects.root: ""` clears the root. The reason lists replace does not apply here: a keyed map
+   * can express a removal, so a removal never looks like an omission.
+   *
+   * `summary` is one value. Send both fields to set it, or `null` to clear it — a half-specified
+   * Summary Model is refused rather than merged, because merging one would let a client change the
+   * Backend Adapter while leaving behind a model id that adapter cannot serve.
+   */
+  providers?: {
+    defaults?: Record<string, string>;
+    /** `automatic` may be omitted when setting a model, and defaults to naming automatically. */
+    summary?: { backend: string; modelId: string; automatic?: boolean } | null;
+  };
 };
 
 const UNITS: Record<string, number> = {

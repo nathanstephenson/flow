@@ -192,6 +192,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     worktree: view.worktree,
     contextUsage: view.contextUsage,
     compacting: view.compacting === true,
+    spoken: view.spoken === true,
     endedReason: view.endedReason,
     // No lastSeq: it is stamped from the event's own seq on every event, so carrying it here would
     // make Chrome differ on every streaming tick and the shallow compare below could never suppress

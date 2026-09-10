@@ -292,6 +292,7 @@ describe("the Chrome shallow compare", () => {
     asking: undefined,
     authorising: undefined,
     compacting: false,
+    spoken: false,
     link: "live" as const,
   };
 

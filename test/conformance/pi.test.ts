@@ -19,9 +19,10 @@ if (process.env["FLOW_E2E_PI"] !== "1") {
   runContract({
     name: "pi",
     turnTimeoutMs: TURN_TIMEOUT_MS,
-    createSession: (emit) =>
+    createSession: (emit, tools) =>
       backend.create({
         scope: process.cwd(),
+        ...(tools === undefined ? {} : { tools }),
         emit: (event) => {
           emit(event);
           if (event.type === "turn_ended") {

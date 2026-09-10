@@ -265,8 +265,11 @@ class ClaudeSession implements BackendSession {
     // Reported before this run has billed anything, so a Revive does not blank the meter it inherits.
     this.spend = options.priorSpend;
 
-    const preApproved = backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
-    this.allowed = new Set([...preApproved, ...(options.standingAuthorisations ?? [])]);
+    // A one-shot text call pre-approves nothing and authorises nothing — see
+    // `BackendCreateOptions.tools`. The deny in `canUseTool` below is the half that makes it hold.
+    const toolless = options.tools === "none";
+    const preApproved = toolless ? [] : (backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS);
+    this.allowed = new Set(toolless ? [] : [...preApproved, ...(options.standingAuthorisations ?? [])]);
     // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
     // `disallowedTools` — which an operator meant — still outranks a grant a human clicked.
@@ -303,6 +306,9 @@ class ClaudeSession implements BackendSession {
        * where there will never be one, an abandonment.
        */
       canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string }) => {
+        // Denied, never parked. There is no human behind a toolless session, so parking would hold
+        // the turn open until the caller gave up on it.
+        if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
         if (this.allowed.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
         return await this.authorise(extra.toolUseID, toolName, input);

@@ -233,6 +233,27 @@ async function handle(
     return;
   }
 
+  /*
+   * `GET /api/models` — what each Backend Adapter can reach, for the Providers section to offer.
+   *
+   * Its own endpoint rather than more of `/api/config`, and a query rather than state, for the
+   * reason `/api/directories` and `/api/branches` are: a client polling the config document every
+   * few seconds must not be made to spawn a process per backend to get it.
+   *
+   * A backend that cannot answer is a **200 carrying a `problem`**, never a 404 — the choice
+   * `/api/branches` makes for a Scope that is not a repository, and for the same reason: naming the
+   * state tells the reader more than a status code, and here it is what turns a picker into a text
+   * field rather than into an empty list nobody can explain.
+   *
+   * Unlike its two neighbours, the answer is cached — see `SessionHost.models` for why, and
+   * `?refresh=1` for the way out.
+   */
+  if (request.method === "GET" && url.pathname === "/api/models") {
+    const scope = options.config?.projectRoot() ?? options.scope ?? process.cwd();
+    send(response, 200, await options.host.models(scope, url.searchParams.get("refresh") === "1"));
+    return;
+  }
+
   if (options.shells && url.pathname === "/api/shells") {
     await handleShellCollection(request, response, url, options.host, options.shells);
     return;
