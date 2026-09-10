@@ -75,9 +75,9 @@ export function StatusDot({ status, className }: { status: DotState; className?:
  * every animation to nothing under `prefers-reduced-motion` — at which point the dot's hue and shape
  * are still carrying the state.
  *
- * The segment travels the header and turns round rather than sliding off and reappearing at the left:
- * the old slide spent part of every cycle with the segment part-way across and then gone, which read
- * as a stall each time it restarted.
+ * The segment travels the header, compresses into each wall and turns round, rather than sliding off
+ * and reappearing at the left: the old slide spent part of every cycle with the segment part-way
+ * across and then gone, which read as a stall each time it restarted.
  */
 export function RunningHairline({ running }: { running: boolean }) {
   return (
