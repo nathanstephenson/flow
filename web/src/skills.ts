@@ -1,73 +1,68 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { ScopeSkills, Skill } from "../../src/protocol/events.ts";
 
 /**
  * Asking the Session Host which Skills a Scope offers, before it has an Agent Session.
  *
- * The sibling of `useBranches`, and it lives beside it because the two ask about the same free-text
- * Scope field off the same debounce. Inside an Agent Session the Composer asks a different way — the
- * `list_skills` Command, keyed by session — and that path is untouched.
+ * Inside an Agent Session the Composer asks a different way — the `list_skills` Command, keyed by
+ * session — and that path is untouched. This is the New Agent Session view's half.
  *
- * **Prefetched, not lazy, which is the opposite of `useBranches` next door.** A Skill list costs a
- * Backend Session: pi answers off disk, but Claude spawns its CLI and takes about nine seconds
- * (`src/daemon/models.ts` carries the measurement). Waiting for somebody to press `/` would spend
- * all nine of those seconds in front of them with a menu open and empty. Asking when the Scope
- * settles spends them while they are choosing a Backend Adapter and typing a first message — which
- * ADR 0020 measured at five to forty seconds — so by the time `/` is pressed the answer is usually
- * already here. Nothing is cached anywhere: the host holds a probe only while it is in flight,
- * because a Skill directory changes whenever somebody saves a file.
+ * **A fetcher, not a state hook, and the difference is load-bearing.** An earlier cut of this held
+ * the answer in state and handed the Composer whatever was there, which meant that pressing `/`
+ * before the request landed answered "no Skills" — and the Composer draws that identically to a
+ * Scope that genuinely has none. `composer.tsx` documents why those two must read differently, so
+ * what it is handed here is the *request*: one promise per Scope, resolving when the host answers.
+ * A menu opened early waits and says "Looking for Skills…", which is true.
  *
- * `undefined` until the first answer, which is not the same as an empty list: one is a menu still
- * looking and the other is a menu with nothing to offer, and the composer's menu renders them
- * differently.
+ * **Prefetched.** The request is started when the Scope changes rather than when the menu opens,
+ * because it costs a Backend Session: pi answers off disk, but Claude spawns its CLI and takes
+ * around six seconds (`src/daemon/skills.ts` carries the measurement). Starting it when somebody
+ * picks a Project spends that while they are typing instead of in front of an open menu. Nothing is
+ * cached — the host holds a probe only while it is in flight, because a Skill directory changes
+ * whenever somebody saves a file.
  */
-
-export type ScopeSkillCatalogue = {
-  skills: Skill[] | undefined;
-  /** Why there are none, when there are none for a reason. Prose, straight from the host. */
-  problem: string | undefined;
-};
-
 export function useScopeSkills(
   scope: string | undefined,
   backend: string,
-): ScopeSkillCatalogue {
-  const [answer, setAnswer] = useState<ScopeSkills | undefined>(undefined);
+): () => Promise<Skill[]> {
   /*
-   * Bumped per request, so an answer for a Scope its reader has moved on from is dropped rather than
-   * rendered — the same guard `useBranches` carries, and it matters more here. A path typed by hand
-   * settles at intermediate values, each of which spawns a backend, and the answers can return out
-   * of order; without this, the menu could offer one directory's Skills for another's Scope.
-   *
-   * This is also the whole of the boot-storm guard, and it belongs on the client rather than on the
-   * host: only the client knows the Scope is still being typed.
+   * The request for the Scope on screen. A ref rather than state because nothing renders from it —
+   * the Composer owns what the menu shows — and replacing it is also what retires the stale-answer
+   * guard `useBranches` needs: there is no second answer to discard, because the only promise anyone
+   * can reach is the current one.
    */
-  const generation = useRef(0);
+  const inFlight = useRef<Promise<Skill[]>>(Promise.resolve([]));
 
   useEffect(() => {
-    const mine = (generation.current += 1);
-    setAnswer(undefined);
-    if (scope === undefined || scope.trim() === "" || backend === "") return;
-
-    void (async () => {
-      try {
-        const response = await fetch(
-          `/api/skills?scope=${encodeURIComponent(scope)}&backend=${encodeURIComponent(backend)}`,
-          { credentials: "same-origin" },
-        );
-        const found = response.ok ? ((await response.json()) as ScopeSkills) : undefined;
-        // Guarded against the Scope having moved on, and against the answer being about another one:
-        // the host echoes the Scope back precisely so a client can check rather than trust.
-        if (generation.current !== mine || found?.scope !== scope) return;
-        setAnswer(found);
-      } catch {
-        // A failed ask reads as "no Skills" rather than as an error, the choice `useBranches` makes.
-        // There is no action a reader could take from a message here, and `/` still types a `/`.
-        if (generation.current === mine) setAnswer({ backend, scope, skills: [] });
-      }
-    })();
+    inFlight.current =
+      scope === undefined || scope === "" || backend === ""
+        ? Promise.resolve([])
+        : fetchScopeSkills(scope, backend);
   }, [scope, backend]);
 
-  return { skills: answer?.skills, problem: answer?.problem };
+  return useCallback(() => inFlight.current, []);
+}
+
+/**
+ * The Skills one Scope offers through one Backend Adapter.
+ *
+ * An empty list for every failure, which is the choice `useBranches` makes and for the same reason:
+ * there is no action a reader could take from a message here, and `/` still types a `/`. The
+ * `problem` the host reports is deliberately dropped — the menu has nowhere to say it, and "no
+ * Skills" is the same outcome either way. Somewhere to show it is a separate decision.
+ */
+async function fetchScopeSkills(scope: string, backend: string): Promise<Skill[]> {
+  try {
+    const response = await fetch(
+      `/api/skills?scope=${encodeURIComponent(scope)}&backend=${encodeURIComponent(backend)}`,
+      { credentials: "same-origin" },
+    );
+    if (!response.ok) return [];
+    const answer = (await response.json()) as ScopeSkills;
+    // The host echoes the Scope back precisely so a client can check rather than trust.
+    return answer.scope === scope ? answer.skills : [];
+  } catch {
+    return [];
+  }
 }

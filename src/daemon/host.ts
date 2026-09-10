@@ -1034,6 +1034,37 @@ export class SessionHost {
   }
 
   /**
+   * Move a Scope's checkout, with no Agent Session in it.
+   *
+   * The counterpart to `switchBranch` above, and deliberately not a shared implementation: that one
+   * is about an Agent Session — it refuses while a turn is in flight, and it leaves a note for the
+   * model saying the files moved — while this one has neither a turn to check nor a conversation to
+   * tell. Folding them together would mean a method whose promises depend on which argument was
+   * supplied.
+   *
+   * **It will move the tree under an Agent Session already bound to that Scope**, which
+   * `switchBranch` exists partly to prevent. That is the caller's call to make and the New Agent
+   * Session view says so beside the control; what is *not* optional is that the rail must not then
+   * lie about where those sessions are, so every one of them is re-read afterwards. Same reasoning
+   * as `refreshBranch`'s own: a stale branch is a claim a reader trusts.
+   */
+  async switchScopeBranch(scope: string, branch: string): Promise<Branch> {
+    if (!isRepository(scope)) throw new CommandRefused(`${scope} is not a git repository`);
+
+    const switched = await gitSwitchBranch(scope, branch);
+    if (!switched.ok) throw new CommandRefused(switched.failure.message);
+
+    // Whoever is bound to this directory is now somewhere else. Awaited so the answer a client
+    // polls for straight afterwards is the new one rather than the one it just replaced.
+    await Promise.all(
+      [...this.sessions.values()]
+        .filter((record) => record.scope === scope)
+        .map((record) => this.refreshBranch(record)),
+    );
+    return switched.value;
+  }
+
+  /**
    * Ask git where the Scope is now, and record it if that is news.
    *
    * Called where there is reason to believe the answer changed — at create, on Revive, after a
@@ -1323,6 +1354,8 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
+      case "switch_scope_branch":
+        return await this.switchScopeBranch(command.scope, command.branch);
       case "rename":
         return await this.rename(command.sessionId);
       case "compact":

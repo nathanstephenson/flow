@@ -1,4 +1,5 @@
 import type { Command } from "../../../src/protocol/commands.ts";
+import type { EffortLevel } from "../../../src/protocol/events.ts";
 
 /**
  * What the New Agent Session form describes, as the Command it would send.
@@ -10,10 +11,13 @@ import type { Command } from "../../../src/protocol/commands.ts";
  */
 
 export type NewAgentSessionForm = {
+  /** A Project's path. Empty where no Project has been chosen, which is what makes the form unready. */
   scope: string;
   backend: string;
-  /** Absent until `GET /api/models` answers, which is also what disables the composer. */
+  /** Absent until `GET /api/models` answers. */
   modelId: string | undefined;
+  /** Absent until somebody chooses one; the backend then runs at whatever it chose for itself. */
+  effort: EffortLevel | undefined;
   inWorktree: boolean;
   /** Whether the Scope is a repository. Asked, not assumed — the field is free text. */
   repository: boolean;
@@ -39,6 +43,7 @@ export function createCommandFor(
     scope,
     backend: form.backend,
     ...(form.modelId === undefined ? {} : { modelId: form.modelId }),
+    ...(form.effort === undefined ? {} : { effort: form.effort }),
     /*
      * All three conditions, every time.
      *

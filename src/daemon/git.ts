@@ -220,21 +220,39 @@ export function flattenBranch(branch: string): string {
 /**
  * The branch a new worktree gets when nobody named one.
  *
- * `flow/<base-leaf>-<date>`: the namespace so `git branch` in the reader's own terminal says
- * who made it — a branch ref always survives a reap, so these accumulate and have to be
- * identifiable six months later — the base branch's own leaf so two are distinguishable at a
- * glance, and the date because that is the fact someone actually uses to decide whether they still
- * care.
+ * `flow/<base-leaf>-<ms since UTC midnight>`: the namespace so `git branch` in the reader's own
+ * terminal says who made it — a branch ref always survives a reap, so these accumulate and have to
+ * be attributable later — the base branch's own leaf so two are distinguishable at a glance, and a
+ * millisecond-of-day so two cut minutes apart do not collide.
  *
  * **Exactly two segments, always.** Git refs are files, so `refs/heads/flow/main` cannot
  * exist while `refs/heads/flow/main/2` does. Any scheme with a variable number of segments
  * is a trap that fires on the second worktree of the day, so the counter goes inside the last
  * segment and never adds one.
+ *
+ * This used to be the date, and swapping it is a deliberate trade rather than a tidy-up. The date
+ * read better — it was the fact someone used to decide whether they still cared about a branch — but
+ * it collided on every worktree after the first each day, so the common case wore a `-2`, `-3`
+ * counter that carried no meaning at all. A millisecond-of-day is unique in practice, which retires
+ * the counter for derived names; what it costs is legibility, and it is paid knowingly. `git branch`
+ * is not where anyone dates a branch — `git log` is.
  */
 export function derivedBranchName(options: { from: string; now: Date }): string {
   const leaf = flattenBranch(options.from.split("/").pop() ?? options.from);
-  const date = options.now.toISOString().slice(0, 10);
-  return `${NAMESPACE}${leaf}-${date}`;
+  return `${NAMESPACE}${leaf}-${millisecondOfDay(options.now)}`;
+}
+
+/**
+ * How far into the UTC day `now` is, in milliseconds.
+ *
+ * UTC rather than local, for the reason every other stamp in this codebase is: it is compared
+ * against other machines' output and read out of transcripts written elsewhere, and a local-time
+ * value is ambiguous the twice a year it matters. Derived from the UTC calendar parts rather than
+ * `% 86_400_000` so a leap second cannot push it past a day's worth.
+ */
+function millisecondOfDay(now: Date): number {
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return now.getTime() - midnight;
 }
 
 async function refExists(repo: string, branch: string): Promise<boolean> {

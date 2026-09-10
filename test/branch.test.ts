@@ -73,6 +73,66 @@ describe("branches", () => {
     assert.deepEqual(reduceAll(host.logFor(id).since(0)).branch, { name: "feature" });
   });
 
+  /**
+   * Moving a Scope's checkout with no Agent Session in it — the New Agent Session view's picker.
+   *
+   * The pair to the block above, and the difference is what each can promise. That one is about a
+   * session: it refuses mid-turn and leaves the model a note. This one has neither, which is exactly
+   * why the last test here exists.
+   */
+  describe("moving a Scope's checkout with no Agent Session in it", () => {
+    it("moves the working tree and answers where it landed", async () => {
+      const repo = repository(work, "api", ["feature"]);
+
+      const landed = await host.switchScopeBranch(repo, "feature");
+
+      assert.deepEqual(landed, { name: "feature" });
+      assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "feature");
+      assert.deepEqual(host.list(), [], "and creates no Agent Session doing it");
+    });
+
+    it("refuses a Scope that is not a repository", async () => {
+      const plain = join(work, "notes");
+      mkdirSync(plain, { recursive: true });
+
+      await assert.rejects(() => host.switchScopeBranch(plain, "main"), /not a git repository/);
+    });
+
+    it("surfaces git's own refusal verbatim", async () => {
+      const repo = repository(work, "api", ["feature"]);
+
+      await assert.rejects(() => host.switchScopeBranch(repo, "nope"), /nope/);
+      assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "main");
+    });
+
+    /*
+     * The hazard this command carries, pinned rather than prevented: unlike `switchBranch` it will
+     * move the tree under a session that is already bound to the Scope. What it must not do is leave
+     * the rail claiming that session is still where it was — a stale branch is a claim a reader
+     * trusts, which is the argument `refreshBranch` is written on.
+     */
+    it("re-reads the Agent Sessions bound to that Scope, so the rail does not lie", async () => {
+      const repo = repository(work, "api", ["feature"]);
+      const id = await host.create({ scope: repo, backend: "fake" });
+      assert.deepEqual(summaryOf(id)?.branch, { name: "main" });
+
+      await host.switchScopeBranch(repo, "feature");
+
+      assert.deepEqual(summaryOf(id)?.branch, { name: "feature" });
+      assert.deepEqual(reduceAll(host.logFor(id).since(0)).branch, { name: "feature" });
+    });
+
+    it("leaves an Agent Session in a different Scope alone", async () => {
+      const repo = repository(work, "api", ["feature"]);
+      const other = repository(work, "web", ["feature"]);
+      const elsewhere = await host.create({ scope: other, backend: "fake" });
+
+      await host.switchScopeBranch(repo, "feature");
+
+      assert.deepEqual(summaryOf(elsewhere)?.branch, { name: "main" });
+    });
+  });
+
   it("refuses while a turn is in flight, and does not move the tree", async () => {
     const repo = repository(work, "api", ["feature"]);
     const id = await host.create({ scope: repo, backend: "fake" });

@@ -4,6 +4,7 @@ import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions } from "@/agent-sessions.tsx";
+import { useSessionActions } from "@/composer-actions.ts";
 import type { Docks } from "@/docks.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
@@ -95,6 +96,9 @@ function AttachedPane({
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const { sessions } = useAgentSessions();
+  // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
+  // no longer knows there is a session behind it — see web/src/composer-actions.ts.
+  const actions = useSessionActions(sessionId);
   const [query, setQuery] = useState("");
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
@@ -143,8 +147,9 @@ function AttachedPane({
       </SubagentOpenProvider>
 
       <Composer
-        sessionId={sessionId}
+        id={sessionId}
         chrome={chrome}
+        actions={actions}
         drafts={drafts}
         /*
          * What an open Permission Prompt is actually asking about, read here rather than in the

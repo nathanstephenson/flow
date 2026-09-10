@@ -15,6 +15,7 @@ const form: NewAgentSessionForm = {
   scope: "/work/api",
   backend: "claude",
   modelId: "claude-x",
+  effort: undefined,
   inWorktree: false,
   repository: true,
   base: "main",
@@ -49,6 +50,15 @@ describe("the create Command a New Agent Session form describes", () => {
     const command = createCommandFor({ ...form, modelId: undefined });
     assert.equal(command?.modelId, undefined);
     assert.ok(command && !("modelId" in command));
+  });
+
+  /*
+   * Absent rather than sent as null, for the reason the model is: the backend runs at whatever level
+   * it chose for itself, and Claude only reports which in the init message of the first turn.
+   */
+  it("carries Effort only once somebody has chosen one", () => {
+    assert.ok(!("effort" in (createCommandFor(form) ?? {})));
+    assert.equal(createCommandFor({ ...form, effort: "high" })?.effort, "high");
   });
 
   describe("the worktree clause", () => {

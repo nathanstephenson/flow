@@ -166,7 +166,7 @@ describe("flattenBranch", () => {
   });
 
   it("drops the namespace, which the directory's position already says", () => {
-    assert.equal(flattenBranch("flow/main-2026-09-04"), "main-2026-09-04");
+    assert.equal(flattenBranch("flow/main-36000000"), "main-36000000");
   });
 
   // Lossy on purpose: nothing reads a branch back out of a path, so collisions are settled by
@@ -181,9 +181,10 @@ describe("flattenBranch", () => {
 });
 
 describe("derivedBranchName", () => {
-  it("names the base branch's leaf and the date, in exactly two segments", () => {
+  it("names the base branch's leaf and the millisecond of the UTC day, in exactly two segments", () => {
+    // 10:00:00Z is ten hours in: 10 * 3_600_000.
     const name = derivedBranchName({ from: "main", now: new Date("2026-09-04T10:00:00Z") });
-    assert.equal(name, "flow/main-2026-09-04");
+    assert.equal(name, "flow/main-36000000");
     assert.equal(name.split("/").length, 2);
   });
 
@@ -191,19 +192,43 @@ describe("derivedBranchName", () => {
   // with `flow/release`, which is a trap that fires on the second worktree of the day.
   it("stays two segments even when the base branch is itself slashed", () => {
     const name = derivedBranchName({ from: "release/2.1", now: new Date("2026-09-04T10:00:00Z") });
-    assert.equal(name, "flow/2.1-2026-09-04");
+    assert.equal(name, "flow/2.1-36000000");
     assert.equal(name.split("/").length, 2);
+  });
+
+  it("counts from UTC midnight, not from the epoch", () => {
+    assert.equal(derivedBranchName({ from: "main", now: new Date("2026-09-04T00:00:00Z") }), "flow/main-0");
+    // One millisecond before the next midnight is the largest value it can take.
+    assert.equal(
+      derivedBranchName({ from: "main", now: new Date("2026-09-04T23:59:59.999Z") }),
+      "flow/main-86399999",
+    );
+  });
+
+  /*
+   * The whole reason for the change. Two worktrees cut from `main` minutes apart used to want the
+   * same name, so the second wore a `-2` that said nothing; now they differ on their own.
+   */
+  it("differs for two worktrees cut in the same day", () => {
+    const morning = derivedBranchName({ from: "main", now: new Date("2026-09-04T09:00:00Z") });
+    const afternoon = derivedBranchName({ from: "main", now: new Date("2026-09-04T15:30:00Z") });
+    assert.notEqual(morning, afternoon);
   });
 });
 
 describe("planWorktree", () => {
+  /*
+   * The counter is effectively retired for derived names now that they carry a millisecond, but the
+   * probe is still what makes that safe rather than assumed — so it is pinned by handing it a name
+   * that is already taken.
+   */
   it("bumps a derived name that is already taken, inside the last segment", async () => {
     const now = new Date("2026-09-04T10:00:00Z");
-    const repo = newRepo("planning", ["flow/main-2026-09-04"]);
+    const repo = newRepo("planning", ["flow/main-36000000"]);
     const planned = await planWorktree({ repo, from: "main", under: join(root, "plans"), now });
     assert.equal(planned.ok, true);
     if (!planned.ok) return;
-    assert.equal(planned.value.branch, "flow/main-2026-09-04-2");
+    assert.equal(planned.value.branch, "flow/main-36000000-2");
   });
 
   // Someone who typed a name and got a different one has been ignored, so a supplied name is
@@ -232,7 +257,7 @@ describe("planWorktree", () => {
     });
     assert.equal(planned.ok, true);
     if (!planned.ok) return;
-    assert.equal(planned.value.path, join(under, "naming", "main-2026-09-04"));
+    assert.equal(planned.value.path, join(under, "naming", "main-36000000"));
   });
 });
 
