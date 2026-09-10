@@ -6,7 +6,8 @@ const backend = new FakeBackend();
 runContract({
   name: "fake",
   turnTimeoutMs: 1_000,
-  createSession: (emit) => backend.create({ scope: "/tmp/scope", emit }),
+  createSession: (emit, tools) =>
+    backend.create({ scope: "/tmp/scope", emit, ...(tools === undefined ? {} : { tools }) }),
   /**
    * Drives a Subagent as well as a plain turn, so the contract's Subagent assertions are
    * exercised rather than skipped. The Fake is the only adapter certain to report one, which is

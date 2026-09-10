@@ -13,6 +13,7 @@ import {
   formatDuration,
   parseDuration,
 } from "../src/daemon/config.ts";
+import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
 import type { DirectoryMatches, Project } from "../src/protocol/projects.ts";
@@ -495,5 +496,133 @@ describe("the Standing Authorisations", () => {
     assert.throws(() => store.update({ permissions: { allow: [""] } } as never), /tool name/);
     assert.throws(() => store.update({ permissions: { allow: "Bash" } } as never), /list of tool names/);
     assert.deepEqual(store.standingAuthorisations(), ["Bash"]);
+  });
+});
+
+describe("the Default Models and the Summary Model", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "flow-providers-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const file = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as Record<string, unknown>;
+
+  it("is absent on a machine that has chosen neither", () => {
+    const store = new ConfigStore(root);
+
+    // A real state, as `projects` and `permissions` are: no machine starts with an opinion about
+    // which model to use, and "unset" is not the same as "somebody chose the empty string".
+    assert.equal(store.view().providers, undefined);
+    assert.equal(store.defaultModel("claude"), undefined);
+    assert.equal(store.summaryModel(), undefined);
+  });
+
+  it("reads both halves off the file", () => {
+    writeFileSync(
+      join(root, "config.json"),
+      JSON.stringify({
+        providers: {
+          defaults: { claude: " opus ", pi: "anthropic/claude-sonnet-4" },
+          summary: { backend: "claude", modelId: "haiku" },
+        },
+      }),
+    );
+    const store = new ConfigStore(root);
+
+    assert.equal(store.defaultModel("claude"), "opus");
+    assert.equal(store.defaultModel("pi"), "anthropic/claude-sonnet-4");
+    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku" });
+  });
+
+  it("keeps an entry for a backend this build does not have", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ providers: { defaults: { zeta: "z-1" } } }));
+    const store = new ConfigStore(root);
+
+    // The same courtesy `update` extends to a key no version of this daemon has parsed: a
+    // config.json written on a machine with another backend installed must survive being read here.
+    assert.equal(store.defaultModel("zeta"), "z-1");
+    assert.equal(store.warning, undefined);
+  });
+
+  it("costs a bad half only itself", () => {
+    writeFileSync(
+      join(root, "config.json"),
+      JSON.stringify({
+        providers: { defaults: { claude: "opus", pi: 7 }, summary: { backend: "claude" } },
+      }),
+    );
+    const store = new ConfigStore(root);
+
+    // Parsed independently, so an unreadable Summary Model still leaves the Default Models in force
+    // and one bad entry does not cost the others.
+    assert.equal(store.defaultModel("claude"), "opus");
+    assert.equal(store.defaultModel("pi"), undefined);
+    assert.equal(store.summaryModel(), undefined);
+    assert.match(store.warning ?? "", /providers\.defaults\.pi/);
+    assert.match(store.warning ?? "", /providers\.summary\.modelId/);
+  });
+
+  it("merges the Default Models per backend, and clears one with an empty string", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { defaults: { claude: "opus" } } });
+
+    // The one place this file departs from "a list is replaced wholesale". That rule exists because
+    // a merged list cannot express a removal; a keyed map can, and `""` is how — the same way
+    // `projects.root: ""` clears the root.
+    store.update({ providers: { defaults: { pi: "gpt-5" } } });
+    assert.deepEqual(store.view().providers?.defaults, { claude: "opus", pi: "gpt-5" });
+
+    store.update({ providers: { defaults: { claude: "" } } });
+    assert.deepEqual(store.view().providers?.defaults, { pi: "gpt-5" });
+  });
+
+  it("clears the Summary Model with null, and the section with it", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { summary: { backend: "claude", modelId: "haiku" } } });
+
+    store.update({ providers: { summary: null } });
+
+    // The key has to be deleted rather than left unwritten, for the reason `permissions` is: the
+    // read-modify-write preserves whatever the file already holds.
+    assert.equal(store.summaryModel(), undefined);
+    assert.equal("providers" in file(), false);
+  });
+
+  it("refuses a half-specified Summary Model rather than merging one", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { summary: { backend: "claude", modelId: "haiku" } } });
+
+    // A merge would let a client change the Backend Adapter and leave behind a model id that
+    // adapter cannot serve — a state nothing meant to ask for.
+    assert.throws(() => store.update({ providers: { summary: { backend: "pi" } } } as never), /modelId/);
+    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku" });
+  });
+
+  it("refuses an id that is not one, and a field it does not know", () => {
+    const store = new ConfigStore(root);
+
+    assert.throws(() => store.update({ providers: { defaults: { claude: "two words" } } }), /not a model id/);
+    assert.throws(() => store.update({ providers: { defaults: { claude: 7 } } } as never), /must be a model id/);
+    assert.throws(() => store.update({ providers: { summarise: {} } } as never), /unknown field summarise/);
+  });
+
+  it("reaches a running host without a restart", async () => {
+    const store = new ConfigStore(root);
+    const host = new SessionHost({ defaultModel: store.defaultModel });
+    const backend = new FakeBackend();
+    host.registerBackend(backend);
+
+    // ADR 0009: the host reads *through* the store rather than being handed a copy at startup. A
+    // snapshot here would present as "my Default Model only applies after a restart".
+    store.update({ providers: { defaults: { fake: "fake-2" } } });
+    await host.create({ scope: root, backend: "fake" });
+
+    assert.equal(backend.latest.modelId, "fake-2");
   });
 });

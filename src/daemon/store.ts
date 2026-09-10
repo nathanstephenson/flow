@@ -21,11 +21,27 @@ import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
  * that away for nothing.
  */
 
+/**
+ * Where an Agent Session's title came from, and so what may overwrite it — see
+ * `SessionRecord.titleSource` in ./host.ts, which is where the rule lives.
+ *
+ * Not on the wire. A client is handed `SessionSummary.title` and has no decision to make about its
+ * provenance; publishing this would be a field nothing reads, able to go stale unnoticed.
+ */
+export type TitleSource = "scope" | "first-line" | "summary";
+
 export type SessionMeta = {
   id: string;
   scope: string;
   backend: string;
   title: string;
+  /**
+   * Where the title came from — see `SessionRecord.titleSource`.
+   *
+   * Optional, and absent in every meta.json written before Agent Sessions were named by a model.
+   * `SessionHost.load` infers it from the title for those, so nothing has to be migrated.
+   */
+  titleSource?: TitleSource;
   createdAt: string;
   updatedAt: string;
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */

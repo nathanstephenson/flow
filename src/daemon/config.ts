@@ -59,6 +59,26 @@ export type Config = {
    * defaulted value: a machine that has never answered a Permission Prompt with Always has none.
    */
   permissions?: Permissions;
+  /**
+   * The Default Models and the Summary Model. Absent when neither has been chosen, which is a real
+   * state and not a defaulted value: every installation starts without one.
+   */
+  providers?: Providers;
+};
+
+/**
+ * Which model to use when nobody has said otherwise, keyed by Backend Adapter because a model id
+ * only means anything through the adapter that serves it.
+ */
+export type Providers = {
+  defaults?: Record<string, string>;
+  summary?: SummaryModel;
+};
+
+/** The Summary Model: the Backend Adapter to reach it through, and the model id to ask for. */
+export type SummaryModel = {
+  backend: string;
+  modelId: string;
 };
 
 /**
@@ -126,6 +146,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const fonts = parseFonts(parsed, warnings);
   const projects = parseProjects(parsed, warnings);
   const permissions = parsePermissions(parsed, warnings);
+  const providers = parseProviders(parsed, warnings);
 
   return {
     config: {
@@ -133,9 +154,83 @@ export function loadConfig(stateRoot: string): LoadedConfig {
       fonts,
       ...(projects === undefined ? {} : { projects }),
       ...(permissions === undefined ? {} : { permissions }),
+      ...(providers === undefined ? {} : { providers }),
     },
     ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}),
   };
+}
+
+/**
+ * The file's manner again, and the two halves are parsed independently so a typo in one does not
+ * cost the other: an unreadable Summary Model still leaves the Default Models in force.
+ *
+ * An entry keyed by a Backend Adapter this build does not have is **kept, not warned about**. A
+ * config.json written on a machine with pi installed must survive being read on one without it —
+ * the same courtesy `ConfigStore.update` extends to a key no version of this daemon has parsed.
+ */
+function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
+  const section = (parsed as { providers?: { defaults?: unknown; summary?: unknown } })?.providers;
+  if (section === undefined || section === null) return undefined;
+  if (typeof section !== "object" || Array.isArray(section)) {
+    warnings.push("providers must be an object; choosing no models");
+    return undefined;
+  }
+
+  const providers: Providers = {};
+
+  if (section.defaults !== undefined) {
+    if (typeof section.defaults !== "object" || section.defaults === null || Array.isArray(section.defaults)) {
+      warnings.push("providers.defaults must map a backend to a model id; choosing no Default Model");
+    } else {
+      const defaults: Record<string, string> = {};
+      for (const [backend, modelId] of Object.entries(section.defaults as Record<string, unknown>)) {
+        const problem = checkModelId(modelId, `providers.defaults.${backend}`);
+        if (problem !== undefined) warnings.push(`${problem}; choosing no Default Model for ${backend}`);
+        else defaults[backend] = (modelId as string).trim();
+      }
+      if (Object.keys(defaults).length > 0) providers.defaults = defaults;
+    }
+  }
+
+  if (section.summary !== undefined) {
+    const summary = section.summary as { backend?: unknown; modelId?: unknown } | null;
+    const problem =
+      typeof summary !== "object" || summary === null || Array.isArray(summary)
+        ? "providers.summary must name a backend and a model id"
+        : (checkModelId(summary.backend, "providers.summary.backend") ??
+          checkModelId(summary.modelId, "providers.summary.modelId"));
+    if (problem !== undefined) warnings.push(`${problem}; naming no Agent Sessions`);
+    else {
+      const named = summary as { backend: string; modelId: string };
+      providers.summary = { backend: named.backend.trim(), modelId: named.modelId.trim() };
+    }
+  }
+
+  return providers.defaults === undefined && providers.summary === undefined ? undefined : providers;
+}
+
+/**
+ * Whether a value can serve as a model id or a Backend Adapter name, reported without saying what to
+ * do about it. Split from its readers for the reason `checkFontFamily` and `checkProjectRoot` are:
+ * the file warns and falls back, a PUT is refused outright, and the rule must not know which caller
+ * it is answering.
+ *
+ * **Whether any backend can actually serve the id is deliberately not checked.** Only a running
+ * Backend Session knows the list (`supportedModels()` is a control request on a live stream), so
+ * checking here would mean I/O, and `applyPatch` stays a pure merge — the same line `checkProjectRoot`
+ * draws around whether a directory exists. An id no adapter serves fails on the first turn instead,
+ * which is what the picker in the Providers section exists to prevent.
+ *
+ * Whitespace is refused rather than trimmed away mid-string: no model id or backend name contains
+ * any, so one that does is a paste that went wrong and saying so beats storing something unreachable.
+ */
+export function checkModelId(value: unknown, field: string): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") {
+    return `${field} must be a model id`;
+  }
+  const id = value.trim();
+  if (/\s/.test(id)) return `${field}: "${id}" is not a model id`;
+  return undefined;
 }
 
 /**
@@ -299,15 +394,83 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
+  const providers = patchProviders(current.providers, body.providers);
   return {
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
     ...(projects === undefined ? {} : { projects }),
     ...(permissions === undefined ? {} : { permissions }),
+    ...(providers === undefined ? {} : { providers }),
   };
+}
+
+/**
+ * The Default Models and the Summary Model.
+ *
+ * `defaults` **merges per backend**, which is the one place this file departs from "a list is
+ * replaced wholesale". That rule exists because a merged list makes a removal indistinguishable
+ * from an omission; a keyed map has somewhere to put a removal, and `""` is it — the same way
+ * `projects.root: ""` is how a form clears the root.
+ *
+ * `summary` is one value and is set whole or cleared with `null`. A merge would let a client change
+ * the Backend Adapter and leave behind a model id that adapter cannot serve, which is a state no
+ * client meant to ask for.
+ */
+function patchProviders(
+  current: Providers | undefined,
+  patch: SettingsPatch["providers"],
+): Providers | undefined {
+  if (patch === undefined) return current;
+  refuseUnknownKeys(patch, ["defaults", "summary"], "providers");
+
+  const next: Providers = {
+    ...(current?.defaults === undefined ? {} : { defaults: { ...current.defaults } }),
+    ...(current?.summary === undefined ? {} : { summary: current.summary }),
+  };
+
+  const defaults: unknown = patch.defaults;
+  if (defaults !== undefined) {
+    if (typeof defaults !== "object" || defaults === null || Array.isArray(defaults)) {
+      throw new ConfigError("providers.defaults must map a backend to a model id");
+    }
+    const merged = { ...next.defaults };
+    for (const [backend, modelId] of Object.entries(defaults as Record<string, unknown>)) {
+      if (modelId === "") {
+        delete merged[backend];
+        continue;
+      }
+      const problem = checkModelId(modelId, `providers.defaults.${backend}`);
+      if (problem !== undefined) throw new ConfigError(problem);
+      merged[backend] = (modelId as string).trim();
+    }
+    if (Object.keys(merged).length === 0) delete next.defaults;
+    else next.defaults = merged;
+  }
+
+  if (patch.summary !== undefined) {
+    if (patch.summary === null) delete next.summary;
+    else {
+      const summary: unknown = patch.summary;
+      if (typeof summary !== "object" || Array.isArray(summary)) {
+        throw new ConfigError("providers.summary must name a backend and a model id");
+      }
+      refuseUnknownKeys(summary as object, ["backend", "modelId"], "providers.summary");
+      const named = summary as { backend?: unknown; modelId?: unknown };
+      const problem =
+        checkModelId(named.backend, "providers.summary.backend") ??
+        checkModelId(named.modelId, "providers.summary.modelId");
+      if (problem !== undefined) throw new ConfigError(problem);
+      next.summary = {
+        backend: (named.backend as string).trim(),
+        modelId: (named.modelId as string).trim(),
+      };
+    }
+  }
+
+  return next.defaults === undefined && next.summary === undefined ? undefined : next;
 }
 
 /**

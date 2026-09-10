@@ -244,6 +244,19 @@ export type ViewState = {
    * second one while a turn is in flight and a compaction is not a turn to queue behind.
    */
   compacting?: true;
+  /**
+   * Whether anybody has said anything yet.
+   *
+   * A boolean rather than a count, and set rather than derived from `entries`, for the reason
+   * `activeSubagents` is a number: it reaches the web client's Chrome, which is shallow-compared,
+   * so scanning `entries` in `chromeOf` would be work on every streamed frame to answer a question
+   * that changes exactly once in a session's life.
+   *
+   * What it is for is the Rename item in the pane's overflow menu: a Summary Model cannot name a
+   * session with nothing in it, and the front-ends hide what cannot apply rather than offering
+   * something that comes back as a refusal.
+   */
+  spoken?: true;
   endedReason?: string;
   lastSeq: number;
 };
@@ -321,6 +334,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "user_message":
       return {
         ...state,
+        spoken: true,
         entries: upsert(state.entries, {
           kind: "user",
           id: event.id,

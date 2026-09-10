@@ -148,6 +148,19 @@ export type Command =
    */
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
+   * Name this Agent Session again, with the Summary Model, from what its transcript now holds
+   * (ADR 0020). Answers the new title.
+   *
+   * **Occupies nothing.** It reads the Presentation Transcript rather than the Conversation Context
+   * (ADR 0001), so unlike every command above it opens no turn, and unlike `compact` or `send` it
+   * does not Revive a Dormant Agent Session to do its work (ADR 0003). The model call happens in a
+   * throwaway Backend Session elsewhere.
+   *
+   * No `title` field: a hand-typed name is not offered, and a field nothing sends is one that will
+   * be wrong the day something does. Adding one later is compatible.
+   */
+  | { type: "rename"; sessionId: string }
+  /**
    * Compact the Conversation Context now, rather than waiting for the backend to do it when the
    * window fills.
    *

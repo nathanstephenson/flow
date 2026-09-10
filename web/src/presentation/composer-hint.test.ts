@@ -20,6 +20,7 @@ const chrome = (over: Partial<Chrome>): Chrome => ({
   asking: undefined,
   authorising: undefined,
   compacting: false,
+  spoken: false,
   link: "live",
   ...over,
 });

@@ -17,6 +17,27 @@ import type { Branch } from "./git.ts";
  */
 export type EffortLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * What one Backend Adapter can reach, as `GET /api/models` reports it.
+ *
+ * In the protocol rather than beside the probe that fills it in, for the reason `Settings` is: the
+ * Providers section renders this and cannot import a module that opens Backend Sessions. Beside
+ * `ModelInfo` because it is a list of them and a name for why the list might be empty.
+ */
+export type BackendModels = {
+  backend: string;
+  models: ModelInfo[];
+  /**
+   * Why the list is empty, when it is empty for a reason rather than because there are no models.
+   *
+   * A string a person reads, not a code: the causes are a CLI that is not logged in, an optional
+   * dependency this build does not carry, a binary that is not on PATH. Nothing a client could
+   * usefully branch on, and everything it should say out loud so the reader knows to type an id
+   * rather than wonder at an empty list.
+   */
+  problem?: string;
+};
+
 export type ModelInfo = {
   id: string;
   provider?: string;

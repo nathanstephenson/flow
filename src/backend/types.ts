@@ -48,6 +48,23 @@ export type BackendCreateOptions = {
    * grant from the Settings.
    */
   standingAuthorisations?: readonly string[];
+  /**
+   * Run no tools at all — a one-shot text call rather than an agent.
+   *
+   * The only caller is the Summary Model (ADR 0020), whose Backend Session holds no Presentation
+   * Transcript and whose words nobody sees. Two things go wrong without it. A pre-approved tool
+   * would let a session nobody is watching read the Scope's files to answer a question about three
+   * words of text; and an unapproved one would raise a Permission Prompt into an event sink with no
+   * human behind it, holding the turn open until the caller's timeout.
+   *
+   * So an adapter honouring this must **deny** a tool call, not park it. Denying is the half that
+   * lets the turn end.
+   *
+   * Not a list. "Which tools" is a question a Standing Authorisation already answers for the
+   * sessions people work in, and a second, subtler mechanism for saying it would be one more place
+   * for the two to disagree.
+   */
+  tools?: "none";
   emit: (event: BackendEvent) => void;
 };
 

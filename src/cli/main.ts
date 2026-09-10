@@ -164,6 +164,8 @@ async function startHost(
     retention: config.retention,
     standingAuthorisations: config.standingAuthorisations,
     allowTool: config.allowTool,
+    defaultModel: config.defaultModel,
+    summaryModel: config.summaryModel,
   });
   registerBackends(host);
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.

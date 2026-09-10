@@ -52,6 +52,11 @@ export type HostConfig = {
    */
   permissions?: Settings["permissions"];
   /**
+   * The Default Models and the Summary Model. Absent where neither has been chosen — the same shape
+   * `projects` and `permissions` have, for the same reason.
+   */
+  providers?: Settings["providers"];
+  /**
    * The opted-in Projects — `projects.include`, resolved. This is what a client offers.
    *
    * **Derived, not a Setting.** The Setting is the list of paths; this is what they point at, which

@@ -12,6 +12,7 @@ import { TranscriptStore } from "../src/daemon/store.ts";
 import { connect, type Connection, type LinkState } from "../src/client/connection.ts";
 import { reduceAll } from "../src/client/reduce.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
+import type { BackendModels } from "../src/protocol/events.ts";
 import type { BranchList } from "../src/protocol/git.ts";
 import type { SessionSummary } from "../src/protocol/commands.ts";
 import { repository } from "./git-fixture.ts";
@@ -93,6 +94,43 @@ describe("Session Host transport", () => {
     it("refuses a request with no scope", async () => {
       const response = await get("/api/branches");
       assert.equal(response.status, 400);
+    });
+
+  });
+
+  describe("the model catalogue", () => {
+    const get = async (path: string) =>
+      await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
+
+    it("reports what each Backend Adapter can reach", async () => {
+      const listing = (await (await get("/api/models")).json()) as BackendModels[];
+
+      assert.deepEqual(
+        listing.map((entry) => entry.backend),
+        ["fake"],
+      );
+      assert.deepEqual(
+        listing[0]?.models.map((model) => model.id),
+        ["fake-1", "fake-2"],
+      );
+      assert.equal(listing[0]?.problem, undefined);
+    });
+
+    // Not a 404, for the reason /api/branches answers 200 for a directory that is not a
+    // repository: naming the state is what turns the picker into a text field rather than into an
+    // empty list nobody can explain.
+    it("answers 200 with a reason for a backend that cannot answer", async () => {
+      host.registerBackend({
+        name: "broken",
+        create: async () => {
+          throw new Error("not logged in");
+        },
+      });
+
+      const listing = (await (await get("/api/models?refresh=1")).json()) as BackendModels[];
+      const broken = listing.find((entry) => entry.backend === "broken");
+
+      assert.deepEqual(broken, { backend: "broken", models: [], problem: "not logged in" });
     });
 
     /**

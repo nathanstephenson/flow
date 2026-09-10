@@ -5,6 +5,7 @@ import { projectName } from "@client/project-name.ts";
 import { canRevive, occupied } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
+import { useHost } from "@/host.tsx";
 import type { DockSide } from "@/presentation/docks.ts";
 import type { Chrome } from "@/store/contract.ts";
 import { RunningHairline } from "@/components/status-indicator.tsx";
@@ -27,6 +28,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
+import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 
@@ -159,6 +161,7 @@ function SteeringQueueBadge({ depth }: { depth: number }) {
  */
 function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
+  const summaryModel = useHost().config.providers?.summary;
   const [confirmEnd, setConfirmEnd] = useState(false);
 
   return (
@@ -195,6 +198,30 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
               {canRevive(chrome.status)
                 ? "Revive and compact the Conversation Context"
                 : "Compact the Conversation Context"}
+            </DropdownMenuItem>
+          ) : null}
+          {/*
+            * Hidden when there is no Summary Model to name with, or nothing yet to name — the
+            * same rule as everything above it.
+            *
+            * Offered to a Dormant Agent Session, and with no "Revive and…" prefix, which is the
+            * one thing to be careful of when reading this next to Compact. A rename reads the
+            * Presentation Transcript (ADR 0001), not the Conversation Context, so it starts no
+            * Backend Session and spends nothing on this session (ADR 0003). Its cost is one call
+            * to the Summary Model, somewhere else.
+            */}
+          {summaryModel && chrome.spoken ? (
+            <DropdownMenuItem
+              onClick={() => {
+                // Said before the wait, not after it. Naming means spawning a whole Backend
+                // Session for the Summary Model, which is the better part of a minute against a
+                // real backend — long enough that a menu closing onto nothing reads as a click
+                // that missed. The name arriving in the header is the completion signal.
+                toast.info("Naming this Agent Session…");
+                void run({ type: "rename", sessionId });
+              }}
+            >
+              Name this Agent Session again
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuItem onClick={() => void navigator.clipboard?.writeText(sessionId)}>
