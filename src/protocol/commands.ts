@@ -194,6 +194,12 @@ export type Command =
    * in `session_started` — a line of an append-only transcript, stale from the first edit and stale
    * in every session at once. It is also only ever wanted after a deliberate keystroke, which is the
    * difference between this and the model list: nobody sees a Skill without asking for one.
+   *
+   * Keyed by `sessionId` because that is what makes it free: the Backend Session is already running,
+   * so the answer is a directory listing away. The Scope with no Agent Session in it yet — the New
+   * Agent Session view — is answered by `GET /api/skills` instead, which has to open a Backend
+   * Session to ask and so is a different enough thing to be a route rather than a member here.
+   * Neither caches, so nothing above contradicts it.
    */
   | { type: "list_skills"; sessionId: string }
   /**

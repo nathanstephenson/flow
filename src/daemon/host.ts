@@ -25,6 +25,7 @@ import type {
   PermissionDecision,
   Producer,
   Question,
+  ScopeSkills,
   Skill,
   Spend,
 } from "../protocol/events.ts";
@@ -41,6 +42,7 @@ import {
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
+import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { nameInput, SummaryModelSpare } from "./summariser.ts";
 
@@ -243,6 +245,14 @@ export class SessionHost {
   /** Model probes by backend name, held in flight rather than resolved — see `models`. */
   private readonly modelProbes = new Map<string, Promise<BackendModels>>();
   /**
+   * Skill probes by Backend Adapter and Scope, held *only* while in flight — see `skillsFor`.
+   *
+   * Keyed on both because a Skill list is a fact about a Scope read through an adapter, and the two
+   * adapters disagree about what a Skill is. `modelProbes` gets away with a bare name because it has
+   * one dimension.
+   */
+  private readonly skillProbes = new Map<string, Promise<ScopeSkills>>();
+  /**
    * One Summary Model session, booted before a naming needs it (ADR 0020).
    *
    * Belongs to no Agent Session, and is deliberately not wired to `announceClosed`, the reaper or
@@ -334,6 +344,42 @@ export class SessionHost {
       return probe;
     });
     return await Promise.all(probes);
+  }
+
+  /**
+   * Which Skills a Scope offers through one Backend Adapter, with no Agent Session in it.
+   *
+   * The counterpart to `listSkills` above, which answers the same question for an Agent Session that
+   * already exists and so costs nothing. This one has to open a Backend Session to ask, which is why
+   * it is here and not folded into that: they share a word and nothing else, and a shared helper
+   * would be one `try` bought by dragging one of two return shapes onto the other.
+   *
+   * **Held in flight and never after.** The entry is deleted as the probe settles, so two clients
+   * asking at once spawn one backend between them, and the next ask after that spawns another. That
+   * is deliberately unlike `models` directly above: a model list changes when an account's
+   * entitlements do, while a Skill directory changes when somebody saves a file, and ADR 0020
+   * already drew that line between `/api/models` and `/api/branches`. Skills are on the
+   * `/api/branches` side. What makes the spawn affordable is the client asking early — when its
+   * Scope field settles rather than when the menu opens — not the host holding a stale answer.
+   *
+   * Never throws, so the route never falls through to `serve`'s blanket 500: an unknown Backend
+   * Adapter is reported as a `problem` like any other reason a list might be empty.
+   */
+  async skillsFor(scope: string, backendName: string): Promise<ScopeSkills> {
+    const backend = this.backends.get(backendName);
+    if (!backend) {
+      return { backend: backendName, scope, skills: [], problem: `No backend named ${backendName}` };
+    }
+
+    const key = `${backendName}\n${scope}`;
+    const held = this.skillProbes.get(key);
+    if (held) return await held;
+
+    const probe = probeSkills(backend, scope).finally(() => {
+      this.skillProbes.delete(key);
+    });
+    this.skillProbes.set(key, probe);
+    return await probe;
   }
 
   logFor(sessionId: string): SessionLog {

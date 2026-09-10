@@ -254,6 +254,40 @@ async function handle(
     return;
   }
 
+  /*
+   * `GET /api/skills?scope=…&backend=…` — the Skills a Scope offers, before it has an Agent Session.
+   *
+   * The `list_skills` Command already answers this for a session that exists, and cannot answer it
+   * for one that does not: it reads a live Backend Session. The New Agent Session view needs the
+   * menu before there is anything to read, so this opens a throwaway session the way
+   * `/api/models` does (ADR 0020) and disposes of it.
+   *
+   * **Both parameters are required.** `scope` because the view asks about a Scope it has picked,
+   * which is why `/api/models`' shortcut of using the Project Root would be wrong here — this is the
+   * `/api/branches` shape, not the `/api/models` one. `backend` because the two adapters genuinely
+   * disagree about what a Skill is (pi folds its PromptTemplates in), so defaulting to the first
+   * registered one would quietly answer with a different adapter's menu than the session is about to
+   * be created on. The client already knows the names: `/api/config` hands it the same list it picks
+   * the backend from.
+   *
+   * A backend that cannot answer is a **200 carrying a `problem`**, the choice both neighbours make.
+   * It matters more here than for either of them: `CommandRefused` → 409 is wired only for
+   * `POST /api/command`, so anything thrown in this handler would reach the reader as a bare 500.
+   * `SessionHost.skillsFor` therefore never throws, including for a backend name it does not know.
+   *
+   * No `?refresh=1`, because nothing is cached to refresh — see `SessionHost.skillsFor`.
+   */
+  if (request.method === "GET" && url.pathname === "/api/skills") {
+    const scope = url.searchParams.get("scope");
+    const backend = url.searchParams.get("backend");
+    if (!scope || !backend) {
+      send(response, 400, { error: "scope and backend are required" });
+      return;
+    }
+    send(response, 200, await options.host.skillsFor(scope, backend));
+    return;
+  }
+
   if (options.shells && url.pathname === "/api/shells") {
     await handleShellCollection(request, response, url, options.host, options.shells);
     return;
