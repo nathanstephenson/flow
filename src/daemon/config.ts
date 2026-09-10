@@ -79,6 +79,14 @@ export type Providers = {
 export type SummaryModel = {
   backend: string;
   modelId: string;
+  /**
+   * Whether an Agent Session is named without being asked.
+   *
+   * Defaulted rather than optional here, unlike the sections around it, because it is a value with
+   * a right answer: somebody who has chosen a Summary Model wants it used. False is a deliberate
+   * "only when I ask", and leaves the rename in the overflow menu working.
+   */
+  automatic: boolean;
 };
 
 /**
@@ -193,7 +201,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
   }
 
   if (section.summary !== undefined) {
-    const summary = section.summary as { backend?: unknown; modelId?: unknown } | null;
+    const summary = section.summary as { backend?: unknown; modelId?: unknown; automatic?: unknown } | null;
     const problem =
       typeof summary !== "object" || summary === null || Array.isArray(summary)
         ? "providers.summary must name a backend and a model id"
@@ -201,8 +209,17 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
           checkModelId(summary.modelId, "providers.summary.modelId"));
     if (problem !== undefined) warnings.push(`${problem}; naming no Agent Sessions`);
     else {
-      const named = summary as { backend: string; modelId: string };
-      providers.summary = { backend: named.backend.trim(), modelId: named.modelId.trim() };
+      const named = summary as { backend: string; modelId: string; automatic?: unknown };
+      // Anything that is not `false` leaves naming on, which is the file's manner applied to a
+      // value with a right default: a typo here should cost the *un*surprising behaviour.
+      if (named.automatic !== undefined && typeof named.automatic !== "boolean") {
+        warnings.push("providers.summary.automatic must be true or false; naming automatically");
+      }
+      providers.summary = {
+        backend: named.backend.trim(),
+        modelId: named.modelId.trim(),
+        automatic: named.automatic !== false,
+      };
     }
   }
 
@@ -457,15 +474,21 @@ function patchProviders(
       if (typeof summary !== "object" || Array.isArray(summary)) {
         throw new ConfigError("providers.summary must name a backend and a model id");
       }
-      refuseUnknownKeys(summary as object, ["backend", "modelId"], "providers.summary");
-      const named = summary as { backend?: unknown; modelId?: unknown };
+      refuseUnknownKeys(summary as object, ["backend", "modelId", "automatic"], "providers.summary");
+      const named = summary as { backend?: unknown; modelId?: unknown; automatic?: unknown };
       const problem =
         checkModelId(named.backend, "providers.summary.backend") ??
         checkModelId(named.modelId, "providers.summary.modelId");
       if (problem !== undefined) throw new ConfigError(problem);
+      if (named.automatic !== undefined && typeof named.automatic !== "boolean") {
+        throw new ConfigError("providers.summary.automatic must be true or false");
+      }
       next.summary = {
         backend: (named.backend as string).trim(),
         modelId: (named.modelId as string).trim(),
+        // Omitted means naming automatically, so a client that has not been taught about the
+        // switch cannot turn it off by not mentioning it.
+        automatic: named.automatic !== false,
       };
     }
   }

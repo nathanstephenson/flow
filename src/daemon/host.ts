@@ -229,7 +229,7 @@ export type SessionHostOptions = {
    * model: the automatic naming does not run, and a `rename` is refused with something a human can
    * read.
    */
-  summaryModel?: () => { backend: string; modelId: string } | undefined;
+  summaryModel?: () => { backend: string; modelId: string; automatic: boolean } | undefined;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -250,7 +250,9 @@ export class SessionHost {
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
   private readonly allowTool: ((name: string) => void) | undefined;
   private readonly defaultModel: ((backend: string) => string | undefined) | undefined;
-  private readonly summaryModel: (() => { backend: string; modelId: string } | undefined) | undefined;
+  private readonly summaryModel:
+    | (() => { backend: string; modelId: string; automatic: boolean } | undefined)
+    | undefined;
   private readonly closedListeners = new Set<(sessionId: string) => void>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
@@ -550,9 +552,28 @@ export class SessionHost {
    */
   private warmSummaryModel(): void {
     const model = this.summaryModel?.();
+
+    /*
+     * Three cases, and the middle one is the reason this is not a one-liner.
+     *
+     * No Summary Model at all: drop whatever is held. This is the only moment a Setting somebody
+     * cleared is ever noticed, because nothing pushes a change (ADR 0009).
+     *
+     * A Summary Model with automatic naming *off*: leave the spare exactly as it is. Not warmed,
+     * because nothing will need one until somebody clicks Rename — and that path warms its own
+     * replacement afterwards, so a second rename is fast without a daemon nobody is renaming in
+     * holding an idle process. And not dropped either: a spare a rename just warmed must survive
+     * the next Agent Session being created, or the two would fight over it.
+     */
+    if (!model) {
+      this.summarySpare.warm(undefined, undefined);
+      return;
+    }
+    if (!model.automatic) return;
+
     let backend: AgentBackend | undefined;
     try {
-      backend = model ? this.backendFor(model.backend) : undefined;
+      backend = this.backendFor(model.backend);
     } catch {
       backend = undefined;
     }
@@ -1163,7 +1184,10 @@ export class SessionHost {
    */
   private async nameFromSummary(record: SessionRecord, text: string): Promise<void> {
     const summary = this.summaryModel?.();
-    if (!summary) return;
+    // `automatic` is the half of the Setting that governs *this* path only. A session whose owner
+    // turned it off keeps the first line of what they typed, and `rename` still works — which is
+    // the whole point of it being a switch rather than clearing the Summary Model.
+    if (!summary?.automatic) return;
 
     const generation = (record.titleGeneration += 1);
     let name: string | undefined;

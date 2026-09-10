@@ -119,8 +119,8 @@ describe("naming an Agent Session", () => {
   let host: SessionHost;
   let backend: FakeBackend;
   let summary: FakeBackend;
-  /** Mutable, so a test can move or clear the Summary Model the way the Settings page would. */
-  let summaryModel: { backend: string; modelId: string } | undefined;
+  /** Mutable, so a test can move, clear or switch off the Summary Model as the Settings page would. */
+  let summaryModel: { backend: string; modelId: string; automatic: boolean } | undefined;
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "flow-state-"));
@@ -128,7 +128,7 @@ describe("naming an Agent Session", () => {
     backend = new FakeBackend();
     summary = new FakeBackend();
     summary.autoReply = "Add retry to the uploader";
-    summaryModel = { backend: "summary", modelId: "fake-2" };
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: true };
     host = new SessionHost({
       store: new TranscriptStore(root),
       // Read through on every call, never captured: ADR 0009's rule, and what lets a test move the
@@ -245,7 +245,7 @@ describe("naming an Agent Session", () => {
   });
 
   it("does not break creating or dispatching when the Summary Model is unreachable", async () => {
-    summaryModel = { backend: "nonesuch", modelId: "x" };
+    summaryModel = { backend: "nonesuch", modelId: "x", automatic: true };
 
     // `backendFor` throws for a name it does not know, and warming happens inside `create`. A typo
     // in the Settings must cost a worse *name*, never the Agent Session itself.
@@ -269,7 +269,7 @@ describe("naming an Agent Session", () => {
           throw new Error("not logged in");
         },
       });
-      summaryModel = { backend: "broken", modelId: "x" };
+      summaryModel = { backend: "broken", modelId: "x", automatic: true };
 
       const id = await host.create({ scope: work, backend: "fake" });
       await host.send(id, "fix the uploader", "after_turn");
@@ -289,7 +289,7 @@ describe("naming an Agent Session", () => {
     const stale = summary.sessions[0];
     assert.equal(stale?.modelId, "fake-2");
 
-    summaryModel = { backend: "summary", modelId: "fake-1" };
+    summaryModel = { backend: "summary", modelId: "fake-1", automatic: true };
     const id = await host.create({ scope: work, backend: "fake" });
     await host.send(id, "fix the uploader", "after_turn");
     await settled();
@@ -297,6 +297,43 @@ describe("naming an Agent Session", () => {
     assert.equal(stale?.disposed, true, "a spare warmed for a model nobody wants any more");
     const used = summary.sessions.find((session) => session.prompts.length > 0);
     assert.equal(used?.modelId, "fake-1");
+  });
+
+  it("keeps the first line when automatic naming is switched off", async () => {
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
+
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "fix the uploader", "after_turn");
+    await settled();
+
+    assert.equal(titleOf(id), "fix the uploader");
+    // Nothing warmed either: a daemon nobody is renaming in should hold no idle process.
+    assert.equal(summary.sessions.length, 0);
+  });
+
+  it("still names on request when automatic naming is off", async () => {
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "fix the uploader", "after_turn");
+    await settled();
+
+    // The whole reason this is a switch rather than clearing the Summary Model.
+    assert.equal(await host.execute({ type: "rename", sessionId: id }), "Add retry to the uploader");
+    assert.equal(titleOf(id), "Add retry to the uploader");
+  });
+
+  it("warms a replacement after a rename, so the second one is not cold either", async () => {
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "fix the uploader", "after_turn");
+    await settled();
+    await host.execute({ type: "rename", sessionId: id });
+
+    // One session for the rename, one warmed behind it. And creating another Agent Session must
+    // not dispose that one — with automatic off, `create` leaves the spare alone.
+    assert.equal(summary.sessions.length, 2);
+    await host.create({ scope: work, backend: "fake" });
+    assert.equal(summary.sessions[1]?.disposed, false);
   });
 
   it("drops the spare when the Summary Model is cleared, and boots nothing more", async () => {

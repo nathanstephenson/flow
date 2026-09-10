@@ -537,7 +537,7 @@ describe("the Default Models and the Summary Model", () => {
 
     assert.equal(store.defaultModel("claude"), "opus");
     assert.equal(store.defaultModel("pi"), "anthropic/claude-sonnet-4");
-    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku" });
+    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku", automatic: true });
   });
 
   it("keeps an entry for a backend this build does not have", () => {
@@ -601,7 +601,32 @@ describe("the Default Models and the Summary Model", () => {
     // A merge would let a client change the Backend Adapter and leave behind a model id that
     // adapter cannot serve — a state nothing meant to ask for.
     assert.throws(() => store.update({ providers: { summary: { backend: "pi" } } } as never), /modelId/);
-    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku" });
+    assert.deepEqual(store.summaryModel(), { backend: "claude", modelId: "haiku", automatic: true });
+  });
+
+  it("names automatically unless somebody says otherwise", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { summary: { backend: "claude", modelId: "haiku" } } });
+
+    // A value with a right answer, unlike the sections around it: choosing a Summary Model and
+    // then having it do nothing is not a state anybody asked for.
+    assert.equal(store.summaryModel()?.automatic, true);
+
+    store.update({ providers: { summary: { backend: "claude", modelId: "haiku", automatic: false } } });
+    assert.equal(store.summaryModel()?.automatic, false);
+  });
+
+  it("reads a switch it cannot understand as naming automatically", () => {
+    writeFileSync(
+      join(root, "config.json"),
+      JSON.stringify({ providers: { summary: { backend: "claude", modelId: "haiku", automatic: "no" } } }),
+    );
+    const store = new ConfigStore(root);
+
+    // The file's manner, applied to a value with a default: a typo costs the *un*surprising
+    // behaviour, and says so. The Summary Model itself survives it.
+    assert.equal(store.summaryModel()?.automatic, true);
+    assert.match(store.warning ?? "", /providers\.summary\.automatic/);
   });
 
   it("refuses an id that is not one, and a field it does not know", () => {
@@ -610,6 +635,10 @@ describe("the Default Models and the Summary Model", () => {
     assert.throws(() => store.update({ providers: { defaults: { claude: "two words" } } }), /not a model id/);
     assert.throws(() => store.update({ providers: { defaults: { claude: 7 } } } as never), /must be a model id/);
     assert.throws(() => store.update({ providers: { summarise: {} } } as never), /unknown field summarise/);
+    assert.throws(
+      () => store.update({ providers: { summary: { backend: "c", modelId: "h", automatic: "yes" } } } as never),
+      /automatic must be true or false/,
+    );
   });
 
   it("reaches a running host without a restart", async () => {

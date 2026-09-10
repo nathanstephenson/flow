@@ -12,6 +12,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
+import { Switch } from "@/components/ui/switch.tsx";
+
+/**
+ * The value the "None" row carries, because a Select item cannot hold the empty string — Base UI
+ * reads that as "nothing selected" and the row would silently never register as chosen.
+ */
+const NO_SUMMARY_MODEL = "__none__";
 
 /**
  * Providers: which model to use when nobody has said, and which one names an Agent Session.
@@ -36,12 +43,14 @@ export function ProvidersSettings() {
   const [defaults, setDefaults] = useState<Record<string, string>>(currentDefaults);
   const [summaryBackend, setSummaryBackend] = useState(currentSummary?.backend ?? "");
   const [summaryModel, setSummaryModel] = useState(currentSummary?.modelId ?? "");
+  const [automatic, setAutomatic] = useState(currentSummary?.automatic ?? true);
 
   // A reload, or a save from elsewhere, wins over what is half-chosen here.
   useEffect(() => {
     setDefaults(currentDefaults);
     setSummaryBackend(currentSummary?.backend ?? "");
     setSummaryModel(currentSummary?.modelId ?? "");
+    setAutomatic(currentSummary?.automatic ?? true);
     // The config object is replaced wholesale on every save and refresh, so its identity is the
     // signal; comparing the fields would mean deep-comparing a map.
   }, [config]);
@@ -49,7 +58,9 @@ export function ProvidersSettings() {
   const backends = config.backends ?? [];
   const dirtyDefaults = backends.some((backend) => (defaults[backend] ?? "") !== (currentDefaults[backend] ?? ""));
   const dirtySummary =
-    summaryBackend !== (currentSummary?.backend ?? "") || summaryModel !== (currentSummary?.modelId ?? "");
+    summaryBackend !== (currentSummary?.backend ?? "") ||
+    summaryModel !== (currentSummary?.modelId ?? "") ||
+    automatic !== (currentSummary?.automatic ?? true);
 
   return (
     <>
@@ -87,7 +98,7 @@ export function ProvidersSettings() {
             value={summaryBackend === "" ? null : summaryBackend}
             onValueChange={(value) => {
               if (typeof value !== "string") return;
-              setSummaryBackend(value);
+              setSummaryBackend(value === NO_SUMMARY_MODEL ? "" : value);
               // A model id from the previous backend is meaningless to this one, and leaving it
               // would save a pair that can never be reached.
               setSummaryModel("");
@@ -97,6 +108,15 @@ export function ProvidersSettings() {
               <SelectValue placeholder="None — keep the first line" />
             </SelectTrigger>
             <SelectContent>
+              {/*
+                * The way back out, and the reason this list is not just the backends: without it
+                * the placeholder promises a state nobody could return to, and choosing a Summary
+                * Model once would be permanent.
+                *
+                * One word, because the popup is anchored to the trigger's width and the trigger is
+                * sized to "claude". What None *means* is on the group's description above.
+                */}
+              <SelectItem value={NO_SUMMARY_MODEL}>None</SelectItem>
               {backends.map((backend) => (
                 <SelectItem key={backend} value={backend}>
                   {backend}
@@ -107,14 +127,33 @@ export function ProvidersSettings() {
         </label>
 
         {summaryBackend === "" ? null : (
-          <ModelField
-            label="Model"
-            listing={catalogue?.find((entry) => entry.backend === summaryBackend)}
-            loading={loading}
-            value={summaryModel}
-            placeholder="Choose a model"
-            onChange={setSummaryModel}
-          />
+          <>
+            <ModelField
+              label="Model"
+              listing={catalogue?.find((entry) => entry.backend === summaryBackend)}
+              loading={loading}
+              value={summaryModel}
+              placeholder="Choose a model"
+              onChange={setSummaryModel}
+            />
+
+            {/*
+              * Hidden until a Summary Model is chosen, because until then it governs nothing —
+              * the house rule the overflow menu follows too. It is *when*, not whether: turning
+              * it off leaves the rename in the pane's menu working, which is the reason it is a
+              * switch here rather than another way to say "None" above.
+              */}
+            <label className="flex items-center justify-between gap-4 pt-1">
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium">Name new Agent Sessions automatically</span>
+                <span className="text-xs text-muted-foreground">
+                  Off keeps the first line of what you typed. You can still name one at any time
+                  from the pane&rsquo;s overflow menu.
+                </span>
+              </span>
+              <Switch checked={automatic} onCheckedChange={setAutomatic} />
+            </label>
+          </>
         )}
 
         <SaveRow
@@ -127,7 +166,9 @@ export function ProvidersSettings() {
               {
                 providers: {
                   summary:
-                    summaryBackend === "" ? null : { backend: summaryBackend, modelId: summaryModel },
+                    summaryBackend === ""
+                      ? null
+                      : { backend: summaryBackend, modelId: summaryModel, automatic },
                 },
               },
               summaryBackend === "" ? "Summary Model cleared." : "Summary Model saved.",

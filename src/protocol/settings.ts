@@ -84,8 +84,13 @@ export type Settings = {
      *
      * Both halves or neither. A model id without the Backend Adapter that serves it is unreachable,
      * so there is no useful half-configured state to represent.
+     *
+     * `automatic` is *when*, not whether: false leaves a session named by the first line of what
+     * was typed, and leaves "Name this Agent Session again" working. Whether the feature exists at
+     * all is said by this section being absent — which is why the switch lives in here rather than
+     * beside it, where it could disagree with a model nobody configured.
      */
-    summary?: { backend: string; modelId: string };
+    summary?: { backend: string; modelId: string; automatic: boolean };
   };
 };
 
@@ -122,7 +127,8 @@ export type SettingsPatch = {
    */
   providers?: {
     defaults?: Record<string, string>;
-    summary?: { backend: string; modelId: string } | null;
+    /** `automatic` may be omitted when setting a model, and defaults to naming automatically. */
+    summary?: { backend: string; modelId: string; automatic?: boolean } | null;
   };
 };
 
