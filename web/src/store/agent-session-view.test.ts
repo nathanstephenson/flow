@@ -52,7 +52,7 @@ const started: AgentEvent = {
   type: "session_started",
   backend: "fake",
   scope: "/tmp/scope",
-  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, subagents: false, enquiries: false },
+  capabilities: { providers: ["anthropic"], models: [], compaction: false, fork: false, subagents: false, enquiries: false, permissions: false },
 };
 
 describe("an Agent Session view", () => {
@@ -290,6 +290,7 @@ describe("the Chrome shallow compare", () => {
     queueDepth: 0,
     activeSubagents: 0,
     asking: undefined,
+    authorising: undefined,
     compacting: false,
     link: "live" as const,
   };

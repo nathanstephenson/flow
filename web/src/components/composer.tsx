@@ -8,6 +8,8 @@ import { useCommand } from "@/agent-sessions.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
 import { ComposerEnquiry } from "@/components/composer-enquiry.tsx";
+import { ComposerPermission } from "@/components/composer-permission.tsx";
+import { PERMISSION_CHOICES } from "@client/permission.ts";
 import { ComposerMenu } from "@/components/composer-menu.tsx";
 import {
   answersOf,
@@ -22,7 +24,7 @@ import {
   type Answering,
 } from "../../../src/client/enquiry.ts";
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
-import type { Skill } from "../../../src/protocol/events.ts";
+import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
@@ -58,10 +60,19 @@ import { cn } from "@/lib/utils.ts";
 export function Composer({
   sessionId,
   chrome,
+  authorisingSummary,
   onShowSubagents,
 }: {
   sessionId: string;
   chrome: Chrome;
+  /**
+   * The précis of the call awaiting authorisation, passed in rather than looked up.
+   *
+   * This component is handed `chrome` and nothing else on purpose (store/contract.ts), and a
+   * Permission Prompt carries only the tool's name — the arguments are in the transcript under the
+   * same id, which the pane above can read and this cannot.
+   */
+  authorisingSummary: string | undefined;
   /** Open the Subagents, from the strip. A callback rather than the Docks handle, so the Composer
    * stays ignorant that Docks exist — it knows there is somewhere to go, not where. */
   onShowSubagents: () => void;
@@ -88,8 +99,21 @@ export function Composer({
   const [answering, setAnswering] = useState<Answering | undefined>(undefined);
   const [answeringFor, setAnsweringFor] = useState<string | undefined>(undefined);
   const [hint, setHint] = useState<string | undefined>(undefined);
+  /*
+   * The cursor in the Permission Prompt panel, and which prompt it belongs to.
+   *
+   * Local for the reason `answering` is: it moves on every keystroke, and Chrome's whole job is not
+   * changing while a turn streams. The id beside it is what stops a second prompt inheriting the
+   * first's cursor — which matters more here than for an Enquiry, since a cursor left on Always
+   * would put the widest decision under an unsuspecting Enter.
+   */
+  const [deciding, setDeciding] = useState(0);
+  const [decidingFor, setDecidingFor] = useState<string | undefined>(undefined);
 
   const asking = chrome.asking;
+  const authorising = chrome.authorising;
+  /** Either callback the CLI is blocked on. Nothing may be sent while one is open. */
+  const blocked = asking !== undefined || authorising !== undefined;
 
   const ended = chrome.status === "ended";
   const running = chrome.status === "running";
@@ -232,6 +256,13 @@ export function Composer({
     setHint(undefined);
   }
 
+  // Start again whenever the prompt changes identity, including when it goes away. In render rather
+  // than an effect, for the reason the Enquiry's reset above is.
+  if (decidingFor !== authorising?.callId) {
+    setDecidingFor(authorising?.callId);
+    setDeciding(0);
+  }
+
   const question = asking && answering ? asking.questions[answering.index] : undefined;
   const rows = useMemo(() => (question ? rowsFor(question, text) : []), [question, text]);
   const chosen = answering?.chosen[answering.index] ?? [];
@@ -286,6 +317,53 @@ export function Composer({
       commit([row.label]);
     },
     [answering, commit, question, rows],
+  );
+
+  /**
+   * Settle the Permission Prompt in hand.
+   *
+   * Nothing optimistic, as everywhere else in this file: the panel closes because the host appended a
+   * `decided` snapshot and it arrived over the stream. `deciding` is not reset here either — the
+   * identity check in render does it, so a decision that is refused leaves the cursor where the human
+   * left it rather than jumping to Allow.
+   */
+  const decide = useCallback(
+    (decision: PermissionDecision): void => {
+      if (!authorising) return;
+      void run({ type: "answer_permission", sessionId, callId: authorising.callId, decision });
+    },
+    [authorising, run, sessionId],
+  );
+
+  /** Take the choice at `index`, which is what both a digit and a click mean. */
+  const decideRow = useCallback(
+    (index: number): void => {
+      const choice = PERMISSION_CHOICES[index];
+      if (choice) decide(choice.decision);
+    },
+    [decide],
+  );
+
+  /*
+   * What the editor borrows while a Permission Prompt is open. Rebuilt per keystroke and read through
+   * a ref by the extension, never captured — the arrangement `menuKeys` and `enquiryKeys` use.
+   */
+  const permissionKeys = useMemo(
+    () => ({
+      context: (composing: boolean) => ({
+        open: authorising !== undefined,
+        composing,
+        rows: PERMISSION_CHOICES.length,
+      }),
+      move: (delta: number) =>
+        setDeciding((current) => cursorAfter(current, delta, PERMISSION_CHOICES.length)),
+      pick: (row: number) => decideRow(row),
+      commit: () => decideRow(deciding),
+      // Escape refuses, where an Enquiry's Escape goes back a Question. A denial is a real answer
+      // here — see `permissionAction`.
+      deny: () => decide("deny"),
+    }),
+    [authorising, decide, decideRow, deciding],
   );
 
   /*
@@ -348,11 +426,11 @@ export function Composer({
   const send = useCallback(async (override?: string): Promise<void> => {
     /*
      * Above everything, including the Command branch. `/compact` typed from memory never touches the
-     * menu, so the menu being shut is not what makes it unavailable — this is. An Enquiry is holding
-     * the turn, and a Command occupies the Agent Session: running one against a backend that is
-     * already blocked is asking the host to hold two things at once.
+     * menu, so the menu being shut is not what makes it unavailable — this is. An Enquiry or a
+     * Permission Prompt is holding the turn, and a Command occupies the Agent Session: running one
+     * against a backend that is already blocked is asking the host to hold two things at once.
      */
-    if (asking) return;
+    if (blocked) return;
 
     const message = (override ?? text).trim();
     // An image with no words is a message — "look at this" is what the paste already said.
@@ -448,7 +526,7 @@ export function Composer({
        * `list_skills` effect — and a composer locked out of sending a Skill has no business listing
        * a Skill directory over HTTP to offer one.
        */
-      setQuery(asking ? undefined : menuQuery(next, caret));
+      setQuery(blocked ? undefined : menuQuery(next, caret));
       setHighlighted(0);
       // The cursor follows the typing onto the Other row, so an answer someone typed is not thrown
       // away by an Enter aimed at it. See `cursorAfterTyping` for the trap this closes.
@@ -461,7 +539,7 @@ export function Composer({
         );
       }
     },
-    [asking, question, text],
+    [blocked, question, text],
   );
 
   /*
@@ -549,6 +627,22 @@ export function Composer({
           * sees to that — so the order is argued from meaning: an Enquiry is a fact about the turn
           * already running, which is what everything above the box has in common.
           */}
+        {/*
+          * Above the Enquiry panel, and the two can never both be open — the CLI is blocked on one
+          * callback at a time and the lockout sees to the rest. Ordered by meaning rather than by
+          * chance: both are facts about the turn already running, which is what everything above the
+          * box has in common.
+          */}
+        <ComposerPermission
+          authorising={authorising}
+          summary={authorisingSummary}
+          cursor={deciding}
+          listboxId={`permission-${sessionId}`}
+          rowId={(index) => `permission-${sessionId}-${index}`}
+          onChoose={decideRow}
+          onHighlight={setDeciding}
+        />
+
         <ComposerEnquiry
           question={question}
           rows={rows}
@@ -599,6 +693,7 @@ export function Composer({
             catalogue={catalogue}
             menu={menuKeys}
             enquiry={enquiryKeys}
+            permission={permissionKeys}
             handle={input}
             onChange={onChange}
             onSubmit={() => void send()}
@@ -612,7 +707,7 @@ export function Composer({
               <SendButton
                 chrome={chrome}
                 sending={sending}
-                disabled={asking !== undefined || (text.trim() === "" && attachments.length === 0)}
+                disabled={blocked || (text.trim() === "" && attachments.length === 0)}
                 onSend={send}
               />
             )}

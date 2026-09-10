@@ -18,6 +18,7 @@ const chrome = (over: Partial<Chrome>): Chrome => ({
   queueDepth: 0,
   activeSubagents: 0,
   asking: undefined,
+  authorising: undefined,
   compacting: false,
   link: "live",
   ...over,

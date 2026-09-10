@@ -7,7 +7,9 @@ import {
   rowsFor,
   type Answering,
 } from "../client/enquiry.ts";
+import { authorisationLabel, PERMISSION_CHOICES } from "../client/permission.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
+import { toolSummary } from "../client/tool-summary.ts";
 import { relativeTime } from "../client/relative-time.ts";
 import { scopeKindLabel } from "../client/scope-kind.ts";
 import { sessionLabel } from "../client/session-label.ts";
@@ -57,6 +59,14 @@ export type UiState = {
    * Which Enquiry it belongs to is `view.asking`; this is only the cursor's place within it.
    */
   answering?: Answering;
+  /**
+   * Where the cursor is in the Permission Prompt picker. Deliberately not an `Overlay`, for the
+   * reason `answering` is not one: it is opened by the model, and Escape must not dismiss it.
+   *
+   * A bare index rather than an `Answering`, because there is nothing else to hold: the three choices
+   * are fixed, none is typed, and which prompt it belongs to is `view.authorising`.
+   */
+  deciding?: number;
   notice?: string;
   /** Passed in rather than read from the clock, so a frame renders identically twice. */
   now?: number;
@@ -67,7 +77,11 @@ export type Size = { columns: number; rows: number };
 export function renderFrame(ui: UiState, size: Size): string[] {
   const width = Math.max(20, size.columns);
   const height = Math.max(6, size.rows);
-  const picker = enquiryLines(ui, width);
+  // Only ever one of the two: an Enquiry and a Permission Prompt are both a callback the CLI is
+  // blocked on, and the composer is locked to whichever is in hand. Concatenated rather than chosen
+  // between, so if the impossible happens the human can see both rather than one of them silently
+  // going missing behind a lockout.
+  const picker = [...enquiryLines(ui, width), ...permissionLines(ui, width)];
   // The picker takes its rows off the transcript rather than replacing it, which is the difference
   // between this and an Overlay. Bounded so a four-option Question on a short terminal still leaves
   // something of the conversation visible.
@@ -163,6 +177,49 @@ function enquiryLines(ui: UiState, width: number): string[] {
 }
 
 /**
+ * The Permission Prompt picker: what wants to run, and the three things a human can do about it.
+ *
+ * Empty when nothing is waiting, which keeps `renderFrame` free of a conditional, exactly as
+ * `enquiryLines` does.
+ *
+ * What is being authorised is read off the `tool` Entry this prompt shares an id with, rather than
+ * carried on the prompt itself: `toolSummary` already précises a call's arguments for both
+ * front-ends, and a second description of the same call is a second thing to keep in step. The tool
+ * name alone would be the withholding `tool-summary.ts` exists to stop — "authorise Bash?" is not a
+ * question anyone can answer.
+ */
+function permissionLines(ui: UiState, width: number): string[] {
+  const authorising = ui.view.authorising;
+  if (!authorising) return [];
+  const cursor = ui.deciding ?? 0;
+
+  const call = ui.view.entries.find(
+    (entry): entry is Extract<Entry, { kind: "tool" }> =>
+      entry.kind === "tool" && entry.id === authorising.callId,
+  );
+  const summary = call ? toolSummary(call.input) : undefined;
+
+  const lines = [rule(`Authorise ${authorising.tool}?`, width)];
+  if (summary) lines.push(...wrap(summary, width));
+
+  PERMISSION_CHOICES.forEach((choice, index) => {
+    const onCursor = index === cursor;
+    const head = `${onCursor ? ">" : " "} ${index + 1} ${choice.label}`;
+    // The description in full on the cursor row and clipped elsewhere, the rule `enquiryLines`
+    // sets — and here the row it matters for is Always, whose description is the whole warning.
+    if (!onCursor) {
+      lines.push(ellipsised(`${head}  ${choice.description}`, width));
+      return;
+    }
+    lines.push(clip(head, width));
+    for (const line of wrap(choice.description, Math.max(8, width - 6))) {
+      lines.push(clip(`      ${line}`, width));
+    }
+  });
+  return lines;
+}
+
+/**
  * The prompt line, and — while an Enquiry is open — the whole of how the lockout is stated.
  *
  * The TUI has no placeholder to put it in, so the sigil carries it: `?` rather than `>`, because a
@@ -170,6 +227,11 @@ function enquiryLines(ui: UiState, width: number): string[] {
  * careful to refuse.
  */
 function promptLine(ui: UiState, width: number): string {
+  // A Permission Prompt takes no text at all, so there is nothing to type and nothing to show
+  // typed. `!` rather than `?`: the difference between being asked something and being asked to
+  // allow something is the whole distinction between an Enquiry and this, and the sigil is the only
+  // place a terminal has to say it.
+  if (ui.view.authorising) return clip("! [1-3 to decide]", width);
   if (!ui.view.asking) return clip(`> ${ui.input}`, width);
   return clip(ui.input === "" ? "? [type your own answer]" : `? ${ui.input}`, width);
 }
@@ -195,7 +257,9 @@ function status(ui: UiState, width: number): string {
    * abort here where on the web it means going back a Question.
    */
   parts.push(
-    ui.view.asking
+    ui.view.authorising
+      ? "↑↓ choose  1-3 pick  enter decide  esc deny"
+      : ui.view.asking
       ? "↑↓ choose  1-9 pick  enter answer  esc abort"
       : `^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`,
   );
@@ -221,8 +285,12 @@ function entryLines(entry: Entry, width: number): string[] {
       return wrap(entry.text, width);
     case "thinking":
       return wrap(`· ${entry.text}`, width);
-    case "tool":
-      return [clip(`  [${entry.status}] ${entry.name}`, width)];
+    case "tool": {
+      // The authorisation only where there is one — most rows have none, and a terminal that printed
+      // something for them would suggest a decision nobody was asked to make.
+      const authorised = authorisationLabel(entry.authorisation);
+      return [clip(`  [${entry.status}] ${entry.name}${authorised ? ` — ${authorised}` : ""}`, width)];
+    }
     case "subagent":
       // Indented past a tool call: a Subagent is what one of those is doing, not another of them.
       return [clip(`    ⤷ [${entry.waitingOn ?? entry.status}] ${entry.name}`, width)];

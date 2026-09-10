@@ -46,6 +46,12 @@ export type HostConfig = {
    */
   projects?: Settings["projects"];
   /**
+   * The Standing Authorisations. Absent where none has been granted, which is a real state and the
+   * one the Permissions settings section checks for — the same shape `projects` has, for the same
+   * reason.
+   */
+  permissions?: Settings["permissions"];
+  /**
    * The opted-in Projects — `projects.include`, resolved. This is what a client offers.
    *
    * **Derived, not a Setting.** The Setting is the list of paths; this is what they point at, which
@@ -153,9 +159,14 @@ export function HostProvider({ children }: { children: ReactNode }) {
               ...current.config,
               fonts: body.fonts,
               retention: body.retention,
-              // Spread-with-undefined would leave a stale root behind once one is cleared, because
-              // `projects` is the one section that can be absent.
+              // Spread-with-undefined would leave a stale value behind once a section is cleared.
+              // Both optional sections need it, and for `permissions` it is not tidiness: a stale
+              // list would leave a revoked row on screen, and revoking a second grant would send the
+              // old list back and re-grant the first.
               ...(body.projects === undefined ? { projects: undefined } : { projects: body.projects }),
+              ...(body.permissions === undefined
+                ? { permissions: undefined }
+                : { permissions: body.permissions }),
             },
           }
         : current,

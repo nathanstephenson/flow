@@ -21,6 +21,7 @@ import type {
   EffortLevel,
   ModelInfo,
   ModelSpend,
+  PermissionDecision,
   Producer,
   Skill,
   Spend,
@@ -29,6 +30,7 @@ import type {
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { ASK_TOOL, PendingEnquiries, questionsOf } from "./enquiries.ts";
+import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 
@@ -41,9 +43,12 @@ type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
  * never-closing AsyncQueue keeps one run open for the Agent Session's life, and prompts are pushed
  * into it. Streaming input mode is required for `interrupt()` and `setModel()` anyway.
  *
- * Tools are pre-approved, but `permissionMode: "bypassPermissions"` alone is not enough: a tool
- * outside the allowlist would have nothing to resolve its permission request and the turn would
- * stall. `canUseTool` denies with a reason instead, so the agent is told and keeps going.
+ * Most tools are pre-approved, but `permissionMode: "bypassPermissions"` is still not what does it:
+ * it auto-approves *before* `canUseTool` is consulted, which would take away the only place a tool
+ * can be held open on a human. So the mode is `"default"`, `allowedTools` carries the pre-approved
+ * set, and `canUseTool` catches the fall-through — where it raises a Permission Prompt (ADR 0018) or,
+ * for `AskUserQuestion`, an Enquiry (ADR 0016). Either way it always settles, because a callback the
+ * CLI is blocked on is a turn that cannot end.
  */
 
 export type ClaudeBackendOptions = {
@@ -187,6 +192,12 @@ const DEFAULT_ALLOWED_TOOLS = [
   "WebSearch",
   "TodoWrite",
   "NotebookEdit",
+  // How a backgrounded Bash is read and stopped. Refused until Permission Prompts existed, which
+  // was a latent bug — the tool that *started* the job was allowed. They belong here rather than
+  // behind a prompt: a poll of a job the human already authorised is not a decision, and asking on
+  // every poll would make the most benign pair in the set the loudest.
+  "BashOutput",
+  "KillShell",
   // Without this a session that reaches plan mode can never leave it: the deny message ends
   // "Continue without it", so the model proceeds read-only instead of surfacing the refusal, and
   // every edit for the rest of the session fails for a reason it cannot name.
@@ -199,7 +210,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true, enquiries: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true, enquiries: true, permissions: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -225,6 +236,17 @@ class ClaudeSession implements BackendSession {
   /** Subagents open in this turn, and any turn end waiting on them. */
   private readonly subagents = new Subagents();
   private readonly enquiries = new PendingEnquiries();
+  private readonly permissions = new PendingPermissions();
+  /**
+   * What runs without being asked about: the pre-approved set, plus the Standing Authorisations this
+   * Backend Session was created with.
+   *
+   * An instance field rather than the local the callback used to close over, because an Always
+   * decision has to change what the callback consults — otherwise the grant would be persisted, the
+   * next session would honour it, and *this* one would go on asking about a tool the human had just
+   * authorised for the machine.
+   */
+  private readonly allowed: Set<string>;
   /**
    * Everything this Agent Session has spent, across every model and every Backend Session.
    *
@@ -243,7 +265,11 @@ class ClaudeSession implements BackendSession {
     // Reported before this run has billed anything, so a Revive does not blank the meter it inherits.
     this.spend = options.priorSpend;
 
-    const allowed = backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const preApproved = backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    this.allowed = new Set([...preApproved, ...(options.standingAuthorisations ?? [])]);
+    // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
+    // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
+    // `disallowedTools` — which an operator meant — still outranks a grant a human clicked.
     const startingEffort = sdkEffort(options.effort);
     const queryOptions: Options = {
       cwd: options.scope,
@@ -252,7 +278,7 @@ class ClaudeSession implements BackendSession {
       // as much. "default" runs the permission flow, allowedTools auto-approves the pre-approved
       // set, and canUseTool catches only the fall-through so nothing can stall waiting on a prompt.
       permissionMode: "default",
-      allowedTools: allowed,
+      allowedTools: preApproved,
       ...(backendOptions.disallowedTools ? { disallowedTools: backendOptions.disallowedTools } : {}),
       ...(backendOptions.systemPrompt ? { systemPrompt: backendOptions.systemPrompt } : {}),
       ...(options.modelId ? { model: options.modelId } : {}),
@@ -265,22 +291,21 @@ class ClaudeSession implements BackendSession {
         : {}),
       ...(isSingleExecutable() ? { spawnClaudeCodeProcess: spawnClaudeDirectly } : {}),
       /*
-       * The fall-through, and — for exactly one tool — the whole of how a human is asked something.
+       * The fall-through, and the whole of how a human is asked anything.
        *
-       * `AskUserQuestion` is deliberately absent from `allowed`: an allowlisted tool is approved
-       * before this runs, so putting it there would answer the model's question with silence. It
-       * reaches here instead, and here the callback is *parked* rather than answered, which is the
-       * one place this adapter does not resolve a permission immediately. What settles it is a human,
-       * through `answerEnquiry` — or, on every path where there will never be one, an abandonment.
+       * `AskUserQuestion` is deliberately absent from the pre-approved set: an allowlisted tool is
+       * approved before this runs, so putting it there would answer the model's question with
+       * silence. It reaches here instead, and so does every tool nobody has authorised.
+       *
+       * Both cases *park* the callback rather than answering it, which is the whole of what this
+       * adapter does differently from one that pre-approves everything — and the whole of its risk.
+       * What settles them is a human, through `answerEnquiry` or `answerPermission`; on every path
+       * where there will never be one, an abandonment.
        */
       canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string }) => {
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
-        return allowed.includes(toolName)
-          ? { behavior: "allow" as const, updatedInput: input }
-          : {
-              behavior: "deny" as const,
-              message: `${toolName} is not enabled for this session. Continue without it.`,
-            };
+        if (this.allowed.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
+        return await this.authorise(extra.toolUseID, toolName, input);
       },
     };
 
@@ -485,10 +510,65 @@ class ClaudeSession implements BackendSession {
     }
   }
 
+  /**
+   * Hold the permission callback for a tool nobody has authorised until a human decides.
+   *
+   * The returned promise is the turn: the SDK does not continue until it settles, so nothing here may
+   * throw and no path may drop it. Deliberately has no timeout, the rule ADR 0016 set for an Enquiry
+   * — a timer that gave up on a prompt someone was still reading would be worse than one that waits,
+   * and Abort is the escape.
+   *
+   * A tool already refused this turn is answered here rather than asked about again, with the
+   * adapter's own neutral message. That is not a shortcut: a model that wanted a tool wants it
+   * several times, and re-asking the moment someone says no pins the composer on the same question
+   * while the model rephrases around it.
+   */
+  private async authorise(
+    callId: string,
+    tool: string,
+    input: Record<string, unknown>,
+  ): Promise<
+    { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string }
+  > {
+    if (this.permissions.isRefused(tool)) {
+      return { behavior: "deny", message: `${tool} is not enabled for this session. Continue without it.` };
+    }
+
+    return await new Promise((resolve) => {
+      this.permissions.hold(callId, tool, input, resolve);
+      this.emit({ type: "permission", callId, tool, state: "asked" });
+    });
+  }
+
+  async answerPermission(callId: string, decision: PermissionDecision): Promise<boolean> {
+    const tool = this.permissions.describe(callId);
+    if (tool === undefined || !this.permissions.decide(callId, decision)) return false;
+    // Before the snapshot, so nothing can observe a decided Always against a session still asking.
+    // The Standing Authorisation itself is the host's to persist; this is only this session honouring
+    // it, which it must do itself because the list it was created with is a snapshot.
+    if (decision === "always") this.allowed.add(tool);
+    this.emit({ type: "permission", callId, tool, state: "decided", decision });
+    return true;
+  }
+
+  /**
+   * Settle every open Permission Prompt as unauthorised, and say so in the transcript.
+   *
+   * Called from every path that ends a turn or a Backend Session, for the reason `abandonEnquiries`
+   * is: denying rather than dropping leaves the CLI's own conversation record complete, so a later
+   * Revive resumes onto a turn with no dangling `tool_use`.
+   */
+  private abandonPermissions(why: string): void {
+    for (const { callId, tool } of this.permissions.abandonAll(why)) {
+      this.emit({ type: "permission", callId, tool, state: "aborted" });
+    }
+  }
+
   async abort(): Promise<void> {
     // Before the interrupt, not after: the CLI is blocked on this callback, and an interrupt that
     // waits on the outstanding permission request would be waiting on something only this releases.
     this.abandonEnquiries("the turn was aborted");
+    this.abandonPermissions("the turn was aborted");
     try {
       await this.stream.interrupt();
     } catch (error) {
@@ -549,6 +629,7 @@ class ClaudeSession implements BackendSession {
     // the teardown leaves an unterminated tool call in the CLI's record, and the Agent Session this
     // belongs to is going Dormant — so that record is exactly what the next Revive resumes onto.
     this.abandonEnquiries("the session stopped");
+    this.abandonPermissions("the session stopped");
     // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
     // Session Host records that from the transcript, the way it does a torn turn.
     this.subagents.abandon();
@@ -576,6 +657,7 @@ class ClaudeSession implements BackendSession {
         // nothing is coming back to answer an open Enquiry, and a picker left on screen over a
         // session that has stopped is a question the human can answer into nothing.
         this.abandonEnquiries("the session failed");
+        this.abandonPermissions("the session failed");
         this.emit({ type: "notice", level: "error", text: message(error) });
         this.endTurn("error");
       }
@@ -817,9 +899,13 @@ class ClaudeSession implements BackendSession {
      * ended — a question with no way to answer it and no way to dismiss it.
      */
     this.abandonEnquiries("the turn ended");
-    // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
+    this.abandonPermissions("the turn ended");
+    // Cleared whatever the outcome, so a held end cannot reach the turn after this one. For
+    // permissions that also drops what the human refused: a no was about what was being attempted,
+    // and the next turn is a different attempt.
     this.subagents.clear();
     this.enquiries.clear();
+    this.permissions.clear();
     if (!turnId) return;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });

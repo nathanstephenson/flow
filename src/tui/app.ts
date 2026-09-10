@@ -15,6 +15,8 @@ import {
   toggled,
   type Answering,
 } from "../client/enquiry.ts";
+import { PERMISSION_CHOICES } from "../client/permission.ts";
+import type { PermissionDecision } from "../protocol/events.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
 import { renderFrame, type Overlay, type UiState } from "./render.ts";
 
@@ -49,6 +51,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
    */
   let answering: Answering | undefined;
   let answeringFor: string | undefined;
+  /** The cursor in the Permission Prompt picker, and which prompt it belongs to. See `answering`. */
+  let deciding: number | undefined;
+  let decidingFor: string | undefined;
   let notice: string | undefined;
   let unsubscribe: (() => void) | undefined;
 
@@ -60,6 +65,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       input,
       overlay,
       ...(answering === undefined ? {} : { answering }),
+      ...(deciding === undefined ? {} : { deciding }),
       now: Date.now(),
       ...(notice ? { notice } : {}),
     };
@@ -201,6 +207,17 @@ export async function runTui(options: TuiOptions): Promise<void> {
       return false;
     }
 
+    /*
+     * A Permission Prompt takes the prompt line on the same terms and in the same place — after the
+     * overlay branch, above everything else. Nothing below runs while one is open, which is the
+     * lockout: the turn is blocked on a callback, so there is nothing a message could reach.
+     */
+    if (view.authorising) {
+      await handlePermissionKey(key);
+      draw();
+      return false;
+    }
+
     if (key === KEY.ctrlS) {
       await refreshSessions();
       const index = sessions.findIndex((session) => session.id === selected);
@@ -325,6 +342,62 @@ export async function runTui(options: TuiOptions): Promise<void> {
         askId,
         answers: answersOf(state, questions),
       });
+    } catch (error) {
+      notice = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * Drive the Permission Prompt picker.
+   *
+   * Simpler than its Enquiry counterpart by the whole of what made that one hard: nothing is typed
+   * here, so there is no box to hold characters and no rule about which keys the picker may borrow
+   * once it does. Digits and Enter are unconditionally the picker's.
+   *
+   * **Escape denies rather than aborting**, which is where this parts company with the Enquiry
+   * branch above. Aborting a turn to refuse one tool call is a sledgehammer — a denial is the answer
+   * the model can carry on from, and it is the whole reason a Deny is not an Abort. Someone wanting
+   * to stop the turn can press it again once the prompt is gone.
+   */
+  async function handlePermissionKey(key: string): Promise<void> {
+    const authorising = view.authorising;
+    if (!authorising) return;
+    // Restarted whenever the prompt changes, so a second call cannot inherit the first's cursor —
+    // which matters more here than for an Enquiry, since a cursor left on Always would put the
+    // widest decision under an unsuspecting Enter.
+    if (deciding === undefined || decidingFor !== authorising.callId) {
+      deciding = 0;
+      decidingFor = authorising.callId;
+    }
+
+    if (key === KEY.escape) {
+      await commitDecision(authorising.callId, "deny");
+      return;
+    }
+    if (key === KEY.up || key === KEY.down) {
+      // Clamped, not wrapped: every list in this TUI clamps. See `handleEnquiryKey`.
+      deciding = cursorClamped(deciding, key === KEY.up ? -1 : 1, PERMISSION_CHOICES.length);
+      return;
+    }
+    if (/^[1-9]$/.test(key)) {
+      const choice = PERMISSION_CHOICES[Number(key) - 1];
+      if (!choice) return;
+      deciding = Number(key) - 1;
+      await commitDecision(authorising.callId, choice.decision);
+      return;
+    }
+    if (key === KEY.enter || key === KEY.newline) {
+      const choice = PERMISSION_CHOICES[deciding];
+      if (choice) await commitDecision(authorising.callId, choice.decision);
+    }
+  }
+
+  async function commitDecision(callId: string, decision: PermissionDecision): Promise<void> {
+    deciding = undefined;
+    decidingFor = undefined;
+    if (!selected) return;
+    try {
+      await options.connection.command({ type: "answer_permission", sessionId: selected, callId, decision });
     } catch (error) {
       notice = error instanceof Error ? error.message : String(error);
     }

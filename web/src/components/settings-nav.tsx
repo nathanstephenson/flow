@@ -1,4 +1,4 @@
-import { ArrowLeft, FolderGit2, Keyboard, Sliders, Type } from "lucide-react";
+import { ArrowLeft, FolderGit2, Keyboard, ShieldCheck, Sliders, Type } from "lucide-react";
 import type { ComponentType } from "react";
 
 import { SETTINGS_SECTIONS, type SettingsSection } from "@/presentation/route.ts";
@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils.ts";
 const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: ComponentType }> = {
   general: { label: "General", hint: "Retention, and this Session Host", icon: Sliders },
   projects: { label: "Projects", hint: "Where your repositories live", icon: FolderGit2 },
+  permissions: { label: "Permissions", hint: "Tools allowed without asking", icon: ShieldCheck },
   appearance: { label: "Appearance", hint: "The two typefaces", icon: Type },
   keyboard: { label: "Keyboard", hint: "Every shortcut", icon: Keyboard },
 };

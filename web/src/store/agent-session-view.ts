@@ -199,6 +199,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     queueDepth: view.queue.length,
     activeSubagents: view.activeSubagents,
     asking: view.asking,
+    authorising: view.authorising,
     link,
   };
 }

@@ -13,6 +13,7 @@ import { manifestOf, NoWebBuild } from "../web/manifest.ts";
 import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { answerLines } from "../client/enquiry.ts";
+import { authorisationLabel } from "../client/permission.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import type { AssetManifest } from "../web/assets.ts";
@@ -158,7 +159,12 @@ async function startHost(
   // One store, shared: the Session Host writes Attachments through it and the HTTP surface reads
   // them back through the same one, so there is no second opinion about where they live.
   const store = new TranscriptStore();
-  const host = new SessionHost({ store, retention: config.retention });
+  const host = new SessionHost({
+    store,
+    retention: config.retention,
+    standingAuthorisations: config.standingAuthorisations,
+    allowTool: config.allowTool,
+  });
   registerBackends(host);
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
   await host.load();
@@ -229,6 +235,8 @@ async function oneShot(
 
     let state: ViewState = initialState();
     let rendered = 0;
+    /** The call already refused, so a snapshot arriving while the decision is in flight is ignored. */
+    let refused: string | undefined;
     let done: (() => void) | undefined;
     const finished = new Promise<void>((resolve) => {
       done = resolve;
@@ -254,6 +262,39 @@ async function oneShot(
           console.log("  ? the model asked a question, and this runner has no way to answer it");
           console.log(`  ? resume with: --session ${sessionId}  (or open it in the TUI)`);
           void connection.command({ type: "abort", sessionId });
+        }
+        /*
+         * Denied rather than aborted, which is the one place this parts company with the Enquiry
+         * above — and the reason is the third option an Enquiry does not have.
+         *
+         * A denial is a *complete* answer to a Permission Prompt: the model is told the tool is not
+         * available and carries on, which is exactly what this runner did before prompts existed. So
+         * refusing keeps `flow "do X"` finishing its turn, where aborting would kill every headless
+         * run that touched an MCP tool. An Enquiry has no such answer — nothing stands in for what a
+         * human would have chosen — so there, ending the turn is the only honest move.
+         *
+         * Printed rather than silent, because a refused tool may be the reason the answer is thin,
+         * and the human should know where it can be authorised instead.
+         *
+         * Driven off `state.authorising` rather than off the event, and that is not a style choice.
+         * This subscribes at `since: 0`, so `--session` replays the whole transcript — and every
+         * `asked` snapshot in it. The reducer already knows which of them was decided afterwards and
+         * which is genuinely still waiting, so asking it is what stops a resumed run refusing a
+         * dozen long-settled calls. `refused` then stops it sending twice for the one that is open,
+         * since `authorising` stays set until the decision comes back over the stream.
+         */
+        if (state.authorising && state.authorising.callId !== refused) {
+          const { tool, callId } = state.authorising;
+          refused = callId;
+          console.log(`  ! ${tool} needs authorising, and this runner has no way to ask; refusing it`);
+          console.log(`  ! authorise it with: --session ${sessionId}  (or open it in the TUI)`);
+          // Rejection swallowed rather than dropped: `--session` resumes a live Agent Session, and a
+          // call decided in another client between the reducer seeing it and this landing comes back
+          // as a refusal. There is nothing to do about that — the prompt is settled either way — and
+          // an unhandled rejection here would take the process down over somebody else's click.
+          void connection
+            .command({ type: "answer_permission", sessionId, callId, decision: "deny" })
+            .catch(() => undefined);
         }
         if (entry.event.type === "turn_ended") done?.();
       },
@@ -292,8 +333,12 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
       return `\n${entry.text}`;
     case "thinking":
       return `\n[thinking] ${entry.text}`;
-    case "tool":
-      return `  · ${entry.name} (${entry.status})`;
+    case "tool": {
+      // The authorisation only when there is one: most rows have none, and printing something for
+      // them would suggest a judgement nobody was asked to make.
+      const authorised = authorisationLabel(entry.authorisation);
+      return `  · ${entry.name} (${entry.status}${authorised ? `, ${authorised}` : ""})`;
+    }
     case "subagent":
       return `  ⤷ ${entry.name} (${entry.waitingOn ? `waiting on ${entry.waitingOn}` : entry.status})`;
     case "enquiry": {

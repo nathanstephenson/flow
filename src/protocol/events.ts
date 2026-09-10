@@ -84,6 +84,13 @@ export type Capabilities = {
    * rendering a question nothing can answer.
    */
   enquiries: boolean;
+  /**
+   * Set when this Backend Adapter can hold a tool call open on a human's authorisation — a
+   * Permission Prompt. False is not "this backend runs nothing dangerous" but "this backend cannot
+   * be asked before it acts", which is the harder fact: a client hides the affordance, and a reader
+   * should understand that such a session authorises nothing because it asks nothing.
+   */
+  permissions: boolean;
 };
 
 /**
@@ -190,6 +197,29 @@ export type EnquiryState =
   | { state: "answered"; answers: string[][] }
   | { state: "aborted" };
 
+/**
+ * What a human decided about one tool call.
+ *
+ * `always` is `allow` plus a Standing Authorisation: the tool runs now, and is never prompted for
+ * again on this machine. Carried as its own word rather than as an `allow` beside a flag, because a
+ * transcript is durable and a reader scrolling back should be able to see which click widened what
+ * the machine pre-approves.
+ */
+export type PermissionDecision = "allow" | "always" | "deny";
+
+/**
+ * What became of a Permission Prompt. A variant rather than a status beside a nullable decision, so
+ * the type refuses a decided prompt with nothing decided and an open one carrying a decision.
+ *
+ * `aborted` reuses TurnEndReason's word verbatim, as `EnquiryState` and `SubagentState` do: the work
+ * stopped and nobody can say what the human would have chosen. There is no `error` — a prompt that
+ * fails is a turn that failed, and is reported as one.
+ */
+export type PermissionState =
+  | { state: "asked" }
+  | { state: "decided"; decision: PermissionDecision }
+  | { state: "aborted" };
+
 export type NoticeLevel = "info" | "warn" | "error";
 
 export type AgentEvent =
@@ -260,6 +290,31 @@ export type AgentEvent =
    * been observed to do.
    */
   | ({ type: "enquiry"; askId: string; questions: Question[]; producer?: Producer } & EnquiryState)
+  /**
+   * One Permission Prompt, wholly — a tool call held open on a human's authorisation.
+   *
+   * `callId` is the tool call's own id, so this and the `tool_started` beside it address the same
+   * thing: the rule ADR 0015 sets for a Subagent and ADR 0016 reuses for an Enquiry. That the call
+   * lands in the transcript *before* the permission callback is what lets a front-end fold this onto
+   * the row already showing it rather than adding a second one.
+   *
+   * Repeated on every transition, latest-wins — never an asked/decided pair, so a client joining at
+   * `since: N` holds a lifecycle it can complete, and one replaying a week-old transcript never
+   * offers buttons for a promise that died with its Backend Session.
+   *
+   * `tool` is the name and **nothing else is carried**. Not the input: `tool_started` already put it
+   * in this same transcript under this same id, and a Presentation Transcript is read in full on
+   * every load (ADR 0001) — an authorised `Write` would otherwise write its file into the record
+   * twice, which is the mistake `attachments` are ids to avoid. The name is carried because a
+   * composer is handed the chrome and nothing else, and cannot fetch a body it could have been
+   * handed.
+   *
+   * `producer` is here for the reason it is on `enquiry`, and unpopulated for the same reason: the
+   * SDK's callback carries an `agentID` that nothing has yet been observed to fill in, so a
+   * Subagent's Permission Prompt is not attributable and `SubagentWait`'s `"permission"` still has
+   * nothing to report.
+   */
+  | ({ type: "permission"; callId: string; tool: string; producer?: Producer } & PermissionState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[] }
   /**

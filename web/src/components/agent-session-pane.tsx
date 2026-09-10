@@ -1,10 +1,11 @@
 import { useState, type CSSProperties } from "react";
 
 import { sessionLabel } from "@client/session-label.ts";
+import { toolSummary } from "@client/tool-summary.ts";
 import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
-import type { AgentSessionView } from "@/store/contract.ts";
+import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
 import { Composer } from "@/components/composer.tsx";
 import { Dock } from "@/components/dock.tsx";
@@ -59,6 +60,21 @@ export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onClose
       shells={shells}
     />
   );
+}
+
+/**
+ * The précis of the call awaiting authorisation, or undefined when nothing is.
+ *
+ * `toolSummary` is the same function both front-ends print a tool row with, so what a human is asked
+ * to allow reads the same as the row above it — which is the point of not inventing a second
+ * description. Undefined where there was nothing worth saying, so the panel shows the name alone
+ * rather than a padded blank.
+ */
+function authorisingSummary(view: AgentSessionView, chrome: Chrome): string | undefined {
+  const callId = chrome.authorising?.callId;
+  if (callId === undefined) return undefined;
+  const call = view.getEntry(`tool:${callId}`);
+  return call?.kind === "tool" ? toolSummary(call.input) : undefined;
 }
 
 function AttachedPane({
@@ -121,6 +137,20 @@ function AttachedPane({
       <Composer
         sessionId={sessionId}
         chrome={chrome}
+        /*
+         * What an open Permission Prompt is actually asking about, read here rather than in the
+         * Composer.
+         *
+         * The Composer is handed `chrome` and nothing else, deliberately (store/contract.ts) — and
+         * the prompt itself carries only the tool's name, because the call's arguments are already in
+         * the transcript under the same id and the protocol will not carry them twice. This pane is
+         * the one object that holds both, which is the argument it already makes for the Subagents.
+         *
+         * Read during render rather than in an effect: `authorising` changes identity when a prompt
+         * opens, which publishes the chrome and re-renders this, and the tool row is in the
+         * transcript before the prompt is raised.
+         */
+        authorisingSummary={authorisingSummary(view, chrome)}
         // No side named: whichever Dock already shows the Subagents wins, so a reader who keeps
         // them in the bottom Dock is not handed a second copy on the right. Opened rather than
         // toggled, or a click on "2 agents running" would close the thing it asked to see.

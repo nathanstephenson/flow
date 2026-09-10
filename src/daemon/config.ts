@@ -54,6 +54,22 @@ export type Config = {
    * and has to be able to read back.
    */
   projects?: Projects;
+  /**
+   * The Standing Authorisations. Absent when none has been granted, which is a real state and not a
+   * defaulted value: a machine that has never answered a Permission Prompt with Always has none.
+   */
+  permissions?: Permissions;
+};
+
+/**
+ * Tools authorised for every Agent Session on this machine, so no Permission Prompt is raised for
+ * them again.
+ *
+ * Names as typed, and never normalised beyond a trim: a tool name is an identifier the backend
+ * chose, and lower-casing `mcp__gdrive__trash_file` would silently stop matching it.
+ */
+export type Permissions = {
+  allow?: string[];
 };
 
 export type Projects = {
@@ -109,11 +125,42 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const retention = parseRetention(parsed, warnings);
   const fonts = parseFonts(parsed, warnings);
   const projects = parseProjects(parsed, warnings);
+  const permissions = parsePermissions(parsed, warnings);
 
   return {
-    config: { retention, fonts, ...(projects === undefined ? {} : { projects }) },
+    config: {
+      retention,
+      fonts,
+      ...(projects === undefined ? {} : { projects }),
+      ...(permissions === undefined ? {} : { permissions }),
+    },
     ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}),
   };
+}
+
+/**
+ * The file's manner once more, and here it matters more than anywhere else: a malformed
+ * `permissions.allow` must cost *nothing but itself*. Falling back to some other list would either
+ * authorise a tool nobody granted or, worse, be read as having done so.
+ *
+ * So an unusable section grants nothing, an unusable entry is dropped, and both say why.
+ */
+function parsePermissions(parsed: unknown, warnings: string[]): Permissions | undefined {
+  const section = (parsed as { permissions?: { allow?: unknown } })?.permissions;
+  if (section === undefined || section === null) return undefined;
+  if (section.allow === undefined) return undefined;
+
+  if (!Array.isArray(section.allow)) {
+    warnings.push("permissions.allow must be a list of tool names; authorising none");
+    return undefined;
+  }
+  const usable = section.allow.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim() !== "",
+  );
+  if (usable.length !== section.allow.length) {
+    warnings.push("permissions.allow: ignoring an entry that is not a tool name");
+  }
+  return usable.length === 0 ? undefined : { allow: usable.map((entry) => entry.trim()) };
 }
 
 /**
@@ -252,13 +299,47 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions"], "config");
   const projects = patchProjects(current.projects, body.projects);
+  const permissions = patchPermissions(current.permissions, body.permissions);
   return {
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
     ...(projects === undefined ? {} : { projects }),
+    ...(permissions === undefined ? {} : { permissions }),
   };
+}
+
+/**
+ * The Standing Authorisations a client wants to end up with.
+ *
+ * **Replaced wholesale**, for the reason `projects.include` is and with more riding on it: a merged
+ * list would make a revocation indistinguishable from an omission, and the thing left un-revoked here
+ * is a tool the machine will run without asking. An empty list is therefore meaningful — it is how
+ * the last grant is taken back — and clears the section rather than being ignored.
+ */
+function patchPermissions(
+  current: Permissions | undefined,
+  patch: SettingsPatch["permissions"],
+): Permissions | undefined {
+  if (patch === undefined) return current;
+  refuseUnknownKeys(patch, ["allow"], "permissions");
+
+  const allow: unknown = patch.allow;
+  if (allow === undefined) return current;
+  if (!Array.isArray(allow)) throw new ConfigError("permissions.allow must be a list of tool names");
+
+  const names: string[] = [];
+  for (const entry of allow as unknown[]) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      throw new ConfigError("permissions.allow: every entry must be a tool name");
+    }
+    const trimmed = entry.trim();
+    // Deduplicated rather than refused, as `projects.include` is: two clients racing to grant the
+    // same tool is a mistake worth absorbing, not one worth failing a save over.
+    if (!names.includes(trimmed)) names.push(trimmed);
+  }
+  return names.length === 0 ? undefined : { allow: names };
 }
 
 function patchProjects(

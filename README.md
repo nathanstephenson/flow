@@ -25,9 +25,12 @@ Verified along the way:
   its first message, so a Backend Adapter must not await the init message before returning — it
   deadlocks. Capabilities therefore arrive late, via `capabilities_changed`.
 - **`bypassPermissions` shadows `canUseTool`.** Pre-approved tools are expressed as
-  `permissionMode: "default"` plus `allowedTools`, leaving `canUseTool` to deny-with-reason on the
-  fall-through so a stray tool cannot stall a turn. The SDK warns that allowlisted tools skip the
-  callback; that is the intent, not a misconfiguration.
+  `permissionMode: "default"` plus `allowedTools`, leaving `canUseTool` to handle the fall-through —
+  where it raises a Permission Prompt for the human to decide (ADR 0018), or an Enquiry for
+  `AskUserQuestion` (ADR 0016). The SDK warns that allowlisted tools skip the callback; that is the
+  intent, not a misconfiguration, and it is why `bypassPermissions` would take away the only place a
+  tool can be held open on a person. What must never happen is a callback that neither settles nor
+  denies: that is a turn nobody can end.
 
 **M1 (pi adapter) complete.** Both backends now sit behind the same Backend Adapter contract.
 

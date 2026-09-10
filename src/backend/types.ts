@@ -1,5 +1,12 @@
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
-import type { BackendEvent, Capabilities, EffortLevel, Skill, Spend } from "../protocol/events.ts";
+import type {
+  BackendEvent,
+  Capabilities,
+  EffortLevel,
+  PermissionDecision,
+  Skill,
+  Spend,
+} from "../protocol/events.ts";
 
 /**
  * One Attachment's bytes on their way to a model.
@@ -30,6 +37,17 @@ export type BackendCreateOptions = {
    * newest Backend Session has spent, which reads as the bill resetting itself.
    */
   priorSpend?: Spend;
+  /**
+   * The Standing Authorisations in force when this Backend Session opened — tools to run without
+   * raising a Permission Prompt, on top of whatever the adapter pre-approves.
+   *
+   * A snapshot, deliberately. The Settings have one owner and are read *through* it (ADR 0009), which
+   * rejected the observer shape a live-updating list would need; so a grant made in another Agent
+   * Session is not pushed here. The cost is one extra prompt in a session that was already running,
+   * which then honours it for the rest of its life — and every session started afterwards reads the
+   * grant from the Settings.
+   */
+  standingAuthorisations?: readonly string[];
   emit: (event: BackendEvent) => void;
 };
 
@@ -99,6 +117,23 @@ export interface BackendSession {
    * acted on it.
    */
   answerEnquiry?(askId: string, answers: string[][]): Promise<boolean>;
+  /**
+   * Decide a Permission Prompt this Backend Session is holding open.
+   *
+   * Optional, and paired with `capabilities.permissions` the way the two methods above are paired
+   * with their flags: an adapter that cannot be asked before it acts omits the method and declares
+   * `false`. The host gates on the flag and never on the method.
+   *
+   * Answers `false` when there is no such open prompt — one already decided, one abandoned with a
+   * torn turn, or a `callId` a client read out of an old transcript. An ordinary race, and the host
+   * turns it into a refusal a human can read. It is also the signal that **nothing must be
+   * persisted**: a stale `always` must not leave a Standing Authorisation behind.
+   *
+   * `always` is honoured *within this Backend Session* by the adapter, which stops asking about the
+   * tool. Granting it beyond this session is not the adapter's business — the Settings have one owner
+   * (ADR 0009), and it is not a Backend Adapter.
+   */
+  answerPermission?(callId: string, decision: PermissionDecision): Promise<boolean>;
   dispose(): Promise<void>;
 }
 
