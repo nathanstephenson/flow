@@ -4,6 +4,7 @@ import { canSettle, occupied } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
+import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
@@ -73,6 +74,15 @@ export function AppShell() {
    */
   const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
   const docks = useDocks(focusedId, sessionIds);
+
+  /*
+   * The unsent messages, for the same reason the Docks are here: the pane remounts when the focus
+   * moves, and a message someone was halfway through typing must not be destroyed by a glance at
+   * another Agent Session. The ids are passed in so the Drafts of Reaped Agent Sessions are
+   * forgotten — and unlike the Docks this is held in memory only, never in `localStorage`
+   * (web/src/drafts.ts says why).
+   */
+  const drafts = useDraftStash(sessionIds);
 
   /**
    * The focused Agent Session's live chrome, which the rail and the shortcuts both read.
@@ -277,6 +287,7 @@ export function AppShell() {
               searchOpen={searchOpen}
               onCloseSearch={() => setSearchOpen(false)}
               docks={docks}
+              drafts={drafts}
               shells={config.shell === true}
             />
           )}
