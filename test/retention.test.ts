@@ -123,7 +123,7 @@ describe("settling and reaping", () => {
     // Backdate the settle so the window has already passed by the time the next host loads.
     const meta = store.readMeta(id);
     assert.ok(meta);
-    store.writeMeta({ ...meta, updatedAt: new Date(Date.now() - 2 * DAY).toISOString() });
+    store.writeMeta({ ...meta, settledAt: new Date(Date.now() - 2 * DAY).toISOString() });
 
     const second = await hostWith(DAY);
 

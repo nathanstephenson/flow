@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import type { EffortLevel } from "../../../src/protocol/events.ts";
 import { scopeKindHint, scopeKindLabel } from "@client/scope-kind.ts";
+import { occupied } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import { useBranches } from "@/branches.ts";
 import type { Chrome } from "@/store/contract.ts";
@@ -95,7 +96,8 @@ function BranchPicker({ sessionId, chrome }: { sessionId: string; chrome: Chrome
   if (!chrome.branch) return null;
 
   const branch = chrome.branch;
-  const running = chrome.status === "running";
+  // Matches the Session Host, which refuses a branch switch on `turnInFlight` — true while Awaiting.
+  const running = occupied(chrome.status);
   const ended = chrome.status === "ended";
 
   return (

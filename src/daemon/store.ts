@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { ATTACHMENT_MEDIA_TYPES, type AttachmentMediaType } from "../protocol/attachments.ts";
 import type { EffortLevel, LoggedEvent } from "../protocol/events.ts";
-import type { SessionStatus } from "../protocol/commands.ts";
+import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
 
 /**
  * On-disk home of Presentation Transcripts.
@@ -32,8 +32,28 @@ export type SessionMeta = {
   resumeToken?: string;
   modelId?: string;
   effort?: EffortLevel;
-  /** Status as of the last write; on load, anything live becomes Dormant. */
-  status: SessionStatus;
+  /**
+   * Lifecycle as of the last write; on load, `live` becomes Dormant (ADR 0003).
+   *
+   * Optional because `readMeta` is a bare `JSON.parse` cast and a file written before the
+   * lifecycle/activity split has only `status`. `SessionHost.load` reads that as the fallback and
+   * rewrites the meta in this shape, so the migration completes on one boot.
+   */
+  lifecycle?: SessionLifecycle;
+  /**
+   * The pre-split field, still written as a mirror of `lifecycle` and never read when `lifecycle`
+   * is present.
+   *
+   * Kept so rolling the daemon back does not read every Settled Agent Session as Dormant, which
+   * would leave them un-reapable and on disk for good. Removable once no shipped daemon reads it.
+   *
+   * @deprecated Read `lifecycle`.
+   */
+  status?: SessionStatus;
+  /** When this Agent Session last became its owner's turn. See `SessionSummary.restingAt`. */
+  restingAt?: string;
+  /** When this Agent Session was Settled, and so what ADR 0006's retention window runs from. */
+  settledAt?: string;
   /**
    * The worktree this Agent Session's Scope *is*, when the Session Host made it. Absent for a Scope
    * its owner named, which is every session before worktrees existed and most sessions after.

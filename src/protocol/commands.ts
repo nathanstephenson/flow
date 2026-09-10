@@ -5,7 +5,27 @@ import type { Branch } from "./git.ts";
 
 export type SendWhen = "now" | "after_turn";
 
-export type SessionStatus = "idle" | "running" | "dormant" | "settled" | "ended";
+/**
+ * What an Agent Session is doing, as a reader sees it.
+ *
+ * Three of these are Lifecycle values reported straight through; `idle`, `running` and `awaiting`
+ * are derived, and exist only while the Lifecycle is `live`. Widening this union is a silent
+ * behaviour change everywhere a caller compares against one member, so reach for the predicates in
+ * `client/status.ts` rather than writing `=== "running"` by hand.
+ */
+export type SessionStatus = "idle" | "running" | "awaiting" | "dormant" | "settled" | "ended";
+
+/**
+ * What the Session Host writes down, as opposed to what it works out.
+ *
+ * The cut is which facts a restart preserves. Dormant, Settled and Ended survive one and mean
+ * something afterwards; whether a turn was in flight does not, because ADR 0003 drops any turn the
+ * restart tore. So the Lifecycle is stored and the activity is derived from it — a wrong activity
+ * draws a wrong dot until the next event, while a wrong Lifecycle reaps a transcript on a timer.
+ *
+ * `live` is never on the wire: a live Agent Session reports its activity instead.
+ */
+export type SessionLifecycle = "live" | "dormant" | "settled" | "ended";
 
 export type SessionSummary = {
   id: string;
@@ -13,7 +33,38 @@ export type SessionSummary = {
   backend: string;
   status: SessionStatus;
   title: string;
-  updatedAt: string;
+  /**
+   * When this Agent Session last came to rest — the time its row prints, and what orders the rail
+   * *within* a band. Which band it is in comes from `railBand`, not from here.
+   *
+   * Stamped when the derived activity enters `idle`, and at no other time. Deliberately not
+   * `updatedAt`, which every streamed token restamps and which therefore floated whichever Agent
+   * Session was busiest to the top of the rail on each poll, reordering the list under a reader
+   * trying to follow it.
+   *
+   * Awaiting does not stamp it, though it is equally its owner's turn: the band already puts it at
+   * the top, and stamping would mean a turn that hit two un-authorised tools jumped the running
+   * band on its way back out.
+   */
+  restingAt: string;
+  /**
+   * How many Subagents are running or waiting, whatever the status says.
+   *
+   * A second signal rather than part of the status, because ADR 0016 fixed that a backgrounded
+   * Subagent is not occupancy: it does not hold the Steering Queue, and the Agent Session really is
+   * `idle` — the model is idle, and steering into it works. But there is still work happening, and
+   * a rail with no way to say so reads as though nothing is.
+   */
+  activeSubagents: number;
+  /**
+   * When this Agent Session was Settled, and so what the retention window is measured from
+   * (ADR 0006). Absent unless `status` is `settled`.
+   *
+   * Its own field rather than `updatedAt`, which used to serve here: every command that touches a
+   * Settled Agent Session restamped that, so opening one and changing its model silently granted it
+   * another full window.
+   */
+  settledAt?: string;
   lastSeq: number;
   capabilities?: Capabilities;
   /**

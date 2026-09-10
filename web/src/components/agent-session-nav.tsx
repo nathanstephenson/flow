@@ -75,7 +75,7 @@ export type AgentSessionNavProps = {
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
   const now = useNow();
-  // The Session Host sorts Settled last, so this partition costs nothing and cannot reorder.
+  // Settled is the Session Host's bottom band, so this partition costs nothing and cannot reorder.
   const active = props.sessions.filter((session) => session.status !== "settled");
   const settled = props.sessions.filter((session) => session.status === "settled");
 
@@ -326,8 +326,14 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             <span className="sr-only">{status}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
+            <SubagentMark count={summary.activeSubagents} />
             <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
-            <span className="ml-auto shrink-0">{relativeTime(summary.updatedAt, now)}</span>
+            {/*
+             * `restingAt`, which is what the Session Host orders this list by. Showing `updatedAt`
+             * here instead would print one time while sorting by another, and the first row whose
+             * age disagreed with its position would read as a bug.
+             */}
+            <span className="ml-auto shrink-0">{relativeTime(summary.restingAt, now)}</span>
           </span>
         </span>
       </SidebarMenuButton>
@@ -385,6 +391,28 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
  * Mono, because a branch name is an identifier and this is the same reading as the Project name in
  * the pane header.
  */
+/**
+ * That Subagents are working, whatever the status dot says.
+ *
+ * Its own mark rather than a hue on the status dot, because a backgrounded Subagent is not
+ * occupancy (ADR 0016): the model really is idle, the Steering Queue really will dispatch, and
+ * colouring the session Running would be a lie that the composer and the branch picker would then
+ * have to act on. What is true is narrower — work is happening — and this is the whole of it.
+ *
+ * The count only refreshes on the rail's two-second poll for rows that are not focused, so a
+ * Subagent that starts and finishes inside one poll never draws a mark. That is a miss, not a
+ * flicker, and it is the cost of the rail not holding an event stream per Agent Session.
+ */
+function SubagentMark({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <>
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-status-active" />
+      <span className="sr-only">{count} subagent{count === 1 ? "" : "s"} working</span>
+    </>
+  );
+}
+
 function ScopeLine({ summary }: { summary: SessionSummary }) {
   if (!summary.branch) return null;
   const Glyph = summary.worktree ? FolderGit2 : GitBranch;

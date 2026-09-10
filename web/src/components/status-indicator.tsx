@@ -16,6 +16,13 @@ import { cn } from "@/lib/utils.ts";
  * turn does. Idle wore Running's blue dimmed for a while and it read as "still going" from across
  * the room, which is the opposite of what a finished turn should say.
  *
+ * Awaiting is produced by an open Enquiry (ADR 0016) or an open Permission Prompt (ADR 0018). It
+ * sat here unreachable for two decisions before the Session Host had a word for it.
+ *
+ * Background Subagents are deliberately *not* a hue here. They are not occupancy (ADR 0016) — the
+ * session really is Idle and steering into it works — so the rail draws them as their own small
+ * mark from `activeSubagents` rather than by lying about the status.
+ *
  * So everything else is the monochrome the rest of this app is. Idle is plain `foreground` and
  * filled; Dormant the same `foreground` as a ring; Settled a muted ring; Ended keeps `--destructive`,
  * because a dead Agent Session is the one status that is a problem. Idle and Dormant sharing a
@@ -30,16 +37,7 @@ import { cn } from "@/lib/utils.ts";
  * the shape a scanner cannot follow.
  */
 
-/**
- * `SessionStatus` plus the one state the protocol has no word for yet.
- *
- * Awaiting is what an `ask_user_question` tool call leaves behind, and that tool does not exist. The
- * dot is ready for it and nothing produces it: when the tool lands, the Session Host reports the
- * state and this map already knows how to draw it.
- */
-export type DotState = SessionStatus | "awaiting";
-
-const DOT_TEXT: Record<DotState, string> = {
+const DOT_TEXT: Record<SessionStatus, string> = {
   running: "text-status-active",
   idle: "text-foreground",
   awaiting: "text-status-awaiting",
@@ -48,12 +46,17 @@ const DOT_TEXT: Record<DotState, string> = {
   ended: "text-destructive",
 };
 
-/** Filled means a Backend Session is attached. Hollow means nothing is running (ADR 0003). */
-function isAttached(status: DotState): boolean {
+/**
+ * Filled means a Backend Session is attached. Hollow means nothing is running (ADR 0003).
+ *
+ * The three filled states are exactly the derived activities, which is the same cut the Session
+ * Host draws between a Lifecycle it stores and an activity it works out.
+ */
+function isAttached(status: SessionStatus): boolean {
   return status === "running" || status === "idle" || status === "awaiting";
 }
 
-export function StatusDot({ status, className }: { status: DotState; className?: string | undefined }) {
+export function StatusDot({ status, className }: { status: SessionStatus; className?: string | undefined }) {
   return (
     <span
       aria-hidden

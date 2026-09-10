@@ -2,7 +2,7 @@ import { MoreHorizontal, PanelBottom, PanelRight } from "lucide-react";
 import { useState } from "react";
 
 import { projectName } from "@client/project-name.ts";
-import { canRevive } from "@client/status.ts";
+import { canRevive, occupied } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
 import type { DockSide } from "@/presentation/docks.ts";
@@ -190,7 +190,7 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
             * A Dormant one says so, because it Revives — and a Revive spends money and edits files
             * (ADR 0003), which is not something a menu item should do without saying it will.
             */}
-          {chrome.capabilities?.compaction && chrome.status !== "running" && chrome.status !== "ended" ? (
+          {chrome.capabilities?.compaction && !occupied(chrome.status) && chrome.status !== "ended" ? (
             <DropdownMenuItem onClick={() => void run({ type: "compact", sessionId })}>
               {canRevive(chrome.status)
                 ? "Revive and compact the Conversation Context"

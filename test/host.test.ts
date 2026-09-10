@@ -757,3 +757,258 @@ describe("a Permission Prompt the model raised", () => {
     assert.equal(backend.sessions.length, sessions, "no Backend Session was started to decide it");
   });
 });
+
+/**
+ * The lifecycle/activity split, from the outside: what `statusOf` and `list()` report, and when the
+ * rail's sort key moves. Its own fixture, because these turn on one Agent Session's whole history.
+ */
+describe("what an Agent Session is doing", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  let sessionId: string;
+
+  beforeEach(async () => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+  });
+
+
+/**
+ * Awaiting: the derived status for a turn held open on a person rather than on a model.
+ *
+ * The Lifecycle is stored and the activity is worked out, so these assert the derivation rather
+ * than a field anyone assigned — and in particular that `turnInFlight` is untouched by it, since
+ * that is what the Steering Queue reads.
+ */
+describe("awaiting a person", () => {
+  it("reports Awaiting while a Permission Prompt is open, without freeing the Steering Queue", async () => {
+    await host.send(sessionId, "go", "now");
+    backend.latest.askPermission("Bash");
+
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    // The turn is still in flight, so a second send queues rather than jumping into it. This is
+    // the assertion that the split did not disturb ADR 0002.
+    await host.send(sessionId, "second", "after_turn");
+    assert.deepEqual(backend.latest.prompts, ["go"], "the queued message must not reach the backend");
+  });
+
+  it("reports Awaiting while an Enquiry is open, and Running again once it is answered", async () => {
+    await host.send(sessionId, "go", "now");
+    const askId = backend.latest.ask([
+      { header: "Pick", question: "Which?", multiSelect: false, options: [{ label: "a" }, { label: "b" }] },
+    ]);
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    await host.answerEnquiry(sessionId, askId, [["a"]]);
+    assert.equal(host.statusOf(sessionId), "running", "the model has the turn back");
+
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(host.statusOf(sessionId), "idle");
+  });
+
+  it("stays Awaiting until the last of several Permission Prompts is decided", async () => {
+    await host.send(sessionId, "go", "now");
+    const first = backend.latest.askPermission("Bash");
+    const second = backend.latest.askPermission("Write");
+
+    await host.answerPermission(sessionId, first, "allow");
+    assert.equal(host.statusOf(sessionId), "awaiting", "one prompt is still open");
+
+    await host.answerPermission(sessionId, second, "allow");
+    assert.equal(host.statusOf(sessionId), "running");
+  });
+
+  it("returns to Idle when a turn ends with a prompt the adapter never closed", async () => {
+    await host.send(sessionId, "go", "now");
+    backend.latest.askPermission("Bash");
+    assert.equal(host.statusOf(sessionId), "awaiting");
+
+    // No terminal snapshot for the prompt — only the turn ending. A torn turn that left the index
+    // set would pin this Agent Session at Awaiting for good.
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(host.statusOf(sessionId), "idle");
+  });
+});
+
+/**
+ * ADR 0016: a backgrounded Subagent is not occupancy. It travels as a count so a rail can say
+ * work is happening, and it must never make the Agent Session look busy — the Steering Queue
+ * would then refuse to dispatch into a model that is sitting idle.
+ */
+describe("counting Subagents without taking occupancy", () => {
+  it("counts running and waiting Subagents, and dedupes a repeated snapshot", async () => {
+    await host.send(sessionId, "go", "now");
+    const explore = backend.latest.beginSubagent("Explore");
+    const plan = backend.latest.beginSubagent("Plan");
+    explore.resume();
+    explore.resume();
+
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.activeSubagents, 2);
+
+    plan.wait("provider");
+    assert.equal(
+      host.list().find((summary) => summary.id === sessionId)?.activeSubagents,
+      2,
+      "waiting is still working",
+    );
+
+    explore.finish();
+    plan.finish();
+    assert.equal(host.list().find((summary) => summary.id === sessionId)?.activeSubagents, 0);
+  });
+
+  it("leaves a session with only background Subagents Idle, and counts them", async () => {
+    await host.send(sessionId, "go", "now");
+    const explore = backend.latest.beginSubagent("Explore");
+    explore.launch();
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const summary = host.list().find((entry) => entry.id === sessionId);
+    // The model really is idle and steering really does work, so the status says so (ADR 0016).
+    // What is true — that work is happening — is the count, and nothing else.
+    assert.equal(summary?.status, "idle");
+    assert.equal(summary?.activeSubagents, 1);
+  });
+});
+
+/**
+ * How the rail is ordered: banded by how alive an Agent Session is, then by when it last came to
+ * rest inside each band. Nothing may move a row while a turn merely streams.
+ */
+describe("ordering the rail", () => {
+  const restAt = (id: string) => host.list().find((summary) => summary.id === id)?.restingAt;
+  const order = () => host.list().map((summary) => summary.id);
+  // Two stamps inside one ISO millisecond tie, and the sort then falls back to insertion order.
+  // Real work is never that close together; these tests are.
+  const gap = () => new Promise((resolve) => setTimeout(resolve, 2));
+
+  it("does not move while a turn streams, though updatedAt does", async () => {
+    const atRest = restAt(sessionId);
+    await host.send(sessionId, "go", "now");
+    for (let index = 0; index < 50; index += 1) backend.latest.say(`chunk ${index}`, false);
+
+    assert.equal(restAt(sessionId), atRest, "a streaming turn must not restamp anything");
+  });
+
+  it("stamps when the turn ends, and not when a prompt wants a decision", async () => {
+    const atRest = restAt(sessionId);
+    await gap();
+    await host.send(sessionId, "go", "now");
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const afterTurn = restAt(sessionId);
+    assert.ok(afterTurn !== undefined && atRest !== undefined && afterTurn > atRest);
+
+    await gap();
+    await host.send(sessionId, "again", "now");
+    backend.latest.askPermission("Bash");
+    // Awaiting is its owner's turn, but the band is what surfaces it. Stamping here would mean this
+    // Agent Session jumped the running band on its way back out of the prompt.
+    assert.equal(restAt(sessionId), afterTurn, "Awaiting must not restamp");
+  });
+
+  it("keeps a working Agent Session above one that has finished", async () => {
+    await gap();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
+
+    // Both Idle, so recency alone decides and the newer one leads.
+    assert.deepEqual(order(), [other, sessionId]);
+
+    await host.send(sessionId, "long turn", "now");
+    for (let index = 0; index < 20; index += 1) mine.say(`chunk ${index}`, false);
+    await gap();
+    assert.deepEqual(
+      order(),
+      [sessionId, other],
+      "a Running Agent Session sits above an Idle one however stale it is",
+    );
+
+    mine.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order(), [sessionId, other], "and holds its place on finishing, now by recency");
+  });
+
+  it("lifts an Agent Session awaiting a person above everything working", async () => {
+    await gap();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
+
+    // `other` is Running, and would lead on both band and recency.
+    await host.send(other, "work", "now");
+    await gap();
+    assert.deepEqual(order(), [other, sessionId]);
+
+    // `sessionId` is older and its restingAt is staler, so only the band can lift it.
+    await host.send(sessionId, "go", "now");
+    mine.askPermission("Bash");
+    assert.equal(host.statusOf(sessionId), "awaiting");
+    assert.deepEqual(order(), [sessionId, other], "the one that needs a person comes first");
+  });
+
+  it("bands background Subagents as working, though the status stays idle", async () => {
+    await gap();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    const mine = backend.sessions.at(-2);
+    assert.ok(mine);
+    assert.deepEqual(order(), [other, sessionId], "precondition: the newer one leads");
+
+    await host.send(sessionId, "explore", "now");
+    const explore = mine.beginSubagent("Explore");
+    explore.launch();
+    mine.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // ADR 0016 keeps the status honest — the model is idle — and the band keeps the row where its
+    // owner can watch it, which is the whole reason the count travels separately.
+    assert.equal(host.statusOf(sessionId), "idle");
+    assert.deepEqual(order(), [sessionId, other], "work happening beats an Idle Agent Session");
+
+    explore.finish();
+
+    // Give `other` the newer rest stamp, so recency alone would put it first. While the Subagent
+    // was working the band overrode that; now that it is done, nothing does.
+    await gap();
+    await host.send(other, "something", "now");
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order(), [other, sessionId], "and it drops back once the Subagent is done");
+  });
+
+  it("sinks Dormant below Idle, and Settled below both", async () => {
+    await gap();
+    const dormant = await host.create({ scope: "/tmp/dormant", backend: "fake" });
+    await gap();
+    const settled = await host.create({ scope: "/tmp/settled", backend: "fake" });
+    await host.settle(settled);
+    await host.shutdown();
+    // shutdown() takes every Backend Session away, so revive the one that must read as Idle.
+    await host.revive(sessionId);
+
+    assert.equal(host.statusOf(sessionId), "idle");
+    assert.equal(host.statusOf(dormant), "dormant");
+    assert.equal(host.statusOf(settled), "settled");
+    assert.deepEqual(order(), [sessionId, dormant, settled]);
+  });
+});
+
+it("refuses a branch switch while a Permission Prompt holds the turn", async () => {
+  // The regression this guards: `switchBranch` used to read `status === "running"`, which stops
+  // being true the moment a prompt makes the derived status Awaiting — so git would have moved
+  // the working tree out from under a live tool call.
+  await host.send(sessionId, "go", "now");
+  backend.latest.askPermission("Bash");
+  assert.equal(host.statusOf(sessionId), "awaiting");
+
+  await assert.rejects(() => host.switchBranch(sessionId, "other"), /abort the turn/);
+});
+});

@@ -23,7 +23,10 @@ It owns no Presentation Transcript and is never Revived. One the model backgroun
 that spawned it and reports back into a later one, so a running Subagent is not occupancy and does
 not hold the Steering Queue; what it cannot outlive is its Backend Session, and one left running by
 an unclean shutdown is closed as aborted, the way a torn turn is. Its conversation never enters the
-parent's Conversation Context, so it costs Spend without costing occupancy.
+parent's Conversation Context, so it costs Spend without costing occupancy. Because it is not
+occupancy it never shows as Running: an Agent Session whose only work is backgrounded Subagents is
+Idle, and how many are working travels beside the status as a count, so a rail can say work is
+happening without saying the model is busy.
 _Avoid_: subagent session, child session, sub-session, task, sidechain, delegation; and `agent` in
 code, which collides with Agent Session — "Agents" is the label a reader sees, not the term.
 
@@ -128,10 +131,58 @@ _Avoid_: server, manager, supervisor
 Messages held by the Session Host awaiting the end of the current turn.
 _Avoid_: inbox, buffer, backlog
 
+**Lifecycle**:
+The half of an Agent Session's state the Session Host writes down: Live, Dormant, Settled or Ended.
+The other half — Idle, Running, Awaiting — is derived, because a restart destroys all three of them
+and a stored copy could only be wrong. The cut is what a wrong answer costs: a wrong activity draws
+a wrong dot until the next event, while a wrong Lifecycle reaps a transcript on a timer.
+_Avoid_: state, phase, mode
+
+**Live**:
+The Lifecycle of an Agent Session with a Backend Session attached. Never reported as a status on its
+own — a Live Agent Session reports which of the three activities it is in instead.
+_Avoid_: active, open, attached, running
+
+**Idle**:
+The activity of a Live Agent Session with no turn in flight: its owner's turn, to type. Its
+Backend Session is attached, which is what separates it from Dormant.
+_Avoid_: ready, waiting, free, dormant
+
+**Running**:
+The activity of a Live Agent Session whose model holds the turn. This is occupancy, and nothing
+else: a backgrounded Subagent working is not Running, because the model is not.
+_Avoid_: busy, working, active, thinking
+
+**Awaiting**:
+The activity of a Live Agent Session whose turn is held open on a person rather than on a model —
+an open Enquiry or an open Permission Prompt. The reader's turn, to decide, and the one state that
+will sit there until they come back. It is occupancy like Running: nothing offered mid-turn may be
+offered while it holds.
+_Avoid_: blocked, waiting, paused, stuck; and idle, which is the other way it can be your turn.
+
+**Resting**:
+The moment an Agent Session last came to rest, by going Idle. What the rail prints beside a row and
+orders rows by *within* a Band, in place of a last-activity time that every streamed token
+restamped — which floated whichever Agent Session was busiest to the top of the list and reordered
+it under anyone trying to read it. Awaiting does not restamp it, though it is equally its owner's
+turn: the Band already surfaces it, and a stamp would let a turn that hit two un-authorised tools
+jump the working Band on its way back out.
+_Avoid_: last activity, updated, touched, modified
+
+**Band**:
+Which tier of the rail an Agent Session sits in, ordered by how alive it is: Awaiting, then working,
+then Idle, then Dormant, then Settled and Ended together. A row moves when its Band changes and at
+no other time, which is what lets a turn stream for an hour without reordering the list. Working is
+the one Band that is not simply a status — an Agent Session whose only work is backgrounded
+Subagents is Idle and sits there anyway, because sinking it below something that finished yesterday
+would hide the thing its owner wanted to watch.
+_Avoid_: group, tier, section, bucket
+
 **Dormant**:
 The state of an Agent Session with no Backend Session running. Its transcript is readable and it can
 be Revived.
-_Avoid_: idle, stopped, paused, dead
+_Avoid_: idle — which is now a Live Agent Session with no turn in flight, and the difference is
+whether reviving costs anything — and stopped, paused, dead
 
 **Settled**:
 The state of an Agent Session its owner has declared themselves done with. No Backend Session runs,

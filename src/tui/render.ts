@@ -332,7 +332,9 @@ function overlay(ui: UiState, width: number, height: number): string[] {
         openedSettled = true;
         rows.push(clip("  ── settled ──", width));
       }
-      const updated = relativeTime(session.updatedAt, now);
+      // `restingAt`, which is also what the list is ordered by — a column showing one time while
+      // the rows are sorted by another reads as broken the first time they disagree.
+      const updated = relativeTime(session.restingAt, now);
       rows.push(
         clip(
           `${index === cursor ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${updated.padEnd(10)} ${sessionLabel(session)}`,

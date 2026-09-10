@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input.tsx";
  * Retention is the one destructive Setting. Shortening it does not delete anything on save — the
  * next sweep does, within the hour — but saving is the moment the reader decides, so this is where
  * the count belongs. It is computed from the Agent Sessions already on screen rather than asked for:
- * a summary carries `status` and `updatedAt`, which is everything the reaper uses (ADR 0006).
+ * a summary carries `status` and `settledAt`, which is everything the reaper uses (ADR 0006).
  */
 export function GeneralSettings() {
   const { config } = useHost();
