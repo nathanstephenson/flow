@@ -259,7 +259,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
     <div className="py-0.5">
-      <div className="w-full rounded-lg border bg-card px-3 py-2 text-card-foreground">
+      <div className="w-full rounded-lg border px-3 py-2 text-foreground">
         <div className="flex items-center gap-2">
           <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
           <span className="shrink-0 text-xs text-muted-foreground">?</span>
@@ -313,7 +313,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     </>
   );
 
-  const shell = "flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground";
+  const shell = "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground";
 
   return (
     <div className="py-0.5">
@@ -361,7 +361,7 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
 
   return (
     <div className="py-0.5">
-      <div className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground">
+      <div className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground">
         <ToolStatusDot status={backgroundDot(entry.status)} />
         <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
         <span className="shrink-0 font-mono text-sm text-foreground">{entry.tool}</span>
