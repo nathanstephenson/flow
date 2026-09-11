@@ -5,6 +5,7 @@ import {
   closeTab,
   defaultLayout,
   fillWithShell,
+  fillWithGit,
   fillWithSubagents,
   parseLayouts,
   pruneLayouts,
@@ -42,6 +43,7 @@ export type DockAction =
   | { type: "add-tab"; side: DockSide }
   /** Chosen from the picker. Fills the unchosen tab it was shown for, or adds one if there was none. */
   | { type: "open-shell"; side: DockSide; tabId?: string }
+  | { type: "open-git"; side: DockSide; tabId?: string }
   /** The Shell has been opened and has an id; the tab has been waiting for it. */
   | { type: "remember-shell"; side: DockSide; tabId: string; shellId: string }
   /**
@@ -62,7 +64,7 @@ export type DockAction =
 
 export type Docks = { layout: DockLayout; dispatch: (action: DockAction) => void };
 
-export function useDocks(sessionId: string | undefined, knownSessionIds: readonly string[]): Docks {
+export function useDocks(sessionId: string | undefined, knownSessionIds: readonly string[] | undefined): Docks {
   const [layouts, setLayouts] = useState<Record<string, DockLayout>>(() => parseLayouts(read()));
 
   const update = useCallback(
@@ -105,6 +107,8 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
             return { ...layout, [action.side]: toggleMinimised(dock) };
           case "add-tab":
             return { ...layout, [action.side]: addTab(dock, newTabId()) };
+          case "open-git":
+            return { ...layout, [action.side]: fillWithGit(dock, action.tabId ?? newTabId()) };
           case "open-shell":
             return { ...layout, [action.side]: fillWithShell(dock, action.tabId ?? newTabId()) };
           case "select-subagent":
@@ -157,6 +161,7 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
    * browser, so nothing else would ever shrink this blob.
    */
   useEffect(() => {
+    if (knownSessionIds === undefined) return;
     setLayouts((current) => {
       const pruned = pruneLayouts(current, knownSessionIds);
       if (pruned === current) return current;

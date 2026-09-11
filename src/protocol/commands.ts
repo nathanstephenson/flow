@@ -2,6 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
+import type { PublishInput } from "./publish.ts";
 
 export type SendWhen = "now" | "after_turn";
 
@@ -158,6 +159,9 @@ export type Command =
    * holds and the next turn reads, whereas this moves someone's working tree on disk. Borrowing
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
+  | { type: "git_status"; sessionId: string }
+  | { type: "prepare_publish"; sessionId: string }
+  | { type: "publish"; sessionId: string; input: PublishInput }
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
    * Move a **Scope's** checkout, with no Agent Session in it yet.
@@ -165,13 +169,6 @@ export type Command =
    * The New Agent Session view's branch picker, which is a chooser rather than a reading: somebody
    * deciding where a session will run may want the checkout somewhere else before it starts, and
    * until it exists there is no `sessionId` to say so through.
-   *
-   * Keyed by Scope rather than folded into `switch_branch` above, because the two differ in what
-   * they can promise. That one refuses while a turn is in flight and rides a note along with the
-   * next message so the model knows its files moved. This one has no turn to check and no
-   * conversation to tell — so where an Agent Session is *already* bound to the Scope, it moves the
-   * tree under it and says so only by the branch on its rail row changing. That is a real hazard and
-   * it is the caller's to weigh, which is why the view spells it out beside the control.
    */
   | { type: "switch_scope_branch"; scope: string; branch: string }
   /**

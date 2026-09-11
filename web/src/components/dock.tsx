@@ -4,6 +4,7 @@ import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide } from "@/presentation/docks.ts";
 import type { DockAction } from "@/docks.ts";
 import { DockResizeHandle } from "@/components/dock-resize-handle.tsx";
+import { GitPane } from "@/components/git-pane.tsx";
 import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -128,8 +129,8 @@ export function Dock({
                   onClick={() => dispatch({ type: "close-tab", side, tabId: tab.id })}
                   // Says what it does. The honest answer is "ends it", and this is the only control
                   // in the app that ends a Shell.
-                  title="Close this tab — ends its Shell"
-                  aria-label={`Close ${tabLabel(dock, tab.id)} — ends its Shell`}
+                  title={tab.content?.kind === "shell" ? "Close this tab — ends its Shell" : "Close this tab"}
+                  aria-label={`Close ${tabLabel(dock, tab.id)}${tab.content?.kind === "shell" ? " — ends its Shell" : ""}`}
                 >
                   <X aria-hidden />
                 </Button>
@@ -169,7 +170,9 @@ export function Dock({
         </Tooltip>
       </div>
 
-      {active?.content?.kind === "subagents" ? (
+      {active?.content?.kind === "git" ? (
+        <GitPane key={`${sessionId}-${active.id}`} sessionId={sessionId} />
+      ) : active?.content?.kind === "subagents" ? (
         <SubagentsPane
           key={active.id}
           sessionId={sessionId}
@@ -190,6 +193,7 @@ export function Dock({
         />
       ) : (
         <ContentPicker
+          onChooseGit={() => dispatch({ type: "open-git", side, ...(active ? { tabId: active.id } : {}) })}
           onChooseSubagents={() =>
             dispatch({ type: "open-subagents", side, ...(active ? { tabId: active.id } : {}) })
           }
@@ -218,7 +222,9 @@ export function Dock({
 function ContentPicker({
   onChooseShell,
   onChooseSubagents,
+  onChooseGit,
 }: {
+  onChooseGit: () => void;
   onChooseShell?: () => void;
   onChooseSubagents: () => void;
 }) {
@@ -230,6 +236,7 @@ function ContentPicker({
           Shell
         </Button>
       )}
+      <Button variant="outline" size="sm" onClick={onChooseGit}>Git</Button>
       <Button variant="outline" size="sm" onClick={onChooseSubagents}>
         <Bot aria-hidden data-icon="inline-start" />
         Agents

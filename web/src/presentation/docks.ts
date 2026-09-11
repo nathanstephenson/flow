@@ -34,7 +34,8 @@ export type DockSide = "bottom" | "right";
  */
 export type DockTabContent =
   | { kind: "shell"; shellId?: string }
-  | { kind: "subagents"; subagentId?: string };
+  | { kind: "subagents"; subagentId?: string }
+  | { kind: "git" };
 
 /** `content: undefined` is an unchosen tab, and unchosen is what draws the picker. */
 export type DockTab = { id: string; content: DockTabContent | undefined };
@@ -140,6 +141,10 @@ function fill(dock: Dock, tabId: string, content: DockTabContent): Dock {
       : [...dock.tabs, { id: tabId, content }],
     activeId: tabId,
   };
+}
+
+export function fillWithGit(dock: Dock, tabId: string): Dock {
+  return fill(dock, tabId, { kind: "git" });
 }
 
 export function fillWithShell(dock: Dock, tabId: string): Dock {
@@ -280,7 +285,7 @@ export function tabLabel(dock: Dock, tabId: string): string {
     if (tab.content === undefined) return "New tab";
     // Not numbered: a second Agents tab shows the same Subagents as the first, so an ordinal would
     // imply a distinction there is not. Shells are numbered because each is its own process.
-    return tab.content.kind === "subagents" ? "Agents" : `Shell ${ordinal}`;
+    return tab.content.kind === "git" ? "Git" : tab.content.kind === "subagents" ? "Agents" : `Shell ${ordinal}`;
   }
   return "New tab";
 }
@@ -342,6 +347,7 @@ function parseTab(value: unknown): DockTab | undefined {
   // Every kind has to be named here. An unrecognised one degrades to an unchosen tab, which is the
   // right answer for a layout written by a newer build — but it also means a kind added without
   // this line reopens as a blank picker, looking like the tab forgot itself.
+  if (shape.kind === "git") return { id: record.id, content: { kind: "git" } };
   if (shape.kind === "subagents") {
     return {
       id: record.id,

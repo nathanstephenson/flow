@@ -18,7 +18,7 @@ _Avoid_: history, log, messages
 **Conversation Context**: What the model can currently see, owned and compacted by the backend.
 _Avoid_: history, transcript, memory
 
-**Spend**: Cumulative billing for an Agent Session across models, including Subagents; not Conversation Context occupancy. Summary Model naming is excluded.
+**Spend**: Cumulative billing for an Agent Session across models, including Subagents; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
 _Avoid_: usage, cost, tokens, context
 
 **Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session.
@@ -143,7 +143,7 @@ _Avoid_: preferred model, fallback model
 **Default Effort**: Per-Backend Adapter Effort choice for new Agent Sessions when none is specified; never reapplied on Revive or inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
-**Summary Model**: Per-Backend Adapter model used to name Agent Sessions through a throwaway Backend Session, outside their Spend.
+**Summary Model**: Per-Backend Adapter model used to name Agent Sessions and draft editable Git publish text through a throwaway Backend Session, outside their Spend.
 _Avoid_: naming model, title model, small model
 
 **Effort**: How hard a model is asked to think, with available levels declared per model.

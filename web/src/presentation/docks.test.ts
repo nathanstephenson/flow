@@ -8,6 +8,7 @@ import {
   defaultLayout,
   fillWithShell,
   fillWithSubagents,
+  fillWithGit,
   emptyDock,
   parseLayouts,
   pruneLayouts,
@@ -35,6 +36,25 @@ function withShells(count: number): Dock {
   }
   return setActive({ ...dock, minimised: false }, "t1");
 }
+
+describe("Git dock tabs", () => {
+  it("fills and labels a Git tab without claiming a Shell", () => {
+    const dock = fillWithGit(withShells(1), "git");
+    assert.equal(tabLabel(dock, "git"), "Git");
+    assert.equal(dock.activeId, "git");
+    const closed = closeTab(dock, "git");
+    assert.equal(closed.killed, undefined);
+    assert.equal(closed.dock.tabs.length, 1);
+  });
+
+  it("keeps Git tabs through storage and Shell reconciliation", () => {
+    const layout = { ...defaultLayout(), right: fillWithGit(emptyDock("right"), "git") };
+    const stored = parseLayouts(JSON.stringify({ session: layout })).session!;
+    const restored = reconcileLayout(stored, []);
+    assert.deepEqual(restored.right.tabs, [{ id: "git", content: { kind: "git" } }]);
+    assert.equal(restored.right.activeId, "git");
+  });
+});
 
 describe("clamping a Dock's size", () => {
   it("floors at the minimum, which differs per side", () => {

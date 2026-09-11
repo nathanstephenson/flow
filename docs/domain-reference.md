@@ -49,8 +49,9 @@ other thing that outlives a turn and the one this is most often mistaken for.
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
 fraction of a window, and a session routinely bills many times what its window holds. One known
-exception, stated rather than fixed (ADR 0020): naming a session bills the Summary Model in a
-Backend Session that is thrown away, so that call appears in no Agent Session's Spend.
+exception, stated rather than fixed (ADR 0020): naming an Agent Session or drafting Git publish text
+bills the Summary Model in a Backend Session that is thrown away, so those calls appear in no
+Agent Session's Spend.
 _Avoid_: usage, cost, tokens, context
 
 **Presentation Transcript**:
@@ -171,11 +172,12 @@ Never reapplied on Revive and never inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
 **Summary Model**:
-The model the Session Host uses to name an Agent Session, chosen per Backend Adapter for the machine.
-An Agent Session uses only its own Backend Adapter's Summary Model, without the Default Effort.
-Reached through an ordinary Backend Adapter, in a throwaway Backend Session that
-holds no Presentation Transcript, runs no tools, and is disposed of when it answers — so it is not
-an Agent Session, is never Revived, and nothing it says is ever seen (ADR 0020).
+The model the Session Host uses to name an Agent Session and draft Git publish text, chosen per
+Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's Summary Model,
+without the Default Effort. Reached through an ordinary Backend Adapter, in a throwaway Backend
+Session that holds no Presentation Transcript, runs no tools, and is disposed of when it answers —
+so it is not an Agent Session and is never Revived (ADR 0020). Git publish text is shown for editing
+only when its owner opens Publish; the model never commits or pushes changes.
 _Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:
