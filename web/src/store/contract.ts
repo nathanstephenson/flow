@@ -42,6 +42,7 @@ export type Chrome = {
 
   /** Depth only. The Steering Queue itself belongs to the Session Host (ADR 0002). */
   queueDepth: number;
+  queuedMessages?: { id: string | undefined; text: string; attachments?: string[] }[] | undefined;
   /**
    * Subagents running or waiting right now.
    *

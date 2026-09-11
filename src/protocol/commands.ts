@@ -145,6 +145,8 @@ export type Command =
        */
       attachments?: IncomingAttachment[];
     }
+  | { type: "steer_queued"; sessionId: string; messageId: string }
+  | { type: "cancel_queued"; sessionId: string; messageId: string }
   | { type: "abort"; sessionId: string }
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }

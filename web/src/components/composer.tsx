@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronRight, Loader2, Square } from "lucide-react";
+import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { attachPasted } from "@/attachments.ts";
@@ -668,6 +668,53 @@ export function Composer({
           * clear of itself as it appears and goes away. Outside it, the last line of the transcript
           * would sit behind it.
           */}
+        {chrome.queuedMessages?.length ? (
+          <div aria-label="Queued messages" className="max-h-48 space-y-2 overflow-y-auto border-b p-3">
+            {chrome.queuedMessages.map((message, index) => (
+              <div key={message.id ?? index} className="group/queued flex items-center justify-end gap-2">
+                <div className="flex shrink-0 gap-1 transition-opacity [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:opacity-0 group-hover/queued:pointer-events-auto group-hover/queued:opacity-100 group-focus-within/queued:pointer-events-auto group-focus-within/queued:opacity-100">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Steer now"
+                    title={message.id ? "Steer now" : "Restart the Session Host to enable queue controls"}
+                    disabled={!message.id || !actions.steerQueued}
+                    onClick={() => void actions.steerQueued?.(message.id!)}
+                  >
+                    <ArrowUp aria-hidden />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Cancel queued message"
+                    title={message.id ? "Cancel queued message" : "Restart the Session Host to enable queue controls"}
+                    disabled={!message.id || !actions.cancelQueued}
+                    onClick={() => void actions.cancelQueued?.(message.id!)}
+                  >
+                    <X aria-hidden />
+                  </Button>
+                </div>
+                <div className="min-w-0 max-w-[80%] space-y-2 rounded-2xl rounded-br-sm bg-muted px-3 py-2">
+                  {message.attachments?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {message.attachments.map((attachmentId) => (
+                        <img
+                          key={attachmentId}
+                          src={`/api/sessions/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`}
+                          alt="Queued attachment"
+                          className="size-14 rounded-md border border-border object-cover"
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.text ? <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{message.text}</p> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <ActivityStrip chrome={chrome} onShow={onShowSubagents} />
 
         {/*

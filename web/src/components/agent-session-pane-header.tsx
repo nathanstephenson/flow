@@ -19,7 +19,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
-import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
   DropdownMenu,
@@ -76,8 +75,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
         <span className="-my-2 w-px shrink-0 self-stretch bg-border" aria-hidden />
         <span className="truncate text-sm font-medium">{title}</span>
 
-        {chrome.queueDepth > 0 ? <SteeringQueueBadge depth={chrome.queueDepth} /> : null}
-
         <div className="ml-auto flex items-center gap-1.5">
           {docks ? (
             <>
@@ -124,21 +121,6 @@ function DockToggle({ side, docks }: { side: DockSide; docks: Docks }) {
       </TooltipTrigger>
       <TooltipContent>
         {open ? `Minimise the ${label} — Shells keep running` : `Open the ${label}`}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
- * The Steering Queue's depth. `secondary` rather than a warn hue: rhea has no warn hue, and a queued
- * message is not a problem — it is the Session Host doing what it promised.
- */
-function SteeringQueueBadge({ depth }: { depth: number }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger render={<Badge variant="secondary" />}>{depth} queued</TooltipTrigger>
-      <TooltipContent>
-        Messages the Session Host has accepted and will send after the current turn
       </TooltipContent>
     </Tooltip>
   );

@@ -22,11 +22,6 @@ import { cn } from "@/lib/utils.ts";
  * with no failing test to catch it — it is the single largest maintenance risk in this front end. If
  * a row needs to *do* something, it dispatches to context; it does not take a handler.
  *
- * The visual rules all follow from one sentence: the Presentation Transcript is a document. So there
- * are no cards around content, no bubbles and no alternating row backgrounds — 1px lines separate,
- * and a 2ch gutter carries one glyph per kind, reusing the vocabulary `src/tui/render.ts` already
- * prints so the two front-ends read the same way.
- *
  * What a model writes is markdown, so it is lexed (`src/client/markdown.ts`) and rendered as a
  * document rather than shown as its own source. Prose is therefore the chrome font, and monospace is
  * spent only where alignment is the point: a code span, a fenced block, and the tool payloads and
@@ -71,19 +66,15 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
 
 type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
 
-/**
- * A left rule and not a background. A filled block behind the human's own words is a chat bubble,
- * and a bubble is the one shape that would make this stop reading as a document.
- */
 function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: string; sessionId: string }) {
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
-    <Row gutter=">" gutterClassName="text-primary">
-      <div className="border-l-2 border-border pl-2 font-medium">
+    <div className="flex justify-end py-3">
+      <div className="min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
       </div>
-    </Row>
+    </div>
   );
 }
 
@@ -174,10 +165,7 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
 }
 
 /**
- * The one thing in the transcript that *is* a card, because a tool call is not prose: it is a
- * bounded, collapsible record of something that happened elsewhere. So it takes `bg-card`, and the
- * payload wells inside it take `bg-muted` — the two have to differ or the well vanishes into the
- * card that holds it. Native `<details>` rather than a component: the disclosure state survives in
+ * Native `<details>` rather than a component: the disclosure state survives in
  * the DOM (which an append-only transcript never unmounts), it is keyboard-accessible without a line
  * of code, and browsers expand it for find-in-page.
  *
@@ -194,11 +182,11 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
   const authorised = authorisationLabel(entry.authorisation);
 
   return (
-    <div className="py-0.5 pl-[2ch]">
+    <div className="py-0.5">
       <details
         open={open}
         onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-lg border bg-card text-card-foreground"
+        className="rounded-lg border text-foreground"
       >
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <ToolStatusDot status={entry.status} />
@@ -270,7 +258,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
  */
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
-    <div className="py-0.5 pl-[2ch]">
+    <div className="py-0.5">
       <div className="w-full rounded-lg border bg-card px-3 py-2 text-card-foreground">
         <div className="flex items-center gap-2">
           <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
@@ -328,7 +316,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
   const shell = "flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground";
 
   return (
-    <div className="py-0.5 pl-[2ch]">
+    <div className="py-0.5">
       {open === undefined ? (
         // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
         <div className={shell}>{body}</div>
@@ -353,7 +341,7 @@ function subagentDot(status: Of<"subagent">["status"]): "running" | "complete" |
  * **It reads as a continuation of that row, not as a free-standing notice**, and it has to. The row
  * above ends `complete` the moment the call is backgrounded — which is true of the launch, and the
  * only signal a launch *failed* — so this card is what corrects the impression that the work
- * finished. Hence the same `pl-[2ch]` indent and card shell a Subagent gets.
+ * finished.
  *
  * Never a button. A Subagent's card opens its own nested transcript; a Background Call has none, and
  * what a reader wants next — the command, the shell id the launch handed back — is on the tool row
@@ -372,7 +360,7 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
   const when = backgroundTiming(entry, now);
 
   return (
-    <div className="py-0.5 pl-[2ch]">
+    <div className="py-0.5">
       <div className="flex w-full items-center gap-2 rounded-lg border bg-card px-3 py-2 text-card-foreground">
         <ToolStatusDot status={backgroundDot(entry.status)} />
         <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
@@ -477,11 +465,6 @@ function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
   );
 }
 
-/**
- * The 2ch gutter every kind shares, so the left edge of the text is the same column all the way
- * down the transcript regardless of which glyph precedes it. Monospaced, because that is what makes
- * 2ch a fixed width.
- */
 function Row({
   gutter,
   gutterClassName,
@@ -492,10 +475,12 @@ function Row({
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[2ch_minmax(0,1fr)] gap-0 py-1">
-      <span aria-hidden className={cn("font-mono text-sm select-none", gutterClassName)}>
-        {gutter ?? ""}
-      </span>
+    <div className={cn("py-1", gutter && "grid grid-cols-[2ch_minmax(0,1fr)] gap-0")}>
+      {gutter ? (
+        <span aria-hidden className={cn("font-mono text-sm select-none", gutterClassName)}>
+          {gutter}
+        </span>
+      ) : null}
       {children}
     </div>
   );

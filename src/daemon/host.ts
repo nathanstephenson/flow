@@ -58,7 +58,7 @@ import { nameInput, SummaryModelSpare } from "./summariser.ts";
 export class CommandRefused extends Error {}
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
-type QueuedMessage = { text: string; attachments: string[] };
+type QueuedMessage = { id: string; text: string; attachments: string[] };
 
 type SessionRecord = {
   id: string;
@@ -722,8 +722,8 @@ export class SessionHost {
     );
 
     if (when === "after_turn" && record.turnInFlight) {
-      record.queue.push({ text, attachments: ids });
-      record.log.append({ type: "queue_changed", pending: pendingTexts(record.queue) });
+      record.queue.push({ id: randomUUID(), text, attachments: ids });
+      record.log.append(queueChanged(record.queue));
       this.touch(record);
       return;
     }
@@ -765,6 +765,25 @@ export class SessionHost {
   private storeOrThrow(): TranscriptStore {
     if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot hold an attachment");
     return this.store;
+  }
+
+  async steerQueued(sessionId: string, messageId: string): Promise<void> {
+    const record = this.record(sessionId);
+    const index = record.queue.findIndex((message) => message.id === messageId);
+    if (index < 0) throw new CommandRefused("This message is no longer queued");
+    const [message] = record.queue.splice(index, 1);
+    record.log.append(queueChanged(record.queue));
+    await this.dispatch(record, message!);
+    this.touch(record);
+  }
+
+  cancelQueued(sessionId: string, messageId: string): void {
+    const record = this.record(sessionId);
+    const index = record.queue.findIndex((message) => message.id === messageId);
+    if (index < 0) throw new CommandRefused("This message is no longer queued");
+    record.queue.splice(index, 1);
+    record.log.append(queueChanged(record.queue));
+    this.touch(record);
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -1349,6 +1368,10 @@ export class SessionHost {
         });
       case "send":
         return await this.send(command.sessionId, command.text, command.when, command.attachments);
+      case "cancel_queued":
+        return this.cancelQueued(command.sessionId, command.messageId);
+      case "steer_queued":
+        return await this.steerQueued(command.sessionId, command.messageId);
       case "abort":
         return await this.abort(command.sessionId);
       case "revive":
@@ -1491,7 +1514,7 @@ export class SessionHost {
     record.openPermissionIds.clear();
   }
 
-  private async dispatch(record: SessionRecord, message: QueuedMessage): Promise<void> {
+  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
     const { text, attachments } = message;
     const note = record.pendingBranchNote;
@@ -1664,7 +1687,7 @@ export class SessionHost {
   private async drain(record: SessionRecord): Promise<void> {
     const next = record.queue.shift();
     if (next === undefined) return;
-    record.log.append({ type: "queue_changed", pending: pendingTexts(record.queue) });
+    record.log.append(queueChanged(record.queue));
     try {
       await this.dispatch(record, next);
     } catch (error) {
@@ -1864,16 +1887,13 @@ function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {
   return capabilities;
 }
 
-/**
- * What `queue_changed` says is waiting.
- *
- * Texts only, and deliberately so: `queue_changed` is a Presentation Transcript event, replayed on
- * every load, and widening its shape so a client could preview a queued message's Attachments would
- * change a record that is already written. The accepted cost is that a queued paste is not visible
- * until its turn dispatches, which is one turn of patience for a shape nobody has to migrate.
- */
-function pendingTexts(queue: QueuedMessage[]): string[] {
-  return queue.map((message) => message.text);
+function queueChanged(queue: QueuedMessage[]): Extract<AgentEvent, { type: "queue_changed" }> {
+  return {
+    type: "queue_changed",
+    pending: queue.map((message) => message.text),
+    ids: queue.map((message) => message.id),
+    attachments: queue.map((message) => message.attachments),
+  };
 }
 
 function firstLine(text: string): string {
