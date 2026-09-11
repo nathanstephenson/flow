@@ -673,28 +673,44 @@ export function Composer({
             {chrome.queuedMessages.map((message, index) => (
               <div key={message.id ?? index} className="group/queued flex items-center justify-end gap-2">
                 <div className="flex shrink-0 gap-1 transition-opacity [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:opacity-0 group-hover/queued:pointer-events-auto group-hover/queued:opacity-100 group-focus-within/queued:pointer-events-auto group-focus-within/queued:opacity-100">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Steer now"
-                    title={message.id ? "Steer now" : "Restart the Session Host to enable queue controls"}
-                    disabled={!message.id || !actions.steerQueued}
-                    onClick={() => void actions.steerQueued?.(message.id!)}
-                  >
-                    <ArrowUp aria-hidden />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Cancel queued message"
-                    title={message.id ? "Cancel queued message" : "Restart the Session Host to enable queue controls"}
-                    disabled={!message.id || !actions.cancelQueued}
-                    onClick={() => void actions.cancelQueued?.(message.id!)}
-                  >
-                    <X aria-hidden />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Steer now"
+                          disabled={!message.id || !actions.steerQueued}
+                          onClick={() => void actions.steerQueued?.(message.id!)}
+                        />
+                      }
+                    >
+                      <ArrowUp aria-hidden />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {message.id ? "Steer now" : "Restart the Session Host to enable queue controls"}
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Cancel queued message"
+                          disabled={!message.id || !actions.cancelQueued}
+                          onClick={() => void actions.cancelQueued?.(message.id!)}
+                        />
+                      }
+                    >
+                      <X aria-hidden />
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {message.id ? "Cancel queued message" : "Restart the Session Host to enable queue controls"}
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
                 <div className="min-w-0 max-w-[80%] space-y-2 rounded-2xl rounded-br-sm bg-muted px-3 py-2">
                   {message.attachments?.length ? (
