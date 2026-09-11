@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
+import { ConfigStore } from "../src/daemon/config-store.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 import { nameFrom, nameInput, summariseToName } from "../src/daemon/summariser.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
@@ -151,6 +152,39 @@ describe("naming an Agent Session", () => {
   const settled = async () => {
     for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve));
   };
+
+  it("routes summaries by the Agent Session backend without inheriting Default Effort", async () => {
+    const config = new ConfigStore(root);
+    config.update({ providers: {
+      summaries: { fake: { modelId: "fake-2" }, second: { modelId: "fake-1" } },
+      efforts: { fake: "high", second: "low" },
+    } });
+    const first = new FakeBackend();
+    const second = new FakeBackend();
+    first.autoReply = "First backend names this session";
+    second.autoReply = "Second backend names this session";
+    const configured = new SessionHost({ summaryModel: config.summaryModel, defaultEffort: config.defaultEffort });
+    configured.registerBackend(first);
+    configured.registerBackend({ name: "second", create: (options) => second.create(options) });
+    try {
+      const a = await configured.create({ scope: work, backend: "fake" });
+      await configured.send(a, "first request", "after_turn");
+      await settled();
+      const b = await configured.create({ scope: work, backend: "second" });
+      await configured.send(b, "second request", "after_turn");
+      await settled();
+      assert.equal(configured.list().find((item) => item.id === a)?.title, first.autoReply);
+      assert.equal(configured.list().find((item) => item.id === b)?.title, second.autoReply);
+      for (const fake of [first, second]) {
+        assert.ok(fake.sessions.some((session) => session.toolless));
+        assert.ok(fake.sessions.filter((session) => session.toolless).every((session) => session.effort === undefined));
+      }
+      config.update({ providers: { summaries: { second: null } } });
+      await assert.rejects(configured.rename(b), /No Summary Model/);
+    } finally {
+      await configured.shutdown();
+    }
+  });
 
   it("shows the first line at once and settles into a name", async () => {
     const id = await host.create({ scope: work, backend: "fake" });

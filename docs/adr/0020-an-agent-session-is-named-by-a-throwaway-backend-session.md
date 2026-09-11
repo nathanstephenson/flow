@@ -75,6 +75,25 @@ where the feature is actually decided; the prompt interpolates the same two cons
 the wording and the rule cannot drift. An over-long answer is rejected rather than cut, because a
 name severed mid-phrase reads as a bug and is worse than the first line of what the human typed.
 
+## Per-backend Settings amendment
+
+Default Backend is machine-wide and resolved by the Session Host when a create command omits its
+backend. Web and terminal clients honour it; explicit choices win. With no setting, automatic
+selection prefers Claude, then the first registered adapter. An unavailable configured adapter is
+refused rather than silently rerouting a prompt. Existing Agent Sessions keep their bound adapter.
+
+Default Model, Default Effort and Summary Model are configured per Backend Adapter. Naming reads the
+Summary Model for the Agent Session's own adapter; unset means no naming model. Default Effort is
+resolved at creation, with explicit effort taking precedence, and never enters a naming request.
+Legacy `providers.summary` is read only for its named backend; editing that backend's summary
+supersedes the legacy value. The spare remains one bounded slot across all backends, so alternating
+backends can lose the warm-start benefit without sharing a Conversation Context.
+
+Pi's catalogue uses credential-aware discovery rather than the full registry. Its model identities
+include the Provider; an old bare id is accepted only when exactly one authenticated model matches.
+Configured authentication is not a live credential validation; revoked credentials can still fail
+when used. An empty pi catalogue does not offer arbitrary ids as a workaround.
+
 ## Consequences
 
 **`GET /api/models` exists, and it spawns a process per backend.** A machine-wide Default Model and

@@ -70,10 +70,7 @@ export type Config = {
  * Which model to use when nobody has said otherwise, keyed by Backend Adapter because a model id
  * only means anything through the adapter that serves it.
  */
-export type Providers = {
-  defaults?: Record<string, string>;
-  summary?: SummaryModel;
-};
+export type Providers = NonNullable<Settings["providers"]>;
 
 /** The Summary Model: the Backend Adapter to reach it through, and the model id to ask for. */
 export type SummaryModel = {
@@ -177,14 +174,19 @@ export function loadConfig(stateRoot: string): LoadedConfig {
  * the same courtesy `ConfigStore.update` extends to a key no version of this daemon has parsed.
  */
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaults?: unknown; summary?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
     return undefined;
   }
 
-  const providers: Providers = {};
+  let providers: Providers = {};
+  if (section.defaultBackend !== undefined) {
+    const problem = checkModelId(section.defaultBackend, "providers.defaultBackend");
+    if (problem) warnings.push(`${problem}; choosing the backend automatically`);
+    else providers.defaultBackend = (section.defaultBackend as string).trim();
+  }
 
   if (section.defaults !== undefined) {
     if (typeof section.defaults !== "object" || section.defaults === null || Array.isArray(section.defaults)) {
@@ -223,7 +225,22 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  return providers.defaults === undefined && providers.summary === undefined ? undefined : providers;
+  for (const field of ["efforts", "summaries"] as const) {
+    const entries = section[field];
+    if (entries === undefined) continue;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+      warnings.push(`providers.${field} must be an object`);
+      continue;
+    }
+    for (const [backend, value] of Object.entries(entries)) {
+      try {
+        providers = patchProviders(providers, { [field]: { [backend]: value } }) ?? {};
+      } catch (error) {
+        warnings.push(String(error));
+      }
+    }
+  }
+  return Object.keys(providers).length === 0 ? undefined : providers;
 }
 
 /**
@@ -441,12 +458,24 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaults", "summary"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries"], "providers");
 
   const next: Providers = {
+    ...(current?.defaultBackend === undefined ? {} : { defaultBackend: current.defaultBackend }),
+    ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
+    ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
     ...(current?.defaults === undefined ? {} : { defaults: { ...current.defaults } }),
     ...(current?.summary === undefined ? {} : { summary: current.summary }),
   };
+
+  if (patch.defaultBackend !== undefined) {
+    if (patch.defaultBackend === "") delete next.defaultBackend;
+    else {
+      const problem = checkModelId(patch.defaultBackend, "providers.defaultBackend");
+      if (problem) throw new ConfigError(problem);
+      next.defaultBackend = patch.defaultBackend.trim();
+    }
+  }
 
   const defaults: unknown = patch.defaults;
   if (defaults !== undefined) {
@@ -493,7 +522,43 @@ function patchProviders(
     }
   }
 
-  return next.defaults === undefined && next.summary === undefined ? undefined : next;
+  for (const field of ["efforts", "summaries"] as const) {
+    const entries = patch[field];
+    if (entries === undefined) continue;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+      throw new ConfigError(`providers.${field} must be an object`);
+    }
+    for (const [backend, value] of Object.entries(entries)) {
+      if (field === "efforts") {
+        const efforts = { ...next.efforts };
+        if (value === "") delete efforts[backend];
+        else {
+          if (typeof value !== "string" || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value)) {
+            throw new ConfigError(`providers.efforts.${backend} must be a valid effort`);
+          }
+          efforts[backend] = value as NonNullable<Providers["efforts"]>[string];
+        }
+        next.efforts = efforts;
+      } else {
+        const summaries = { ...next.summaries };
+        // A per-backend edit supersedes the old singleton, including an explicit clear.
+        if (next.summary?.backend === backend) delete next.summary;
+        if (value === null) delete summaries[backend];
+        else {
+          if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`providers.summaries.${backend} must name a model`);
+          refuseUnknownKeys(value, ["modelId", "automatic"], `providers.summaries.${backend}`);
+          const named = value as { modelId?: unknown; automatic?: unknown };
+          const problem = checkModelId(named.modelId, `providers.summaries.${backend}.modelId`);
+          if (problem) throw new ConfigError(problem);
+          if (named.automatic !== undefined && typeof named.automatic !== "boolean") throw new ConfigError(`providers.summaries.${backend}.automatic must be true or false`);
+          summaries[backend] = { modelId: (named.modelId as string).trim(), automatic: named.automatic !== false };
+        }
+        next.summaries = summaries;
+      }
+    }
+    if (Object.keys(next[field] ?? {}).length === 0) delete next[field];
+  }
+  return Object.keys(next).length === 0 ? undefined : next;
 }
 
 /**

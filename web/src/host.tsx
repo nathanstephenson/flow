@@ -172,6 +172,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
               ...(body.permissions === undefined
                 ? { permissions: undefined }
                 : { permissions: body.permissions }),
+              ...(body.providers === undefined ? { providers: undefined } : { providers: body.providers }),
             },
           }
         : current,

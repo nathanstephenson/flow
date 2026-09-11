@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import type { Capabilities, EffortLevel } from "../../../src/protocol/events.ts";
 import type { Project } from "../../../src/protocol/projects.ts";
+import { resolveDefaultBackend } from "../../../src/protocol/settings.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import { useBranches } from "@/branches.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
@@ -102,7 +103,8 @@ export function NewAgentSessionPage({
   const scope = project?.path;
 
   // Not held: the host's defaults, every time.
-  const [backend, setBackend] = useState(config.backends[0] ?? "");
+  const [chosenBackend, setBackend] = useState<string | undefined>(undefined);
+  const backend = chosenBackend ?? resolveDefaultBackend(config.backends, config.providers?.defaultBackend) ?? "";
   const [chosenModel, setChosenModel] = useState<string | undefined>(undefined);
   const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);
   const [inWorktree, setInWorktree] = useState(false);
@@ -319,7 +321,7 @@ export function NewAgentSessionPage({
             {/*
               * The two bindings an Agent Session can never change, on one quiet row above the
               * message: which Backend Adapter runs it and which Project it runs in. Compact and
-              * centred because in the common case nobody touches either — the host's first backend
+              * centred because in the common case nobody touches either — the host's Default Backend
               * and the Project you were last in are almost always the answer — so they read as a
               * caption over the box rather than as a form to fill in.
               *

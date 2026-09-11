@@ -28,7 +28,7 @@ import { renderFrame, type Overlay, type UiState } from "./render.ts";
 export type TuiOptions = {
   connection: Connection;
   scope: string;
-  backend: string;
+  backend?: string;
   stdin?: NodeJS.ReadStream;
   stdout?: NodeJS.WriteStream;
 };
@@ -101,7 +101,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       const id = await options.connection.command<string>({
         type: "create",
         scope: options.scope,
-        backend: options.backend,
+        ...(options.backend === undefined ? {} : { backend: options.backend }),
         ...(worktree === undefined ? {} : { worktree }),
       });
       await refreshSessions();

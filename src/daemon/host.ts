@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveDefaultBackend } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
 import {
@@ -226,7 +227,9 @@ export type SessionHostOptions = {
    * `defaultModel`. Omitted means the adapter picks, which is what every test wants and what a host
    * built without a Settings file can honestly offer.
    */
+  defaultBackend?: () => string | undefined;
   defaultModel?: (backend: string) => string | undefined;
+  defaultEffort?: (backend: string) => EffortLevel | undefined;
   /**
    * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
    * Session (ADR 0020).
@@ -235,7 +238,7 @@ export type SessionHostOptions = {
    * model: the automatic naming does not run, and a `rename` is refused with something a human can
    * read.
    */
-  summaryModel?: () => { backend: string; modelId: string; automatic: boolean } | undefined;
+  summaryModel?: (backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -263,9 +266,11 @@ export class SessionHost {
   private readonly retention: number | "never" | (() => number | "never");
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
   private readonly allowTool: ((name: string) => void) | undefined;
+  private readonly defaultBackend: (() => string | undefined) | undefined;
   private readonly defaultModel: ((backend: string) => string | undefined) | undefined;
+  private readonly defaultEffort: ((backend: string) => EffortLevel | undefined) | undefined;
   private readonly summaryModel:
-    | (() => { backend: string; modelId: string; automatic: boolean } | undefined)
+    | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
   private readonly closedListeners = new Set<(sessionId: string) => void>();
   private readonly keptListeners = new Set<
@@ -277,7 +282,9 @@ export class SessionHost {
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
     this.allowTool = options.allowTool;
+    this.defaultBackend = options.defaultBackend;
     this.defaultModel = options.defaultModel;
+    this.defaultEffort = options.defaultEffort;
     this.summaryModel = options.summaryModel;
   }
 
@@ -510,13 +517,15 @@ export class SessionHost {
 
   async create(options: {
     scope: string;
-    backend: string;
+    backend?: string;
     modelId?: string;
     effort?: EffortLevel;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
   }): Promise<string> {
-    const backend = this.backendFor(options.backend);
+    const backendName = options.backend ?? resolveDefaultBackend([...this.backends.keys()], this.defaultBackend?.());
+    if (backendName === undefined) throw new Error("No backends available");
+    const backend = this.backendFor(backendName);
     const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
@@ -564,7 +573,7 @@ export class SessionHost {
        * life — the same shape as the Standing Authorisations snapshot in BackendCreateOptions.
        */
       modelId: options.modelId ?? this.defaultModel?.(backend.name),
-      effort: options.effort,
+      effort: options.effort ?? this.defaultEffort?.(backend.name),
       createdAt: now,
       updatedAt: now,
     };
@@ -592,7 +601,7 @@ export class SessionHost {
      * how a spare gets dropped when somebody clears the Setting: nothing will ever *tell* us it
      * changed (ADR 0009), so a read-through is the only moment it can be noticed.
      */
-    this.warmSummaryModel();
+    this.warmSummaryModel(backend.name);
     return id;
   }
 
@@ -603,8 +612,8 @@ export class SessionHost {
    * name it does not know: a typo in `providers.summary.backend` must cost a worse Agent Session
    * *name*, never the Agent Session itself.
    */
-  private warmSummaryModel(): void {
-    const model = this.summaryModel?.();
+  private warmSummaryModel(backendName: string): void {
+    const model = this.summaryModel?.(backendName);
 
     /*
      * Three cases, and the middle one is the reason this is not a one-liner.
@@ -1230,7 +1239,7 @@ export class SessionHost {
    */
   async rename(sessionId: string): Promise<string> {
     const record = this.record(sessionId);
-    const summary = this.summaryModel?.();
+    const summary = this.summaryModel?.(record.backendName);
     if (!summary) throw new CommandRefused("No Summary Model is configured — choose one in Settings");
 
     const entries = record.log.since(0);
@@ -1269,7 +1278,7 @@ export class SessionHost {
    * else — least of all the turn the human is waiting on.
    */
   private async nameFromSummary(record: SessionRecord, text: string): Promise<void> {
-    const summary = this.summaryModel?.();
+    const summary = this.summaryModel?.(record.backendName);
     // `automatic` is the half of the Setting that governs *this* path only. A session whose owner
     // turned it off keeps the first line of what they typed, and `rename` still works — which is
     // the whole point of it being a switch rather than clearing the Summary Model.
@@ -1333,7 +1342,7 @@ export class SessionHost {
       case "create":
         return await this.create({
           scope: command.scope,
-          backend: command.backend,
+          ...(command.backend === undefined ? {} : { backend: command.backend }),
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
           ...(command.effort === undefined ? {} : { effort: command.effort }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),

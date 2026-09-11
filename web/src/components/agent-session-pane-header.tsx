@@ -161,7 +161,9 @@ function SteeringQueueBadge({ depth }: { depth: number }) {
  */
 function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
-  const summaryModel = useHost().config.providers?.summary;
+  const providers = useHost().config.providers;
+  const summaryModel = chrome.backend === undefined ? undefined
+    : providers?.summaries?.[chrome.backend] ?? (providers?.summary?.backend === chrome.backend ? providers.summary : undefined);
   const [confirmEnd, setConfirmEnd] = useState(false);
 
   return (

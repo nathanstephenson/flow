@@ -71,7 +71,11 @@ function stubSession(): Stub {
       if (current?.reasoning !== true) thinkingLevel = undefined;
     },
     getContextUsage: () => ({ tokens: 42, contextWindow: 200_000, percent: 0.02 }),
-    modelRegistry: { getAll: () => models },
+    modelRuntime: {
+      getModels: () => [...models, { id: "locked", provider: "unauthenticated" }],
+      getAvailable: async () => models,
+      getAvailableSnapshot: () => models,
+    },
     get model() {
       return current;
     },
@@ -101,6 +105,31 @@ function stubSession(): Stub {
     },
   };
 }
+
+it("offers only authenticated models with provider-qualified identity", () => {
+  const stub = stubSession();
+  const session = new PiSession(stub.session, () => {});
+  assert.deepEqual(session.capabilities.models.map((model) => model.id), ["anthropic/m1", "anthropic/m2"]);
+  assert.deepEqual(session.capabilities.providers, ["anthropic"]);
+});
+
+it("selects the requested Provider and refuses ambiguous legacy ids", async () => {
+  const stub = stubSession();
+  const models = [
+    { id: "shared", provider: "one", reasoning: false },
+    { id: "shared", provider: "two", reasoning: false },
+  ];
+  let chosen: unknown;
+  const sdk = {
+    ...stub.session,
+    modelRuntime: { getAvailable: async () => models, getAvailableSnapshot: () => models },
+    setModel: async (model: unknown) => { chosen = model; },
+  } as unknown as AgentSession;
+  const session = new PiSession(sdk, () => {});
+  await session.setModel("two/shared");
+  assert.equal(chosen, models[1]);
+  await assert.rejects(session.setModel("shared"), /Unknown model/);
+});
 
 const assistant = (text: string) =>
   ({ role: "assistant", content: [{ type: "text", text }] }) as unknown as Extract<

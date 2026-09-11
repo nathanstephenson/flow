@@ -20,6 +20,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
 
+it("lets the Session Host choose the Default Backend when the terminal has no override", async () => {
+  const backend = new FakeBackend();
+  const host = new SessionHost({ defaultBackend: () => "preferred" });
+  host.registerBackend({ name: "preferred", create: (options) => backend.create(options) });
+  const running = await serve({ host, token: "default-backend-test", assets: {} });
+  const stdin = Object.assign(new PassThrough(), { setRawMode: () => undefined, isTTY: true });
+  const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 24 });
+  stdout.resume();
+  const finished = runTui({
+    connection: connect({ url: running.url, token: "default-backend-test" }),
+    scope: tmpdir(),
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
+  });
+  try {
+    await waitFor(() => backend.sessions.length === 1);
+    assert.equal(host.list()[0]?.backend, "preferred");
+  } finally {
+    stdin.write(KEY.ctrlC);
+    await finished;
+    await running.close();
+  }
+});
+
 const CAPABILITIES: Capabilities = {
   providers: ["anthropic", "openai"],
   models: [

@@ -12,6 +12,7 @@
  * they mean on disk; this file owns only their shape.
  */
 
+import type { EffortLevel } from "./events.ts";
 import type { Fonts } from "./fonts.ts";
 
 export type Settings = {
@@ -77,10 +78,16 @@ export type Settings = {
    * and nothing else can be handed it. CONTEXT.md's Provider entry says so too.
    */
   providers?: {
+    /** Used for new Agent Sessions when no backend is explicitly chosen. */
+    defaultBackend?: string;
     /** The Default Model per Backend Adapter: the model a new Agent Session starts on. */
     defaults?: Record<string, string>;
+    /** Creation-only main-model effort per Backend Adapter; never used for naming. */
+    efforts?: Record<string, EffortLevel>;
+    /** Naming stays within the Agent Session's Backend Adapter. Absent means keep the first line. */
+    summaries?: Record<string, { modelId: string; automatic: boolean }>;
     /**
-     * The Summary Model — the model that names an Agent Session.
+     * The legacy Summary Model — the model that names an Agent Session.
      *
      * Both halves or neither. A model id without the Backend Adapter that serves it is unreachable,
      * so there is no useful half-configured state to represent.
@@ -126,11 +133,22 @@ export type SettingsPatch = {
    * Backend Adapter while leaving behind a model id that adapter cannot serve.
    */
   providers?: {
+    /** Empty string restores automatic backend selection. */
+    defaultBackend?: string;
     defaults?: Record<string, string>;
+    /** Merges per backend; an empty string clears its Default Effort. */
+    efforts?: Record<string, EffortLevel | "">;
+    /** Merges per backend; null clears one summary, including its legacy singleton value. */
+    summaries?: Record<string, { modelId: string; automatic?: boolean } | null>;
     /** `automatic` may be omitted when setting a model, and defaults to naming automatically. */
     summary?: { backend: string; modelId: string; automatic?: boolean } | null;
   };
 };
+
+/** Explicitly configured backends never silently fall back to a different inference route. */
+export function resolveDefaultBackend(backends: readonly string[], configured?: string): string | undefined {
+  return configured ?? (backends.includes("claude") ? "claude" : backends[0]);
+}
 
 const UNITS: Record<string, number> = {
   s: 1000,

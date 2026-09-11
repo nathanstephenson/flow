@@ -67,7 +67,7 @@ describe("what pi is handed", () => {
       async prompt(text: string, options: unknown) {
         prompts.push({ text, options });
       },
-      modelRegistry: { getAll: () => models },
+      modelRuntime: { getAvailable: async () => models, getAvailableSnapshot: () => models },
       get model() {
         return models[0];
       },
@@ -106,8 +106,8 @@ describe("what pi is handed", () => {
   it("reads acceptsImages from the registry, per model", () => {
     const { session } = start();
     const models = session.capabilities.models;
-    assert.equal(models.find((model: ModelInfo) => model.id === "m1")?.acceptsImages, true);
+    assert.equal(models.find((model: ModelInfo) => model.id === "anthropic/m1")?.acceptsImages, true);
     // Absent, not false — a client hides the control rather than reading a flag it must negate.
-    assert.equal(models.find((model: ModelInfo) => model.id === "m2")?.acceptsImages, undefined);
+    assert.equal(models.find((model: ModelInfo) => model.id === "anthropic/m2")?.acceptsImages, undefined);
   });
 });

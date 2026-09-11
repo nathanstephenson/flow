@@ -102,8 +102,18 @@ export class ConfigStore {
    */
   readonly defaultModel = (backend: string): string | undefined => this.config.providers?.defaults?.[backend];
 
+  readonly defaultBackend = (): string | undefined => this.config.providers?.defaultBackend;
+
   /** The Summary Model, asked fresh. Undefined means no Agent Session is named by a model. */
-  readonly summaryModel = (): SummaryModel | undefined => this.config.providers?.summary;
+  readonly summaryModel = (backend?: string): SummaryModel | undefined => {
+    const providers = this.config.providers;
+    if (backend === undefined) return providers?.summary;
+    const summary = providers?.summaries?.[backend];
+    if (summary) return { backend, ...summary };
+    return providers?.summary?.backend === backend ? providers.summary : undefined;
+  };
+
+  readonly defaultEffort = (backend: string) => this.config.providers?.efforts?.[backend];
 
   /**
    * Grant a Standing Authorisation for one tool — what an Always decision leaves behind.

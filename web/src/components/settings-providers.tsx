@@ -1,9 +1,21 @@
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 
-import type { BackendModels } from "../../../src/protocol/events.ts";
+import type {
+  BackendModels,
+  EffortLevel,
+} from "../../../src/protocol/events.ts";
+import {
+  resolveDefaultBackend,
+  type Settings,
+} from "../../../src/protocol/settings.ts";
 import { useHost } from "@/host.tsx";
 import { useModelCatalogue } from "@/models.ts";
-import { SaveRow, SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
+import {
+  SaveRow,
+  SettingsGroup,
+  useSaveSettings,
+} from "@/components/settings-parts.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import {
@@ -15,195 +27,301 @@ import {
 } from "@/components/ui/select.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
 
-/**
- * The value the "None" row carries, because a Select item cannot hold the empty string — Base UI
- * reads that as "nothing selected" and the row would silently never register as chosen.
- */
-const NO_SUMMARY_MODEL = "__none__";
+const UNSET = "__unset__";
 
-/**
- * Providers: which model to use when nobody has said, and which one names an Agent Session.
- *
- * Named for the Provider whose models these are, and laid out per **Backend Adapter**, because that
- * is the only way a model id can be reached — `opus[1m]` means something to Claude and nothing to
- * anything else. CONTEXT.md's Provider entry says the same.
- *
- * The lists come from `GET /api/models`, which opens a throwaway Backend Session per backend to ask
- * — the only way to learn a model id without an Agent Session, and the reason this section fetches
- * on mount rather than reading the config document every other page already holds. A backend that
- * could not answer gets a text field and its reason, rather than an empty list nobody can explain.
- */
 export function ProvidersSettings() {
   const { config } = useHost();
-  const { save, saving } = useSaveSettings();
   const { catalogue, loading, refresh } = useModelCatalogue();
-
-  const currentDefaults = config.providers?.defaults ?? {};
-  const currentSummary = config.providers?.summary;
-
-  const [defaults, setDefaults] = useState<Record<string, string>>(currentDefaults);
-  const [summaryBackend, setSummaryBackend] = useState(currentSummary?.backend ?? "");
-  const [summaryModel, setSummaryModel] = useState(currentSummary?.modelId ?? "");
-  const [automatic, setAutomatic] = useState(currentSummary?.automatic ?? true);
-
-  // A reload, or a save from elsewhere, wins over what is half-chosen here.
-  useEffect(() => {
-    setDefaults(currentDefaults);
-    setSummaryBackend(currentSummary?.backend ?? "");
-    setSummaryModel(currentSummary?.modelId ?? "");
-    setAutomatic(currentSummary?.automatic ?? true);
-    // The config object is replaced wholesale on every save and refresh, so its identity is the
-    // signal; comparing the fields would mean deep-comparing a map.
-  }, [config]);
-
-  const backends = config.backends ?? [];
-  const dirtyDefaults = backends.some((backend) => (defaults[backend] ?? "") !== (currentDefaults[backend] ?? ""));
-  const dirtySummary =
-    summaryBackend !== (currentSummary?.backend ?? "") ||
-    summaryModel !== (currentSummary?.modelId ?? "") ||
-    automatic !== (currentSummary?.automatic ?? true);
-
   return (
     <>
-      <SettingsGroup
-        title="Default Model"
-        description="The model a new Agent Session starts on, per backend. It is read when the session is created and never again, so choosing a different one here never moves a session already running. An id the backend cannot serve fails on that session's first turn — nothing checks it here, because only a running backend knows the list."
-      >
-        {backends.map((backend) => (
-          <ModelField
+      <DefaultBackendSettings
+        backends={config.backends}
+        current={config.providers?.defaultBackend ?? ""}
+      />
+      <div className="flex flex-col gap-3">
+        {(config.backends ?? []).map((backend) => (
+          <BackendSettings
             key={backend}
-            label={backend}
+            backend={backend}
+            providers={config.providers}
+            isDefault={
+              backend ===
+              resolveDefaultBackend(
+                config.backends,
+                config.providers?.defaultBackend,
+              )
+            }
             listing={catalogue?.find((entry) => entry.backend === backend)}
             loading={loading}
-            value={defaults[backend] ?? ""}
-            placeholder="Let the backend choose"
-            onChange={(value) => setDefaults({ ...defaults, [backend]: value })}
           />
         ))}
-
-        <SaveRow
-          dirty={dirtyDefaults}
-          saving={saving}
-          onSave={() => void save({ providers: { defaults } }, "Default Models saved.")}
-          onReset={() => setDefaults(currentDefaults)}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="Summary Model"
-        description="Names an Agent Session in three to seven words, once when its first message is sent and again whenever you ask from the pane's overflow menu. It runs in its own Backend Session with no tools, sees only the transcript, and never touches the session it is naming. Leave it unset and a session keeps the first line of what you typed."
-      >
-        <label className="flex flex-col gap-1">
-          <span className="text-sm font-medium">Backend</span>
-          <Select
-            value={summaryBackend === "" ? null : summaryBackend}
-            onValueChange={(value) => {
-              if (typeof value !== "string") return;
-              setSummaryBackend(value === NO_SUMMARY_MODEL ? "" : value);
-              // A model id from the previous backend is meaningless to this one, and leaving it
-              // would save a pair that can never be reached.
-              setSummaryModel("");
-            }}
-          >
-            <SelectTrigger size="sm" aria-label="Summary Model backend">
-              <SelectValue placeholder="None — keep the first line" />
-            </SelectTrigger>
-            <SelectContent>
-              {/*
-                * The way back out, and the reason this list is not just the backends: without it
-                * the placeholder promises a state nobody could return to, and choosing a Summary
-                * Model once would be permanent.
-                *
-                * One word, because the popup is anchored to the trigger's width and the trigger is
-                * sized to "claude". What None *means* is on the group's description above.
-                */}
-              <SelectItem value={NO_SUMMARY_MODEL}>None</SelectItem>
-              {backends.map((backend) => (
-                <SelectItem key={backend} value={backend}>
-                  {backend}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-
-        {summaryBackend === "" ? null : (
-          <>
-            <ModelField
-              label="Model"
-              listing={catalogue?.find((entry) => entry.backend === summaryBackend)}
-              loading={loading}
-              value={summaryModel}
-              placeholder="Choose a model"
-              onChange={setSummaryModel}
-            />
-
-            {/*
-              * Hidden until a Summary Model is chosen, because until then it governs nothing —
-              * the house rule the overflow menu follows too. It is *when*, not whether: turning
-              * it off leaves the rename in the pane's menu working, which is the reason it is a
-              * switch here rather than another way to say "None" above.
-              */}
-            <label className="flex items-center justify-between gap-4 pt-1">
-              <span className="flex flex-col gap-0.5">
-                <span className="text-sm font-medium">Name new Agent Sessions automatically</span>
-                <span className="text-xs text-muted-foreground">
-                  Off keeps the first line of what you typed. You can still name one at any time
-                  from the pane&rsquo;s overflow menu.
-                </span>
-              </span>
-              <Switch checked={automatic} onCheckedChange={setAutomatic} />
-            </label>
-          </>
-        )}
-
-        <SaveRow
-          // Both halves or neither: a backend without a model id is unreachable, so there is
-          // nothing to save until the pair is complete. Clearing both is a save, and clears it.
-          dirty={dirtySummary && (summaryBackend === "") === (summaryModel === "")}
-          saving={saving}
-          onSave={() =>
-            void save(
-              {
-                providers: {
-                  summary:
-                    summaryBackend === ""
-                      ? null
-                      : { backend: summaryBackend, modelId: summaryModel, automatic },
-                },
-              },
-              summaryBackend === "" ? "Summary Model cleared." : "Summary Model saved.",
-            )
-          }
-          onReset={() => {
-            setSummaryBackend(currentSummary?.backend ?? "");
-            setSummaryModel(currentSummary?.modelId ?? "");
-          }}
-        />
-      </SettingsGroup>
-
+      </div>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Button size="sm" variant="ghost" disabled={loading} onClick={() => void refresh()}>
-          {loading ? "Asking the backends…" : "Check again"}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={loading}
+          onClick={() => void refresh()}
+        >
+          {loading ? "Checking models…" : "Check again"}
         </Button>
         <span>
-          The lists are asked for once per Session Host, because asking starts a process for each
-          backend.
+          Refresh after connecting a Provider. Pi lists only models with
+          authentication configured.
         </span>
       </div>
     </>
   );
 }
 
-/**
- * One model choice: a list where the backend answered, a text field where it did not.
- *
- * The text field is not a lesser fallback but the honest one — a Claude that is not logged in and a
- * pi this build does not carry both leave a real person with a real id they know and no way to type
- * it, which is worse than a list they cannot use.
- */
+function backendLabel(backend: string): string {
+  return backend === "pi" ? "Pi" : backend === "claude" ? "Claude" : backend;
+}
+
+function DefaultBackendSettings({
+  backends,
+  current,
+}: {
+  backends: string[];
+  current: string;
+}) {
+  const { save, saving } = useSaveSettings();
+  const [value, setValue] = useState(current);
+  useEffect(() => setValue(current), [current]);
+  const automatic = resolveDefaultBackend(backends);
+  return (
+    <SettingsGroup
+      title="Default Backend"
+      description="Used by web and terminal for new Agent Sessions. An explicit backend choice takes precedence."
+    >
+      <Select
+        value={value || UNSET}
+        onValueChange={(next) => {
+          if (typeof next === "string") setValue(next === UNSET ? "" : next);
+        }}
+      >
+        <SelectTrigger
+          className="w-full sm:max-w-sm"
+          aria-label="Default Backend"
+        >
+          <SelectValue>
+            {value
+              ? backendLabel(value)
+              : `Automatic${automatic ? ` — ${backendLabel(automatic)}` : ""}`}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={UNSET}>
+            Automatic{automatic ? ` — ${backendLabel(automatic)}` : ""}
+          </SelectItem>
+          {current && !backends.includes(current) ? (
+            <SelectItem value={current} disabled>
+              {current} (unavailable)
+            </SelectItem>
+          ) : null}
+          {backends.map((backend) => (
+            <SelectItem key={backend} value={backend}>
+              {backendLabel(backend)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <SaveRow
+        dirty={value !== current}
+        saving={saving}
+        onReset={() => setValue(current)}
+        onSave={() =>
+          void save(
+            { providers: { defaultBackend: value } },
+            "Default Backend saved.",
+          )
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
+function BackendSettings({
+  backend,
+  providers,
+  listing,
+  loading,
+  isDefault,
+}: {
+  backend: string;
+  providers: Settings["providers"];
+  listing: BackendModels | undefined;
+  loading: boolean;
+  isDefault: boolean;
+}) {
+  const { save, saving } = useSaveSettings();
+  const legacy = providers?.summary;
+  const summary =
+    providers?.summaries?.[backend] ??
+    (legacy?.backend === backend ? legacy : undefined);
+  const currentModel = providers?.defaults?.[backend] ?? "";
+  const currentEffort = providers?.efforts?.[backend] ?? "";
+  const currentSummary = summary?.modelId ?? "";
+  const currentAutomatic = summary?.automatic ?? true;
+  const [model, setModel] = useState(currentModel);
+  const [effort, setEffort] = useState<EffortLevel | "">(currentEffort);
+  const [summaryModel, setSummaryModel] = useState(currentSummary);
+  const [automatic, setAutomatic] = useState(currentAutomatic);
+  function reset() {
+    setModel(currentModel);
+    setEffort(currentEffort);
+    setSummaryModel(currentSummary);
+    setAutomatic(currentAutomatic);
+  }
+  useEffect(reset, [
+    currentModel,
+    currentEffort,
+    currentSummary,
+    currentAutomatic,
+  ]);
+  const selected = listing?.models.find((entry) => entry.id === model);
+  const levels = selected?.effortLevels ?? [];
+  const dirty =
+    model !== currentModel ||
+    effort !== currentEffort ||
+    summaryModel !== currentSummary ||
+    automatic !== currentAutomatic;
+
+  return (
+    <details
+      name="provider-backends"
+      className="group rounded-lg border bg-card"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold">{backendLabel(backend)}</h2>
+            {isDefault ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                Default
+              </span>
+            ) : null}
+            {dirty ? (
+              <span className="text-xs text-muted-foreground">Unsaved</span>
+            ) : null}
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {selected?.label ?? (model || "Backend model default")}
+            {effort ? ` · ${effort} effort` : ""}
+            {summaryModel ? " · Summary enabled" : " · No summary model"}
+          </p>
+        </div>
+        <ChevronDown
+          className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+          aria-hidden
+        />
+      </summary>
+      <div className="flex flex-col gap-4 border-t p-4">
+        <p className="text-xs text-muted-foreground">
+          Model and effort defaults apply to new Agent Sessions only.
+        </p>
+        <div className="grid gap-6 md:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-3">
+            <ModelField
+              label="Default Model"
+              backend={backend}
+              listing={listing}
+              loading={loading}
+              value={model}
+              placeholder="Use backend default"
+              onChange={(value) => {
+                setModel(value);
+                setEffort("");
+              }}
+            />
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium">Default Effort</span>
+              <Select
+                value={effort || UNSET}
+                onValueChange={(value) => {
+                  if (typeof value === "string")
+                    setEffort(value === UNSET ? "" : (value as EffortLevel));
+                }}
+              >
+                <SelectTrigger
+                  className="w-full"
+                  size="sm"
+                  aria-label={`${backend} Default Effort`}
+                >
+                  <SelectValue>{effort || "Use backend default"}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNSET}>Use backend default</SelectItem>
+                  {effort && !levels.includes(effort) ? (
+                    <SelectItem value={effort}>{effort} (saved)</SelectItem>
+                  ) : null}
+                  {levels.map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {level}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span className="text-xs text-muted-foreground">
+                {levels.length
+                  ? "For the main model only. Explicit session effort takes precedence."
+                  : "Choose a model with effort support to see its levels."}
+              </span>
+            </label>
+          </div>
+          <div className="flex min-w-0 flex-col gap-3">
+            <ModelField
+              label="Summary Model"
+              backend={backend}
+              listing={listing}
+              loading={loading}
+              value={summaryModel}
+              placeholder="None — keep the first line"
+              onChange={setSummaryModel}
+            />
+            <p className="text-xs text-muted-foreground">
+              Names this backend’s Agent Sessions. Does not inherit Default
+              Effort.
+            </p>
+            {summaryModel ? (
+              <label className="flex items-center justify-between gap-4">
+                <span className="text-sm">
+                  Name new Agent Sessions automatically
+                </span>
+                <Switch checked={automatic} onCheckedChange={setAutomatic} />
+              </label>
+            ) : null}
+          </div>
+        </div>
+        <SaveRow
+          dirty={dirty}
+          saving={saving}
+          onReset={reset}
+          onSave={() =>
+            void save(
+              {
+                providers: {
+                  defaults: { [backend]: model },
+                  efforts: { [backend]: effort },
+                  summaries: {
+                    [backend]: summaryModel
+                      ? { modelId: summaryModel, automatic }
+                      : null,
+                  },
+                },
+              },
+              `${backend} models saved.`,
+            )
+          }
+        />
+      </div>
+    </details>
+  );
+}
+
 function ModelField({
   label,
+  backend,
   listing,
   loading,
   value,
@@ -211,50 +329,92 @@ function ModelField({
   onChange,
 }: {
   label: string;
+  backend: string;
   listing: BackendModels | undefined;
   loading: boolean;
   value: string;
   placeholder: string;
   onChange: (value: string) => void;
 }) {
+  const [search, setSearch] = useState("");
   const models = listing?.models ?? [];
-
+  const filtered = models.filter((model) =>
+    `${model.provider ?? ""} ${model.label ?? ""} ${model.id}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+  const selectedModel = models.find((model) => model.id === value);
+  const savedMissing = value !== "" && selectedModel === undefined;
+  const displayValue = selectedModel
+    ? `${selectedModel.provider ? `${selectedModel.provider} / ` : ""}${selectedModel.label ?? selectedModel.id}`
+    : value
+      ? `${value} (unavailable)`
+      : placeholder;
   return (
     <div className="flex flex-col gap-1">
-      <label className="flex flex-col gap-1">
-        <span className="text-sm font-medium">{label}</span>
-        {models.length === 0 ? (
-          <Input
-            className="font-mono text-xs"
-            value={value}
-            placeholder={loading ? "Asking the backend…" : placeholder}
-            onChange={(event) => onChange(event.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-        ) : (
+      <span className="text-sm font-medium">{label}</span>
+      {backend !== "pi" && !loading && models.length === 0 ? (
+        <Input
+          aria-label={`${backend} ${label}`}
+          value={value}
+          placeholder={placeholder}
+          onChange={(event) => onChange(event.target.value)}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      ) : (
+        <>
+          {models.length > 10 ? (
+            <Input
+              aria-label={`Search ${backend} ${label}`}
+              placeholder="Filter models…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          ) : null}
           <Select
-            value={value === "" ? null : value}
+            value={value || UNSET}
             onValueChange={(next) => {
-              if (typeof next === "string") onChange(next);
+              if (typeof next === "string")
+                onChange(next === UNSET ? "" : next);
             }}
           >
-            <SelectTrigger size="sm" aria-label={label}>
-              <SelectValue placeholder={placeholder} />
+            <SelectTrigger
+              className="w-full"
+              size="sm"
+              aria-label={`${backend} ${label}`}
+            >
+              <SelectValue>{displayValue}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {models.map((model) => (
+              <SelectItem value={UNSET}>{placeholder}</SelectItem>
+              {savedMissing ? (
+                <SelectItem value={value} disabled>
+                  {value} (unavailable)
+                </SelectItem>
+              ) : null}
+              {filtered.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
+                  {model.provider ? `${model.provider} / ` : ""}
                   {model.label ?? model.id}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-        )}
-      </label>
-      {listing?.problem === undefined ? null : (
-        <p className="text-xs text-muted-foreground">{listing.problem} — type an id instead.</p>
+        </>
       )}
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Checking models…</p>
+      ) : null}
+      {listing?.problem ? (
+        <p className="text-xs text-muted-foreground">{listing.problem}</p>
+      ) : null}
+      {backend === "pi" && !loading && models.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No authenticated models available. Connect a Provider in pi, then
+          check again.
+        </p>
+      ) : null}
     </div>
   );
 }

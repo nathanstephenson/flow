@@ -44,6 +44,47 @@ describe("SessionHost", () => {
     ]);
   });
 
+  it("uses the Default Backend for omitted choices, without changing existing sessions", async () => {
+    let chosen: string | undefined = "second";
+    const configured = new SessionHost({ defaultBackend: () => chosen });
+    const first = new FakeBackend();
+    const second = new FakeBackend();
+    configured.registerBackend(first);
+    configured.registerBackend({ name: "second", create: (options) => second.create(options) });
+    const id = await configured.execute({ type: "create", scope: "/tmp/scope" }) as string;
+    assert.equal(configured.list().find((item) => item.id === id)?.backend, "second");
+    chosen = "fake";
+    await configured.shutdown();
+    await configured.revive(id);
+    assert.equal(second.sessions.length, 2);
+    const explicit = await configured.create({ scope: "/tmp/scope", backend: "second" });
+    assert.equal(configured.list().find((item) => item.id === explicit)?.backend, "second");
+    const next = await configured.create({ scope: "/tmp/scope" });
+    assert.equal(configured.list().find((item) => item.id === next)?.backend, "fake");
+    chosen = "missing";
+    await assert.rejects(configured.create({ scope: "/tmp/scope" }), /Unknown backend: missing/);
+    chosen = undefined;
+    const automatic = await configured.create({ scope: "/tmp/scope" });
+    assert.equal(configured.list().find((item) => item.id === automatic)?.backend, "fake");
+    await configured.shutdown();
+  });
+
+  it("reads Default Effort only at creation and lets explicit effort win", async () => {
+    let effort: "high" | "low" = "high";
+    const configured = new SessionHost({ defaultEffort: () => effort });
+    const fake = new FakeBackend();
+    configured.registerBackend(fake);
+    const id = await configured.create({ scope: "/tmp/scope", backend: "fake" });
+    assert.equal(fake.latest.effort, "high");
+    effort = "low";
+    await configured.shutdown();
+    await configured.revive(id);
+    assert.equal(fake.latest.effort, "high");
+    await configured.create({ scope: "/tmp/scope", backend: "fake", effort: "medium" });
+    assert.equal(fake.latest.effort, "medium");
+    await configured.shutdown();
+  });
+
   it("keeps the chosen Effort across a Revive", async () => {
     await host.setEffort(sessionId, "high");
     assert.equal(backend.latest.effort, "high");

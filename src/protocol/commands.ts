@@ -108,7 +108,8 @@ export type Command =
   | {
       type: "create";
       scope: string;
-      backend: string;
+      /** Omitted means the Session Host's current Default Backend. */
+      backend?: string;
       modelId?: string;
       effort?: EffortLevel;
       /**

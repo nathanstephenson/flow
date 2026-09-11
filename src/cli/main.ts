@@ -56,7 +56,7 @@ async function main(): Promise<number> {
       // No default, deliberately: `?? process.cwd()` at each read site would be indistinguishable
       // from the reader having typed it, and the Project Root has to sit between the two.
       scope: { type: "string" },
-      backend: { type: "string", default: "claude" },
+      backend: { type: "string" },
       model: { type: "string" },
       effort: { type: "string" },
       session: { type: "string" },
@@ -96,7 +96,7 @@ async function main(): Promise<number> {
       await runTui({
         connection,
         scope: values.scope ?? configuredScope() ?? process.cwd(),
-        backend: values.backend ?? "claude",
+        ...(values.backend === undefined ? {} : { backend: values.backend }),
       });
     } finally {
       await stop();
@@ -164,7 +164,9 @@ async function startHost(
     retention: config.retention,
     standingAuthorisations: config.standingAuthorisations,
     allowTool: config.allowTool,
+    defaultBackend: config.defaultBackend,
     defaultModel: config.defaultModel,
+    defaultEffort: config.defaultEffort,
     summaryModel: config.summaryModel,
   });
   registerBackends(host);
@@ -226,7 +228,7 @@ async function oneShot(
       (await connection.command<string>({
         type: "create",
         scope: values.scope ?? process.cwd(),
-        backend: values.backend ?? "claude",
+        ...(values.backend === undefined ? {} : { backend: values.backend }),
         ...(values.model ? { modelId: values.model } : {}),
         ...(effort ? { effort } : {}),
       }));

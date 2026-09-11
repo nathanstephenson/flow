@@ -513,6 +513,68 @@ describe("the Default Models and the Summary Model", () => {
   const file = (): Record<string, unknown> =>
     JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as Record<string, unknown>;
 
+  it("keeps valid backend entries when disk settings contain invalid efforts or summaries", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ providers: {
+      efforts: { claude: "high", pi: "nonsense" },
+      summaries: { claude: { modelId: "haiku" }, pi: { automatic: true } },
+    } }));
+    const store = new ConfigStore(root);
+    assert.equal(store.defaultEffort("claude"), "high");
+    assert.equal(store.defaultEffort("pi"), undefined);
+    assert.equal(store.summaryModel("claude")?.modelId, "haiku");
+    assert.equal(store.summaryModel("pi"), undefined);
+    assert.match(store.warning ?? "", /efforts.pi/);
+    assert.match(store.warning ?? "", /summaries.pi.modelId/);
+  });
+
+  it("honours a per-backend clear over a legacy summary on disk", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ providers: {
+      summary: { backend: "claude", modelId: "haiku" }, summaries: { claude: null },
+    } }));
+    assert.equal(new ConfigStore(root).summaryModel("claude"), undefined);
+  });
+
+  it("limits legacy summaries to their backend and clears them durably", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ providers: {
+      summary: { backend: "claude", modelId: "haiku" },
+    } }));
+    const store = new ConfigStore(root);
+    assert.equal(store.summaryModel("pi"), undefined);
+    assert.equal(store.summaryModel("claude")?.modelId, "haiku");
+    store.update({ providers: { summaries: { claude: null } } });
+    assert.equal(new ConfigStore(root).summaryModel("claude"), undefined);
+  });
+
+  it("persists, validates and clears the Default Backend independently of model settings", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { defaultBackend: "pi", defaults: { pi: "openai/gpt-5" } } });
+    assert.equal(new ConfigStore(root).defaultBackend(), "pi");
+    store.update({ providers: { efforts: { pi: "high" } } });
+    assert.equal(store.defaultBackend(), "pi");
+    assert.throws(() => store.update({ providers: { defaultBackend: 42 } } as never), /defaultBackend/);
+    assert.equal(store.defaultBackend(), "pi");
+    store.update({ providers: { defaultBackend: "" } });
+    assert.equal(new ConfigStore(root).defaultBackend(), undefined);
+    assert.equal(store.defaultModel("pi"), "openai/gpt-5");
+  });
+
+  it("stores independent summaries and default efforts per backend", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: {
+      summaries: { claude: { modelId: "haiku", automatic: false }, pi: { modelId: "openai/gpt-5" } },
+      efforts: { claude: "high", pi: "low" },
+    } });
+    const reloaded = new ConfigStore(root);
+    assert.deepEqual(reloaded.summaryModel("claude"), { backend: "claude", modelId: "haiku", automatic: false });
+    assert.deepEqual(reloaded.summaryModel("pi"), { backend: "pi", modelId: "openai/gpt-5", automatic: true });
+    assert.equal(reloaded.defaultEffort("pi"), "low");
+    store.update({ providers: { summaries: { pi: null }, efforts: { pi: "" } } });
+    assert.equal(store.summaryModel("pi"), undefined);
+    assert.equal(store.defaultEffort("pi"), undefined);
+    assert.equal(store.defaultEffort("claude"), "high");
+    assert.throws(() => store.update({ providers: { efforts: { pi: "bogus" } } } as never), /effort/i);
+  });
+
   it("is absent on a machine that has chosen neither", () => {
     const store = new ConfigStore(root);
 

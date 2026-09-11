@@ -109,7 +109,10 @@ export class PiSession implements BackendSession {
   }
 
   async setModel(modelId: string): Promise<void> {
-    const model = this.session.modelRegistry.getAll().find((candidate) => candidate.id === modelId);
+    const available = await this.session.modelRuntime.getAvailable();
+    const qualified = available.find((candidate) => describeModel(candidate).id === modelId);
+    const legacy = available.filter((candidate) => candidate.id === modelId);
+    const model = qualified ?? (legacy.length === 1 ? legacy[0] : undefined);
     if (!model) throw new Error(`Unknown model: ${modelId}`);
     await this.session.setModel(model);
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
@@ -403,6 +406,14 @@ export class PiBackend implements AgentBackend {
     });
 
     const piSession = new PiSession(session, options.emit, sessionDir);
+    if (options.modelId) {
+      try {
+        await piSession.setModel(options.modelId);
+      } catch (error) {
+        await piSession.dispose();
+        throw error;
+      }
+    }
     options.emit({ type: "capabilities_changed", capabilities: piSession.capabilities });
     // Which model is in force decides which effort levels a client may offer, so say it up front,
     // preferring the registry entry: that is the one carrying pi's own answer about its levels.
@@ -420,12 +431,13 @@ export class PiBackend implements AgentBackend {
 }
 
 function capabilitiesOf(session: AgentSession): Capabilities {
-  const current = session.model?.id;
-  const models = session.modelRegistry.getAll().map((model) => {
+  const current = session.model ? describeModel(session.model).id : undefined;
+  // The SDK populates this auth-filtered snapshot before createAgentSession resolves.
+  const models = session.modelRuntime.getAvailableSnapshot().map((model) => {
     const described = describeModel(model);
     // pi will only answer for the model it has selected, and that answer is the authoritative one.
     // Every other entry is inferred from the registry and firms up if you switch to it.
-    if (model.id !== current) return described;
+    if (described.id !== current) return described;
     const available = availableEffort(session);
     return available.length > 0 ? { ...described, effortLevels: available } : omitEffort(described);
   });
@@ -459,7 +471,7 @@ function capabilitiesOf(session: AgentSession): Capabilities {
 function describeModel(model: PiModel): ModelInfo {
   const effortLevels = inferredEffort(model);
   return {
-    id: model.id,
+    id: model.provider ? `${model.provider}/${model.id}` : model.id,
     ...(model.provider ? { provider: model.provider } : {}),
     ...(model.name ? { label: model.name } : {}),
     ...(effortLevels.length > 0 ? { effortLevels } : {}),
