@@ -11,8 +11,9 @@ survives a daemon restart as Dormant.
 _Avoid_: session, run, job
 
 **Backend Session**:
-The SDK's ephemeral session serving an Agent Session, holding the Conversation Context. One Agent
-Session may be served by several Backend Sessions over its life.
+The ephemeral execution boundary serving an Agent Session, holding its Conversation Context and
+owning its Subagents and Background Calls. One Agent Session may be served by several Backend
+Sessions over its life.
 _Avoid_: session, process, connection
 
 **Subagent**:
@@ -90,14 +91,14 @@ _Note_: `Command` in `src/protocol/commands.ts` is the wider union of every clie
 _Avoid_: slash command, action, tool — **tool** especially, which is what a model calls.
 
 **Enquiry**:
-The whole of one `AskUserQuestion` tool call — one to four Questions, held open **inside the turn that
+The whole of one tool call asking its human — one to four Questions, held open **inside the turn that
 asked it**. It occupies the Agent Session while it waits, is answered once and wholly, and cannot
 outlive its turn: one left open by an unclean shutdown is closed as aborted, the way a torn turn and
 its Subagents are. Identified by the tool call that asked it, so it is addressable without a new id
 space. It is not a Command (nobody triggered it), not a message (it never becomes a user turn), and
 not a Permission Prompt (nothing is being authorised — the tool is already allowed to run; the human
 is supplying its input). Only a backend with a channel to ask through has them: `Capabilities.enquiries`
-says which, and pi has none.
+says which.
 _Avoid_: ask, prompt, dialog, poll, permission.
 
 **Question**:

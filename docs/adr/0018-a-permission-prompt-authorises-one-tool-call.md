@@ -121,11 +121,11 @@ which would take away the only place a tool can be held open on a human. Nothing
 than denying changes that, and the paragraph in README.md that described the fall-through as denying
 has been rewritten rather than deleted.
 
-**pi cannot serve one, and the reason is not the one already on file.** Its `enquiries: false` rests
-on `tools` being a `string[]` filter with nowhere to register a host-side tool. An approval hook is a
-*different* surface, and that argument does not transfer — nobody has established whether pi has one.
-So `permissions: false` is honest about today and TODO.md carries the open question, along with the
-standing consequence: Claude sessions ask, and pi sessions run everything silently.
+**The pi adapter still serves no Permission Prompts.** Custom tools now provide Enquiries and
+Subagents (ADRs 0016 and 0022), superseding the earlier claim that pi had no registration channel.
+Holding tools for authorisation is a separate integration that the adapter does not implement.
+`permissions: false` remains honest, and TODO.md records the gap: Claude sessions ask, while pi
+sessions run tools without Flow asking for authorisation.
 
 **A Subagent's Permission Prompt is still not attributable.** The callback carries an `agentID` that
 nothing has been observed to populate — the finding ADR 0016 recorded — so `producer` is on the event

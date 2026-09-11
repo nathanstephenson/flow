@@ -69,10 +69,12 @@ by `turn_ended`, `session_dormant`, `session_settled` and `session_ended`. A tor
 set would lock the composer with no key that unlocks it — the one failure of this feature a human
 could not recover from without reloading.
 
-**pi cannot serve one**, and says so through `Capabilities.enquiries`. Its `tools` option is a filter
-over its own built-ins, not a place to register a host-side tool — the same closed door TODO.md
-records for Subagents. Clients hide the affordance rather than rendering a question nothing can
-answer.
+**pi serves Enquiries through a Flow-owned `ask_question` custom tool.** Its execution waits for
+`answerEnquiry` and releases the wait on the SDK's abort signal. Disposal waits for abort to finish
+before disconnecting, so the SDK saves the cancelled tool result rather than restoring a missing
+result on Revive. `test/backend/pi-enquiries.test.ts` verifies this against the installed SDK with
+a local model endpoint. The capability is false and the answer method is absent when the tool is
+disabled, including Summary Model calls. Enquiries remain parent-only for the first pi milestone (ADR 0022).
 
 **The one-shot CLI runner aborts an Enquiry rather than waiting on one.** It takes a single prompt and
 has no input at all, so waiting would hang forever — which reads as a slow model rather than as a

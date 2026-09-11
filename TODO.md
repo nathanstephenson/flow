@@ -4,44 +4,19 @@ Work that is known about and not done. Each entry says enough to be picked up co
 undecided, where it lives, and why it was left. Anything that turns out to be a decision rather than
 a task belongs in `docs/adr/` once it is made.
 
-## Decide whether pi can support Subagents
+## Report pi Spend, including Subagents
 
-`src/backend/pi/index.ts` declares `subagents: false`, and pi's event stream carries no parent or
-agent identity on any message or tool call — so there is nothing to attribute a Subagent to even if
-pi can spawn one.
-
-The obvious route is closed: `createAgentSession`'s `tools` option is `string[]`, a filter over pi's
-built-ins, not a place to register a host-side tool. Whether pi exposes a custom-tool or hook surface
-under another name is unresolved, and is a documentation question rather than a types one.
-
-Two things to settle before building anything:
-
-- **It breaks the glossary.** CONTEXT.md defines a Subagent as living wholly inside one Backend
-  Session. A Flow-implemented one would live in a *second* one, so either the term widens or
-  pi's version needs its own name.
-- **It moves the agent loop into the daemon.** With Claude the CLI owns the subagent loop and we
-  watch. Here we would own it, making retries, timeouts, cancellation and the child's failure modes
-  the daemon's problem — a real scope increase for something that currently owns Agent Sessions and
-  nothing else.
-
-## Decide whether pi can ask its human anything
-
-`src/backend/pi/index.ts` declares `enquiries: false`, and the reason is the one already written
-above for Subagents: `createAgentSession`'s `tools` option is a `string[]` filter over pi's built-ins,
-not a place to register a host-side tool, so there is nowhere to put an equivalent of the Claude
-SDK's `AskUserQuestion`.
-
-The protocol is ready for it either way — `answerEnquiry` is optional on `BackendSession` and paired
-with the capability flag, so a pi adapter that found a channel would need the method and the flag and
-nothing else. What is unresolved is whether pi has such a channel at all, which is the same
-documentation question the Subagent entry above is waiting on, and worth answering once for both.
+`src/backend/pi/index.ts` reports Conversation Context occupancy but no Spend. Subagents now make
+model calls in internal SDK sessions (ADR 0022), so reading only the parent's SDK totals would miss
+their Spend. Reporting needs to account for both, preserve per-model totals, and carry prior Spend
+across Revive without counting any call twice. This was left outside the Enquiry, Subagent, and
+Background Call milestone.
 
 ## Decide whether pi can be asked before it acts
 
-`src/backend/pi/index.ts` declares `permissions: false`, and **the reason is not the one written
-twice above.** The Subagent and Enquiry entries both rest on `createAgentSession`'s `tools` option
-being a `string[]` filter over pi's built-ins, with nowhere to register a host-side tool. An approval
-hook is a different surface, and that argument does not transfer to it — nobody has looked.
+`src/backend/pi/index.ts` declares `permissions: false`. Custom-tool registration is now confirmed,
+but a hook that can hold built-in tools for authorisation is a separate question, not settled by
+that finding.
 
 What is true today: pi's adapter has no permission handling at all, and its event union has no
 permission or approval member, so `translate()` sees `tool_execution_start` with no pre-execution
@@ -49,7 +24,7 @@ hook to hang anything off. So the standing consequence, until this is answered, 
 naming: **a Claude Agent Session asks before running an unauthorised tool, and a pi one runs it
 silently.** Clients hide the affordance on the flag, so nothing breaks — but nothing warns either.
 
-Same documentation question as the two entries above, and worth answering once for all three.
+This remains separate from the Enquiry and Subagent milestone.
 
 ## Run the two spikes ADR 0018 is still owed
 

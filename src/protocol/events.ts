@@ -122,9 +122,8 @@ export type Capabilities = {
   /**
    * Set when this Backend Adapter can carry an Enquiry to a human and an answer back. False is not
    * "this backend's models never ask" but "this backend has no channel to ask through" — the same
-   * distinction `subagents` draws, and pi is the case: its `tools` option is a filter over its own
-   * built-ins, not a place to register one of ours. A client hides the affordance rather than
-   * rendering a question nothing can answer.
+   * distinction `subagents` draws. A client hides the affordance rather than rendering a question
+   * nothing can answer.
    */
   enquiries: boolean;
   /**
@@ -346,7 +345,7 @@ export type AgentEvent =
    */
   | ({ type: "background_call"; callId: string; tool: string; producer?: Producer } & BackgroundCallState)
   /**
-   * One Enquiry, wholly — every Question of one `AskUserQuestion` call and what came of them.
+   * One Enquiry, wholly — every Question of one question tool call and what came of them.
    *
    * `askId` is the callId of the tool call that asked, so this and the `tool` Entry beside it address
    * the same thing: the rule ADR 0015 sets for a Subagent, and available here for the same reason.

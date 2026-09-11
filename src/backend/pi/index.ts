@@ -18,17 +18,20 @@ import type {
   TurnEndReason,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
+import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
+import { backgroundTools } from "./background-calls.ts";
+import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
+import { PiWork, callIdFor, resultText, textResult, type Completion, type ToolResult } from "./work.ts";
 
 /**
  * Backend Adapter for the pi SDK.
  *
  * Two mappings are deliberately not the obvious ones:
  *
- * 1. pi distinguishes an agentic *run* (`agent_start`/`agent_end`) from a single model *turn*
- *    (`turn_start`/`turn_end`), and one prompt produces many of the latter. Our turn is an exchange
- *    with the human, so it maps to agent_*. Mapping to turn_* would emit N pairs per prompt.
- * 2. `agent_end` carries `willRetry`. When set, pi is about to auto-retry and the exchange is not
- *    over, so no turn_ended is emitted until a run ends for good.
+ * 1. pi distinguishes an agentic run from a single model call (`turn_start`/`turn_end`). One Flow
+ *    turn can contain many model calls, so it ends on `agent_settled`, when pi can accept new work.
+ * 2. `agent_end` carries `willRetry` and arrives before SDK cleanup. It supplies the outcome, not
+ *    permission to dispatch: ending the Flow turn there would race the Steering Queue against pi.
  *
  * pi also has a native follow-up queue. We never use it: the Steering Queue lives in the Session
  * Host (ADR 0002), so every prompt is sent with `streamingBehavior: "steer"`.
@@ -56,7 +59,14 @@ export type PiBackendOptions = {
 
 export class PiSession implements BackendSession {
   capabilities: Capabilities;
+  readonly answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
 
+  private readonly enquiries: PiEnquiries | undefined;
+  private readonly work: PiWork | undefined;
+  private readonly completions: Completion[] = [];
+  private disposed = false;
+  private disposal: Promise<void> | undefined;
+  private turnReason: TurnEndReason = "complete";
   private readonly session: AgentSession;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
@@ -77,11 +87,16 @@ export class PiSession implements BackendSession {
   private messageCount = 0;
   private currentMessageId: string | undefined;
 
-  constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string) {
+  constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
+    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean } = {}) {
     this.session = session;
     this.emit = emit;
     this.sessionDir = sessionDir;
-    this.capabilities = capabilitiesOf(session);
+    this.enquiries = support.enquiries;
+    this.work = support.work;
+    const enquiries = support.enquiries;
+    if (enquiries) this.answerEnquiry = async (askId, answers) => enquiries.answer(askId, answers);
+    this.capabilities = capabilitiesOf(session, support.enquiries !== undefined, support.subagents ?? false);
     this.unsubscribe = session.subscribe((event) => this.translate(event));
   }
 
@@ -104,7 +119,7 @@ export class PiSession implements BackendSession {
   }
 
   async abort(): Promise<void> {
-    this.aborting = true;
+    this.aborting = this.turnId !== undefined;
     await this.session.abort();
   }
 
@@ -117,7 +132,7 @@ export class PiSession implements BackendSession {
     await this.session.setModel(model);
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
     // on the way through, so both the list and the level in force are re-read here.
-    this.capabilities = capabilitiesOf(this.session);
+    this.capabilities = capabilitiesOf(this.session, this.enquiries !== undefined, this.capabilities.subagents);
     this.emit({ type: "model_changed", model: describeModel(model) });
     this.emit({ type: "capabilities_changed", capabilities: this.capabilities });
     this.reapplyEffort();
@@ -149,6 +164,7 @@ export class PiSession implements BackendSession {
     // A rejection here would never reach `compaction_end`, and a turn left open pins the session in
     // `running` forever — refusing every later send and every later compaction.
     void this.session.compact(instructions).catch((error: unknown) => {
+      if (this.compactionTurnId !== turnId) return;
       this.emit({
         type: "notice",
         level: "error",
@@ -164,6 +180,7 @@ export class PiSession implements BackendSession {
     if (!turnId) return;
     this.compactionTurnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });
+    this.scheduleCompletions();
   }
 
   /**
@@ -229,9 +246,52 @@ export class PiSession implements BackendSession {
     this.applyEffort(this.wantedEffort);
   }
 
-  async dispose(): Promise<void> {
-    this.unsubscribe();
-    this.session.dispose();
+  dispose(): Promise<void> {
+    return this.disposal ??= this.disposeOnce();
+  }
+
+  private async disposeOnce(): Promise<void> {
+    this.disposed = true;
+    this.completions.length = 0;
+    try {
+      await Promise.all([this.abort(), this.work?.dispose()]);
+    } finally {
+      this.unsubscribe();
+      this.session.dispose();
+    }
+  }
+
+  completed(completion: Completion): void {
+    if (this.disposed) return;
+    this.completions.push(completion);
+    this.scheduleCompletions();
+  }
+
+  private scheduleCompletions(): void {
+    queueMicrotask(() => {
+      if (this.disposed || this.turnId || this.compactionTurnId || this.session.isStreaming || !this.completions.length) return;
+      const completed = this.completions.splice(0).map(({ brief, state, result }) => ({ ...brief, state, output: resultText(result) }));
+      const turnId = `turn-${++this.messageSeq}`;
+      this.turnId = turnId;
+      this.turnReason = "complete";
+      this.emit({ type: "turn_started", turnId });
+      void this.session.sendCustomMessage({ customType: "flow_completion", content: JSON.stringify(completed), display: false },
+        { triggerTurn: true }).catch((error: unknown) => {
+        this.emit({ type: "notice", level: "error", text: error instanceof Error ? error.message : String(error) });
+        if (this.turnId === turnId) this.finishTurn("error");
+      });
+    });
+  }
+
+  private finishTurn(reason: TurnEndReason): void {
+    const turnId = this.turnId;
+    if (!turnId) return;
+    this.turnId = undefined;
+    this.aborting = false;
+    this.turnReason = "complete";
+    this.reportContextUsage();
+    this.emit({ type: "turn_ended", turnId, reason });
+    this.scheduleCompletions();
   }
 
   private translate(event: AgentSessionEvent): void {
@@ -272,16 +332,19 @@ export class PiSession implements BackendSession {
         return;
 
       case "agent_end": {
-        if (event.willRetry) return; // pi is about to retry; the exchange is not over.
-        this.reportContextUsage();
-        const turnId = this.turnId;
-        if (!turnId) return;
-        this.turnId = undefined;
-        const reason = this.aborting ? "aborted" : "complete";
-        this.aborting = false;
-        this.emit({ type: "turn_ended", turnId, reason });
+        if (event.willRetry) return;
+        const last = event.messages.findLast((message) => message.role === "assistant");
+        this.turnReason = this.aborting || last?.stopReason === "aborted" ? "aborted"
+          : last?.stopReason === "error" ? "error" : "complete";
+        if (last?.stopReason === "error" && last.errorMessage) {
+          this.emit({ type: "notice", level: "error", text: last.errorMessage });
+        }
         return;
       }
+
+      case "agent_settled":
+        this.finishTurn(this.aborting ? "aborted" : this.turnReason);
+        return;
 
       case "auto_retry_start":
         this.emit({
@@ -373,10 +436,11 @@ export class PiBackend implements AgentBackend {
     const agentDir = getAgentDir();
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.
+    const settingsManager = SettingsManager.create(options.scope, agentDir);
     const resourceLoader = new DefaultResourceLoader({
       cwd: options.scope,
       agentDir,
-      settingsManager: SettingsManager.create(options.scope, agentDir),
+      settingsManager,
       noExtensions: true,
     });
     await resourceLoader.reload();
@@ -390,22 +454,32 @@ export class PiBackend implements AgentBackend {
         : SessionManager.create(options.scope, sessionDir)
       : undefined;
 
+    const defaults = settingsManager.getDefaultTools() ?? ["read", "bash", "edit", "write"];
+    const tools = options.tools === "none" ? [] : this.options.tools ?? [
+      ...defaults, ASK_TOOL, SUBAGENT_TOOL, ...(defaults.includes("bash") ? ["bash_output", "kill_shell"] : []),
+    ];
+    const enabled = (name: string) => tools.includes(name);
+    const enquiries = enabled(ASK_TOOL) ? new PiEnquiries(options.emit) : undefined;
+    const work = new PiWork(options.emit, (completion) => piSession.completed(completion));
+    const subagents = enabled(SUBAGENT_TOOL);
+    const customTools = [
+      ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
+      ...(enquiries ? [enquiries.tool] : []),
+      ...(subagents ? [subagentTool(work, (id, input, signal) =>
+        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit))] : []),
+    ];
     const { session } = await createAgentSession({
       cwd: options.scope,
       agentDir,
       resourceLoader,
+      settingsManager,
+      customTools,
+      tools,
       ...(sessionManager ? { sessionManager } : {}),
-      // A one-shot text call outranks the backend's own tool list — see
-      // `BackendCreateOptions.tools`. pi already has the switch this needs.
-      ...(options.tools === "none"
-        ? { noTools: "all" as const }
-        : {
-            ...(this.options.tools ? { tools: this.options.tools } : {}),
-            ...(this.options.tools?.length === 0 ? { noTools: "all" as const } : {}),
-          }),
+      ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit, sessionDir);
+    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
@@ -430,7 +504,65 @@ export class PiBackend implements AgentBackend {
   }
 }
 
-function capabilitiesOf(session: AgentSession): Capabilities {
+async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
+  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void): Promise<ToolResult> {
+  const available = parent.modelRuntime.getAvailableSnapshot();
+  const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
+  if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
+  const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
+  const tools = parent.getActiveToolNames().filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL);
+  const settingsManager = SettingsManager.create(scope, agentDir);
+  const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
+    appendSystemPrompt: ["You are a Subagent. Complete the delegated work and return the result. If human input is needed, return that request to the parent. You cannot ask the human or create further Subagents."] });
+  await resourceLoader.reload();
+  signal.throwIfAborted();
+  const producer = { subagentId: id };
+  const { session: child } = await createAgentSession({ cwd: scope, agentDir, model, modelRuntime: parent.modelRuntime,
+    resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope), tools,
+    customTools: backgroundTools(scope, settingsManager, work, producer, input.run_in_background === false).filter((tool) => tools.includes(tool.name)),
+  });
+  let output = "";
+  let failure: string | undefined;
+  let reason: TurnEndReason = "complete";
+  const adapter = new PiSession(child, (event) => {
+    switch (event.type) {
+      case "message":
+      case "thinking":
+        work.waiting(id, false);
+        if (event.type === "message" && event.final) output = event.text;
+        emit({ ...event, id: callIdFor(event.id, producer), producer });
+        break;
+      case "tool_started":
+      case "tool_updated":
+      case "tool_ended":
+        if (event.type === "tool_started") work.waiting(id, false);
+        emit({ ...event, callId: callIdFor(event.callId, producer), producer });
+        break;
+      case "notice":
+        if (event.level === "warn") work.waiting(id, true);
+        if (event.level === "error") failure = event.text;
+        emit({ ...event, text: `${input.name ?? "Subagent"}: ${event.text}` });
+        break;
+      case "turn_ended": reason = event.reason; break;
+    }
+  });
+  const abort = () => { void adapter.abort(); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    await adapter.setEffort(effort);
+    signal.throwIfAborted();
+    await adapter.prompt(input.prompt);
+    if (reason !== "complete") throw new Error(failure ?? `Subagent ${reason}`);
+    return textResult(output || "Subagent completed without text output");
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await adapter.dispose();
+    if (input.run_in_background === false) await work.stopOwnedCalls(id);
+  }
+}
+
+function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: boolean): Capabilities {
   const current = session.model ? describeModel(session.model).id : undefined;
   // The SDK populates this auth-filtered snapshot before createAgentSession resolves.
   const models = session.modelRuntime.getAvailableSnapshot().map((model) => {
@@ -447,23 +579,8 @@ function capabilitiesOf(session: AgentSession): Capabilities {
     models,
     compaction: true,
     fork: false,
-    // pi's event stream carries no parent or agent identity on any of its messages or tool calls,
-    // so there is nothing to attribute a Subagent to even if pi can spawn one. False says "this
-    // backend does not tell us", which is what it is, and the conformance contract skips
-    // accordingly rather than failing.
-    subagents: false,
-    // And no channel to ask a human anything through. `createAgentSession`'s `tools` option is a
-    // `string[]` filter over pi's own built-ins, not a place to register a host-side tool, so there
-    // is nowhere to put an equivalent of `AskUserQuestion` — the same closed door TODO.md already
-    // records for Subagents. False says "this backend cannot ask", and clients hide the affordance
-    // rather than rendering a question nothing could answer.
-    enquiries: false,
-    // And nothing runs a tool past a human first. Note this is **not** the reason above: an approval
-    // hook is a different surface from registering a tool, so the closed door that blocks an Enquiry
-    // says nothing about this one. What is true is that pi's adapter has no such hook today and its
-    // 17-member event union has no permission event in it — so a pi Agent Session runs whatever pi
-    // runs, silently, where a Claude one would ask. That asymmetry is the standing consequence, and
-    // TODO.md carries the open question.
+    subagents,
+    enquiries,
     permissions: false,
   };
 }

@@ -163,9 +163,11 @@ describe("pi adapter mapping", () => {
     assert.deepEqual(events, [], "one prompt is one turn, however many model calls it takes");
   });
 
-  it("ends the turn on agent_end, not on turn_end", async () => {
+  it("ends the turn only when the SDK has settled and can accept another prompt", async () => {
     await session.prompt("hello");
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    assert.equal(events.some((event) => event.type === "turn_ended"), false);
+    stub.fire({ type: "agent_settled" });
 
     const ended = events.filter((event) => event.type === "turn_ended");
     assert.equal(ended.length, 1);
@@ -178,6 +180,7 @@ describe("pi adapter mapping", () => {
     assert.equal(events.filter((event) => event.type === "turn_ended").length, 0);
 
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    stub.fire({ type: "agent_settled" });
     assert.equal(events.filter((event) => event.type === "turn_ended").length, 1);
   });
 
@@ -185,6 +188,7 @@ describe("pi adapter mapping", () => {
     await session.prompt("hello");
     await session.abort();
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    stub.fire({ type: "agent_settled" });
 
     const ended = events.find((event) => event.type === "turn_ended");
     assert.equal(ended?.type === "turn_ended" ? ended.reason : "", "aborted");
@@ -242,6 +246,7 @@ describe("pi adapter mapping", () => {
   it("reports context usage when the run ends", async () => {
     await session.prompt("hello");
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    stub.fire({ type: "agent_settled" });
 
     const usage = events.find((event) => event.type === "context_usage");
     assert.deepEqual(usage?.type === "context_usage" ? [usage.used, usage.window] : [], [42, 200_000]);
