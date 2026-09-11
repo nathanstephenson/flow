@@ -100,6 +100,21 @@ describe("attachments", () => {
    * it is accepted. Holding the bytes in memory instead would mean a message that waits out a long
    * turn is one crash away from losing the picture but keeping the words.
    */
+  it("exposes queued attachment IDs and preserves the images when steered", async () => {
+    await host.send(sessionId, "first", "now");
+    await host.send(sessionId, "", "after_turn", [png, jpeg]);
+    const queue = events().filter((event) => event.type === "queue_changed").at(-1)!;
+    assert.equal(queue.attachments?.[0]?.length, 2);
+    assert.deepEqual([...queue.attachments![0]!].sort(), attachmentFiles());
+    assert.ok(!JSON.stringify(queue).includes(png.data));
+    const view = reduceAll(host.logFor(sessionId).since(0));
+    assert.deepEqual(view.queuedMessages?.[0]?.attachments, queue.attachments![0]);
+
+    await host.steerQueued(sessionId, queue.ids![0]!);
+    assert.deepEqual(backend.latest.promptedAttachments[1], [png, jpeg]);
+    assert.deepEqual(userMessages().at(-1)?.attachments, queue.attachments![0]);
+  });
+
   it("writes a queued message's bytes before the turn it waits for has ended", async () => {
     await host.send(sessionId, "first", "now");
     await host.send(sessionId, "second", "after_turn", [png]);

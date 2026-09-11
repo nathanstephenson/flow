@@ -395,7 +395,7 @@ export type AgentEvent =
    */
   | ({ type: "permission"; callId: string; tool: string; producer?: Producer } & PermissionState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
-  | { type: "queue_changed"; pending: string[] }
+  | { type: "queue_changed"; pending: string[]; ids?: string[]; attachments?: string[][] }
   /**
    * `used`/`window` are occupancy: how full the Conversation Context is, and so what the next turn
    * has room to do. `spend` is a different measure — everything billed for this Agent Session so

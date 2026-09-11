@@ -253,6 +253,38 @@ describe("an Agent Session view", () => {
     assert.equal(seen.view.getChrome().queueDepth, 1);
   });
 
+  it("publishes queued messages when their IDs change at the same depth", () => {
+    const seen = harness();
+    seen.view.start();
+    seen.emit({ type: "queue_changed", pending: ["same"], ids: ["first"] });
+    seen.flush();
+    let notifications = 0;
+    seen.view.subscribeChrome(() => { notifications += 1; });
+    seen.emit({ type: "queue_changed", pending: ["same"], ids: ["second"] });
+    seen.flush();
+    assert.equal(notifications, 1);
+    assert.deepEqual(seen.view.getChrome().queuedMessages, [{ id: "second", text: "same" }]);
+    seen.emit({ type: "queue_changed", pending: [] });
+    seen.flush();
+    assert.deepEqual(seen.view.getChrome().queuedMessages, []);
+  });
+
+  it("publishes queued attachment changes and preserves unchanged snapshots", () => {
+    const seen = harness();
+    seen.view.start();
+    seen.emit({ type: "queue_changed", pending: [""], ids: ["message"], attachments: [["first.png"]] });
+    seen.flush();
+    let notifications = 0;
+    seen.view.subscribeChrome(() => { notifications += 1; });
+    seen.emit({ type: "queue_changed", pending: [""], ids: ["message"], attachments: [["first.png"]] });
+    seen.flush();
+    assert.equal(notifications, 0);
+    seen.emit({ type: "queue_changed", pending: [""], ids: ["message"], attachments: [["second.png"]] });
+    seen.flush();
+    assert.equal(notifications, 1);
+    assert.deepEqual(seen.view.getChrome().queuedMessages?.[0]?.attachments, ["second.png"]);
+  });
+
   it("records the markers that punctuate an Agent Session's life", () => {
     const seen = harness();
     seen.view.start();

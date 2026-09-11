@@ -38,6 +38,8 @@ export type ComposerActions = {
   listSkills: () => Promise<Skill[]>;
   compact?: (instructions: string | undefined) => Promise<void>;
   abort?: () => Promise<void>;
+  steerQueued?: (messageId: string) => Promise<void>;
+  cancelQueued?: (messageId: string) => Promise<void>;
   answerEnquiry?: (askId: string, answers: string[][]) => void;
   answerPermission?: (callId: string, decision: PermissionDecision) => void;
 };
@@ -70,6 +72,12 @@ export function useSessionActions(sessionId: string): ComposerActions {
       listSkills: async () => (await run<Skill[]>({ type: "list_skills", sessionId })) ?? [],
       compact: async (instructions: string | undefined) => {
         await run({ type: "compact", sessionId, ...(instructions ? { instructions } : {}) });
+      },
+      cancelQueued: async (messageId: string) => {
+        await run({ type: "cancel_queued", sessionId, messageId });
+      },
+      steerQueued: async (messageId: string) => {
+        await run({ type: "steer_queued", sessionId, messageId });
       },
       abort: async () => {
         await run({ type: "abort", sessionId });

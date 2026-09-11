@@ -44,8 +44,8 @@ export function ToolChain({
   const precis = latest?.kind === "tool" ? toolSummary(latest.input) : undefined;
 
   return (
-    <div className="py-0.5 pl-[2ch]">
-      <details className="rounded-lg border bg-card text-card-foreground">
+    <div className="py-0.5">
+      <details className="rounded-lg border text-foreground">
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>

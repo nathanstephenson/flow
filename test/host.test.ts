@@ -134,6 +134,55 @@ describe("SessionHost", () => {
     assert.deepEqual(pendings, [["second"], []]);
   });
 
+  it("steers one queued message by ID and leaves the others in order", async () => {
+    await host.send(sessionId, "first", "now");
+    await host.send(sessionId, "second", "after_turn");
+    await host.send(sessionId, "third", "after_turn");
+    const queue = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    const messageId = queue.ids![1]!;
+
+    await host.execute({ type: "steer_queued", sessionId, messageId });
+
+    assert.deepEqual(backend.latest.prompts, ["first", "third"]);
+    const remaining = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    assert.deepEqual(remaining.pending, ["second"]);
+    assert.deepEqual(remaining.ids, [queue.ids![0]]);
+    await assert.rejects(host.steerQueued(sessionId, messageId), /no longer queued/);
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(backend.latest.prompts, ["first", "third", "second"]);
+  });
+
+  it("cancels only the selected queued message without dispatching it", async () => {
+    await host.send(sessionId, "first", "now");
+    await host.send(sessionId, "second", "after_turn");
+    await host.send(sessionId, "third", "after_turn");
+    const queue = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    await host.execute({ type: "cancel_queued", sessionId, messageId: queue.ids![0]! });
+    assert.deepEqual(backend.latest.prompts, ["first"]);
+    const remaining = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    assert.deepEqual(remaining.pending, ["third"]);
+    assert.deepEqual(remaining.ids, [queue.ids![1]]);
+    assert.throws(() => host.cancelQueued(sessionId, queue.ids![0]!), /no longer queued/);
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(backend.latest.prompts, ["first", "third"]);
+    assert.throws(() => host.cancelQueued(sessionId, queue.ids![1]!), /no longer queued/);
+  });
+
+  it("does not steer a message already dispatched from the queue", async () => {
+    await host.send(sessionId, "first", "now");
+    await host.send(sessionId, "duplicate", "after_turn");
+    await host.send(sessionId, "duplicate", "after_turn");
+    const queue = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    await assert.rejects(host.steerQueued(sessionId, queue.ids![0]!), /no longer queued/);
+    assert.deepEqual(backend.latest.prompts, ["first", "duplicate"]);
+    const remaining = events(host, sessionId).filter((event) => event.type === "queue_changed").at(-1)!;
+    assert.deepEqual(remaining.ids, [queue.ids![1]]);
+  });
+
   it("queues in FIFO order and releases one message per turn", async () => {
     await host.send(sessionId, "first", "now");
     await host.send(sessionId, "second", "after_turn");

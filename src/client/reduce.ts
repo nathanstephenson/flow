@@ -223,6 +223,7 @@ export type ViewState = {
   worktree?: true;
   entries: Entry[];
   queue: string[];
+  queuedMessages?: { id: string | undefined; text: string; attachments?: string[] }[];
   contextUsage?: { used: number; window: number; spend?: Spend };
   /**
    * Subagents running or waiting right now.
@@ -560,7 +561,19 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
       return { ...state, turnInFlight: false, asking: undefined, authorising: undefined };
 
     case "queue_changed":
-      return { ...state, queue: [...event.pending] };
+      return {
+        ...state,
+        queue: [...event.pending],
+        queuedMessages: state.queuedMessages?.length === event.pending.length &&
+          state.queuedMessages.every((message, index) => message.text === event.pending[index] && message.id === event.ids?.[index] &&
+            (message.attachments?.length ?? 0) === (event.attachments?.[index]?.length ?? 0) &&
+            (message.attachments ?? []).every((id, attachmentIndex) => id === event.attachments?.[index]?.[attachmentIndex]))
+          ? state.queuedMessages
+          : event.pending.map((text, index) => ({
+            id: event.ids?.[index], text,
+            ...(event.attachments?.[index]?.length ? { attachments: event.attachments[index] } : {}),
+          })),
+      };
 
     case "context_usage":
       return {
@@ -612,6 +625,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         lifecycle: "dormant",
         turnInFlight: false,
         queue: [],
+        queuedMessages: [],
         // Neither an Enquiry nor a Permission Prompt can survive its Backend Session: the promise a
         // human would have settled died with it. Same for the two below.
         asking: undefined,
@@ -628,6 +642,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         lifecycle: "settled",
         turnInFlight: false,
         queue: [],
+        queuedMessages: [],
         asking: undefined,
         authorising: undefined,
         entries: [
