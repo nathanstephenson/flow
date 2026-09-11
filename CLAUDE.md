@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-Domain language and architecture live in `CONTEXT.md` and `docs/adr/`. Read those first.
+Read `CONTEXT.md` for domain language before changing the project.
+For detailed rules, read only relevant term sections in `docs/domain-reference.md`.
+For architecture decisions, select relevant files by name in `docs/adr/`; do not read the whole directory.
+Read these references only when the task needs them.
 
 ## Driving the web UI in a browser
 
