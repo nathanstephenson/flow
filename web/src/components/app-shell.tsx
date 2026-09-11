@@ -81,7 +81,7 @@ export function AppShell() {
    * remembered layouts of Reaped Agent Sessions can be forgotten.
    */
   const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
-  const docks = useDocks(focusedId, sessionIds);
+  const docks = useDocks(focusedId, loaded ? sessionIds : undefined);
 
   /*
    * The unsent messages, for the same reason the Docks are here: the pane remounts when the focus

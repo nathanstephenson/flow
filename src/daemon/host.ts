@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
+import { gitStatus, snapshot, target, branchChanges, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
 import { resolveDefaultBackend } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
@@ -45,7 +49,7 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
-import { nameInput, SummaryModelSpare } from "./summariser.ts";
+import { nameInput, summarisePublish, SummaryModelSpare } from "./summariser.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -262,6 +266,89 @@ export class SessionHost {
    * `settle` — it is a throwaway that outlives any one of them, in the same way `modelProbes` is.
    */
   private readonly summarySpare = new SummaryModelSpare();
+  private readonly gitOperations = new Set<string>();
+  private readonly closingScopes = new Set<string>();
+  private readonly publishReviews = new Map<string, { token: string; expires: number; snapshot: PublishSnapshot; target: PublishTarget }>();
+
+  private refuseGitOperation(scope: string): void {
+    if (this.gitOperations.has(scopeKey(scope))) throw new CommandRefused("A Git operation is in progress in this Scope. Wait for it to finish.");
+    if (this.closingScopes.has(scopeKey(scope))) throw new CommandRefused("A Backend Session in this Scope is stopping. Wait for it to finish.");
+  }
+
+  private async stopBackendSession(scope: string, session: BackendSession | undefined): Promise<void> {
+    const key = scopeKey(scope);
+    this.closingScopes.add(key);
+    try {
+      await session?.dispose();
+    } finally {
+      this.closingScopes.delete(key);
+    }
+  }
+
+  private async withGitOperation<T>(scope: string, work: () => Promise<T>): Promise<T> {
+    this.refuseGitOperation(scope);
+    const key = scopeKey(scope);
+    if ([...this.sessions.values()].some((record) => scopeKey(record.scope) === key && (record.turnInFlight || record.reviving || record.buffered !== undefined))) {
+      throw new CommandRefused("An Agent Session in this Scope is running or otherwise occupied; abort the turn or wait for it to finish before changing Git state.");
+    }
+    if ([...this.sessions.values()].some((record) => scopeKey(record.scope) === key && (record.openSubagentIds.size > 0 || record.openBackgroundCallIds.size > 0))) {
+      throw new CommandRefused("A Subagent or Background Call is still working in this Scope. Wait for it to finish before changing Git state.");
+    }
+    this.gitOperations.add(key);
+    try {
+      return await work();
+    } catch (error) {
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.gitOperations.delete(key);
+    }
+  }
+
+  async gitStatus(sessionId: string): Promise<GitStatus> {
+    return gitStatus(this.record(sessionId).scope);
+  }
+
+  async preparePublish(sessionId: string): Promise<PublishReview> {
+    const record = this.record(sessionId);
+    return this.withGitOperation(record.scope, async () => {
+      this.publishReviews.delete(sessionId);
+      for (const [id, review] of this.publishReviews) if (review.expires < Date.now()) this.publishReviews.delete(id);
+      const { input: changes, ...reviewed } = await snapshot(record.scope);
+      const destination = await target(record.scope, reviewed.branch);
+      const committed = await branchChanges(record.scope, destination);
+      if (reviewed.files.length === 0 && committed.commits.length === 0 && !destination.pr) throw new CommandRefused("There are no changes to publish.");
+      let text = { commitMessage: "", title: destination.pr?.title ?? "", body: "" };
+      let warning: string | undefined;
+      const model = this.summaryModel?.(record.backendName);
+      try {
+        if (!model) throw new Error("No Summary Model is configured. Choose one in Settings, or enter publish text below.");
+        text = await summarisePublish({ backend: this.backendFor(model.backend), modelId: model.modelId, text: `${changes}\nCommitted branch changes:\n${committed.input}` });
+      } catch (error) {
+        warning = `Enter publish text manually. ${error instanceof Error ? error.message : String(error)}`;
+      }
+      const token = randomUUID();
+      this.publishReviews.set(sessionId, { token, expires: Date.now() + 15 * 60_000, snapshot: reviewed, target: destination });
+      return { ...text, token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
+    });
+  }
+
+  async publish(sessionId: string, input: PublishInput): Promise<PublishResult> {
+    const record = this.record(sessionId);
+    return this.withGitOperation(record.scope, async () => {
+      const review = this.publishReviews.get(sessionId);
+      if (!review || review.token !== input.token || review.expires < Date.now()) throw new CommandRefused("This Publish review expired. Open Publish again.");
+      this.publishReviews.delete(sessionId);
+      try {
+        return await publish(record.scope, review.snapshot, review.target, input);
+      } finally {
+        for (const other of this.sessions.values()) {
+          if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
+          await this.refreshBranch(other);
+          other.pendingBranchNote = "[Flow] Git publishing was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
+        }
+      }
+    });
+  }
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
@@ -670,6 +757,7 @@ export class SessionHost {
   /** Attach a fresh Backend Session to a Dormant Agent Session, continuing the same transcript. */
   async revive(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
     if (record.session) return;
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.reviving) return await record.reviving;
@@ -712,6 +800,7 @@ export class SessionHost {
    */
   async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[]): Promise<void> {
     const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
     if (!record.session) await this.revive(sessionId);
 
@@ -769,6 +858,7 @@ export class SessionHost {
 
   async steerQueued(sessionId: string, messageId: string): Promise<void> {
     const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
     const index = record.queue.findIndex((message) => message.id === messageId);
     if (index < 0) throw new CommandRefused("This message is no longer queued");
     const [message] = record.queue.splice(index, 1);
@@ -958,6 +1048,7 @@ export class SessionHost {
 
   async compact(sessionId: string, instructions?: string): Promise<void> {
     const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
     // Refused rather than left to `revive`'s own throw, which would reach the client as a 500 for
     // something it should be told plainly.
     if (record.lifecycle === "ended") {
@@ -965,6 +1056,7 @@ export class SessionHost {
     }
     if (!record.session) await this.revive(sessionId);
 
+    this.refuseGitOperation(record.scope);
     const session = record.session;
     if (!session) {
       throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session to compact`);
@@ -1029,6 +1121,11 @@ export class SessionHost {
    */
   async switchBranch(sessionId: string, branch: string): Promise<Branch> {
     const record = this.record(sessionId);
+    return this.withGitOperation(record.scope, () => this.switchBranchOnce(sessionId, branch));
+  }
+
+  private async switchBranchOnce(sessionId: string, branch: string): Promise<Branch> {
+    const record = this.record(sessionId);
     if (record.turnInFlight) {
       throw new CommandRefused(
         `Agent Session ${sessionId} is running; abort the turn or wait for it to end before switching branch`,
@@ -1061,22 +1158,11 @@ export class SessionHost {
     return switched.value;
   }
 
-  /**
-   * Move a Scope's checkout, with no Agent Session in it.
-   *
-   * The counterpart to `switchBranch` above, and deliberately not a shared implementation: that one
-   * is about an Agent Session — it refuses while a turn is in flight, and it leaves a note for the
-   * model saying the files moved — while this one has neither a turn to check nor a conversation to
-   * tell. Folding them together would mean a method whose promises depend on which argument was
-   * supplied.
-   *
-   * **It will move the tree under an Agent Session already bound to that Scope**, which
-   * `switchBranch` exists partly to prevent. That is the caller's call to make and the New Agent
-   * Session view says so beside the control; what is *not* optional is that the rail must not then
-   * lie about where those sessions are, so every one of them is re-read afterwards. Same reasoning
-   * as `refreshBranch`'s own: a stale branch is a claim a reader trusts.
-   */
   async switchScopeBranch(scope: string, branch: string): Promise<Branch> {
+    return this.withGitOperation(scope, () => this.switchScopeBranchOnce(scope, branch));
+  }
+
+  private async switchScopeBranchOnce(scope: string, branch: string): Promise<Branch> {
     if (!isRepository(scope)) throw new CommandRefused(`${scope} is not a git repository`);
 
     const switched = await gitSwitchBranch(scope, branch);
@@ -1131,12 +1217,13 @@ export class SessionHost {
   async dispose(sessionId: string, reason = "disposed"): Promise<void> {
     const record = this.sessions.get(sessionId);
     if (!record) return;
+    this.refuseGitOperation(record.scope);
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "ended";
     record.turnInFlight = false;
     record.queue.length = 0;
-    await session?.dispose();
+    await this.stopBackendSession(record.scope, session);
     record.log.append({ type: "session_ended", reason });
     this.touch(record);
     this.announceClosed(sessionId);
@@ -1152,6 +1239,7 @@ export class SessionHost {
    */
   async settle(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.lifecycle === "settled") return;
 
@@ -1163,7 +1251,7 @@ export class SessionHost {
     record.settledAt = new Date().toISOString();
     record.queue.length = 0;
     record.turnInFlight = false;
-    await session?.dispose();
+    await this.stopBackendSession(record.scope, session);
     // Close a turn we are interrupting before recording the Settle. Leaving it open would let the
     // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
     // the rail would say settled while the pane said idle.
@@ -1202,12 +1290,19 @@ export class SessionHost {
       // in place to be retried on the next sweep rather than stranding a directory whose owner is
       // gone. `deleteSession` removes only `<root>/sessions/<id>`, so it can never take a worktree
       // with it by accident.
-      await this.releaseWorktree(record);
-
-      record.log.closeSubscribers();
-      this.sessions.delete(record.id);
-      this.store?.deleteSession(record.id);
-      reaped.push(record.id);
+      const key = scopeKey(record.scope);
+      if (this.gitOperations.has(key) || this.closingScopes.has(key)) continue;
+      this.gitOperations.add(key);
+      try {
+        await this.releaseWorktree(record);
+        record.log.closeSubscribers();
+        this.sessions.delete(record.id);
+        this.publishReviews.delete(record.id);
+        this.store?.deleteSession(record.id);
+        reaped.push(record.id);
+      } finally {
+        this.gitOperations.delete(key);
+      }
     }
     for (const sessionId of reaped) this.announceClosed(sessionId);
     return reaped;
@@ -1346,7 +1441,7 @@ export class SessionHost {
       record.turnInFlight = false;
       record.queue.length = 0;
       record.turnInFlight = false;
-      await session.dispose();
+      await this.stopBackendSession(record.scope, session);
       this.closeOpenSubagents(record, record.log.since(0));
       this.closeOpenBackgroundCalls(record, record.log.since(0));
       this.closeOpenEnquiries(record, record.log.since(0));
@@ -1384,6 +1479,12 @@ export class SessionHost {
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
+      case "git_status":
+        return await this.gitStatus(command.sessionId);
+      case "prepare_publish":
+        return await this.preparePublish(command.sessionId);
+      case "publish":
+        return await this.publish(command.sessionId, command.input);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
       case "switch_scope_branch":
@@ -1515,6 +1616,7 @@ export class SessionHost {
   }
 
   private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
+    this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
     const { text, attachments } = message;
     const note = record.pendingBranchNote;
@@ -1903,4 +2005,12 @@ function firstLine(text: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function scopeKey(scope: string): string {
+  try {
+    return realpathSync(scope);
+  } catch {
+    return resolve(scope);
+  }
 }

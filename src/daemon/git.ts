@@ -75,7 +75,7 @@ function refuse(attempted: string, message: string, code?: number): GitResult<ne
  * waits forever, and a refused invocation is strictly better than a hung one. `GIT_OPTIONAL_LOCKS=0`
  * so a read never takes `index.lock` out from under the reader's own terminal.
  */
-async function run(
+export async function run(
   directory: string | undefined,
   args: string[],
   timeout: number,
