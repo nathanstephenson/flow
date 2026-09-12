@@ -26,6 +26,7 @@ export type PullRequestDetails = PullRequest & PullRequestRef & {
   state: "OPEN" | "MERGED" | "CLOSED";
   author: string;
   headRefName: string;
+  headRepository?: string;
   baseRefName: string;
   createdAt: string;
   updatedAt: string;

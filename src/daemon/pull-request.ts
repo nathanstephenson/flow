@@ -41,7 +41,7 @@ async function connection<T>(scope: string, github: Gh, id: string, type: string
   });
 }
 
-type Candidate = PullRequestRef & { state: string; updatedAt: string; headRepository: { nameWithOwner: string } | null };
+type Candidate = PullRequestRef & { state: string; updatedAt: string; closedAt: string | null; headRepository: { id: string } | null };
 async function select(scope: string, github: Gh): Promise<PullRequestRef | null> {
   if (!isRepository(scope)) return null;
   const branch = await head(scope);
@@ -61,15 +61,17 @@ async function select(scope: string, github: Gh): Promise<PullRequestRef | null>
   if (!url.ok) throw new Error(url.failure.message);
   const source = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(url.value.trim())?.[1];
   if (!source) throw new Error("Cannot identify the GitHub source repository.");
+  const sourceRepo = JSON.parse(await github(scope, ["repo", "view", source, "--json", "id"])) as { id?: string };
+  if (!sourceRepo.id) throw new Error("Cannot verify the source repository: GitHub did not return its ID.");
   const [owner, name] = base.nameWithOwner.split("/");
   const candidates = await pages<Candidate>(async cursor => {
     const data = await api<{ repository: { pullRequests: Connection<Candidate> } }>(scope, github,
-      `query($owner:String!,$name:String!,$branch:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(headRefName:$branch,first:100,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number state updatedAt headRepository{nameWithOwner}} ${page}}}}`,
+      `query($owner:String!,$name:String!,$branch:String!,$cursor:String){repository(owner:$owner,name:$name){pullRequests(headRefName:$branch,first:100,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number state updatedAt closedAt headRepository{id}} ${page}}}}`,
       { owner: owner!, name: name!, branch: branch.value.name, cursor });
     return data.repository.pullRequests;
   });
-  const matches = candidates.filter(pr => pr.headRepository?.nameWithOwner.toLowerCase() === source.toLowerCase());
-  matches.sort((a, b) => Number(b.state === "OPEN") - Number(a.state === "OPEN") || b.updatedAt.localeCompare(a.updatedAt));
+  const matches = candidates.filter(pr => pr.headRepository?.id === sourceRepo.id);
+  matches.sort((a, b) => Number(b.state === "OPEN") - Number(a.state === "OPEN") || (b.closedAt ?? b.updatedAt).localeCompare(a.closedAt ?? a.updatedAt));
   const chosen = matches[0];
   return chosen ? { repo: base.nameWithOwner, number: chosen.number, id: chosen.id } : null;
 }
@@ -77,9 +79,10 @@ async function select(scope: string, github: Gh): Promise<PullRequestRef | null>
 export async function pullRequest(scope: string, github: Gh = gh): Promise<PullRequestDetails | null> {
   const ref = await select(scope, github);
   if (!ref) return null;
-  const data = await api<{ node: Omit<PullRequestDetails, "author"> & { author: { login: string } | null; commits: { nodes: { commit: { statusCheckRollup: { id: string } | null } }[] } } }>(scope, github,
-    `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision author{login} headRefName baseRefName createdAt updatedAt mergeable mergeStateStatus viewerCanComment commits(last:1){nodes{commit{statusCheckRollup{id}}}}}}}`, ref);
-  const { commits, author, ...details } = data.node;
+  const data = await api<{ node: Omit<PullRequestDetails, "author" | "viewerCanComment" | "headRepository"> & { author: { login: string } | null; headRepository: { nameWithOwner: string } | null; locked: boolean; repository: { isArchived: boolean; viewerPermission: string | null }; commits: { nodes: { commit: { statusCheckRollup: { id: string } | null } }[] } } }>(scope, github,
+    `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision author{login} headRefName headRepository{nameWithOwner} baseRefName createdAt updatedAt mergeable mergeStateStatus locked repository{isArchived viewerPermission} commits(last:1){nodes{commit{statusCheckRollup{id}}}}}}}`, ref);
+  const { commits, author, headRepository, locked, repository, ...details } = data.node;
+  const viewerCanComment = !repository.isArchived && (!locked || ["ADMIN", "MAINTAIN", "WRITE"].includes(repository.viewerPermission ?? ""));
   const comments = (await connection<Comment>(scope, github, ref.id, "PullRequest", "comments", commentFields)).map(comment);
   const reviews = (await connection<Comment & { state: string }>(scope, github, ref.id, "PullRequest", "reviews", `${commentFields} state`)).map(value => ({ ...comment(value), state: value.state }));
   const rawThreads = await connection<Omit<PullRequestThread, "comments" | "diffHunk">>(scope, github, ref.id, "PullRequest", "reviewThreads", "id path line isOutdated isResolved viewerCanReply viewerCanResolve viewerCanUnresolve");
@@ -90,7 +93,7 @@ export async function pullRequest(scope: string, github: Gh = gh): Promise<PullR
   }
   const rollup = commits.nodes[0]?.commit.statusCheckRollup;
   const statusCheckRollup = rollup ? await connection<PullRequestDetails["statusCheckRollup"][number]>(scope, github, rollup.id, "StatusCheckRollup", "contexts", "... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state targetUrl }") : [];
-  return { ...details, ...ref, author: author?.login ?? "[deleted]", comments, reviews, threads, statusCheckRollup };
+  return { ...details, ...ref, ...(headRepository ? { headRepository: headRepository.nameWithOwner } : {}), author: author?.login ?? "[deleted]", viewerCanComment, comments, reviews, threads, statusCheckRollup };
 }
 
 function validId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9_+/=-]+$/.test(value) && value.length <= 256; }

@@ -15,8 +15,14 @@ the render instead makes the safe behaviour structural rather than filtered: raw
 arrives as a text token and is displayed as the characters it is, so there is no path by which
 `<script>` becomes a script. Link hrefs are checked against an allowlist of `http`, `https` and
 `mailto` for the same reason, and a rejected link falls back to showing its own source rather than a
-label that hides where it pointed. Images are not fetched at all — a remote image in a transcript is
+label that hides where it pointed. Images from a Presentation Transcript are not fetched — a remote image in a transcript is
 a tracking pixel with extra steps.
+
+The pull request view opts into images for descriptions and discussion. It uses the same token tree,
+with repository-relative links and image paths resolved against the source branch. Markdown images
+and standalone GitHub `<img>` tags supply only a checked HTTP(S) source and alt text; arbitrary HTML
+and attributes remain inert. The browser loads images without a referrer. This does not enable images
+in a Presentation Transcript.
 
 `react-markdown` was the obvious alternative and was rejected on the highlighting. Its `components`
 map is keyed by HTML element name and does not expose text nodes, so marking search hits would have
