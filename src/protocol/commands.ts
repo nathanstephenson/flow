@@ -2,6 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
+import type { PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { PublishInput } from "./publish.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -159,6 +160,9 @@ export type Command =
    * holds and the next turn reads, whereas this moves someone's working tree on disk. Borrowing
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
+  | { type: "pull_request"; sessionId: string }
+  | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
+  | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
   | { type: "git_status"; sessionId: string }
   | { type: "prepare_publish"; sessionId: string }
   | { type: "publish"; sessionId: string; input: PublishInput }
