@@ -7,7 +7,7 @@ export type PullRequest = {
   title: string;
   isDraft: boolean;
   reviewDecision: string;
-  statusCheckRollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string }[];
+  statusCheckRollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string; detailsUrl?: string; targetUrl?: string }[];
 };
 export type GitStatus = {
   repository: boolean;
