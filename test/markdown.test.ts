@@ -143,6 +143,44 @@ describe("markdown that could put HTML on screen", () => {
   });
 });
 
+describe("pull request Markdown images", () => {
+  const options = { images: true, linkBase: "https://github.com/test/repo/blob/feature/", imageBase: "https://raw.githubusercontent.com/test/repo/feature/" };
+  const images = (source: string) => JSON.stringify(parseMarkdown(source, options));
+
+  it("renders Markdown screenshots and resolves repository-relative paths", () => {
+    assert.deepEqual(parseMarkdown("![Preview](screenshots/view.png)", options), [{ kind: "paragraph", inlines: [{ kind: "image", src: `${options.imageBase}screenshots/view.png`, alt: "Preview" }] }]);
+    assert.match(images("[Docs](docs/guide.md)"), /github.com\/test\/repo\/blob\/feature\/docs\/guide.md/);
+    assert.match(images("- **![Nested](https://example.com/a.png)**"), /"kind":"image"/);
+  });
+
+  it("loads GitHub blob screenshots as raw images without changing normal links", () => {
+    const blob = "https://github.com/blob/repo/blob/abc123/screenshots/view.png";
+    const raw = "https://raw.githubusercontent.com/blob/repo/abc123/screenshots/view.png";
+    assert.deepEqual(parseMarkdown(`![Preview](${blob})`, options), [{ kind: "paragraph", inlines: [{ kind: "image", src: raw, alt: "Preview" }] }]);
+    assert.deepEqual(parseMarkdown(`<img src="${blob}" alt="Preview">`, options), [{ kind: "paragraph", inlines: [{ kind: "image", src: raw, alt: "Preview" }] }]);
+    assert.match(images(`[View screenshot](${blob})`), /github.com\/blob\/repo\/blob\/abc123/);
+    assert.doesNotMatch(images("![Preview](https://example.com/a/repo/blob/ref/img.png)"), /raw.githubusercontent/);
+  });
+
+  it("reads GitHub HTML screenshots without carrying event handlers or other HTML", () => {
+    const blocks = parseMarkdown('<img width="600" alt="Before &amp; after" src="https://example.com/a.png?a=1&amp;b=2" onerror="alert(1)" />', options);
+    assert.deepEqual(blocks, [{ kind: "paragraph", inlines: [{ kind: "image", src: "https://example.com/a.png?a=1&b=2", alt: "Before & after" }] }]);
+    assert.match(images("<img src='https://example.com/a.png'>\n<img src=https://example.com/b.png>"), /"kind":"image"/);
+    assert.doesNotMatch(images('<script><img src="https://example.com/a.png"></script>'), /"kind":"image"/);
+    assert.equal(textOf(parseMarkdown('<img src="https://example.com/a.png">')), '<img src="https://example.com/a.png">');
+  });
+
+  it("refuses unsafe URLs and preserves literal images inside code", () => {
+    for (const url of ["javascript:alert(1)", "data:image/svg+xml,test", "file:///etc/passwd", "mailto:test@example.com"]) {
+      assert.doesNotMatch(images(`![bad](${url})`), /"kind":"image"/);
+      assert.doesNotMatch(images(`<img src="${url}">`), /"kind":"image"/);
+    }
+    assert.doesNotMatch(images('<img src="&#106;avascript:alert(1)">'), /"kind":"image"/);
+    assert.doesNotMatch(images('`![alt](https://example.com/a.png)`'), /"kind":"image"/);
+    assert.doesNotMatch(images('```html\n<img src="https://example.com/a.png">\n```'), /"kind":"image"/);
+  });
+});
+
 describe("markdown that is only half written, as streaming produces", () => {
   it("lexes an unterminated fence as one code block running to the end", () => {
     const block = only("```ts\nconst x = 1;\nlet y");

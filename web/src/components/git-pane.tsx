@@ -4,6 +4,8 @@ import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
+import { PullRequestPane } from "@/components/pull-request-pane.tsx";
+import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 
 export function GitPane({ sessionId }: { sessionId: string }) {
   const { connection } = useHost();
@@ -67,27 +69,20 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="min-h-0 space-y-4 overflow-auto p-4 text-sm">
+    <div className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <strong>{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
         <Button size="sm" variant="outline" disabled={busy || review !== undefined} onClick={() => void refresh()}>Refresh</Button>
         <Button size="sm" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}>{busy ? "Please wait…" : "Publish"}</Button>
       </div>
+      <h2 className="font-medium">Local files</h2>
       {!status ? <p>Reading Git status…</p> : !status.repository ? <p>This Scope is not a Git repository.</p> : <FileList files={status.files} />}
       {status?.problem ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
-      {status?.pr ? (
-        <div className="space-y-2">
-          <a className="underline" href={status.pr.url} target="_blank" rel="noreferrer">#{status.pr.number} {status.pr.title}</a>
-          <p>{status.pr.isDraft ? "Draft" : "Ready for review"} · {status.pr.reviewDecision || "No review decision"}</p>
-          <ul>{status.pr.statusCheckRollup.map((check, index) => <li key={index}>{check.name || check.context || "Check"}: {check.conclusion || check.state || check.status || "Unknown"}</li>)}</ul>
-          {status.pr.statusCheckRollup.length === 0 ? <p>No checks reported.</p> : null}
-        </div>
-      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {result ? <div role="status" className="space-y-2">
         {result.branch ? <p>Created branch {result.branch}.</p> : null}
         <p>{result.committed ? `Committed ${result.committed.slice(0, 8)}. ` : "No new commit confirmed. "}{result.pushed ? "Pushed." : "Push not confirmed."}</p>
-        {result.url ? <a className="underline" href={result.url} target="_blank" rel="noreferrer">Open pull request</a> : null}
+        {result.url ? <a className="underline" href={safePullRequestUrl(result.url)} target="_blank" rel="noreferrer">Open pull request</a> : null}
         {result.error ? <p>{result.error} Local Git changes, commits, and successful pushes are not undone. Refresh and open Publish to review before retrying.</p> : null}
       </div> : null}
       {opening || review !== undefined ? (
@@ -112,6 +107,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           </form> : null}
         </section>
       ) : null}
+      <PullRequestPane key={sessionId} sessionId={sessionId} />
     </div>
   );
 }

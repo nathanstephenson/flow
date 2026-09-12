@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { pullRequest, commentPullRequest, resolvePullRequestThread } from "./pull-request.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
 import { gitStatus, snapshot, target, branchChanges, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
 import { resolveDefaultBackend } from "../protocol/settings.ts";
@@ -1479,6 +1480,12 @@ export class SessionHost {
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
+      case "pull_request":
+        return await pullRequest(this.record(command.sessionId).scope);
+      case "comment_pull_request":
+        return await commentPullRequest(this.record(command.sessionId).scope, command.input);
+      case "resolve_pull_request_thread":
+        return await resolvePullRequestThread(this.record(command.sessionId).scope, command.input);
       case "git_status":
         return await this.gitStatus(command.sessionId);
       case "prepare_publish":

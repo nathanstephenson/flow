@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { MdAlign, MdBlock, MdInline } from "@client/markdown.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
@@ -226,7 +226,16 @@ function Inline({ inline, query }: { inline: MdInline; query: string }) {
           <Inlines inlines={inline.inlines} query={query} />
         </a>
       );
+    case "image":
+      return <MarkdownImage key={inline.src} src={inline.src} alt={inline.alt} />;
     case "break":
       return <br />;
   }
+}
+
+function MarkdownImage({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  return failed
+    ? <span className="text-muted-foreground">Image unavailable{alt ? `: ${alt}` : ""}. Open the pull request on GitHub to view it.</span>
+    : <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} className="my-2 max-h-[36rem] max-w-full rounded border object-contain" />;
 }
