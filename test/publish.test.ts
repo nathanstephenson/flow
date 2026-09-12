@@ -14,14 +14,14 @@ const text = { commitMessage: "Add reviewed files", title: "Add reviewed files",
 const input: PublishInput = { ...text, token: "test", branch: "feature/test" };
 const pr: PullRequest = { number: 1, url: "https://github.com/test/repo/pull/1", title: "Existing", isDraft: true, reviewDecision: "APPROVED", statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }] };
 
-function github(options: { pr?: PullRequest; fork?: boolean; createError?: boolean; branchExists?: boolean } = {}): { calls: string[][]; run: Gh } {
+function github(options: { pr?: PullRequest; repoId?: string | null; headRepository?: { id?: string; nameWithOwner?: string } | null; fork?: boolean; createError?: boolean; branchExists?: boolean } = {}): { calls: string[][]; run: Gh } {
   const calls: string[][] = [];
   return { calls, run: async (_scope, args) => {
     calls.push(args);
     if (args[0] === "auth") return "";
     if (args[0] === "api") return JSON.stringify(options.branchExists ? [{ ref: "refs/heads/feature/test" }] : []);
-    if (args[0] === "repo") return JSON.stringify({ defaultBranchRef: { name: "main" }, isFork: options.fork ?? false });
-    if (args[1] === "list") return JSON.stringify(options.pr ? [{ ...options.pr, headRepository: { nameWithOwner: "test/repo" } }] : []);
+    if (args[0] === "repo") return JSON.stringify({ id: options.repoId === undefined ? "R_repo" : options.repoId, defaultBranchRef: { name: "main" }, isFork: options.fork ?? false });
+    if (args[1] === "list") return JSON.stringify(options.pr ? [{ ...options.pr, headRepository: options.headRepository === undefined ? { id: "R_repo" } : options.headRepository }] : []);
     if (options.createError) throw new Error("GitHub request failed: unavailable");
     return "https://github.com/test/repo/pull/1\n";
   } };
@@ -64,6 +64,29 @@ describe("Git Publish", () => {
     assert.deepEqual(status.files, [{ path: "a\nfile.txt", status: "??" }]);
     assert.match(status.problem!, /CLI is missing/);
     assert.deepEqual(await gitStatus(root), { repository: false, files: [] });
+  });
+
+  it("matches PR repository IDs without requiring repository names", async () => {
+    const mock = github({ pr });
+    const destination = await target(repo, "feature/existing", mock.run);
+    assert.equal(destination.pr?.number, pr.number);
+    assert.equal(destination.url, "git@github.com:test/repo.git");
+    assert.ok(mock.calls.find((args) => args[0] === "repo")?.at(-1)?.split(",").includes("id"));
+  });
+
+  it("accepts renamed repositories with matching IDs", async () => {
+    const destination = await target(repo, "feature/existing", github({ pr, headRepository: { id: "R_repo", nameWithOwner: "new-owner/new-name" } }).run);
+    assert.equal(destination.pr?.number, pr.number);
+  });
+
+  it("refuses different repository IDs even when names match", async () => {
+    await assert.rejects(target(repo, "feature/existing", github({ pr, headRepository: { id: "R_other", nameWithOwner: "test/repo" } }).run), /different head repository/);
+  });
+
+  it("reports unverifiable PR sources when repository IDs are missing", async () => {
+    for (const options of [{ repoId: null }, { repoId: "" }, { headRepository: null }, { headRepository: {} }, { headRepository: { id: "" } }, { repoId: null, headRepository: null }]) {
+      await assert.rejects(target(repo, "feature/existing", github({ pr, ...options }).run), /Cannot verify PR source/);
+    }
   });
 
   it("refuses detached and unborn HEAD, forks and ambiguous remotes", async () => {
