@@ -124,15 +124,18 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
   if (!match) throw new Error("This remote is not a supported github.com repository URL.");
   const repo = match[1]!;
   await github(scope, ["auth", "status", "--hostname", "github.com"]);
-  const info = JSON.parse(await github(scope, ["repo", "view", repo, "--json", "defaultBranchRef,isFork"])) as { defaultBranchRef?: { name: string }; isFork: boolean };
+  const info = JSON.parse(await github(scope, ["repo", "view", repo, "--json", "id,defaultBranchRef,isFork"])) as { id?: string; defaultBranchRef?: { name: string }; isFork: boolean };
   if (info.isFork) throw new Error("Fork publishing is not supported. Publish with gh directly to select the base repository.");
   if (!info.defaultBranchRef?.name) throw new Error("GitHub has no default branch. Create it before publishing.");
-  const prs = JSON.parse(await github(scope, ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,url,title,isDraft,reviewDecision,statusCheckRollup,headRepository"])) as (PullRequest & { headRepository?: { nameWithOwner?: string } })[];
+  const prs = JSON.parse(await github(scope, ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,url,title,isDraft,reviewDecision,statusCheckRollup,headRepository"])) as (PullRequest & { headRepository?: { id?: string } })[];
   if (prs.length > 1) throw new Error("More than one pull request matches this branch. Publish with gh directly.");
   const pr = prs[0];
   if (pr && branch === info.defaultBranchRef.name) throw new Error("The default branch already heads a pull request. Publish with gh directly to select the intended branch.");
   if (pr) pr.statusCheckRollup ??= [];
-  if (pr && pr.headRepository?.nameWithOwner?.toLowerCase() !== repo.toLowerCase()) {
+  if (pr && (!info.id || !pr.headRepository?.id)) {
+    throw new Error("Cannot verify PR source: GitHub did not return repository IDs. Publish with gh directly.");
+  }
+  if (pr && pr.headRepository?.id !== info.id) {
     throw new Error("The pull request uses a different head repository. Publish with gh directly.");
   }
   return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, ...(pr ? { pr } : {}) };
