@@ -89,7 +89,7 @@ for (const eligible of [false, true]) it(`shows Create stack only for an eligibl
   const tree = pane.render("StackPane", props);
   assert.throws(() => find(tree, "Input"));
   for (const label of ["Add branch", "Rebase", "Submit stack", "Sync stack"]) assert.throws(() => find(tree, "Button", node => node.props.children === label));
-  if (!eligible) assert.throws(() => find(tree, "Button", node => node.props.children === "Create stack"));
+  if (!eligible) assert.equal(tree, null);
   else {
     assert.match(JSON.stringify(tree), /first/);
     assert.match(JSON.stringify(tree), /second/);

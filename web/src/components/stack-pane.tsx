@@ -59,13 +59,13 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
     finally { setBusy(false); }
   }
   const blocked = busy || disabled;
+  if (!error && !output && !busy && !review && !syncFailed && (!status || (status.available && !status.view && !status.candidate && !status.rebasing && !status.problem))) return null;
   return <section aria-label="Stack" className="space-y-3 border-t pt-4">
     <div className="flex items-center gap-2"><h2 className="font-medium">Stack</h2><Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button></div>
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
     {status?.available ? <>
-      {!status.view && !status.rebasing ? <p>No tracked stack for this branch.</p> : null}
       {status.view ? <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Use Publish for uncommitted files.</p> : null}
       {status.view ? <><p>Trunk: {status.view.trunk}</p><ul className="space-y-2">{status.view.branches.map((branch) => <li key={branch.name} className="flex flex-wrap items-center gap-2">
         <span>{branch.name}{branch.isCurrent ? " (current)" : ""}{branch.pr ? ` · #${branch.pr.number} ${branch.pr.state}` : " · no PR"}{branch.needsRebase ? " · needs rebase" : ""}</span>
