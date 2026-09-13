@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -84,7 +85,6 @@ export class PiSession implements BackendSession {
   private wantedEffort: EffortLevel | undefined;
   private effort: EffortLevel | undefined;
   private messageSeq = 0;
-  private messageCount = 0;
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
@@ -301,7 +301,7 @@ export class PiSession implements BackendSession {
         return;
 
       case "message_start":
-        this.currentMessageId = `msg-${this.messageSeq}-${++this.messageCount}`;
+        this.currentMessageId = randomUUID();
         this.emitMessage(event.message, false);
         return;
 
@@ -406,7 +406,7 @@ export class PiSession implements BackendSession {
 
   private emitMessage(message: AgentMessage, final: boolean): void {
     if (message.role !== "assistant") return;
-    const id = this.currentMessageId ?? `msg-${this.messageSeq}-${++this.messageCount}`;
+    const id = this.currentMessageId ?? randomUUID();
     this.currentMessageId = id;
 
     const text = joinBlocks(message.content, "text");
