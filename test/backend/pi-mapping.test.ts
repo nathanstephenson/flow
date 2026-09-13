@@ -3,7 +3,8 @@ import { describe, it, beforeEach } from "node:test";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { PiSession } from "../../src/backend/pi/index.ts";
-import type { BackendEvent } from "../../src/protocol/events.ts";
+import type { AgentEvent, BackendEvent } from "../../src/protocol/events.ts";
+import { initialState, reduce } from "../../src/client/reduce.ts";
 
 /**
  * pi's event vocabulary translated into Agent Events, without a model behind it.
@@ -105,6 +106,29 @@ function stubSession(): Stub {
     },
   };
 }
+
+it("keeps output from a revived Backend Session after the lifecycle markers", async () => {
+  let state = initialState();
+  let seq = 0;
+  const emit = (event: AgentEvent) => {
+    state = reduce(state, { seq: ++seq, sessionId: "s1", at: "", event });
+  };
+  for (const text of ["Before revive", "After revive"]) {
+    const stub = stubSession();
+    const adapter = new PiSession(stub.session, emit);
+    await adapter.prompt(text);
+    stub.fire({ type: "message_start", message: assistant(text) });
+    stub.fire({ type: "message_end", message: assistant(text) });
+    await adapter.dispose();
+    if (text === "Before revive") {
+      emit({ type: "session_dormant", reason: "host_shutdown" });
+      emit({ type: "revived", fromSeq: seq });
+    }
+  }
+  assert.deepEqual(state.entries.map((entry) => entry.kind), ["assistant", "marker", "marker", "assistant"]);
+  assert.deepEqual(state.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.text),
+    ["Before revive", "After revive"]);
+});
 
 it("offers only authenticated models with provider-qualified identity", () => {
   const stub = stubSession();
