@@ -102,6 +102,16 @@ describe("Git Publish", () => {
     await assert.rejects(target(repo, "main", github().run), /Fetch and push/);
   });
 
+  it("allows a leftover REBASE_HEAD but refuses active rebase state", async () => {
+    writeFileSync(join(repo, ".git/REBASE_HEAD"), git(repo, "rev-parse", "HEAD"));
+    await snapshot(repo);
+    for (const operation of ["rebase-merge", "rebase-apply"]) {
+      mkdirSync(join(repo, `.git/${operation}`));
+      await assert.rejects(snapshot(repo), /Finish the current Git operation/);
+      rmSync(join(repo, `.git/${operation}`), { recursive: true });
+    }
+  });
+
   it("refuses merge conflicts, paused Git operations and submodules", async () => {
     mkdirSync(join(repo, ".git/rebase-merge"));
     await assert.rejects(snapshot(repo), /Finish the current Git operation/);
@@ -442,4 +452,33 @@ describe("Session Host Publish guards", () => {
     assert.equal(backend.sessions.reduce((sum, item) => sum + item.prompts.length, 0), 1);
     await host.shutdown();
   });
+});
+
+
+it("reviews and publishes only upper-stack changes against the parent branch", async () => {
+  git(repo, "switch", "feature/existing");
+  writeFileSync(join(repo, "ancestor.txt"), "ancestor");
+  git(repo, "add", "."); git(repo, "commit", "-m", "ancestor");
+  git(repo, "switch", "-c", "upper");
+  writeFileSync(join(repo, "upper.txt"), "upper");
+  git(repo, "add", "."); git(repo, "commit", "-m", "upper");
+  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "feature/existing" }, { branch: "upper" }] }] }));
+  const mock = github();
+  const destination = await target(repo, "upper", mock.run);
+  assert.equal(destination.baseBranch, "feature/existing");
+  assert.deepEqual((await branchChanges(repo, destination)).files.map(f => f.path), ["upper.txt"]);
+  writeFileSync(join(repo, "uncommitted.txt"), "new");
+  const reviewed = await snapshot(repo);
+  const metadata = { schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "upper" }] }] };
+  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify(metadata));
+  assert.match((await publish(repo, reviewed, destination, input, mock.run)).error!, /base branch.*changed/);
+  metadata.stacks[0]!.branches.unshift({ branch: "feature/existing" });
+  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify(metadata));
+  const result = await publish(repo, reviewed, destination, input, mock.run);
+  assert.equal(result.error, undefined);
+  const create = mock.calls.find(args => args[1] === "create")!;
+  assert.equal(create[create.indexOf("--base") + 1], "feature/existing");
+  await assert.rejects(target(repo, "upper", async (scope, args) => { if (args[0] === "stack") throw new Error("missing"); return mock.run(scope, args); }), /Install gh stack/);
+  writeFileSync(join(repo, ".git/gh-stack"), "broken");
+  await assert.rejects(target(repo, "upper", mock.run));
 });

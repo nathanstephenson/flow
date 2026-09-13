@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pullRequest, commentPullRequest, resolvePullRequestThread } from "./pull-request.ts";
+import { stackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
+import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
 import { gitStatus, snapshot, target, branchChanges, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
 import { resolveDefaultBackend } from "../protocol/settings.ts";
@@ -267,6 +269,7 @@ export class SessionHost {
    * `settle` — it is a throwaway that outlives any one of them, in the same way `modelProbes` is.
    */
   private readonly summarySpare = new SummaryModelSpare();
+  private readonly stackReviews = new Map<string, { review: StackReview; fingerprint: string; expires: number }>();
   private readonly gitOperations = new Set<string>();
   private readonly closingScopes = new Set<string>();
   private readonly publishReviews = new Map<string, { token: string; expires: number; snapshot: PublishSnapshot; target: PublishTarget }>();
@@ -305,6 +308,54 @@ export class SessionHost {
     }
   }
 
+  async prepareStack(sessionId: string, action: "submit" | "sync"): Promise<StackReview> {
+    if (action !== "submit" && action !== "sync") throw new CommandRefused("Invalid Stack review action.");
+    const record = this.record(sessionId);
+    return this.withGitOperation(record.scope, async () => {
+      this.stackReviews.delete(sessionId);
+      await cleanStack(record.scope);
+      const status = await stackStatus(record.scope);
+      if (!status.view) throw new Error(status.problem ?? "No stack found.");
+      const review = { token: randomUUID(), action, view: status.view };
+      this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
+      return review;
+    });
+  }
+
+  async changeStack(sessionId: string, input: StackInput): Promise<string> {
+    const record = this.record(sessionId);
+    return this.withGitOperation(record.scope, async () => {
+      if (input.action === "submit" || input.action === "sync") {
+        const saved = this.stackReviews.get(sessionId);
+        this.stackReviews.delete(sessionId);
+        if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
+        await cleanStack(record.scope);
+        const status = await stackStatus(record.scope);
+        if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
+      }
+      try {
+        return await changeStack(record.scope, input);
+      } finally {
+        for (const other of this.sessions.values()) {
+          if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
+          this.stackReviews.delete(other.id);
+          this.publishReviews.delete(other.id);
+          await this.refreshBranch(other);
+          other.pendingBranchNote = "[Flow] A Stack operation was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
+        }
+      }
+    });
+  }
+
+  async assistStack(sessionId: string): Promise<void> {
+    const record = this.record(sessionId);
+    await this.withGitOperation(record.scope, async () => {
+      const status = await stackStatus(record.scope);
+      if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
+    });
+    await this.send(sessionId, stackConflictMessage, "now");
+  }
+
   async gitStatus(sessionId: string): Promise<GitStatus> {
     return gitStatus(this.record(sessionId).scope);
   }
@@ -329,7 +380,7 @@ export class SessionHost {
       }
       const token = randomUUID();
       this.publishReviews.set(sessionId, { token, expires: Date.now() + 15 * 60_000, snapshot: reviewed, target: destination });
-      return { ...text, token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
+      return { ...text, token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.baseBranch ? { baseBranch: destination.baseBranch } : {}), ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
     });
   }
 
@@ -1486,6 +1537,14 @@ export class SessionHost {
         return await commentPullRequest(this.record(command.sessionId).scope, command.input);
       case "resolve_pull_request_thread":
         return await resolvePullRequestThread(this.record(command.sessionId).scope, command.input);
+      case "stack_status":
+        return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
+      case "prepare_stack":
+        return await this.prepareStack(command.sessionId, command.action);
+      case "change_stack":
+        return await this.changeStack(command.sessionId, command.input);
+      case "assist_stack":
+        return await this.assistStack(command.sessionId);
       case "git_status":
         return await this.gitStatus(command.sessionId);
       case "prepare_publish":

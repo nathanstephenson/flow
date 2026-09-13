@@ -3,6 +3,7 @@ import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
 import type { PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
+import type { StackInput } from "./stack.ts";
 import type { PublishInput } from "./publish.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -163,6 +164,10 @@ export type Command =
   | { type: "pull_request"; sessionId: string }
   | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
   | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
+  | { type: "stack_status"; sessionId: string }
+  | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
+  | { type: "change_stack"; sessionId: string; input: StackInput }
+  | { type: "assist_stack"; sessionId: string }
   | { type: "git_status"; sessionId: string }
   | { type: "prepare_publish"; sessionId: string }
   | { type: "publish"; sessionId: string; input: PublishInput }

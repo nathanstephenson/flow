@@ -22,6 +22,7 @@ export type PublishReview = PublishText & {
   files: GitFile[];
   branch: string;
   defaultBranch: string;
+  baseBranch?: string;
   committedFiles: GitFile[];
   commits: string[];
   pr?: PullRequest;

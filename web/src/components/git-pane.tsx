@@ -4,6 +4,7 @@ import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
+import { StackPane } from "@/components/stack-pane.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 
@@ -17,6 +18,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<PublishResult>();
+  const [prRevision, setPrRevision] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,7 +97,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
             <FileList files={review.files} />
             {review.commits.length > 0 ? <div className="space-y-2"><h3 className="font-medium">Committed branch changes</h3><FileList files={review.committedFiles} /><ul className="max-h-32 overflow-auto text-xs">{review.commits.map((commit) => <li key={commit}>{commit}</li>)}</ul></div> : null}
             {review.warning ? <p role="status">{review.warning}</p> : null}
-            {review.branch === review.defaultBranch ? <label className="block space-y-1">New feature branch<Input required value={branch} onChange={(event) => setBranch(event.target.value)} disabled={busy} /></label> : <p>Branch: {review.branch}</p>}
+            {review.branch === review.defaultBranch ? <label className="block space-y-1">New feature branch<Input required value={branch} onChange={(event) => setBranch(event.target.value)} disabled={busy} /></label> : <p>Branch: {review.branch}{review.baseBranch ? ` · Base: ${review.baseBranch}` : ""}</p>}
             <label className="block space-y-1">Commit message<Textarea required={review.files.length > 0} value={review.commitMessage} onChange={(event) => setReview({ ...review, commitMessage: event.target.value })} disabled={busy} /></label>
             {!review.pr ? <>
               <label className="block space-y-1">Pull request title<Input required value={review.title} onChange={(event) => setReview({ ...review, title: event.target.value })} disabled={busy} /></label>
@@ -107,7 +109,8 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           </form> : null}
         </section>
       ) : null}
-      <PullRequestPane key={sessionId} sessionId={sessionId} />
+      {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} disabled={busy || review !== undefined} onChange={() => { setReview(undefined); setResult(undefined); setPrRevision(value => value + 1); void refresh(); }} /> : null}
+      <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import type { GitFile, GitStatus, PublishInput, PublishResult, PullRequest } from "../protocol/publish.ts";
+import { localStack } from "./stack-metadata.ts";
 
 const exec = promisify(execFile);
 export type Gh = (scope: string, args: string[]) => Promise<string>;
@@ -16,14 +17,14 @@ export const gh: Gh = async (scope, args) => {
       cwd: scope,
       timeout: GIT_WRITE_TIMEOUT_MS,
       maxBuffer: 2 << 20,
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" },
+      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0", ...(args[0] === "stack" ? { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } : {}) },
     })).stdout;
   } catch (error) {
-    const failure = error as { code?: string | number; stderr?: string; message?: string };
+    const failure = error as { code?: string | number; stdout?: string; stderr?: string; message?: string };
     if (failure.code === "ENOENT") throw new Error("GitHub CLI is missing. Install gh on the Session Host.");
-    const detail = failure.stderr?.trim() || failure.message || "Unknown error";
+    const detail = (args[0] === "stack" ? [failure.stdout, failure.stderr].filter(Boolean).join("\n").trim() : failure.stderr?.trim()) || failure.message || "Unknown error";
     const requestFailed = /HTTP (?:429|5\d\d)|connection|timed? out|network|TLS|certificate|could not resolve/i.test(detail);
-    if (failure.code === 4 || (args[0] === "auth" && !requestFailed)) {
+    if ((failure.code === 4 && args[0] !== "stack") || (args[0] === "auth" && !requestFailed)) {
       throw new Error(`GitHub authentication failed. Run gh auth login on the Session Host. ${detail}`);
     }
     throw new Error(`GitHub request failed: ${detail}`);
@@ -47,7 +48,7 @@ export type PublishSnapshot = {
   branch: string;
   commit: string;
 };
-export type PublishTarget = { remote: string; url: string; repo: string; defaultBranch: string; pr?: PullRequest };
+export type PublishTarget = { remote: string; url: string; repo: string; defaultBranch: string; baseBranch?: string; pr?: PullRequest };
 
 async function files(scope: string): Promise<GitFile[]> {
   const raw = await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
@@ -69,7 +70,7 @@ export async function snapshot(scope: string): Promise<PublishSnapshot & { input
   if (index.split("\0").some((entry) => entry.startsWith("160000 "))) {
     throw new Error("Publishing repositories with submodules is not supported. Use Git directly.");
   }
-  for (const operation of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"]) {
+  for (const operation of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
     const active = await run(scope, ["rev-parse", "--verify", "-q", operation], GIT_READ_TIMEOUT_MS);
     if (active.ok) throw new Error("Finish the current Git operation before publishing.");
   }
@@ -138,15 +139,23 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
   if (pr && pr.headRepository?.id !== info.id) {
     throw new Error("The pull request uses a different head repository. Publish with gh directly.");
   }
-  return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, ...(pr ? { pr } : {}) };
+  const stack = await localStack(scope, branch);
+  let baseBranch: string | undefined;
+  if (stack) {
+    try { await github(scope, ["stack", "--help"]); }
+    catch (error) { throw new Error(`This branch belongs to a stack. Install gh stack on the Session Host before publishing. ${error instanceof Error ? error.message : String(error)}`); }
+    const index = stack.branches.findIndex(b => b.branch === branch);
+    baseBranch = stack.branches.slice(0, index).filter(b => !b.pullRequest?.merged).at(-1)?.branch ?? stack.trunk.branch;
+  }
+  return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
 }
 
 export async function branchChanges(scope: string, destination: PublishTarget): Promise<{ files: GitFile[]; commits: string[]; input: string }> {
-  let base = `refs/remotes/${destination.remote}/${destination.defaultBranch}`;
+  let base = destination.baseBranch ? `refs/heads/${destination.baseBranch}` : `refs/remotes/${destination.remote}/${destination.defaultBranch}`;
   const remote = await run(scope, ["rev-parse", "--verify", base], GIT_READ_TIMEOUT_MS);
-  if (!remote.ok) base = `refs/heads/${destination.defaultBranch}`;
+  if (!remote.ok) base = destination.baseBranch ? `refs/remotes/${destination.remote}/${destination.baseBranch}` : `refs/heads/${destination.defaultBranch}`;
   const known = await run(scope, ["rev-parse", "--verify", base], GIT_READ_TIMEOUT_MS);
-  if (!known.ok) throw new Error("Fetch the default branch before publishing so its changes can be reviewed.");
+  if (!known.ok) throw new Error(`Fetch the ${destination.baseBranch ? "stack parent" : "default"} branch before publishing so its changes can be reviewed.`);
   const range = `${base}...HEAD`;
   const raw = (await git(scope, ["diff", "--name-status", "-z", "--no-renames", range, "--"])).split("\0").filter(Boolean);
   const files: GitFile[] = [];
@@ -179,7 +188,7 @@ export async function publish(scope: string, reviewed: PublishSnapshot, destinat
     const current = await snapshot(scope);
     if (current.branch !== reviewed.branch || current.fingerprint !== reviewed.fingerprint) throw new Error("Reviewed changes have changed. Open Publish again.");
     const freshTarget = await target(scope, current.branch, github);
-    if (freshTarget.remote !== destination.remote || freshTarget.url !== destination.url || freshTarget.repo !== destination.repo || freshTarget.defaultBranch !== destination.defaultBranch || freshTarget.pr?.number !== destination.pr?.number) throw new Error("The remote or pull request has changed. Open Publish again.");
+    if (freshTarget.remote !== destination.remote || freshTarget.url !== destination.url || freshTarget.repo !== destination.repo || freshTarget.defaultBranch !== destination.defaultBranch || freshTarget.baseBranch !== destination.baseBranch || freshTarget.pr?.number !== destination.pr?.number) throw new Error("The remote, base branch, or pull request has changed. Open Publish again.");
     if (typeof input.commitMessage !== "string" || typeof input.title !== "string" || typeof input.body !== "string" || !input.title.trim() || (current.files.length > 0 && !input.commitMessage.trim())) {
       throw new Error("A commit message and pull request title are required.");
     }
@@ -220,7 +229,7 @@ export async function publish(scope: string, reviewed: PublishSnapshot, destinat
     result.pushed = true;
     if (destination.pr) result.url = destination.pr.url;
     else {
-      result.url = (await github(scope, ["pr", "create", "--repo", destination.repo, "--base", destination.defaultBranch, "--head", branch, "--title", input.title, "--body", input.body, ...(input.ready === true ? [] : ["--draft"])] )).trim();
+      result.url = (await github(scope, ["pr", "create", "--repo", destination.repo, "--base", destination.baseBranch ?? destination.defaultBranch, "--head", branch, "--title", input.title, "--body", input.body, ...(input.ready === true ? [] : ["--draft"])] )).trim();
     }
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
