@@ -8,6 +8,37 @@ Run and watch coding-agent sessions from a terminal or a browser, over more than
 
 See [CONTEXT.md](./CONTEXT.md) for the domain language and [docs/adr](./docs/adr) for decisions.
 
+## Stacked pull requests
+
+The browser's Git tab uses `github/gh-stack` directly (tested with v0.1.1).
+Install it on the Session Host with `gh extension install github/gh-stack` and
+authenticate with `gh auth login`. Ordinary Git controls remain available without it.
+
+Stack supports Create, Add, Switch, Submit, Sync, and Rebase. Create is offered only
+for a clear chain of at least two existing local branches above the default branch.
+It registers the displayed branches; it never accepts names for new branches.
+Ambiguous chains and branches already tracked in a stack are not offered.
+Switching and mutations
+require no working Agent Session in the same Scope, including background work.
+Except for conflict continuation and abort, the working tree must be clean; Flow never
+stashes changes. Use Publish for uncommitted files; stack branches use their active
+parent as the review base and the base for new PRs. Switch only selects local stack
+branches, including numeric branch names.
+
+Submit and Sync require a fresh review of the affected branches and PRs. Submit uses
+`gh stack submit --auto`: new PRs are drafts; existing draft states do not change.
+Sync checks remote stack membership at review and confirmation, then fetches,
+rebases, and pushes. If membership differs, reconcile it with `gh stack` outside
+Flow and review again. API failures block Sync. The CLI cannot lock remote membership;
+changes after the final check remain a race. After a Sync conflict, use Rebase to resolve it
+locally, then confirm Sync again. No retry or push happens automatically.
+
+A paused Rebase shows conflict files, Continue, and Abort. **Ask agent to fix, then
+continue** sends a normal message to the current Agent Session to resolve and stage
+conflicts, then use `gh stack rebase --continue` only when resolved. It does not grant
+permission to publish, push, sync, or merge. Review the result and refresh Stack.
+Merge and stack restructuring are not exposed.
+
 ## Status
 
 **M0 (walking skeleton) complete.** The Claude adapter drives real sessions end to end; the Session
