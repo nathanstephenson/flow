@@ -18,10 +18,10 @@ _Avoid_: history, log, messages
 **Conversation Context**: What the model can currently see, owned and compacted by the backend.
 _Avoid_: history, transcript, memory
 
-**Spend**: Cumulative billing for an Agent Session across models, including Subagents; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
+**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
 _Avoid_: usage, cost, tokens, context
 
-**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session.
+**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session.
 _Avoid_: child session, task, sidechain, agent
 
 **Background Call**: A tool call continuing past its turn, owned by its Backend Session and identified by the call. Unlike a Subagent, it has no conversation; it does not occupy the Agent Session.
@@ -32,6 +32,15 @@ _Avoid_: server, manager, supervisor
 
 **Backend Adapter**: The translation of an agent SDK into Agent Events and session commands.
 _Avoid_: driver, provider, runtime, plugin
+
+**Workflow Definition**: A saved graph of typed Workflow Steps, copied when a Workflow Execution starts.
+_Avoid_: script, pipeline
+
+**Workflow Execution**: Work owned by one Agent Session, with a fixed Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
+_Avoid_: parent turn, Background Call
+
+**Workflow Step**: One typed operation in a Workflow Definition. Each attempt owns its work until it stops.
+_Avoid_: turn, node
 
 ### Human interaction
 
@@ -50,13 +59,13 @@ _Avoid_: slash command, action, tool
 **Skill**: A named prompt expanded by the backend at the start of a message. Unlike a Command, it enters both records as an ordinary user turn.
 _Avoid_: command, prompt template, macro
 
-**Enquiry**: A tool call asking the human one to four Questions, answered once as a whole within its turn. It occupies the Agent Session and requests input, not authorisation.
+**Enquiry**: A tool call asking the human one to four Questions, answered once as a whole within its turn. It requests input, not authorisation. Only an Enquiry from the parent turn occupies the Agent Session.
 _Avoid_: prompt, dialog, poll, permission
 
 **Question**: One part of an Enquiry, with a header, selection mode and two to four Options. An **Option** has a label and description; an **Answer** contains selected labels or the human's own words.
 _Avoid_: choice, poll, option for a whole Question
 
-**Permission Prompt**: A tool call awaiting authorisation within its turn, occupying the Agent Session. The human allows it, refuses it, or grants Standing Authorisation.
+**Permission Prompt**: A tool call awaiting authorisation within its owning turn. Only a prompt from the parent turn occupies the Agent Session. The human allows it, refuses it, or grants Standing Authorisation.
 _Avoid_: approval, confirmation, gate, enquiry
 
 **Standing Authorisation**: A machine-wide tool grant held in Settings, applied when a Backend Session opens. It covers the tool, not particular arguments, and is distinct from adapter pre-approval.

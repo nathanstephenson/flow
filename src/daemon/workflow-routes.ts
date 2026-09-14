@@ -4,6 +4,10 @@ import { validateDefinition } from '../workflows/graph.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
 import type { SecretStore } from './secret-store.ts';
 
+export function workflowRequestError(error: unknown): string {
+  return error instanceof Error && error.name !== 'ZodError' && error.name !== 'SyntaxError' && error.message ? error.message.split(':')[0]! : 'Invalid workflow request';
+}
+
 export async function workflowRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, workflows?: WorkflowStore, secrets?: SecretStore): Promise<boolean> {
   const match = /^\/api\/(workflows|secrets)(?:\/(.*))?$/.exec(pathname);
   if (!match) return false;
@@ -54,7 +58,7 @@ export async function workflowRoutes(request: IncomingMessage, response: ServerR
         try {
           definition = validateDefinition(body).definition;
           if (definition.id !== id) throw new Error();
-        } catch { reply(400, { error: 'Invalid workflow definition' }); return true; }
+        } catch (error) { reply(400, { error: workflowRequestError(error) }); return true; }
         workflows!.saveDefinition(definition);
         reply(200, { workflow: definition });
       }

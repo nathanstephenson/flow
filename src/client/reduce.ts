@@ -194,6 +194,19 @@ export type Entry =
    */
   | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted"; text: string };
 
+function combinedSpend(values: Spend[]): Spend {
+  const result: Spend = { tokens: 0, cached: 0, costUSD: 0, models: [] };
+  for (const value of values) {
+    result.tokens += value.tokens; result.cached += value.cached; result.costUSD += value.costUSD;
+    for (const model of value.models) {
+      const prior = result.models.find(item => item.id === model.id);
+      if (prior) { prior.tokens += model.tokens; prior.cached += model.cached; prior.costUSD += model.costUSD; }
+      else result.models.push({ ...model });
+    }
+  }
+  return result;
+}
+
 export type ViewState = {
   /**
    * Derived, never assigned by an arm — `reduce` works it out from the three fields below through
@@ -225,6 +238,9 @@ export type ViewState = {
   queue: string[];
   queuedMessages?: { id: string | undefined; text: string; attachments?: string[] }[];
   contextUsage?: { used: number; window: number; spend?: Spend };
+  parentSpend?: Spend;
+  workflowSpend?: Record<string, Spend>;
+  spend?: Spend;
   /**
    * Subagents running or waiting right now.
    *
@@ -575,15 +591,25 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           })),
       };
 
-    case "context_usage":
+    case 'workflow_spend': {
+      const workflowSpend = { ...state.workflowSpend, [event.executionId]: event.spend };
+      const spend = combinedSpend([...(state.parentSpend ? [state.parentSpend] : []), ...Object.values(workflowSpend)]);
+      return { ...state, workflowSpend, spend, ...(state.contextUsage ? { contextUsage: { ...state.contextUsage, spend } } : {}) };
+    }
+
+    case "context_usage": {
+      const spend = event.spend || state.workflowSpend ? combinedSpend([...(event.spend ? [event.spend] : []), ...Object.values(state.workflowSpend ?? {})]) : undefined;
       return {
         ...state,
+        ...(event.spend ? { parentSpend: event.spend } : {}),
+        ...(spend ? { spend } : {}),
         contextUsage: {
           used: event.used,
           window: event.window,
-          ...(event.spend === undefined ? {} : { spend: event.spend }),
+          ...(spend === undefined ? {} : { spend }),
         },
       };
+    }
 
     case "model_changed":
       return { ...state, model: event.model };

@@ -1,6 +1,6 @@
 # Workflow core
 
-The core and code executors have no UI or execution service. The Session Host exposes machine-wide definition and secret CRUD.
+The Session Host owns execution through `src/daemon/workflow-executions.ts` and the frozen HTTP routes below. Definition and secret CRUD remain machine-wide. Private workflow requests do not enter the parent composer or Conversation Context.
 
 ## Execution HTTP contract
 
@@ -37,7 +37,7 @@ Errors are `{ error: string }`: 400 invalid input, 401 unauthenticated, 403 disa
 
 `ConfigStore.view()` and `/api/config` report `workflowRuntime`: `externalSandbox` defaults to `true`, `dockerImage` to `flow-workflow-runtime:local`; `nodePath` and `dockerPath` are optional absolute overrides. PUT `/api/config` merges these fields; an empty executable override clears it. `workflowRuntimeOptions` discovers omitted executables on PATH, ignoring relative PATH entries. Missing executables remain undefined; execution integration must reject them rather than fall back. Settings file reads retain valid fields and default invalid fields with a warning.
 
-The CLI constructs one WorkflowStore and SecretStore for these routes. `prestart` builds both web assets and the workflow runtime. SEA embedding and private extraction already exist. The next stage must read current runtime Settings, resolve executables, select the source bundle or extracted SEA asset, probe Docker, and construct/recreate executors. It must inject secret resolution and add execution ownership, cancellation, recovery and UI separately.
+The CLI constructs one WorkflowStore, SecretStore and WorkflowExecutionService. `prestart` builds web assets and the source runtime; SEA installations use the extracted runtime asset. The service probes executors asynchronously, snapshots runtime Settings for each execution, and refreshes cached readiness when Settings change. Recovery uses the saved runtime Settings and definition. It owns cancellation, private activity, human requests and per-step Spend. See ADR 0023.
 
 ## Contracts
 

@@ -54,9 +54,13 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
       const secrets: Record<string, string> = Object.create(null);
       for (const [name, reference] of Object.entries(context.step.secrets ?? {})) { secrets[name] = await options.resolveSecret!(reference, context.signal); context.signal.throwIfAborted(); }
       const inputSchema = context.inputSchema ?? context.step.inputSchema;
-      const output = await executeRuntime(context, secrets, inputSchema);
-      context.signal.throwIfAborted();
-      return context.step.kind === 'typescript' ? parseValue(context.step.outputSchema, output) : output;
+      try {
+        const output = await executeRuntime(context, secrets, inputSchema);
+        context.signal.throwIfAborted();
+        return context.step.kind === 'typescript' ? parseValue(context.step.outputSchema, output) : output;
+      } catch (error) {
+        throw new Error(redact(error instanceof Error ? error.message : String(error), secrets));
+      }
     },
   };
   async function executeRuntime(context: ExecutorContext, secrets: Record<string, string>, inputSchema?: VisualSchema): Promise<Json> {
@@ -106,6 +110,7 @@ function redactValue(value: Json, secrets: Record<string, string>): Json {
   return value;
 }
 function redact(text: string, secrets: Record<string, string>): string {
-  for (const value of Object.values(secrets)) if (value) text = text.split(value).join('[REDACTED]');
+  const patterns = Object.values(secrets).filter(Boolean).flatMap(value => [value, JSON.stringify(value).slice(1, -1), JSON.stringify(JSON.stringify(value).slice(1, -1)).slice(1, -1)]).sort((a, b) => b.length - a.length);
+  for (const value of patterns) text = text.split(value).join('[REDACTED]');
   return text;
 }

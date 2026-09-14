@@ -1,6 +1,6 @@
 # Workflow builder scope
 
-Status: initial agreed scope. No implementation is included.
+Status: implemented scope. Runtime details are in `src/workflows/README.md`; execution ownership is recorded in ADR 0023.
 
 ## Purpose and surfaces
 
@@ -147,9 +147,9 @@ The builder can test a single step with sample input and an explicitly selected 
 - Per-step Backend Adapter selection and cross-adapter execution.
 - TypeScript imports and process access.
 
-## Technical checks before implementation
+## Design checks
 
-These are unresolved checks, not agreed implementation designs:
+These checks guided the implementation and remain review criteria:
 
 1. Confirm each Backend Adapter can select Subagent model and Effort, supply isolated input, track owned background work, and route permissions and Enquiries independently of the parent turn. Define unsupported-capability behaviour.
 2. Define durable execution records and restart reconciliation. Existing Subagents belong to a Backend Session and cannot survive it. Confirm how Shell and TypeScript execution is stopped after host loss.
@@ -162,7 +162,7 @@ These are unresolved checks, not agreed implementation designs:
 9. Define recovery when branches have completed independently or files have changed since interruption. Confirm input/output override auditing.
 10. Define result rendering for structured output and artifacts, plus failure and cancellation summaries in the main Agent Session.
 
-## Acceptance scenarios for later implementation
+## Acceptance scenarios
 
 - Edit a workflow visually, start it with typed inputs, and inspect validated outputs in the workflow panel and main Presentation Transcript.
 - Run parallel Agent steps with different models and Effort; keep the parent conversation independent and wait for their background work.

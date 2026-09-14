@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils.ts";
  * which name keys that do not resolve here — see `IN_SETTINGS` in web/src/presentation/bindings.ts.
  */
 const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: ComponentType }> = {
+  workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Sliders },
+  secrets: { label: "Secrets", hint: "Named secrets and code runtime", icon: ShieldCheck },
   general: { label: "General", hint: "Retention, and this Session Host", icon: Sliders },
   projects: { label: "Projects", hint: "Where your repositories live", icon: FolderGit2 },
   permissions: { label: "Permissions", hint: "Tools allowed without asking", icon: ShieldCheck },

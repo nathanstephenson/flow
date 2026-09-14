@@ -1,3 +1,6 @@
+import { lazy, Suspense } from "react";
+const WorkflowsSettings = lazy(() => import('./settings-workflows.tsx'));
+const SecretsSettings = lazy(() => import('./settings-secrets.tsx'));
 import type { SettingsSection } from "@/presentation/route.ts";
 import { GeneralSettings } from "@/components/settings-general.tsx";
 import { ProjectsSettings } from "@/components/settings-projects.tsx";
@@ -19,7 +22,7 @@ import { KeyboardSettings } from "@/components/settings-keyboard.tsx";
 export function SettingsPage({ section }: { section: SettingsSection }) {
   return (
     <div className="transcript-scroller min-h-0 overflow-y-auto">
-      <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-8">
+      <div className={`mx-auto flex ${section === 'workflows' ? 'w-full' : 'max-w-2xl'} flex-col gap-6 px-6 py-8`}>
         {/*
          * Said once, at the top, rather than on each field. Settings live in the Session Host's
          * state root, so one value governs every Agent Session on the machine — which is exactly
@@ -29,6 +32,10 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
           These apply to every Agent Session on this machine, not to one Scope.
         </p>
 
+        <Suspense fallback={<p>Loading settings…</p>}>
+          {section === 'workflows' && <WorkflowsSettings />}
+          {section === 'secrets' && <SecretsSettings />}
+        </Suspense>
         {section === "general" ? <GeneralSettings /> : null}
         {section === "projects" ? <ProjectsSettings /> : null}
         {section === "permissions" ? <PermissionsSettings /> : null}

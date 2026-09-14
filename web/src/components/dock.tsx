@@ -1,4 +1,5 @@
-import { useCallback, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useRef, useState } from "react";
+const WorkflowsPane = lazy(() => import('./workflows-pane.tsx'));
 import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide } from "@/presentation/docks.ts";
@@ -170,7 +171,9 @@ export function Dock({
         </Tooltip>
       </div>
 
-      {active?.content?.kind === "git" ? (
+      {active?.content?.kind === "workflows" ? (
+        <Suspense fallback={<p>Loading workflows…</p>}><WorkflowsPane key={sessionId} sessionId={sessionId} /></Suspense>
+      ) : active?.content?.kind === "git" ? (
         <GitPane key={`${sessionId}-${active.id}`} sessionId={sessionId} />
       ) : active?.content?.kind === "subagents" ? (
         <SubagentsPane
@@ -193,6 +196,7 @@ export function Dock({
         />
       ) : (
         <ContentPicker
+          onChooseWorkflows={() => dispatch({ type: 'open-workflows', side, ...(active ? { tabId: active.id } : {}) })}
           onChooseGit={() => dispatch({ type: "open-git", side, ...(active ? { tabId: active.id } : {}) })}
           onChooseSubagents={() =>
             dispatch({ type: "open-subagents", side, ...(active ? { tabId: active.id } : {}) })
@@ -220,10 +224,12 @@ export function Dock({
  * that basis, which meant anything else they could hold was withheld with them.
  */
 function ContentPicker({
+  onChooseWorkflows,
   onChooseShell,
   onChooseSubagents,
   onChooseGit,
 }: {
+  onChooseWorkflows: () => void;
   onChooseGit: () => void;
   onChooseShell?: () => void;
   onChooseSubagents: () => void;
@@ -237,6 +243,7 @@ function ContentPicker({
         </Button>
       )}
       <Button variant="outline" size="sm" onClick={onChooseGit}>Git</Button>
+      <Button variant="outline" size="sm" onClick={onChooseWorkflows}>Workflows</Button>
       <Button variant="outline" size="sm" onClick={onChooseSubagents}>
         <Bot aria-hidden data-icon="inline-start" />
         Agents
