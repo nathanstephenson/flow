@@ -8,6 +8,13 @@ Run and watch coding-agent sessions from a terminal or a browser, over more than
 
 See [CONTEXT.md](./CONTEXT.md) for the domain language and [docs/adr](./docs/adr) for decisions.
 
+## Publish branch names
+
+Publish offers an editable branch name before the first push. It uses the Summary Model
+when configured, with a local fallback otherwise. Confirmation creates a feature branch
+from the default branch, or renames an unpublished branch. Published branches and registered
+stack branches keep their names. No branch changes happen while preparing the review.
+
 ## Stacked pull requests
 
 The browser's Git tab uses `github/gh-stack` directly (tested with v0.1.1).
@@ -39,6 +46,9 @@ continue** sends a normal message to the current Agent Session to resolve and st
 conflicts, then use `gh stack rebase --continue` only when resolved. It does not grant
 permission to publish, push, sync, or merge. Review the result and refresh Stack.
 Merge and stack restructuring are not exposed.
+
+**Copy stack** copies PR titles as formatted links, from top to bottom. **Copy PR link**
+copies one PR. Plain-text paste contains titles only.
 
 ## Status
 

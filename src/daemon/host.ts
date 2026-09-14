@@ -5,7 +5,7 @@ import { pullRequest, commentPullRequest, resolvePullRequestThread } from "./pul
 import { stackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
-import { gitStatus, snapshot, target, branchChanges, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
+import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
 import { resolveDefaultBackend } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
@@ -52,7 +52,7 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
-import { nameInput, summarisePublish, SummaryModelSpare } from "./summariser.ts";
+import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -369,7 +369,7 @@ export class SessionHost {
       const destination = await target(record.scope, reviewed.branch);
       const committed = await branchChanges(record.scope, destination);
       if (reviewed.files.length === 0 && committed.commits.length === 0 && !destination.pr) throw new CommandRefused("There are no changes to publish.");
-      let text = { commitMessage: "", title: destination.pr?.title ?? "", body: "" };
+      let text: Awaited<ReturnType<typeof summarisePublish>> = { commitMessage: "", title: destination.pr?.title ?? "", body: "" };
       let warning: string | undefined;
       const model = this.summaryModel?.(record.backendName);
       try {
@@ -378,9 +378,13 @@ export class SessionHost {
       } catch (error) {
         warning = `Enter publish text manually. ${error instanceof Error ? error.message : String(error)}`;
       }
+      const suggestion = await canNameBranch(record.scope, reviewed.branch, destination)
+        ? text.suggestedBranch ?? suggestedBranch((record.titleSource !== "scope" ? record.title : "") || text.commitMessage || committed.commits[0]?.replace(/^[a-f0-9]+ /, "") || record.title)
+        : undefined;
+      delete text.suggestedBranch;
       const token = randomUUID();
       this.publishReviews.set(sessionId, { token, expires: Date.now() + 15 * 60_000, snapshot: reviewed, target: destination });
-      return { ...text, token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.baseBranch ? { baseBranch: destination.baseBranch } : {}), ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
+      return { ...text, ...(suggestion ? { suggestedBranch: suggestion } : {}), token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.baseBranch ? { baseBranch: destination.baseBranch } : {}), ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
     });
   }
 

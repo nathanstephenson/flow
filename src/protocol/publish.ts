@@ -19,6 +19,7 @@ export type GitStatus = {
 export type PublishText = { commitMessage: string; title: string; body: string };
 export type PublishReview = PublishText & {
   token: string;
+  suggestedBranch?: string;
   files: GitFile[];
   branch: string;
   defaultBranch: string;

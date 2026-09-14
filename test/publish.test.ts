@@ -4,8 +4,8 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
-import { gitStatus, snapshot, target, branchChanges, publish, gh, type Gh } from "../src/daemon/publish.ts";
-import { summarisePublish } from "../src/daemon/summariser.ts";
+import { gitStatus, snapshot, target, branchChanges, publish, canNameBranch, gh, type Gh } from "../src/daemon/publish.ts";
+import { summarisePublish, suggestedBranch } from "../src/daemon/summariser.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import type { PublishInput, PullRequest } from "../src/protocol/publish.ts";
@@ -150,6 +150,7 @@ describe("Git Publish", () => {
     assert.equal(git(repo, "status", "--porcelain"), "");
     assert.ok(mock.calls.find((args) => args[1] === "create")?.includes("--draft"));
     assert.equal(git(repo, "log", "-1", "--format=%s").trim(), text.commitMessage);
+    assert.equal(git(repo, "rev-parse", "main").trim(), reviewed.commit);
   });
 
   it("pushes updates to an existing PR without editing its draft state", async () => {
@@ -157,13 +158,81 @@ describe("Git Publish", () => {
     const mock = github({ pr });
     const reviewed = await snapshot(repo);
     const destination = await target(repo, reviewed.branch, mock.run);
-    const result = await publish(repo, reviewed, destination, { ...input, ready: true }, mock.run);
+    const result = await publish(repo, reviewed, destination, { ...input, branch: "", ready: true }, mock.run);
     assert.equal(result.error, undefined);
     assert.equal(result.url, pr.url);
     assert.equal(result.committed, undefined);
     assert.equal(result.pushed, true);
     assert.ok(mock.calls.every((args) => args[0] !== "pr" || args[1] === "list"));
   });
+
+  it("renames an unpublished branch only on confirmation", async () => {
+    git(repo, "switch", "feature/existing");
+    const mock = github();
+    const reviewed = await snapshot(repo);
+    const destination = await target(repo, reviewed.branch, mock.run);
+    assert.equal(await canNameBranch(repo, reviewed.branch, destination, mock.run), true);
+    assert.equal(git(repo, "branch", "--show-current").trim(), reviewed.branch);
+    const result = await publish(repo, reviewed, destination, input, mock.run);
+    assert.equal(result.error, undefined);
+    assert.equal(result.branch, input.branch);
+    assert.equal(result.pushed, true);
+    assert.throws(() => git(repo, "rev-parse", "--verify", "refs/heads/feature/existing"));
+  });
+
+  for (const protection of ["remote", "tracking", "pr", "closed-pr", "stack", "trunk"] as const) {
+    it(`rechecks ${protection} before renaming`, async () => {
+      git(repo, "switch", "feature/existing");
+      const reviewed = await snapshot(repo);
+      const destination = await target(repo, reviewed.branch, github().run);
+      if (protection === "tracking") git(repo, "update-ref", "refs/remotes/origin/feature/existing", reviewed.commit);
+      if (protection === "stack" || protection === "trunk") writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: protection === "trunk" ? reviewed.branch : "main" }, branches: protection === "stack" ? [{ branch: reviewed.branch }] : [] }] }));
+      const mock = github(protection === "pr" ? { pr } : {});
+      const run: Gh = async (scope, args) => {
+        if (protection === "remote" && args[0] === "api") return JSON.stringify([{ ref: `refs/heads/${reviewed.branch}` }]);
+        if (protection === "closed-pr" && args.includes("all")) return JSON.stringify([{ number: 3 }]);
+        return mock.run(scope, args);
+      };
+      assert.equal(await canNameBranch(repo, reviewed.branch, await target(repo, reviewed.branch, run), run), false);
+      const result = await publish(repo, reviewed, destination, input, run);
+      assert.ok(result.error);
+      assert.equal(result.pushed, false);
+      assert.equal(git(repo, "branch", "--show-current").trim(), reviewed.branch);
+    });
+  }
+
+  for (const branch of ["", "feature/existing"]) {
+    it(`keeps an existing PR branch with ${JSON.stringify(branch)} input`, async () => {
+      git(repo, "switch", "feature/existing");
+      const mock = github({ pr });
+      const result = await publish(repo, await snapshot(repo), await target(repo, "feature/existing", mock.run), { ...input, branch }, mock.run);
+      assert.equal(result.error, undefined);
+      assert.equal(git(repo, "branch", "--show-current").trim(), "feature/existing");
+    });
+  }
+
+  it("rejects unsafe names and refuses a different name for an existing PR", async () => {
+    git(repo, "switch", "feature/existing");
+    const reviewed = await snapshot(repo);
+    for (const branch of ["--force", "main", "@{-1}", "bad name", "feature/other"]) {
+      const mock = github({ pr });
+      const result = await publish(repo, reviewed, await target(repo, reviewed.branch, mock.run), { ...input, branch }, mock.run);
+      assert.ok(result.error);
+      assert.equal(result.pushed, false);
+      assert.equal(git(repo, "branch", "--show-current").trim(), reviewed.branch);
+    }
+  });
+
+  for (const collision of ["local", "remote"]) {
+    it(`refuses ${collision} rename destination collisions`, async () => {
+      git(repo, "switch", "feature/existing");
+      if (collision === "local") git(repo, "branch", input.branch!);
+      const mock = github({ branchExists: collision === "remote" });
+      const result = await publish(repo, await snapshot(repo), await target(repo, "feature/existing", mock.run), input, mock.run);
+      assert.match(result.error!, /already exists/);
+      assert.equal(git(repo, "branch", "--show-current").trim(), "feature/existing");
+    });
+  }
 
   it("uses ready only for a new PR", async () => {
     const mock = github();
@@ -303,7 +372,7 @@ describe("Git Publish", () => {
     writeFileSync(join(repo, "diverged"), "diverged");
     const mock = github();
     const reviewed = await snapshot(repo);
-    const result = await publish(repo, reviewed, await target(repo, reviewed.branch, mock.run), input, mock.run);
+    const result = await publish(repo, reviewed, await target(repo, reviewed.branch, mock.run), { ...input, branch: "" }, mock.run);
     assert.ok(result.committed);
     assert.equal(result.pushed, false);
     assert.match(result.error!, /rejected|non-fast-forward/);
@@ -325,6 +394,21 @@ describe("Git Publish", () => {
 });
 
 describe("Publish Summary Model", () => {
+  it("sanitises suggestions without losing publish text", async () => {
+    const backend = new FakeBackend();
+    for (const value of ["Fix/Add Search..@{oops}", 42, "..."]) {
+      backend.autoReply = JSON.stringify({ ...text, suggestedBranch: value });
+      const summary = await summarisePublish({ backend, modelId: "fake-2", text: "diff" });
+      const { suggestedBranch: branch, ...rest } = summary;
+      assert.deepEqual(rest, text);
+      if (typeof value === "string" && value !== "...") {
+        assert.equal(branch, "fix/add-search-oops");
+        git(repo, "check-ref-format", "--branch", branch!);
+      } else assert.equal(branch, undefined);
+    }
+    assert.equal(suggestedBranch("Add search filters"), "feat/add-search-filters");
+    assert.equal(suggestedBranch("!!!"), "feat/publish-changes");
+  });
   it("uses a tool-less Backend Session, selected model and no effort", async () => {
     const backend = new FakeBackend();
     backend.autoReply = JSON.stringify(text);
@@ -412,6 +496,8 @@ describe("Session Host Publish guards", () => {
     const id = await host.create({ scope: repo });
     const review = await host.preparePublish(id);
     assert.match(review.warning!, /No Summary Model/);
+    assert.ok(review.suggestedBranch?.startsWith("feat/"));
+    git(repo, "check-ref-format", "--branch", review.suggestedBranch!);
     assert.equal(backend.sessions.length, 1);
     await host.send(id, "work", "now");
     await assert.rejects(host.publish(id, { ...input, token: review.token }), /occupied/);
@@ -419,6 +505,24 @@ describe("Session Host Publish guards", () => {
     const result = await host.publish(id, { ...input, token: review.token });
     assert.equal(result.error, undefined);
     await host.shutdown();
+  });
+
+  it("uses committed work as the fallback and hides suggestions for tracked branches", async () => {
+    installGh();
+    git(repo, "switch", "feature/existing");
+    writeFileSync(join(repo, "search.txt"), "search");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "Add search filters");
+    const host = new SessionHost();
+    host.registerBackend(new FakeBackend());
+    const id = await host.create({ scope: repo });
+    try {
+      assert.equal((await host.preparePublish(id)).suggestedBranch, "feat/add-search-filters");
+      git(repo, "update-ref", "refs/remotes/origin/feature/existing", "HEAD");
+      assert.equal((await host.preparePublish(id)).suggestedBranch, undefined);
+    } finally {
+      await host.shutdown();
+    }
   });
 
   it("calls the Summary Model only on opening Publish, blocks send and switch races, and consumes reviews", async () => {
@@ -437,10 +541,12 @@ describe("Session Host Publish guards", () => {
     await assert.rejects(host.preparePublish(id), /Git operation/);
     const deadline = Date.now() + 3_000;
     while (backend.latest.prompts.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
-    backend.latest.say(JSON.stringify(text));
+    backend.latest.say(JSON.stringify({ ...text, suggestedBranch: "feat/publish-review" }));
     backend.latest.completeTurn();
     const review = await preparing;
     assert.equal(review.warning, undefined);
+    assert.equal(review.suggestedBranch, "feat/publish-review");
+    assert.equal(git(repo, "branch", "--show-current").trim(), "main");
     const publishing = host.publish(id, { ...input, token: review.token });
     await assert.rejects(host.send(id, "race", "now"), /Git operation/);
     await assert.rejects(host.switchScopeBranch(repo, "feature/existing"), /Git operation/);
@@ -474,7 +580,7 @@ it("reviews and publishes only upper-stack changes against the parent branch", a
   assert.match((await publish(repo, reviewed, destination, input, mock.run)).error!, /base branch.*changed/);
   metadata.stacks[0]!.branches.unshift({ branch: "feature/existing" });
   writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify(metadata));
-  const result = await publish(repo, reviewed, destination, input, mock.run);
+  const result = await publish(repo, reviewed, destination, { ...input, branch: "" }, mock.run);
   assert.equal(result.error, undefined);
   const create = mock.calls.find(args => args[1] === "create")!;
   assert.equal(create[create.indexOf("--base") + 1], "feature/existing");

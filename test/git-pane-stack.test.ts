@@ -55,6 +55,48 @@ it("Stack changes immediately replace the PR pane and clear Publish results", as
   assert.doesNotMatch(JSON.stringify(after), /published-branch/);
 });
 
+for (const branch of ["main", "flow/generated-123"]) it(`reviews and edits a suggested Publish branch from ${branch}`, async () => {
+  const calls: any[] = [];
+  const pane = component("git-pane", async input => {
+    calls.push(input);
+    if (input.type === "prepare_publish") return { files: [], commits: [], branch, defaultBranch: "main", suggestedBranch: "feat/copy-pr-links", title: "Copy PR links", commitMessage: "Copy PR links", body: "" };
+    if (input.type === "publish") return { pushed: true, branch: input.input.branch };
+    return { repository: true, files: [] };
+  });
+  const props = { sessionId: "session" };
+  pane.render("GitPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  find(pane.render("GitPane", props), "Button", node => node.props.children === "Publish").props.onClick();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  const tree = pane.render("GitPane", props);
+  const label = find(tree, "label", node => node.props.children[0] === "Feature branch name");
+  const field = find(label, "Input");
+  assert.equal(field.props.value, "feat/copy-pr-links");
+  assert.equal(calls.filter(call => call.type === "publish").length, 0);
+  assert.match(JSON.stringify(tree), branch === "main" ? /Create a feature branch from main/ : /Rename flow\/generated-123/);
+  field.props.onChange({ target: { value: "feat/edited-name" } });
+  find(pane.render("GitPane", props), "form").props.onSubmit({ preventDefault() {} });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(calls.find(call => call.type === "publish").input.branch, "feat/edited-name");
+  assert.match(JSON.stringify(pane.render("GitPane", props)), /feat\/edited-name/);
+});
+
+it("does not offer branch renaming without a Publish suggestion", async () => {
+  const pane = component("git-pane", async input => input.type === "prepare_publish"
+    ? { files: [], commits: [], branch: "feat/published", defaultBranch: "main" }
+    : { repository: true, files: [] });
+  const props = { sessionId: "session" };
+  pane.render("GitPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  find(pane.render("GitPane", props), "Button", node => node.props.children === "Publish").props.onClick();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  const tree = pane.render("GitPane", props);
+  assert.throws(() => find(tree, "label", node => node.props.children[0] === "Feature branch name"));
+  assert.match(JSON.stringify(tree), /feat\/published/);
+});
+
 for (const fails of [false, true]) it(`Stack checkout invalidates Git state after ${fails ? "failure" : "success"}`, async () => {
   let changes = 0;
   const status = { available: true, conflicts: [], rebasing: false, view: { trunk: "main", branches: [{ name: "123" }] } };
@@ -116,7 +158,10 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
   pane.render("StackPane", props);
   pane.effects[0]!();
   await Promise.resolve();
-  const button = find(pane.render("StackPane", props), "Button", node => node.props.children === "Copy stack");
+  const button = find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === "Copy stack");
+  assert.equal(button.props.size, "icon-sm");
+  assert.equal(button.props.title, "Copy stack");
+  assert.equal(find(button, "Copy").props["aria-hidden"], "true");
   assert.equal(button.props.disabled, false);
   button.props.onClick();
   await Promise.resolve();
@@ -124,9 +169,19 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
   assert.equal(await copied[0].data["text/html"].text(), '<div><a href="https://github.com/test/repo/pull/2">Top change</a></div><div><a href="https://github.com/test/repo/pull/1">Base &lt;fix&gt; &amp; &quot;test&quot;</a></div>');
   assert.equal(await copied[0].data["text/plain"].text(), 'Top change\nBase <fix> & "test"');
   assert.match(JSON.stringify(pane.render("StackPane", props)), /Stack copied/);
+  for (const pr of prs) {
+    const single = find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === `Copy PR #${pr.number} link`);
+    assert.equal(single.props.disabled, false);
+    single.props.onClick();
+    await Promise.resolve();
+    const title = pr.number === 1 ? "Base &lt;fix&gt; &amp; &quot;test&quot;" : pr.title;
+    assert.equal(await copied[0].data["text/html"].text(), `<div><a href="${pr.url}">${title}</a></div>`);
+    assert.equal(await copied[0].data["text/plain"].text(), pr.title);
+    assert.match(JSON.stringify(pane.render("StackPane", props)), new RegExp(`PR #${pr.number} copied`));
+  }
 });
 
-it("reports clipboard failures", async () => {
+for (const single of [false, true]) it(`reports clipboard failures for ${single ? "one PR" : "the stack"}`, async () => {
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
     view: { trunk: "main", branches: [{ name: "base", pr: { number: 1, title: "Base", url: "https://github.com/test/repo/pull/1" } }] },
   }), { Blob, ClipboardItem: class {}, navigator: { clipboard: { write: async () => { throw new Error("Permission denied"); } } } });
@@ -134,9 +189,9 @@ it("reports clipboard failures", async () => {
   pane.render("StackPane", props);
   pane.effects[0]!();
   await Promise.resolve();
-  find(pane.render("StackPane", props), "Button", node => node.props.children === "Copy stack").props.onClick();
+  find(pane.render("StackPane", props), "Button", node => single ? node.props["aria-label"] === "Copy PR #1 link" : node.props["aria-label"] === "Copy stack").props.onClick();
   for (let i = 0; i < 5; i++) await Promise.resolve();
-  assert.match(find(pane.render("StackPane", props), "p", node => node.props.role === "alert").props.children, /Could not copy stack.*Permission denied/);
+  assert.match(find(pane.render("StackPane", props), "p", node => node.props.role === "alert").props.children, /Could not copy .*Permission denied/);
 });
 
 for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy without ${pr ? "PR details" : "PRs"}`, async () => {
@@ -147,9 +202,12 @@ for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy wi
   pane.render("StackPane", props);
   pane.effects[0]!();
   await Promise.resolve();
-  const button = () => find(pane.render("StackPane", props), "Button", node => node.props.children === "Copy stack");
+  const button = () => find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === "Copy stack");
   if (pr) assert.equal(button().props.disabled, true);
   else assert.throws(button, /Missing Button/);
+  const single = () => find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === "Copy PR #1 link");
+  if (pr) assert.equal(single().props.disabled, true);
+  else assert.throws(single, /Missing Button/);
 });
 
 it("keeps merged members from the tracked stack visible", async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Copy } from "lucide-react";
 import type { StackAction, StackReview, StackStatus } from "../../../src/protocol/stack.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -59,23 +60,23 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
     finally { setBusy(false); }
   }
   const pullRequests = (status?.view ? status.view.branches.flatMap(branch => branch.pr ? [branch.pr] : []) : status?.candidate?.pullRequests ?? []).slice().reverse();
-  async function copyStack() {
+  async function copyLinks(prs = pullRequests, label = "Stack") {
     setError("");
     setOutput("");
     try {
       const escape = (text: string) => text.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-      const html = pullRequests.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title!)}</a></div>`).join("");
+      const html = prs.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title!)}</a></div>`).join("");
       await navigator.clipboard.write([new ClipboardItem({
         "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([pullRequests.map(pr => pr.title).join("\n")], { type: "text/plain" }),
+        "text/plain": new Blob([prs.map(pr => pr.title).join("\n")], { type: "text/plain" }),
       })]);
-      setOutput("Stack copied.");
-    } catch (failure) { setError(`Could not copy stack: ${String(failure)}`); }
+      setOutput(`${label} copied.`);
+    } catch (failure) { setError(`Could not copy ${label === "Stack" ? "stack" : label}: ${String(failure)}`); }
   }
   const blocked = busy || disabled;
   if (!error && !output && !busy && !review && !syncFailed && (!status || (status.available && !status.view && !status.candidate && !status.rebasing && !status.problem))) return null;
   return <section aria-label="Stack" className="space-y-3 border-t pt-4">
-    <div className="flex items-center gap-2"><h2 className="font-medium">Stack</h2><Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button>{pullRequests.length > 0 ? <Button size="sm" variant="outline" disabled={busy || pullRequests.some(pr => !pr.title || !pr.url)} onClick={() => void copyStack()}>Copy stack</Button> : null}</div>
+    <div className="flex items-center gap-2"><h2 className="font-medium">Stack</h2><Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button>{pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.title || !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}</div>
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
@@ -83,11 +84,12 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
       {status.view ? <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Use Publish for uncommitted files.</p> : null}
       {status.view ? <><p>Trunk: {status.view.trunk}</p><ul className="space-y-2">{status.view.branches.map((branch) => <li key={branch.name} className="flex flex-wrap items-center gap-2">
         <span>{branch.name}{branch.isCurrent ? " (current)" : ""}{branch.pr ? ` · #${branch.pr.number} ${branch.isMerged ? "MERGED" : branch.pr.state}` : branch.isMerged ? " · MERGED" : " · no PR"}{branch.needsRebase ? " · needs rebase" : ""}</span>
+        {branch.pr ? <Button size="sm" variant="outline" aria-label={`Copy PR #${branch.pr.number} link`} disabled={busy || !branch.pr.title || !branch.pr.url} onClick={() => void copyLinks([branch.pr!], `PR #${branch.pr!.number}`)}>Copy PR link</Button> : null}
         <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || branch.isCurrent} onClick={() => void run("checkout", [branch.name])}>Switch</Button>
       </li>)}</ul></> : null}
       {!status.rebasing && !status.view && status.candidate ? <>
         <p>PR-linked branches above {status.candidate.trunk} (bottom to top):</p>
-        <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch}>{pr.branch} · #{pr.number} {pr.state}</li>)}</ol>
+        <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch} className="flex flex-wrap items-center gap-2">{pr.branch} · #{pr.number} {pr.state}<Button size="sm" variant="outline" aria-label={`Copy PR #${pr.number} link`} disabled={busy || !pr.title || !pr.url} onClick={() => void copyLinks([pr], `PR #${pr.number}`)}>Copy PR link</Button></li>)}</ol>
         <p>Create stack registers these branches. It does not create branches.</p>
         <Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run("init", status.candidate!.branches)}>Create stack</Button>
       </> : null}
