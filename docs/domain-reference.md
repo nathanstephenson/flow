@@ -176,8 +176,9 @@ The model the Session Host uses to name an Agent Session and draft Git publish t
 Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's Summary Model,
 without the Default Effort. Reached through an ordinary Backend Adapter, in a throwaway Backend
 Session that holds no Presentation Transcript, runs no tools, and is disposed of when it answers —
-so it is not an Agent Session and is never Revived (ADR 0020). Git publish text is shown for editing
-only when its owner opens Publish; the model never commits or pushes changes.
+so it is not an Agent Session and is never Revived (ADR 0020). Git publish text and suggested branch
+names are shown for editing only when its owner opens Publish; the model never renames branches,
+commits, or pushes changes.
 _Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:

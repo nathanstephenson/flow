@@ -28,7 +28,7 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
   if (stacks.some(s => s.branches.some(b => b.branch === current.value.name))) return;
   const refs = (await git(scope, ["for-each-ref", "--format=%(refname:strip=2) %(objectname)", "refs/heads"])).trim().split("\n").filter(Boolean).map(line => line.split(" ") as [string, string]);
   let destination: Awaited<ReturnType<typeof repositoryTarget>>;
-  type PR = { number: number; state: string; merged_at: string | null; head: { ref: string; repo: { node_id: string } | null }; base: { ref: string; repo: { node_id: string } } };
+  type PR = { number: number; title?: string; html_url?: string; state: string; merged_at: string | null; head: { ref: string; repo: { node_id: string } | null }; base: { ref: string; repo: { node_id: string } } };
   let prs: PR[];
   try {
     destination = await repositoryTarget(scope, github);
@@ -67,7 +67,7 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
       prs.filter(other => other.head.ref === pr.head.ref).length !== 1 ||
       (pr.base.ref !== trunk && prs.filter(other => other.base.ref === pr.base.ref).length !== 1)) return;
   }
-  const pullRequests = chain.map(pr => ({ branch: pr.head.ref, number: pr.number, state: pr.merged_at ? "MERGED" : pr.state.toUpperCase() }));
+  const pullRequests = chain.map(pr => ({ branch: pr.head.ref, number: pr.number, state: pr.merged_at ? "MERGED" : pr.state.toUpperCase(), ...(pr.title && pr.html_url ? { title: pr.title, url: pr.html_url } : {}) }));
   return { trunk, branches: chain.map(pr => pr.head.ref), pullRequests, fingerprint: createHash("sha256").update(JSON.stringify({ destination, base, chain, refs, current: current.value.name })).digest("hex") };
 }
 
@@ -83,6 +83,15 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
     try { status.view = parseStack(await github(scope, ["stack", "view", "--json"])); }
     catch (error) {
       if (!/current branch .+ (?:is not|not) (?:a )?part of (?:a |any )?stack/i.test(String(error)) || await localStack(scope, (await git(scope, ["branch", "--show-current"])).trim())) throw error;
+    }
+    if (status.view) {
+      await Promise.all(status.view.branches.map(async ({ pr }) => {
+        if (!pr) return;
+        const details = JSON.parse(await github(scope, ["pr", "view", pr.url || String(pr.number), "--json", "title,url"]));
+        if (typeof details.title !== "string" || typeof details.url !== "string") throw new Error("Cannot load stack PR titles and links.");
+        pr.title = details.title;
+        pr.url = details.url;
+      }));
     }
     if (!status.view && !status.rebasing) {
       const candidate = await discoverStack(scope, github);

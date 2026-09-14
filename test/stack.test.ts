@@ -50,9 +50,10 @@ it("probes the actual command and provides installation instructions when unavai
   assert.equal(unavailable.available, false);
   assert.match(unavailable.problem!, /gh extension install github\/gh-stack/);
   assert.deepEqual(calls, [["stack", "--help"]]);
-  const available = await stackStatus(repo, async (_scope, args) => { calls.push(args); return args[1] === "view" ? JSON.stringify(view) : "help"; });
-  assert.deepEqual(available.view, view);
-  assert.deepEqual(calls.at(-1), ["stack", "view", "--json"]);
+  const available = await stackStatus(repo, async (_scope, args) => { calls.push(args); return args[0] === "pr" ? JSON.stringify({ title: "Feature title", url: view.branches[0]!.pr!.url }) : args[1] === "view" ? JSON.stringify(view) : "help"; });
+  assert.equal(available.problem, undefined);
+  assert.deepEqual(available.view, { ...view, branches: [{ ...view.branches[0], pr: { ...view.branches[0]!.pr, title: "Feature title" } }] });
+  assert.deepEqual(calls.at(-1), ["pr", "view", view.branches[0]!.pr!.url, "--json", "title,url"]);
 });
 
 it("keeps Stack diagnostics and disables editors for non-interactive continuation", async () => {
@@ -73,7 +74,7 @@ it("uses exact local and remote CLI arguments without --open or stash", async ()
   await changeStack(repo, { action: "rebase" }, gh);
   await changeStack(repo, { action: "submit" }, gh);
   await changeStack(repo, { action: "sync" }, gh);
-  assert.deepEqual(calls, [["stack", "add", "third"], ["stack", "--help"], ["stack", "view", "--json"], ["stack", "rebase"], ["stack", "submit", "--auto"], ["stack", "sync"]]);
+  assert.deepEqual(calls, [["stack", "add", "third"], ["stack", "--help"], ["stack", "view", "--json"], ["pr", "view", view.branches[0]!.pr!.url, "--json", "title,url"], ["stack", "rebase"], ["stack", "submit", "--auto"], ["stack", "sync"]]);
   await assert.rejects(changeStack(repo, { action: "checkout", branches: ["--force"] }, gh), /Invalid/);
 });
 
@@ -262,6 +263,22 @@ function githubFixture(prs = [pr(23, "feature", "main", true), pr(22, "second", 
   return { prs, github, calls };
 }
 
+it("retains candidate PR titles and URLs in branch order", async () => {
+  chain();
+  const prs = [pr(23, "feature", "main", true), pr(22, "second", "feature")].map(pr => ({ ...pr, title: `Title ${pr.number}`, html_url: `https://github.com/test/repo/pull/${pr.number}` }));
+  const { github } = githubFixture(prs);
+  assert.deepEqual((await discoverStack(repo, github))!.pullRequests.map(pr => [pr.title, pr.url]), prs.map(pr => [pr.title, pr.html_url]));
+});
+
+it("keeps the stack visible when PR title loading fails", async () => {
+  const state = await stackStatus(repo, async (_scope, args) => {
+    if (args[0] === "pr") throw new Error("GitHub unavailable");
+    return args[1] === "view" ? JSON.stringify(view) : "";
+  });
+  assert.deepEqual(state.view, view);
+  assert.equal(state.problem, "GitHub unavailable");
+});
+
 it("registers a PR-linked chain and retains merged status without commit ancestry", async () => {
   chain();
   git(repo, "branch", "-f", "feature", "second");
@@ -346,12 +363,17 @@ it("uses GitHub's default branch, not stale remote HEAD, and ignores unrelated P
   assert.equal(await discoverStack(repo, github), undefined);
 });
 
-it("uses gh-stack view for tracked merged members without querying PR links", async () => {
+it("loads titles for tracked merged members without rediscovering the chain", async () => {
   const tracked = { ...view, branches: [{ ...view.branches[0]!, isMerged: true, pr: { number: 23, state: "MERGED" } }] };
   const state = await stackStatus(repo, async (_scope, args) => {
+    if (args[0] === "pr") {
+      assert.deepEqual(args, ["pr", "view", "23", "--json", "title,url"]);
+      return JSON.stringify({ title: "Merged title", url: "https://github.com/test/repo/pull/23" });
+    }
     assert.equal(args[0], "stack");
     return args[1] === "view" ? JSON.stringify(tracked) : "";
   });
-  assert.deepEqual(state.view, tracked);
+  assert.equal(state.problem, undefined);
+  assert.deepEqual(state.view, { ...tracked, branches: [{ ...tracked.branches[0], pr: { number: 23, state: "MERGED", title: "Merged title", url: "https://github.com/test/repo/pull/23" } }] });
   assert.equal(state.candidate, undefined);
 });

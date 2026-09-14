@@ -43,8 +43,9 @@ export function GitPane({ sessionId }: { sessionId: string }) {
     setError("");
     setResult(undefined);
     try {
-      setReview(await connection.command<PublishReview>({ type: "prepare_publish", sessionId }));
-      setBranch("");
+      const prepared = await connection.command<PublishReview>({ type: "prepare_publish", sessionId });
+      setReview(prepared);
+      setBranch(prepared.suggestedBranch ?? "");
       setReady(false);
     } catch (failure) { setError(String(failure)); }
     finally { setBusy(false); setOpening(false); }
@@ -82,7 +83,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       {status?.problem ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {result ? <div role="status" className="space-y-2">
-        {result.branch ? <p>Created branch {result.branch}.</p> : null}
+        {result.branch ? <p>Branch: {result.branch}.</p> : null}
         <p>{result.committed ? `Committed ${result.committed.slice(0, 8)}. ` : "No new commit confirmed. "}{result.pushed ? "Pushed." : "Push not confirmed."}</p>
         {result.url ? <a className="underline" href={safePullRequestUrl(result.url)} target="_blank" rel="noreferrer">Open pull request</a> : null}
         {result.error ? <p>{result.error} Local Git changes, commits, and successful pushes are not undone. Refresh and open Publish to review before retrying.</p> : null}
@@ -97,7 +98,10 @@ export function GitPane({ sessionId }: { sessionId: string }) {
             <FileList files={review.files} />
             {review.commits.length > 0 ? <div className="space-y-2"><h3 className="font-medium">Committed branch changes</h3><FileList files={review.committedFiles} /><ul className="max-h-32 overflow-auto text-xs">{review.commits.map((commit) => <li key={commit}>{commit}</li>)}</ul></div> : null}
             {review.warning ? <p role="status">{review.warning}</p> : null}
-            {review.branch === review.defaultBranch ? <label className="block space-y-1">New feature branch<Input required value={branch} onChange={(event) => setBranch(event.target.value)} disabled={busy} /></label> : <p>Branch: {review.branch}{review.baseBranch ? ` · Base: ${review.baseBranch}` : ""}</p>}
+            {review.suggestedBranch !== undefined || review.branch === review.defaultBranch ? <>
+              <label className="block space-y-1">Feature branch name<Input required value={branch} onChange={(event) => setBranch(event.target.value)} disabled={busy} /></label>
+              <p className="text-muted-foreground">{review.branch === review.defaultBranch ? `Create a feature branch from ${review.branch} when you confirm.` : `Rename ${review.branch} when you confirm. Keep its current name to skip renaming.`}</p>
+            </> : <p>Branch: {review.branch}{review.baseBranch ? ` · Base: ${review.baseBranch}` : ""}</p>}
             <label className="block space-y-1">Commit message<Textarea required={review.files.length > 0} value={review.commitMessage} onChange={(event) => setReview({ ...review, commitMessage: event.target.value })} disabled={busy} /></label>
             {!review.pr ? <>
               <label className="block space-y-1">Pull request title<Input required value={review.title} onChange={(event) => setReview({ ...review, title: event.target.value })} disabled={busy} /></label>

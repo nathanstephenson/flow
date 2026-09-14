@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import type { GitFile, GitStatus, PublishInput, PublishResult, PullRequest } from "../protocol/publish.ts";
-import { localStack } from "./stack-metadata.ts";
+import { localStack, localStacks } from "./stack-metadata.ts";
 
 const exec = promisify(execFile);
 export type Gh = (scope: string, args: string[]) => Promise<string>;
@@ -155,6 +155,20 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
   return { remote, url, repo, defaultBranch, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
 }
 
+async function remoteBranchExists(scope: string, destination: PublishTarget, branch: string, github: Gh): Promise<boolean> {
+  const refs = JSON.parse(await github(scope, ["api", `repos/${destination.repo}/git/matching-refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`])) as { ref: string }[];
+  return refs.some(ref => ref.ref === `refs/heads/${branch}`);
+}
+
+export async function canNameBranch(scope: string, branch: string, destination: PublishTarget, github: Gh = gh): Promise<boolean> {
+  if (branch === destination.defaultBranch) return true;
+  if (destination.pr || (await localStacks(scope)).some(stack => stack.trunk.branch === branch || stack.branches.some(item => item.branch === branch))) return false;
+  const tracked = await run(scope, ["show-ref", "--verify", "--quiet", `refs/remotes/${destination.remote}/${branch}`], GIT_READ_TIMEOUT_MS);
+  if (tracked.ok || await remoteBranchExists(scope, destination, branch, github)) return false;
+  const prs = JSON.parse(await github(scope, ["pr", "list", "--repo", destination.repo, "--head", branch, "--state", "all", "--json", "number"])) as { number: number }[];
+  return prs.length === 0;
+}
+
 export async function branchChanges(scope: string, destination: PublishTarget): Promise<{ files: GitFile[]; commits: string[]; input: string }> {
   let base = destination.baseBranch ? `refs/heads/${destination.baseBranch}` : `refs/remotes/${destination.remote}/${destination.defaultBranch}`;
   const remote = await run(scope, ["rev-parse", "--verify", base], GIT_READ_TIMEOUT_MS);
@@ -200,21 +214,25 @@ export async function publish(scope: string, reviewed: PublishSnapshot, destinat
     const checked = await snapshot(scope);
     if (checked.branch !== current.branch || checked.fingerprint !== current.fingerprint) throw new Error("Reviewed changes have changed. Open Publish again.");
     let branch = current.branch;
-    if (branch === destination.defaultBranch) {
-      if (typeof input.branch !== "string" || !input.branch.trim() || input.branch.startsWith("-") || input.branch === destination.defaultBranch) {
-        throw new Error("Enter a new feature branch name before publishing from the default branch.");
+    const requestedBranch = typeof input.branch === "string" ? input.branch.trim() : "";
+    const creating = branch === destination.defaultBranch;
+    if (creating || (requestedBranch && requestedBranch !== branch)) {
+      if (!requestedBranch || requestedBranch.startsWith("-") || requestedBranch === destination.defaultBranch || requestedBranch.includes("@{")) {
+        throw new Error("Enter a valid new feature branch name before publishing.");
       }
-      await git(scope, ["check-ref-format", "--branch", input.branch]);
-      const refs = JSON.parse(await github(scope, ["api", `repos/${destination.repo}/git/matching-refs/heads/${input.branch.split("/").map(encodeURIComponent).join("/")}`])) as { ref: string }[];
-      if (refs.some((ref) => ref.ref === `refs/heads/${input.branch}`)) throw new Error("That feature branch already exists on GitHub. Choose a new branch name or switch to the existing branch before publishing.");
+      if (!await canNameBranch(scope, branch, freshTarget, github)) throw new Error("This branch has a pull request, remote ref, or stack registration and cannot be renamed.");
+      await git(scope, ["check-ref-format", "--branch", requestedBranch]);
+      const local = await run(scope, ["show-ref", "--verify", "--quiet", `refs/heads/${requestedBranch}`], GIT_READ_TIMEOUT_MS);
+      if (local.ok) throw new Error("That feature branch already exists locally. Choose a new branch name.");
+      if (await remoteBranchExists(scope, destination, requestedBranch, github)) throw new Error("That feature branch already exists on GitHub. Choose a new branch name or switch to the existing branch before publishing.");
       const beforeSwitch = await snapshot(scope);
       if (beforeSwitch.branch !== reviewed.branch || beforeSwitch.fingerprint !== reviewed.fingerprint) throw new Error("Reviewed changes have changed. Open Publish again.");
-      await git(scope, ["switch", "-c", input.branch], true);
-      branch = input.branch;
+      await git(scope, creating ? ["switch", "-c", requestedBranch] : ["branch", "-m", requestedBranch], true);
+      branch = requestedBranch;
       result.branch = branch;
       const afterSwitch = await snapshot(scope);
-      if (afterSwitch.fingerprint !== reviewed.fingerprint) {
-        throw new Error("The branch was created, but its changes differ after checkout hooks. Open Publish again.");
+      if (afterSwitch.branch !== branch || afterSwitch.fingerprint !== reviewed.fingerprint) {
+        throw new Error(`The branch was ${creating ? "created" : "renamed"}, but its changes differ after checkout hooks. Open Publish again.`);
       }
     }
     if (current.files.length > 0) {
