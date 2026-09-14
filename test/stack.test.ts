@@ -235,50 +235,82 @@ it("checks remote membership at review and confirmation, refusing additions and 
 });
 
 function chain() {
+  git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
   git(repo, "switch", "feature");
   git(repo, "commit", "--allow-empty", "-m", "feature");
   git(repo, "switch", "-c", "second");
   git(repo, "commit", "--allow-empty", "-m", "second");
 }
 
-it("offers and registers only an existing linear chain", async () => {
-  assert.equal(await discoverStack(repo), undefined);
-  chain();
-  const candidate = (await discoverStack(repo))!;
-  assert.deepEqual(candidate.branches, ["feature", "second"]);
+function pr(number: number, branch: string, base: string, merged = false) {
+  return { number, state: merged ? "closed" : "open", merged_at: merged ? "2026-01-01" : null,
+    head: { ref: branch, repo: { node_id: "repo-id" } }, base: { ref: base, repo: { node_id: "repo-id" } } };
+}
+function githubFixture(prs = [pr(23, "feature", "main", true), pr(22, "second", "feature")]) {
   const calls: string[][] = [];
-  await changeStack(repo, { action: "init", ...candidate }, async (_scope, args) => { calls.push(args); return "done"; });
+  const github = async (scope: string, args: string[]) => {
+    assert.equal(scope, repo);
+    if (args[0] === "auth") return "";
+    if (args[0] === "repo") return JSON.stringify({ id: "repo-id", defaultBranchRef: { name: "main" }, isFork: false });
+    if (args[0] === "api") {
+      assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/test/repo/pulls?state=all&per_page=100"]);
+      return JSON.stringify([prs]);
+    }
+    calls.push(args);
+    return "done";
+  };
+  return { prs, github, calls };
+}
+
+it("registers a PR-linked chain and retains merged status without commit ancestry", async () => {
+  chain();
+  git(repo, "branch", "-f", "feature", "second");
+  const { github, calls } = githubFixture();
+  const candidate = (await discoverStack(repo, github))!;
+  assert.deepEqual(candidate.branches, ["feature", "second"]);
+  assert.deepEqual(candidate.pullRequests, [{ branch: "feature", number: 23, state: "MERGED" }, { branch: "second", number: 22, state: "OPEN" }]);
+  await changeStack(repo, { action: "init", ...candidate }, github);
   assert.deepEqual(calls, [["stack", "init", "--base", "main", "feature", "second"]]);
   git(repo, "switch", "main");
-  assert.deepEqual((await discoverStack(repo))?.branches, candidate.branches);
+  assert.deepEqual((await discoverStack(repo, github))?.branches, candidate.branches);
 });
 
-it("omits siblings, equal tips, and tracked branches without guessing", async () => {
+for (const failure of ["siblings", "no PR", "one PR", "missing branch", "forked chain", "duplicate head", "cycle", "foreign repository", "tracked", "missing trunk", "detached", "multiple remotes", "unavailable"]) it(`does not infer a stack: ${failure}`, async () => {
   chain();
-  git(repo, "branch", "alias");
-  assert.equal(await discoverStack(repo), undefined);
-  git(repo, "branch", "-D", "alias");
-  git(repo, "switch", "-c", "sibling", "feature");
-  git(repo, "commit", "--allow-empty", "-m", "sibling");
-  git(repo, "switch", "feature");
-  assert.equal(await discoverStack(repo), undefined);
-  git(repo, "switch", "main");
-  assert.equal(await discoverStack(repo), undefined);
-  git(repo, "branch", "-D", "sibling");
-  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "feature" }] }] }));
-  assert.equal(await discoverStack(repo), undefined);
+  const fixture = githubFixture();
+  if (failure === "siblings") fixture.prs[1]!.base.ref = "main";
+  if (failure === "no PR") fixture.prs.length = 0;
+  if (failure === "one PR") fixture.prs.shift();
+  if (failure === "missing branch") git(repo, "branch", "-D", "feature");
+  if (failure === "forked chain") fixture.prs.push(pr(24, "missing", "feature"));
+  if (failure === "duplicate head") fixture.prs.push(pr(24, "feature", "main"));
+  if (failure === "cycle") fixture.prs[0]!.base.ref = "second";
+  if (failure === "foreign repository") fixture.prs[0]!.head.repo.node_id = "fork";
+  if (failure === "tracked") writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "feature" }] }] }));
+  if (failure === "missing trunk") git(repo, "branch", "-D", "main");
+  if (failure === "detached") git(repo, "switch", "--detach");
+  if (failure === "multiple remotes") git(repo, "remote", "add", "other", "https://github.com/other/repo.git");
+  if (failure === "unavailable") fixture.github = async () => { throw new Error("offline"); };
+  assert.equal(await discoverStack(repo, fixture.github), undefined);
+  assert.deepEqual(fixture.calls, []);
 });
 
-for (const change of ["deleted", "changed", "missing", "metadata"]) it(`refuses init after ${change} branches without creating anything`, async () => {
+for (const change of ["deleted", "changed", "missing", "metadata", "base", "status", "head", "number"]) it(`refuses init after ${change} changes without creating anything`, async () => {
   chain();
-  const candidate = (await discoverStack(repo))!;
+  const { github, prs, calls } = githubFixture();
+  const candidate = (await discoverStack(repo, github))!;
   if (change === "deleted") git(repo, "branch", "-D", "feature");
   if (change === "changed") git(repo, "commit", "--allow-empty", "-m", "later");
   if (change === "missing") candidate.branches = ["missing", "second"];
   if (change === "metadata") writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "feature" }] }] }));
+  if (change === "base") prs[1]!.base.ref = "main";
+  if (change === "status") prs[1]!.state = "closed";
+  if (change === "head") prs[1]!.head.ref = "renamed";
+  if (change === "number") prs[1]!.number = 99;
   const before = git(repo, "show-ref");
-  await assert.rejects(changeStack(repo, { action: "init", ...candidate }, async () => { assert.fail("must not run"); }), /chain changed or is not eligible/);
+  await assert.rejects(changeStack(repo, { action: "init", ...candidate }, github), /chain changed or is not eligible/);
   assert.equal(git(repo, "show-ref"), before);
+  assert.deepEqual(calls, []);
 });
 
 it("reports an expected no-stack state without the gh error", async () => {
@@ -291,21 +323,35 @@ it("reports an expected no-stack state without the gh error", async () => {
   assert.equal(status.candidate, undefined);
 });
 
-it("uses the remote default and excludes unrelated branches", async () => {
-  git(repo, "branch", "-m", "main", "develop");
-  git(repo, "update-ref", "refs/remotes/origin/develop", "develop");
-  git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop");
-  chain();
-  git(repo, "switch", "-c", "unrelated", "develop");
-  git(repo, "commit", "--allow-empty", "-m", "unrelated");
-  git(repo, "switch", "second");
-  assert.equal((await discoverStack(repo))?.trunk, "develop");
-  assert.deepEqual((await discoverStack(repo))?.branches, ["feature", "second"]);
-  git(repo, "switch", "develop");
-  assert.equal(await discoverStack(repo), undefined);
-});
-
 it("refuses a names-only init even when those branches exist", async () => {
   chain();
-  await assert.rejects(changeStack(repo, { action: "init", branches: ["feature", "second"] }, async () => { assert.fail("must not run"); }), /chain changed or is not eligible/);
+  const { github, calls } = githubFixture();
+  await assert.rejects(changeStack(repo, { action: "init", branches: ["feature", "second"] }, github), /chain changed or is not eligible/);
+  assert.deepEqual(calls, []);
+});
+
+it("uses GitHub's default branch, not stale remote HEAD, and ignores unrelated PRs", async () => {
+  chain();
+  git(repo, "branch", "-m", "main", "develop");
+  git(repo, "update-ref", "refs/remotes/origin/main", "feature");
+  git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  const fixture = githubFixture();
+  fixture.prs[0]!.base.ref = "develop";
+  fixture.prs.push(pr(24, "unrelated", "develop"));
+  const github = async (scope: string, args: string[]) => args[0] === "repo"
+    ? JSON.stringify({ id: "repo-id", defaultBranchRef: { name: "develop" }, isFork: false })
+    : fixture.github(scope, args);
+  assert.equal((await discoverStack(repo, github))?.trunk, "develop");
+  git(repo, "switch", "develop");
+  assert.equal(await discoverStack(repo, github), undefined);
+});
+
+it("uses gh-stack view for tracked merged members without querying PR links", async () => {
+  const tracked = { ...view, branches: [{ ...view.branches[0]!, isMerged: true, pr: { number: 23, state: "MERGED" } }] };
+  const state = await stackStatus(repo, async (_scope, args) => {
+    assert.equal(args[0], "stack");
+    return args[1] === "view" ? JSON.stringify(tracked) : "";
+  });
+  assert.deepEqual(state.view, tracked);
+  assert.equal(state.candidate, undefined);
 });

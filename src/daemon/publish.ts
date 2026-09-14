@@ -110,7 +110,7 @@ export async function snapshot(scope: string): Promise<PublishSnapshot & { input
   };
 }
 
-export async function target(scope: string, branch: string, github: Gh = gh): Promise<PublishTarget> {
+export async function repositoryTarget(scope: string, github: Gh = gh) {
   const remotes = (await git(scope, ["remote"])).trim().split("\n").filter(Boolean);
   if (remotes.length === 0) throw new Error("No remote is configured. Add a GitHub remote before publishing.");
   if (remotes.length !== 1) throw new Error("Publish requires exactly one remote. Select and publish the remote with Git directly.");
@@ -128,15 +128,20 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
   const info = JSON.parse(await github(scope, ["repo", "view", repo, "--json", "id,defaultBranchRef,isFork"])) as { id?: string; defaultBranchRef?: { name: string }; isFork: boolean };
   if (info.isFork) throw new Error("Fork publishing is not supported. Publish with gh directly to select the base repository.");
   if (!info.defaultBranchRef?.name) throw new Error("GitHub has no default branch. Create it before publishing.");
+  return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, id: info.id };
+}
+
+export async function target(scope: string, branch: string, github: Gh = gh): Promise<PublishTarget> {
+  const { remote, url, repo, defaultBranch, id } = await repositoryTarget(scope, github);
   const prs = JSON.parse(await github(scope, ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,url,title,isDraft,reviewDecision,statusCheckRollup,headRepository"])) as (PullRequest & { headRepository?: { id?: string } })[];
   if (prs.length > 1) throw new Error("More than one pull request matches this branch. Publish with gh directly.");
   const pr = prs[0];
-  if (pr && branch === info.defaultBranchRef.name) throw new Error("The default branch already heads a pull request. Publish with gh directly to select the intended branch.");
+  if (pr && branch === defaultBranch) throw new Error("The default branch already heads a pull request. Publish with gh directly to select the intended branch.");
   if (pr) pr.statusCheckRollup ??= [];
-  if (pr && (!info.id || !pr.headRepository?.id)) {
+  if (pr && (!id || !pr.headRepository?.id)) {
     throw new Error("Cannot verify PR source: GitHub did not return repository IDs. Publish with gh directly.");
   }
-  if (pr && pr.headRepository?.id !== info.id) {
+  if (pr && pr.headRepository?.id !== id) {
     throw new Error("The pull request uses a different head repository. Publish with gh directly.");
   }
   const stack = await localStack(scope, branch);
@@ -147,7 +152,7 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
     const index = stack.branches.findIndex(b => b.branch === branch);
     baseBranch = stack.branches.slice(0, index).filter(b => !b.pullRequest?.merged).at(-1)?.branch ?? stack.trunk.branch;
   }
-  return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
+  return { remote, url, repo, defaultBranch, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
 }
 
 export async function branchChanges(scope: string, destination: PublishTarget): Promise<{ files: GitFile[]; commits: string[]; input: string }> {

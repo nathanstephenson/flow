@@ -68,12 +68,12 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
     {status?.available ? <>
       {status.view ? <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Use Publish for uncommitted files.</p> : null}
       {status.view ? <><p>Trunk: {status.view.trunk}</p><ul className="space-y-2">{status.view.branches.map((branch) => <li key={branch.name} className="flex flex-wrap items-center gap-2">
-        <span>{branch.name}{branch.isCurrent ? " (current)" : ""}{branch.pr ? ` · #${branch.pr.number} ${branch.pr.state}` : " · no PR"}{branch.needsRebase ? " · needs rebase" : ""}</span>
+        <span>{branch.name}{branch.isCurrent ? " (current)" : ""}{branch.pr ? ` · #${branch.pr.number} ${branch.isMerged ? "MERGED" : branch.pr.state}` : branch.isMerged ? " · MERGED" : " · no PR"}{branch.needsRebase ? " · needs rebase" : ""}</span>
         <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || branch.isCurrent} onClick={() => void run("checkout", [branch.name])}>Switch</Button>
       </li>)}</ul></> : null}
       {!status.rebasing && !status.view && status.candidate ? <>
-        <p>Existing branches above {status.candidate.trunk} (bottom to top):</p>
-        <ol>{status.candidate.branches.map(branch => <li key={branch}>{branch}</li>)}</ol>
+        <p>PR-linked branches above {status.candidate.trunk} (bottom to top):</p>
+        <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch}>{pr.branch} · #{pr.number} {pr.state}</li>)}</ol>
         <p>Create stack registers these branches. It does not create branches.</p>
         <Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run("init", status.candidate!.branches)}>Create stack</Button>
       </> : null}

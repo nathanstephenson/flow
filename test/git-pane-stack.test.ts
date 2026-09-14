@@ -77,7 +77,7 @@ for (const fails of [false, true]) it(`Stack checkout invalidates Git state afte
 
 for (const eligible of [false, true]) it(`shows Create stack only for an eligible chain: ${eligible}`, async () => {
   const calls: any[] = [];
-  const candidate = { trunk: "main", branches: ["first", "second"], fingerprint: "reviewed" };
+  const candidate = { trunk: "main", branches: ["first", "second"], pullRequests: [{ branch: "first", number: 23, state: "MERGED" }, { branch: "second", number: 22, state: "OPEN" }], fingerprint: "reviewed" };
   const pane = component("stack-pane", async input => {
     calls.push(input);
     return { available: true, conflicts: [], rebasing: false, ...(eligible ? { candidate } : {}) };
@@ -93,10 +93,25 @@ for (const eligible of [false, true]) it(`shows Create stack only for an eligibl
   else {
     assert.match(JSON.stringify(tree), /first/);
     assert.match(JSON.stringify(tree), /second/);
+    assert.match(JSON.stringify(tree), /MERGED/);
+    assert.match(JSON.stringify(tree), /OPEN/);
     find(tree, "Button", node => node.props.children === "Create stack").props.onClick();
     await Promise.resolve();
     const input = calls.find(call => call.type === "change_stack").input;
     assert.equal(JSON.stringify(input.branches), JSON.stringify(candidate.branches));
     assert.equal(input.fingerprint, candidate.fingerprint);
   }
+});
+
+it("keeps merged members from the tracked stack visible", async () => {
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
+    view: { trunk: "main", branches: [{ name: "merged-member", isMerged: true, pr: { number: 23, state: "CLOSED" } }] } }));
+  const props = { sessionId: "session", onChange() {} };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tree = pane.render("StackPane", props);
+  assert.match(JSON.stringify(tree), /merged-member/);
+  assert.match(JSON.stringify(tree), /#23 MERGED/);
+  assert.throws(() => find(tree, "Button", node => node.props.children === "Create stack"));
 });
