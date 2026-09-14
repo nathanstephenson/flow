@@ -2,7 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
-import type { PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
+import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
 import type { PublishInput } from "./publish.ts";
 
@@ -162,6 +162,8 @@ export type Command =
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
   | { type: "pull_request"; sessionId: string }
+  | { type: "pull_branch"; sessionId: string; branch: string }
+  | { type: "change_pull_request"; sessionId: string; action: "rebase" | "merge"; input: PullRequestActionInput }
   | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
   | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
   | { type: "stack_status"; sessionId: string }

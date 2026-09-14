@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { pullRequest, commentPullRequest, resolvePullRequestThread } from "./pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
 import { stackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
@@ -1535,6 +1535,10 @@ export class SessionHost {
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
+      case "pull_branch":
+        return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
+      case "change_pull_request":
+        return await this.withGitOperation(this.record(command.sessionId).scope, () => changePullRequest(this.record(command.sessionId).scope, command.action, command.input));
       case "pull_request":
         return await pullRequest(this.record(command.sessionId).scope);
       case "comment_pull_request":

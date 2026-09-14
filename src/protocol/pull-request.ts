@@ -1,5 +1,7 @@
 import type { PullRequest } from "./publish.ts";
 
+export type MergeMethod = "MERGE" | "SQUASH" | "REBASE";
+export type PullRequestActionInput = { pr: PullRequestRef; headOid: string; baseBranch: string; method?: MergeMethod };
 export type PullRequestRef = { repo: string; number: number; id: string };
 export type PullRequestComment = {
   id: string;
@@ -33,6 +35,8 @@ export type PullRequestDetails = PullRequest & PullRequestRef & {
   mergeable: string;
   mergeStateStatus: string;
   viewerCanComment: boolean;
+  headRefOid?: string;
+  mergeMethods?: MergeMethod[];
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
   threads: PullRequestThread[];

@@ -34,6 +34,125 @@ function find(element: any, type: string, matches: (element: Element) => boolean
   throw new Error(`Missing ${type}`);
 }
 
+it("Git tabs default to PR, keep an explicit Diff choice and fall back when unavailable", async () => {
+  const pane = component("git-pane", async () => ({ repository: true, files: [] }));
+  const props = { sessionId: "session" };
+  const render = () => pane.render("GitPane", props);
+  render();
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tab = (label: string) => find(render(), "Button", node => node.props.role === "tab" && node.props.children === label);
+  assert.equal(tab("Diff").props["aria-selected"], true);
+  assert.throws(() => tab("PR"));
+  assert.throws(() => tab("Stack"));
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  assert.equal(tab("PR").props["aria-selected"], true);
+  assert.equal(find(render(), "div", node => node.props.id === "git-session-Diff").props.hidden, true);
+  find(render(), "StackPane").props.onAvailable(true);
+  tab("Stack").props.onClick();
+  assert.equal(tab("Stack").props["aria-selected"], true);
+  find(render(), "StackPane").props.onAvailable(false);
+  assert.equal(tab("Diff").props["aria-selected"], true);
+  tab("Diff").props.onClick();
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  assert.equal(tab("Diff").props["aria-selected"], true);
+  tab("PR").props.onClick();
+  find(render(), "PullRequestPane").props.onAvailable(false);
+  assert.equal(tab("Diff").props["aria-selected"], true);
+});
+
+it("keeps Publish visible when the PR is discovered after it opens", async () => {
+  const pane = component("git-pane", async input => input.type === "prepare_publish"
+    ? { files: [], commits: [], branch: "feature", defaultBranch: "main" }
+    : { repository: true, files: [] });
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  render();
+  pane.effects[0]!();
+  await Promise.resolve();
+  find(render(), "Button", node => node.props.children === "Publish").props.onClick();
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.equal(find(render(), "div", node => node.props.id === "git-session-Diff").props.hidden, false);
+  assert.equal(find(render(), "Button", node => node.props.role === "tab" && node.props.children === "Diff").props["aria-selected"], true);
+  find(render(), "form");
+});
+
+it("refreshes Stack after a PR action or Pull", async () => {
+  const pane = component("git-pane", async () => ({ repository: true, branch: { name: "feature" }, files: [] }));
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  render();
+  pane.effects[0]!();
+  await Promise.resolve();
+  const before = find(render(), "StackPane").props.revision;
+  find(render(), "PullRequestPane").props.onChange();
+  assert.equal(find(render(), "StackPane").props.revision, before + 1);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  find(render(), "Button", node => node.props.children === "Pull").props.onClick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(find(render(), "StackPane").props.revision, before + 2);
+});
+
+for (const candidate of [false, true]) it(`reports a ${candidate ? "candidate" : "tracked"} Stack as available`, async () => {
+  let available = false;
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, ...(candidate ? { candidate: { pullRequests: [] } } : { view: { branches: [] } }) }));
+  const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  pane.render("StackPane", props);
+  pane.effects.at(-1)!();
+  assert.equal(available, true);
+});
+
+it("Pull uses the displayed branch and disables dirty files", async () => {
+  const calls: any[] = [];
+  const status = { repository: true, branch: { name: "feature" }, files: [] as any[] };
+  const pane = component("git-pane", async input => { calls.push(input); return status; });
+  const props = { sessionId: "session" };
+  pane.render("GitPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const button = () => find(pane.render("GitPane", props), "Button", node => node.props.children === "Pull");
+  assert.equal(button().props.disabled, false);
+  button().props.onClick();
+  assert.equal(calls.at(-1).type, "pull_branch");
+  assert.equal(calls.at(-1).branch, "feature");
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  status.files.push({ path: "dirty", status: "M" });
+  assert.equal(button().props.disabled, true);
+});
+
+for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation and sends the displayed PR identity`, () => {
+  const calls: any[] = [];
+  const pane = component("pull-request-pane", async () => {});
+  const pr = { repo: "test/repo", id: "PR_one", number: 1, state: "OPEN", headRefOid: "a".repeat(40), headRefName: "feature", baseRefName: "main", mergeMethods: ["SQUASH", "REBASE"] };
+  const props = { pr, busy: false, change: (...args: any[]) => calls.push(args) };
+  const render = () => pane.render("PullRequestActions", props);
+  find(render(), "Button", node => node.props.children === (action === "merge" ? "Merge" : "Rebase")).props.onClick();
+  assert.equal(calls.length, 0);
+  if (action === "merge") {
+    const select = find(render(), "select");
+    assert.equal(select.props.value, "SQUASH");
+    assert.equal(select.props.children.length, 2);
+    select.props.onChange({ target: { value: "REBASE" } });
+  } else assert.match(JSON.stringify(render()), /No push or stack rebase/);
+  find(render(), "form").props.onSubmit({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], action);
+  assert.equal(calls[0][1].headOid, pr.headRefOid);
+  assert.equal(calls[0][1].baseBranch, "main");
+  assert.equal(calls[0][1].pr.id, "PR_one");
+  assert.equal(calls[0][1].method, action === "merge" ? "REBASE" : undefined);
+});
+
+it("PR merge is unavailable without a permitted method or for a draft", () => {
+  const pane = component("pull-request-pane", async () => {});
+  for (const extra of [{ mergeMethods: [] }, { mergeMethods: ["MERGE"], isDraft: true }]) {
+    const tree = pane.render("PullRequestActions", { pr: { state: "OPEN", headRefOid: "a".repeat(40), ...extra }, busy: false, change() {} });
+    assert.equal(find(tree, "Button", node => node.props.children === "Merge").props.disabled, true);
+  }
+});
+
 it("Stack changes immediately replace the PR pane and clear Publish results", async () => {
   const pane = component("git-pane", async (input) => {
     if (input.type === "prepare_publish") return { files: [], commits: [], branch: "feature", defaultBranch: "main" };

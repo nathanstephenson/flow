@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { pullRequest, commentPullRequest, resolvePullRequestThread } from "../src/daemon/pull-request.ts";
+import { git, repository } from "./git-fixture.ts";
+import { FakeBackend } from "../src/backend/fake/index.ts";
+import type { MergeMethod } from "../src/protocol/pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch } from "../src/daemon/pull-request.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import type { Gh } from "../src/daemon/publish.ts";
 
@@ -17,12 +20,134 @@ test("Session Host routes all PR commands through Agent Session lookup", async (
   ]) await assert.rejects(host.execute(command), /session/i);
 });
 
+const actionInput = { pr: { repo: "base/repo", number: 1, id: "PR_one" }, headOid: "a".repeat(40), baseBranch: "main" };
+
+for (const method of ["MERGE", "SQUASH", "REBASE"] as const) test(`merges with permitted ${method} and an expected head`, async () => {
+  const path = await scope();
+  try {
+    const { github, mutations } = mock({ permission: "WRITE", methods: [method] });
+    assert.deepEqual((await pullRequest(path, github))?.mergeMethods, [method]);
+    await changePullRequest(path, "merge", { ...actionInput, method }, github);
+    assert.equal(mutations.length, 1);
+    assert.match(mutations[0]!.join(" "), /expectedHeadOid:\$head/);
+    assert.ok(mutations[0]!.includes(`head=${actionInput.headOid}`));
+    assert.ok(mutations[0]!.includes(`method=${method}`));
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("rejects changed PRs, invalid methods, drafts and denied merges without mutations", async () => {
+  const path = await scope();
+  try {
+    for (const options of [{ state: "CLOSED" }, { state: "MERGED" }, { headOid: "b".repeat(40) }, { baseBranch: "other" }, { draft: true }, { denied: true }, { permission: "READ" }, { methods: [] }, { candidates: [] }]) {
+      const { github, mutations } = mock({ permission: "WRITE", methods: ["MERGE"], ...options });
+      await assert.rejects(changePullRequest(path, "merge", { ...actionInput, method: "MERGE" }, github));
+      assert.equal(mutations.length, 0);
+    }
+    const failure = mock({ permission: "WRITE", methods: ["MERGE"], fail: true });
+    await assert.rejects(changePullRequest(path, "merge", { ...actionInput, method: "MERGE" }, failure.github), /denied/);
+    assert.equal(failure.mutations.length, 1);
+    await assert.rejects(changePullRequest(path, "merge", { ...actionInput, pr: { ...actionInput.pr, id: "stale" }, method: "MERGE" }, mock().github), /changed/);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("Rebase rejects dirty state, existing Git operations and stale PR heads before fetching", async () => {
+  const path = await scope();
+  try {
+    await writeFile(join(path, "dirty"), "work");
+    await assert.rejects(changePullRequest(path, "rebase", actionInput, mock().github), /uncommitted/);
+    await rm(join(path, "dirty"));
+    await mkdir(join(path, ".git/rebase-merge"));
+    await assert.rejects(changePullRequest(path, "rebase", actionInput, mock().github), /Finish or abort/);
+    await assert.rejects(pullBranch(path, "feature"), /Finish or abort/);
+    await rm(join(path, ".git/rebase-merge"), { recursive: true });
+    await assert.rejects(changePullRequest(path, "rebase", actionInput, mock({ headOid: "b".repeat(40) }).github), /changed/);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+for (const conflict of [false, true]) test(`rebases only the current branch without push; conflicts=${conflict}`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "flow-pr-rebase-"));
+  try {
+    const remote = repository(root, "remote", ["feature"]);
+    const path = join(root, "local");
+    git(root, "clone", "--quiet", remote, path);
+    git(path, "config", "user.name", "Test");
+    git(path, "config", "user.email", "test@example.com");
+    git(path, "switch", "feature");
+    git(path, "remote", "set-url", "origin", "git@github.com:fork/repo.git");
+    git(path, "config", `url.${remote}.insteadOf`, "https://github.com/base/repo.git");
+    await writeFile(join(path, conflict ? "README.md" : "feature.txt"), "feature change\n");
+    git(path, "add", ".");
+    git(path, "commit", "--quiet", "-m", "feature change");
+    const before = git(path, "rev-parse", "HEAD").trim();
+    git(path, "branch", "stack-other");
+    git(path, "config", "rebase.updateRefs", "true");
+    await writeFile(join(remote, "README.md"), "base change\n");
+    git(remote, "commit", "--quiet", "-am", "base change");
+    const base = git(remote, "rev-parse", "main").trim();
+    if (conflict) {
+      await assert.rejects(changePullRequest(path, "rebase", actionInput, mock().github), /Rebase aborted/);
+      assert.equal(git(path, "rev-parse", "HEAD").trim(), before);
+    } else {
+      await changePullRequest(path, "rebase", actionInput, mock().github);
+      assert.equal(git(path, "rev-parse", "HEAD^").trim(), base);
+      assert.notEqual(git(path, "rev-parse", "HEAD").trim(), before);
+    }
+    assert.equal(git(path, "rev-parse", "stack-other").trim(), before);
+    assert.equal(git(path, "branch", "--show-current").trim(), "feature");
+    assert.equal(git(path, "status", "--porcelain"), "");
+    assert.equal(git(remote, "rev-parse", "feature").trim(), git(path, "rev-parse", "origin/feature").trim());
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Pull fast-forwards, refuses divergence, dirty trees, detached and stale branches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "flow-pull-"));
+  try {
+    const remote = repository(root, "remote");
+    const path = join(root, "local");
+    git(root, "clone", "--quiet", remote, path);
+    git(remote, "commit", "--quiet", "--allow-empty", "-m", "remote change");
+    await pullBranch(path, "main");
+    assert.equal(git(path, "rev-parse", "HEAD"), git(remote, "rev-parse", "HEAD"));
+    await assert.rejects(pullBranch(path, "stale"), /changed/);
+    await writeFile(join(path, "dirty"), "dirty");
+    await assert.rejects(pullBranch(path, "main"), /uncommitted/);
+    await rm(join(path, "dirty"));
+    git(path, "commit", "--quiet", "--allow-empty", "-m", "local change");
+    git(remote, "commit", "--quiet", "--allow-empty", "-m", "diverge");
+    const before = git(path, "rev-parse", "HEAD");
+    await assert.rejects(pullBranch(path, "main"), /fast-forward/i);
+    assert.equal(git(path, "rev-parse", "HEAD"), before);
+    git(path, "checkout", "--detach");
+    await assert.rejects(pullBranch(path, "main"), /changed/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("PR actions and Pull share the Scope operation safeguards", async () => {
+  const path = await scope();
+  const host = new SessionHost();
+  const backend = new FakeBackend();
+  host.registerBackend(backend);
+  try {
+    const sessionId = await host.create({ scope: path });
+    const commands = [{ type: "pull_branch" as const, sessionId, branch: "feature" }, ...(["rebase", "merge"] as const).map(action => ({ type: "change_pull_request" as const, sessionId, action, input: actionInput }))];
+    await host.send(sessionId, "work", "now");
+    for (const command of commands) await assert.rejects(host.execute(command), /occupied/);
+    const child = backend.latest.beginSubagent("worker", "work");
+    backend.latest.completeTurn();
+    for (const command of commands) await assert.rejects(host.execute(command), /Subagent or Background Call/);
+    child.finish();
+    const call = backend.latest.backgroundCall();
+    for (const command of commands) await assert.rejects(host.execute(command), /Subagent or Background Call/);
+    call.settle();
+  } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
+});
+
 const ref = { repo: "base/repo", number: 1, id: "PR_one" };
 const closed = { ...ref, state: "CLOSED", updatedAt: "2026-01-02", closedAt: "2026-01-02" as string | null, headRepository: { id: "R_source" } };
 const open = { ...closed, state: "OPEN", updatedAt: "2025-01-01", closedAt: null };
 const thread = { id: "PRRT_one", path: "a.ts", line: 2, isOutdated: false, isResolved: false, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true };
 const entry = { id: "C_one", author: { login: "user" }, body: "![image](url)", url: "url", createdAt: "2025-01-01", diffHunk: "@@ -1 +1 @@" };
-function mock(options: { candidates?: typeof closed[]; denied?: boolean; fail?: boolean; paginate?: boolean; locked?: boolean; permission?: string } = {}) {
+function mock(options: { candidates?: typeof closed[]; denied?: boolean; fail?: boolean; paginate?: boolean; locked?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean } = {}) {
   const mutations: string[][] = [];
   const calls: string[][] = [];
   const github: Gh = async (_, args) => {
@@ -36,7 +161,7 @@ function mock(options: { candidates?: typeof closed[]; denied?: boolean; fail?: 
       if (options.fail) return JSON.stringify({ errors: [{ message: "denied" }] });
       data = { result: {} };
     } else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: connection(options.candidates ?? [open]) } };
-    else if (query.includes("commits(last:1)")) data = { node: { ...ref, body: "![image](url)", author: { login: "user" }, headRepository: { nameWithOwner: "fork/repo" }, locked: options.locked ?? false, repository: { isArchived: options.denied ?? false, viewerPermission: options.permission ?? "READ" }, commits: { nodes: [{ commit: { statusCheckRollup: { id: "rollup" } } }] } } };
+    else if (query.includes("commits(last:1)")) data = { node: { ...ref, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefName: "feature", headRefOid: options.headOid ?? "a".repeat(40), baseRefName: options.baseBranch ?? "main", body: "![image](url)", author: { login: "user" }, headRepository: { nameWithOwner: "fork/repo" }, locked: options.locked ?? false, repository: { isArchived: options.denied ?? false, viewerPermission: options.permission ?? "READ", mergeCommitAllowed: options.methods?.includes("MERGE"), squashMergeAllowed: options.methods?.includes("SQUASH"), rebaseMergeAllowed: options.methods?.includes("REBASE") }, commits: { nodes: [{ commit: { statusCheckRollup: { id: "rollup" } } }] } } };
     else if (query.includes("reviewThreads(")) data = { node: { reviewThreads: connection([{ ...thread, viewerCanReply: !options.denied, viewerCanResolve: !options.denied, viewerCanUnresolve: !options.denied }]) } };
     else if (query.includes("reviews(")) data = { node: { reviews: connection([{ ...entry, state: "APPROVED" }]) } };
     else if (query.includes("contexts(")) data = { node: { contexts: connection([{ name: "test", detailsUrl: "https://example.com/check" }]) } };
