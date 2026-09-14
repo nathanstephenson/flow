@@ -19,6 +19,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState("");
   const [result, setResult] = useState<PublishResult>();
   const [prRevision, setPrRevision] = useState(0);
+  const [prRefreshRevision, setPrRefreshRevision] = useState(0);
   const [stackRevision, setStackRevision] = useState(0);
   const [hasPr, setHasPr] = useState(false);
   const [hasStack, setHasStack] = useState(false);
@@ -57,7 +58,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
 
   async function refresh(discover = false) {
     if (discover) {
-      setPrRevision(value => value + 1);
+      setPrRefreshRevision(value => value + 1);
       setStackRevision(value => value + 1);
     }
     setBusy(true);
@@ -163,7 +164,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
         {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} revision={stackRevision} disabled={busy || review !== undefined} onAvailable={setHasStack} onChange={changed} /> : null}
       </div>
       <div role="tabpanel" id={`git-${sessionId}-PR`} aria-labelledby={`git-${sessionId}-PR-tab`} hidden={selected !== "PR"}>
-        <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} disabled={busy || review !== undefined} onAvailable={setHasPr} onChange={() => { setStackRevision(value => value + 1); void refresh(); }} />
+        <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} revision={prRefreshRevision} disabled={busy || review !== undefined} onAvailable={setHasPr} onChange={() => { setStackRevision(value => value + 1); void refresh(); }} />
       </div>
     </div>
   );

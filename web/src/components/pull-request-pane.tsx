@@ -11,7 +11,7 @@ function Link({ url, children }: { url: string; children: ReactNode }) {
   return href ? <a className="underline underline-offset-2 break-words" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId, disabled = false, onAvailable, onChange }: { sessionId: string; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void }) {
+export function PullRequestPane({ sessionId, revision = 0, disabled = false, onAvailable, onChange }: { sessionId: string; revision?: number; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void }) {
   const { connection } = useHost();
   const loader = useRef<PullRequestLoader<PullRequestDetails | null> | null>(null);
   const [state, setState] = useState<PullRequestLoadState<PullRequestDetails | null>>({ value: undefined, busy: true, error: "", success: "" });
@@ -26,6 +26,7 @@ export function PullRequestPane({ sessionId, disabled = false, onAvailable, onCh
     return () => { current.dispose(); loader.current = null; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
   }, [connection, sessionId]);
 
+  useEffect(() => { void loader.current?.refresh(); }, [revision]);
   useEffect(() => { onAvailable?.(Boolean(state.value)); }, [state.value, onAvailable]);
 
   function change(action: "rebase" | "merge", input: PullRequestActionInput) {

@@ -105,8 +105,12 @@ test("Pull fast-forwards, refuses divergence, dirty trees, detached and stale br
     const remote = repository(root, "remote");
     const path = join(root, "local");
     git(root, "clone", "--quiet", remote, path);
-    git(remote, "commit", "--quiet", "--allow-empty", "-m", "remote change");
+    await writeFile(join(remote, "incoming.txt"), "incoming change\n");
+    git(remote, "add", ".");
+    git(remote, "commit", "--quiet", "-m", "remote change");
+    git(path, "config", "branch.main.mergeOptions", "--squash");
     await pullBranch(path, "main");
+    assert.equal(git(path, "status", "--porcelain"), "");
     assert.equal(git(path, "rev-parse", "HEAD"), git(remote, "rev-parse", "HEAD"));
     await assert.rejects(pullBranch(path, "stale"), /changed/);
     await writeFile(join(path, "dirty"), "dirty");

@@ -77,6 +77,19 @@ it("keeps Publish visible when the PR is discovered after it opens", async () =>
   find(render(), "form");
 });
 
+it("refreshes PR data without remounting comment drafts from Diff", async () => {
+  const pane = component("git-pane", async () => ({ repository: true, files: [] }));
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  render();
+  pane.effects[0]!();
+  await Promise.resolve();
+  const before = find(render(), "PullRequestPane");
+  find(render(), "Button", node => node.props.children === "Refresh").props.onClick();
+  const after = find(render(), "PullRequestPane");
+  assert.equal(after.key, before.key);
+  assert.equal(after.props.revision, before.props.revision + 1);
+});
+
 it("refreshes Stack after a PR action or Pull", async () => {
   const pane = component("git-pane", async () => ({ repository: true, branch: { name: "feature" }, files: [] }));
   const render = () => pane.render("GitPane", { sessionId: "session" });

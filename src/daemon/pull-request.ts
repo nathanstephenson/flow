@@ -114,7 +114,7 @@ export async function pullBranch(scope: string, branch: string): Promise<void> {
   await cleanStack(scope);
   const selected = await head(scope);
   if (!selected.ok || selected.value.detached || selected.value.name !== branch) throw new Error("The branch has changed. Refresh Git status before pulling.");
-  await git(scope, ["pull", "--ff-only", "--no-rebase", "--no-autostash"]);
+  await git(scope, ["pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-squash"]);
 }
 
 export async function changePullRequest(scope: string, action: "rebase" | "merge", input: PullRequestActionInput, github: Gh = gh): Promise<void> {
