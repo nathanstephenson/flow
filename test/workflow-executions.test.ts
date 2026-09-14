@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { it } from 'node:test';
+import { after, before, it } from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { FakeBackend } from '../src/backend/fake/index.ts';
 import { SessionHost } from '../src/daemon/host.ts';
 import { TranscriptStore } from '../src/daemon/store.ts';
@@ -17,6 +17,11 @@ import type { WorkflowExecutionView } from '../src/protocol/workflow-executions.
 import { reduceAll } from '../src/client/reduce.ts';
 import { WorkflowStepError } from '../src/workflows/scheduler.ts';
 
+const runtimeDirectory = mkdtempSync(join(tmpdir(), 'flow-execution-runtime-'));
+const runtimePath = join(runtimeDirectory, 'runtime.cjs');
+before(() => execFileSync(process.execPath, ['scripts/build-workflow-runtime.mjs', runtimePath]));
+after(() => rmSync(runtimeDirectory, { recursive: true, force: true }));
+
 const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample', backend: 'fake', permission: 'ask', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'agent', name: 'Agent', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'Return JSON', outputSchema: { type: 'string' } }], edges: [] };
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
@@ -27,7 +32,7 @@ async function fixture() {
   config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
   const backend = new FakeBackend();
   const host = new SessionHost({ store, retention: 0, allowTool: config.allowTool }); host.registerBackend(backend);
-  const service = new WorkflowExecutionService(host, workflows, secrets, config, resolve('build/workflow-runtime.cjs'));
+  const service = new WorkflowExecutionService(host, workflows, secrets, config, runtimePath);
   await host.load(); service.reconcile();
   const id = await host.create({ scope: root, backend: 'fake' });
   workflows.saveDefinition(definition);
@@ -74,7 +79,8 @@ for (const permission of ['auto-accept', 'ask'] as const) {
       const handle = f.backend.latest.workflowSubagents[0]!;
       assert.equal(handle.options.permissionMode, permission);
       if (permission === 'ask') {
-        const callId = handle.requestPermission('Bash');
+        handle.requestPermission('Bash');
+        const callId = f.service.view(f.id, started.execution.id).permissions[0]!.callId;
         assert.equal(f.host.statusOf(f.id), 'idle');
         assert.equal(f.service.view(f.id, started.execution.id).permissions.length, 1);
         await f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, callId, decision: 'allow' });
@@ -182,8 +188,10 @@ it('runs an owned Agent beside chat, keeps requests private, rejects stale decis
     assert.equal((await f.request(f.base, 'POST', { workflowId: 'sample', input: {} })).status, 409);
     assert.equal(f.backend.latest.prompts.length, 1);
     const questions = [{ header: 'Pick', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }];
-    const askId = handle.ask(questions, 'raw-ask');
-    const callId = handle.requestPermission('Bash', 'raw-call');
+    handle.ask(questions, 'raw-ask');
+    handle.requestPermission('Bash', 'raw-call');
+    const askId = f.service.view(f.id, started.execution.id).enquiries[0]!.askId;
+    const callId = f.service.view(f.id, started.execution.id).permissions[0]!.callId;
     let view = await (await f.request(path)).json() as WorkflowExecutionView;
     assert.equal(view.enquiries[0]?.askId, askId); assert.equal(view.permissions[0]?.callId, callId);
     assert.ok(!JSON.stringify(f.host.logFor(f.id).since(0)).includes('raw-ask'));
@@ -247,7 +255,7 @@ it('interrupts on shutdown, recovers a deleted saved definition without replay, 
     assert.equal(f.service.view(f.id, started.execution.id).execution.status, 'recovery-required');
     f.workflows.deleteDefinition(definition.id);
     other = new SessionHost({ store: f.store }); const backend = new FakeBackend(); other.registerBackend(backend);
-    const service = new WorkflowExecutionService(other, f.workflows, f.secrets, f.config, resolve('build/workflow-runtime.cjs'));
+    const service = new WorkflowExecutionService(other, f.workflows, f.secrets, f.config, runtimePath);
     await other.load(); service.reconcile();
     assert.equal(other.statusOf(f.id), 'dormant');
     assert.equal(service.view(f.id, started.execution.id).activity.length, 1);
@@ -259,7 +267,7 @@ it('interrupts on shutdown, recovers a deleted saved definition without replay, 
     await service.scheduler.wait(f.id, started.execution.id); await pause();
     await other.shutdown();
     const finalHost = new SessionHost({ store: f.store }); finalHost.registerBackend(new FakeBackend());
-    const finalService = new WorkflowExecutionService(finalHost, f.workflows, f.secrets, f.config, resolve('build/workflow-runtime.cjs'));
+    const finalService = new WorkflowExecutionService(finalHost, f.workflows, f.secrets, f.config, runtimePath);
     await finalHost.load(); finalService.reconcile(); finalService.reconcile();
     assert.equal(finalHost.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text.includes(started.execution.id)).length, 1);
     assert.equal(finalService.scheduler.occupied(f.id), false);
@@ -355,3 +363,63 @@ it('redacts quote/newline secrets in private Agent activity and output; cancella
     assert.equal(f.service.scheduler.occupied(f.id), false);
   } finally { await f.close(); }
 });
+
+for (const secret of ['type', 'asked', 'raw', 'question', 'options', 'header', 'multiSelect', 'label', 'description', 'private-"quote\nline']) {
+  it(`preserves private request structure and routing with secret ${secret}`, async () => {
+    const f = await fixture();
+    try {
+      f.secrets.set('KEY', secret);
+      const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, {});
+      const executionId = started.execution.id;
+      await until(() => f.backend.latest.workflowSubagents.length === 1);
+      const handle = f.backend.latest.workflowSubagents[0]!;
+      const view = () => f.service.view(f.id, executionId);
+      const questions = [{ header: secret, question: secret, multiSelect: false, options: [{ label: secret, description: secret }, { label: 'Other' }] }];
+      const ids = new Set<string>();
+      for (let i = 0; i < 2; i++) {
+        const rawCall = `${secret}-call-${i}`, rawAsk = `${secret}-ask-${i}`;
+        handle.emit({ type: 'tool_started', callId: rawCall, name: 'Bash', input: { [secret]: secret, nested: { type: secret } } });
+        handle.requestPermission(`Bash ${secret}`, rawCall);
+        handle.ask(questions, rawAsk);
+        const permission = view().permissions[0]!, enquiry = view().enquiries[0]!;
+        assert.ok(permission); assert.ok(enquiry);
+        assert.notEqual(permission.callId, rawCall); assert.notEqual(enquiry.askId, rawAsk);
+        ids.add(permission.callId); ids.add(enquiry.askId);
+        assert.deepEqual(enquiry.questions, [{ header: '[REDACTED]', question: '[REDACTED]', multiSelect: false, options: [{ label: '[REDACTED]', description: '[REDACTED]' }, { label: 'Other' }] }]);
+        const tool = view().activity.at(-3)!.event;
+        assert.equal(tool.type, 'tool_started');
+        if (tool.type === 'tool_started') {
+          assert.equal(tool.callId, permission.callId);
+          assert.ok(!JSON.stringify(tool.input).includes(secret));
+        }
+        await f.service.answer(f.id, executionId, { subagentId: handle.options.id, callId: permission.callId, decision: 'allow' });
+        await f.service.answer(f.id, executionId, { subagentId: handle.options.id, askId: enquiry.askId, answers: [[secret]] });
+        assert.deepEqual(handle.decisions.at(-1), { callId: rawCall, decision: 'allow' });
+        assert.deepEqual(handle.answers.at(-1), { askId: rawAsk, answers: [[secret]] });
+        assert.equal(view().permissions.length, 0); assert.equal(view().enquiries.length, 0);
+        const answered = view().activity.at(-1)!.event;
+        assert.equal(answered.type, 'enquiry');
+        if (answered.type === 'enquiry') {
+          assert.equal(answered.state, 'answered'); assert.equal(answered.askId, enquiry.askId);
+          if (answered.state === 'answered') assert.deepEqual(answered.answers, [['[REDACTED]']]);
+        }
+        await assert.rejects(f.service.answer(f.id, executionId, { subagentId: handle.options.id, askId: enquiry.askId, answers: [['Other']] }));
+      }
+      assert.equal(ids.size, 4);
+      handle.requestPermission('Bash', `${secret}-aborted-call`);
+      handle.ask(questions, `${secret}-aborted-ask`);
+      handle.emit({ type: 'permission', state: 'aborted', callId: `${secret}-aborted-call`, tool: 'Bash' });
+      handle.emit({ type: 'enquiry', state: 'aborted', askId: `${secret}-aborted-ask`, questions });
+      assert.equal(view().permissions.length, 0); assert.equal(view().enquiries.length, 0);
+      handle.complete(secret);
+      const result = await f.service.scheduler.wait(f.id, executionId);
+      assert.equal(result.result, '[REDACTED]');
+      assert.equal(f.workflows.getExecution(f.id, executionId).result, '[REDACTED]');
+      const saved = readFileSync(join(f.root, 'sessions', f.id, 'workflow-activity', executionId + '.json'), 'utf8');
+      assert.ok(!saved.includes(`${secret}-call-`)); assert.ok(!saved.includes(`${secret}-ask-`));
+      const persisted = JSON.parse(saved);
+      assert.deepEqual(persisted.activity, view().activity);
+      assert.equal(persisted.permissions.length, 0); assert.equal(persisted.enquiries.length, 0);
+    } finally { await f.close(); }
+  });
+}

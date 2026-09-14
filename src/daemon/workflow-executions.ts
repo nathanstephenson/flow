@@ -15,7 +15,7 @@ import type { SecretStore } from './secret-store.ts';
 import { SessionHost } from './host.ts';
 
 type PrivateView = Omit<WorkflowExecutionView, 'execution'>;
-type Launch = { sessionId: string; executionId: string; stepId: string; handle: WorkflowSubagentHandle };
+type Launch = { sessionId: string; executionId: string; stepId: string; handle: WorkflowSubagentHandle; requestIds: Map<string, string> };
 
 export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
@@ -195,10 +195,10 @@ export class WorkflowExecutionService {
       const enquiry = view.enquiries.find(item => item.subagentId === body.subagentId && item.askId === body.askId);
       if (!enquiry) throw new WorkflowConflict();
       if (body.answers?.length !== enquiry.questions.length) throw new Error('An Enquiry must be answered in one act');
-      if (!await launch.handle.answerEnquiry(body.askId, body.answers!)) throw new WorkflowConflict();
+      if (!await launch.handle.answerEnquiry(launch.requestIds.get(body.askId)!, body.answers!)) throw new WorkflowConflict();
     } else {
       const prompt = view.permissions.find(item => item.subagentId === body.subagentId && item.callId === body.callId);
-      if (!prompt || !await launch.handle.answerPermission(body.callId!, body.decision!)) throw new WorkflowConflict();
+      if (!prompt || !await launch.handle.answerPermission(launch.requestIds.get(body.callId!)!, body.decision!)) throw new WorkflowConflict();
       if (body.decision === 'always') this.host.authoriseWorkflowTool(prompt.tool);
     }
     return { accepted: true as const };
@@ -215,10 +215,17 @@ export class WorkflowExecutionService {
     const id = randomUUID();
     const view = this.privateView(context.sessionId, context.executionId);
     const priorSpend = view.stepSpend[context.step.id];
+    const requestIds = new Map<string, string>();
+    const publicIds = new Map<string, string>();
+    const publicId = (raw: string): string => {
+      let opaque = publicIds.get(raw);
+      if (!opaque) { opaque = randomUUID(); publicIds.set(raw, opaque); requestIds.set(opaque, raw); }
+      return opaque;
+    };
     const handle = backend.startWorkflowSubagent({ id, name: context.step.name, instructions: context.step.instructions + '\nReturn only JSON matching this schema: ' + JSON.stringify(context.step.outputSchema) + (Object.keys(aliases).length ? '\nPrivate named secrets: ' + JSON.stringify(aliases) : ''), input: context.input, modelId: context.step.model, effort: context.step.effort, permissionMode: context.permission,
       emit: ({ event: rawEvent }) => {
         const oversized = JSON.stringify(rawEvent).length > 100_000;
-        const event: BackendEvent | { type: 'spend'; spend: Spend } = oversized ? { type: 'notice', level: 'error', text: 'Workflow activity limit exceeded' } : redact(rawEvent, values);
+        const event: BackendEvent | { type: 'spend'; spend: Spend } = oversized ? { type: 'notice', level: 'error', text: 'Workflow activity limit exceeded' } : redactEvent(rawEvent, values, publicId);
         if (oversized) queueMicrotask(() => { void this.launches.get(id)?.handle.cancel().catch(() => {}); });
         const sequence = (view.activity.at(-1)?.sequence ?? 0) + 1;
         view.activity.push({ sequence, at: Date.now(), stepId: context.step.id, subagentId: id, event });
@@ -248,7 +255,7 @@ export class WorkflowExecutionService {
       await handle.cancel();
       throw new Error('Workflow Agent permissions are unavailable');
     }
-    this.launches.set(id, { sessionId: context.sessionId, executionId: context.executionId, stepId: context.step.id, handle });
+    this.launches.set(id, { sessionId: context.sessionId, executionId: context.executionId, stepId: context.step.id, handle, requestIds });
     const abort = () => { void handle.cancel().catch(() => {}); };
     context.signal.addEventListener('abort', abort, { once: true });
     if (context.signal.aborted) abort();
@@ -336,6 +343,23 @@ function redact<T>(value: T, secrets: string[]): T {
     return item;
   };
   return visit(value) as T;
+}
+
+function redactEvent<T extends BackendEvent | { type: 'spend'; spend: Spend }>(event: T, secrets: string[], publicId: (id: string) => string): T {
+  const visit = (item: unknown, path: string[] = []): unknown => {
+    if (typeof item === 'string') {
+      const key = path.at(-1)!;
+      if (path.length === 1 && ['type', 'state', 'on', 'decision', 'reason', 'level', 'trigger', 'effort'].includes(key)) return item;
+      if (['id', 'callId', 'askId', 'subagentId', 'turnId'].includes(key) && (path.length === 1 || path[0] === 'producer')) return publicId(item);
+      return redact(item, secrets);
+    }
+    if (Array.isArray(item)) return item.map(value => visit(value, path));
+    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, value]) => [key,
+      path.length === 0 && ['input', 'update', 'result'].includes(key) ? redact(value, secrets) : visit(value, [...path, key]),
+    ]));
+    return item;
+  };
+  return visit(event) as T;
 }
 
 function publicDefinition(definition: WorkflowDefinition) {
