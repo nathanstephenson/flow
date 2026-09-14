@@ -15,8 +15,9 @@ Install it on the Session Host with `gh extension install github/gh-stack` and
 authenticate with `gh auth login`. Ordinary Git controls remain available without it.
 
 Stack supports Create, Add, Switch, Submit, Sync, and Rebase. Create is offered only
-for a clear chain of at least two existing local branches above the default branch.
-It registers the displayed branches; it never accepts names for new branches.
+for a clear chain of at least two existing local branches linked by PR head/base relationships.
+Commit ancestry alone does not identify a stack. Merged members retain their status.
+Create registers the displayed branches; it never accepts names for new branches.
 Ambiguous chains and branches already tracked in a stack are not offered.
 Switching and mutations
 require no working Agent Session in the same Scope, including background work.

@@ -2,7 +2,7 @@ import { localStack, localStacks } from "./stack-metadata.ts";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { gh, type Gh } from "./publish.ts";
+import { gh, repositoryTarget, type Gh } from "./publish.ts";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import type { StackCandidate, StackInput, StackStatus, StackView } from "../protocol/stack.ts";
 
@@ -20,35 +20,55 @@ export function parseStack(raw: string): StackView {
   return value;
 }
 
-export async function discoverStack(scope: string): Promise<StackCandidate | undefined> {
+export async function discoverStack(scope: string, github: Gh = gh): Promise<StackCandidate | undefined> {
   const current = await head(scope);
   if (!current.ok || current.value.detached) return;
   const stacks = await localStacks(scope);
   const tracked = new Set(stacks.flatMap(s => [s.trunk.branch, ...s.branches.map(b => b.branch)]));
   if (stacks.some(s => s.branches.some(b => b.branch === current.value.name))) return;
   const refs = (await git(scope, ["for-each-ref", "--format=%(refname:strip=2) %(objectname)", "refs/heads"])).trim().split("\n").filter(Boolean).map(line => line.split(" ") as [string, string]);
-  const defaults = (await git(scope, ["for-each-ref", "--format=%(symref)", "refs/remotes"])).split("\n").filter(Boolean).map(ref => ref.replace(/^refs\/remotes\/[^/]+\//, ""));
-  const choices = [...new Set(defaults.length ? defaults : refs.map(([name]) => name).filter(name => name === "main" || name === "master"))];
-  if (choices.length !== 1) return;
-  const trunk = choices[0]!;
+  let destination: Awaited<ReturnType<typeof repositoryTarget>>;
+  type PR = { number: number; state: string; merged_at: string | null; head: { ref: string; repo: { node_id: string } | null }; base: { ref: string; repo: { node_id: string } } };
+  let prs: PR[];
+  try {
+    destination = await repositoryTarget(scope, github);
+    const pages: PR[][] = JSON.parse(await github(scope, ["api", "--paginate", "--slurp", `repos/${destination.repo}/pulls?state=all&per_page=100`]));
+    if (!destination.id || !Array.isArray(pages) || pages.some(page => !Array.isArray(page))) return;
+    prs = pages.flat();
+    if (prs.some(pr => !Number.isInteger(pr.number) || !pr.head?.ref || !pr.base?.ref || !["open", "closed"].includes(pr.state) || !(pr.merged_at === null || typeof pr.merged_at === "string"))) return;
+  } catch { return; }
+  const trunk = destination.defaultBranch;
   const base = refs.find(([name]) => name === trunk);
   if (!base) return;
-  const ancestor = async (a: string, b: string) => (await run(scope, ["merge-base", "--is-ancestor", a, b], GIT_READ_TIMEOUT_MS)).ok;
-  const above: [string, string][] = [];
-  for (const ref of refs) if (ref[0] !== trunk && ref[1] !== base[1] && await ancestor(base[1], ref[1])) above.push(ref);
-  const tip = refs.find(([name]) => name === current.value.name);
-  if (!tip) return;
-  const chain: [string, string][] = [];
-  for (const ref of above) if (current.value.name === trunk || await ancestor(ref[1], tip[1]) || await ancestor(tip[1], ref[1])) chain.push(ref);
-  for (const ref of above.filter(ref => !chain.includes(ref))) {
-    for (const member of chain) if (await ancestor(member[1], ref[1]) || await ancestor(ref[1], member[1])) return;
+  const chain: PR[] = [];
+  let branch = current.value.name;
+  const seen = new Set<string>();
+  while (branch !== trunk) {
+    if (seen.has(branch)) return;
+    seen.add(branch);
+    const parents = prs.filter(pr => pr.head.ref === branch);
+    if (parents.length !== 1) return;
+    chain.unshift(parents[0]!);
+    branch = parents[0]!.base.ref;
   }
-  if (chain.length < 2 || chain.some(([name]) => tracked.has(name)) || new Set(chain.map(([, sha]) => sha)).size !== chain.length) return;
-  for (let i = 0; i < chain.length; i++) for (let j = i + 1; j < chain.length; j++) {
-    if (await ancestor(chain[j]![1], chain[i]![1])) [chain[i], chain[j]] = [chain[j]!, chain[i]!];
-    else if (!await ancestor(chain[i]![1], chain[j]![1])) return;
+  branch = chain.at(-1)?.head.ref ?? trunk;
+  while (true) {
+    const children = prs.filter(pr => pr.base.ref === branch);
+    if (!children.length) break;
+    if (children.length !== 1 || seen.has(children[0]!.head.ref)) return;
+    chain.push(children[0]!);
+    branch = children[0]!.head.ref;
+    seen.add(branch);
   }
-  return { trunk, branches: chain.map(([name]) => name), fingerprint: createHash("sha256").update(JSON.stringify({ base, chain, current: current.value.name })).digest("hex") };
+  if (chain.length < 2) return;
+  for (const pr of chain) {
+    if (pr.head.ref === trunk || tracked.has(pr.head.ref) || !refs.some(([name]) => name === pr.head.ref) ||
+      pr.head.repo?.node_id !== destination.id || pr.base.repo?.node_id !== destination.id ||
+      prs.filter(other => other.head.ref === pr.head.ref).length !== 1 ||
+      (pr.base.ref !== trunk && prs.filter(other => other.base.ref === pr.base.ref).length !== 1)) return;
+  }
+  const pullRequests = chain.map(pr => ({ branch: pr.head.ref, number: pr.number, state: pr.merged_at ? "MERGED" : pr.state.toUpperCase() }));
+  return { trunk, branches: chain.map(pr => pr.head.ref), pullRequests, fingerprint: createHash("sha256").update(JSON.stringify({ destination, base, chain, refs, current: current.value.name })).digest("hex") };
 }
 
 export async function stackStatus(scope: string, github: Gh = gh): Promise<StackStatus> {
@@ -65,7 +85,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
       if (!/current branch .+ (?:is not|not) (?:a )?part of (?:a |any )?stack/i.test(String(error)) || await localStack(scope, (await git(scope, ["branch", "--show-current"])).trim())) throw error;
     }
     if (!status.view && !status.rebasing) {
-      const candidate = await discoverStack(scope);
+      const candidate = await discoverStack(scope, github);
       if (candidate) status.candidate = candidate;
     }
   } catch (error) { status.problem = error instanceof Error ? error.message : String(error); }
@@ -108,7 +128,7 @@ export async function changeStack(scope: string, input: StackInput, github: Gh =
   } else await cleanStack(scope);
   const args = ["stack", action];
   if (action === "init") {
-    const candidate = await discoverStack(scope);
+    const candidate = await discoverStack(scope, github);
     if (!candidate || input.fingerprint !== candidate.fingerprint || JSON.stringify(input.branches) !== JSON.stringify(candidate.branches)) throw new Error("The existing branch chain changed or is not eligible. Refresh Stack and review it again.");
     args.push("--base", candidate.trunk);
   }
