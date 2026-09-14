@@ -198,7 +198,7 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
   let copied: any[] = [];
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
     ...(candidate ? { candidate: { trunk: "main", pullRequests: prs } } : { view: { trunk: "main", branches: [{ name: "base", pr: prs[0] }, { name: "unpublished" }, { name: "top", pr: prs[1] }] } }),
-  }), { Blob, ClipboardItem: class { constructor(public data: any) {} }, navigator: { clipboard: { write: async (items: any[]) => { copied = items; } } } });
+  }), { Blob, ClipboardItem: class { data: any; constructor(data: any) { this.data = data; } }, navigator: { clipboard: { write: async (items: any[]) => { copied = items; } } } });
   const props = { sessionId: "session", onChange() { assert.fail("Copy must not change Git state"); } };
   pane.render("StackPane", props);
   pane.effects[0]!();
