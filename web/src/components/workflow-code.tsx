@@ -32,6 +32,7 @@ export function WorkflowCode({
         extensions: [
           javascript({ typescript: true }),
           lineNumbers(),
+          EditorView.lineWrapping,
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           syntaxHighlighting(defaultHighlightStyle),

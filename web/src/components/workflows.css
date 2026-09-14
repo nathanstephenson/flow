@@ -73,6 +73,7 @@
   height: 100%;
 }
 .workflow-inspector {
+  grid-template-columns: minmax(0, 1fr);
   overflow: auto;
   min-width: 0;
   align-content: start;
