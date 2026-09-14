@@ -97,6 +97,51 @@ it("does not offer branch renaming without a Publish suggestion", async () => {
   assert.match(JSON.stringify(tree), /feat\/published/);
 });
 
+for (const fails of [false, true]) it(`opens and cancels new branch entry, then handles add ${fails ? "failure" : "success"}`, async () => {
+  const calls: any[] = [];
+  const pane = component("stack-pane", async input => {
+    calls.push(input);
+    if (input.type === "change_stack") {
+      if (fails) throw new Error("Branch already exists");
+      return "Branch added";
+    }
+    return { available: true, conflicts: [], rebasing: false, view: { trunk: "main", branches: [] } };
+  });
+  const props = { sessionId: "session", onChange() {} };
+  const render = () => pane.render("StackPane", props);
+  render();
+  pane.effects[0]!();
+  await Promise.resolve();
+  assert.throws(() => find(render(), "Input"));
+  const open = () => find(render(), "Button", node => node.props["aria-label"] === "New branch");
+  assert.equal(open().props.size, "icon-sm");
+  assert.equal(find(open(), "Plus").props["aria-hidden"], "true");
+  open().props.onClick();
+  assert.equal(find(render(), "Input").props.autoFocus, true);
+  assert.equal(find(render(), "Button", node => node.props.children === "Add branch").props.disabled, true);
+  find(render(), "Input").props.onChange({ target: { value: "discard-me" } });
+  find(render(), "Button", node => node.props.children === "Cancel").props.onClick();
+  assert.throws(() => find(render(), "Input"));
+  assert.equal(calls.filter(call => call.type === "change_stack").length, 0);
+  open().props.onClick();
+  assert.equal(find(render(), "Input").props.value, "");
+  find(render(), "Input").props.onChange({ target: { value: "  feat/new-branch  " } });
+  find(render(), "form").props.onSubmit({ preventDefault() {} });
+  assert.equal(find(render(), "Button", node => node.props.children === "Cancel").props.disabled, true);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  const input = calls.find(call => call.type === "change_stack").input;
+  assert.equal(input.action, "add");
+  assert.equal(JSON.stringify(input.branches), JSON.stringify(["feat/new-branch"]));
+  if (fails) {
+    assert.equal(find(render(), "Input").props.value, "  feat/new-branch  ");
+    assert.match(JSON.stringify(render()), /Branch already exists/);
+  } else {
+    assert.throws(() => find(render(), "Input"));
+    open().props.onClick();
+    assert.equal(find(render(), "Input").props.value, "");
+  }
+});
+
 for (const fails of [false, true]) it(`Stack checkout invalidates Git state after ${fails ? "failure" : "success"}`, async () => {
   let changes = 0;
   const status = { available: true, conflicts: [], rebasing: false, view: { trunk: "main", branches: [{ name: "123" }] } };
@@ -172,6 +217,9 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
   for (const pr of prs) {
     const single = find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === `Copy PR #${pr.number} link`);
     assert.equal(single.props.disabled, false);
+    assert.equal(single.props.size, "icon-sm");
+    assert.equal(single.props.title, `Copy PR #${pr.number} link`);
+    assert.equal(find(single, "Copy").props["aria-hidden"], "true");
     single.props.onClick();
     await Promise.resolve();
     const title = pr.number === 1 ? "Base &lt;fix&gt; &amp; &quot;test&quot;" : pr.title;
