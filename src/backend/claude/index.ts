@@ -14,7 +14,8 @@ import {
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -53,6 +54,7 @@ type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
  */
 
 export type ClaudeBackendOptions = {
+  query?: typeof query;
   allowedTools?: string[];
   disallowedTools?: string[];
   systemPrompt?: string;
@@ -223,6 +225,9 @@ class ClaudeSession implements BackendSession {
   /** Set between asking the CLI for a compaction and the `result` that closes it. See `compact`. */
   private compacting = false;
   private disposed = false;
+  private readonly workflowSubagents = new Set<WorkflowSubagentHandle>();
+  private readonly workflowGrants: Set<string>;
+  private disposal: Promise<void> | undefined;
   private modelId: string | undefined;
   private bootedModel: string | undefined;
   /** The last model id reported to clients, so the model in force is announced exactly once. */
@@ -260,8 +265,14 @@ class ClaudeSession implements BackendSession {
   private spend: Spend | undefined;
   private readonly priorSpend: Spend | undefined;
 
+  private readonly options: BackendCreateOptions;
+  private readonly backendOptions: ClaudeBackendOptions;
+
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
+    this.options = options;
+    this.backendOptions = backendOptions;
     this.emit = options.emit;
+    this.workflowGrants = new Set(options.standingAuthorisations ?? []);
     this.modelId = options.modelId;
     this.wantedEffort = options.effort;
     this.priorSpend = options.priorSpend;
@@ -313,12 +324,12 @@ class ClaudeSession implements BackendSession {
         // the turn open until the caller gave up on it.
         if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
-        if (this.allowed.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
+        if (this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
         return await this.authorise(extra.toolUseID, toolName, input);
       },
     };
 
-    this.stream = query({ prompt: this.inbox, options: queryOptions });
+    this.stream = (backendOptions.query ?? query)({ prompt: this.inbox, options: queryOptions });
     this.pump = this.consume();
     void this.loadModels();
     // A meter that only fills once a turn ends reads as "no window" when it is really just early.
@@ -555,7 +566,10 @@ class ClaudeSession implements BackendSession {
     // Before the snapshot, so nothing can observe a decided Always against a session still asking.
     // The Standing Authorisation itself is the host's to persist; this is only this session honouring
     // it, which it must do itself because the list it was created with is a snapshot.
-    if (decision === "always") this.allowed.add(tool);
+    if (decision === "always") {
+      this.allowed.add(tool);
+      this.workflowGrants.add(tool);
+    }
     this.emit({ type: "permission", callId, tool, state: "decided", decision });
     return true;
   }
@@ -631,9 +645,28 @@ class ClaudeSession implements BackendSession {
     return known ?? { id: modelId ?? "default", provider: "anthropic" };
   }
 
-  async dispose(): Promise<void> {
-    if (this.disposed) return;
+  startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
+    if (this.disposed) throw new Error("Backend Session disposed");
+    if (this.options.tools === "none") throw new Error("This Backend Session runs no tools");
+    const handle = new ClaudeWorkflowSubagent({ cwd: this.options.scope,
+      ...(this.backendOptions.disallowedTools ? { disallowedTools: this.backendOptions.disallowedTools } : {}),
+      ...(this.backendOptions.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: this.backendOptions.pathToClaudeCodeExecutable } : {}),
+    }, options, this.workflowGrants, {
+      ...(this.backendOptions.query ? { query: this.backendOptions.query } : {}),
+      spawn: (options) => spawnWorkflowProcess(isSingleExecutable() ? { ...options, ...seaSpawnTarget(options) } : options),
+    });
+    this.workflowSubagents.add(handle);
+    void handle.done.finally(() => this.workflowSubagents.delete(handle)).catch(() => {});
+    return handle;
+  }
+
+  dispose(): Promise<void> {
+    return this.disposal ??= this.stop();
+  }
+
+  private async stop(): Promise<void> {
     this.disposed = true;
+    const workflowsStopped = Promise.all([...this.workflowSubagents].map((handle) => handle.cancel()));
     // Before the stream closes, while there is still something to deny into. A callback dropped by
     // the teardown leaves an unterminated tool call in the CLI's record, and the Agent Session this
     // belongs to is going Dormant — so that record is exactly what the next Revive resumes onto.
@@ -651,6 +684,7 @@ class ClaudeSession implements BackendSession {
       // Closing a stream that already ended is not an error worth surfacing.
     }
     await this.pump.catch(() => undefined);
+    await workflowsStopped;
   }
 
   private async consume(): Promise<void> {

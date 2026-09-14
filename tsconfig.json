@@ -12,6 +12,7 @@
     "rootDir": ".",
     "outDir": "dist",
     "strict": true,
+    "erasableSyntaxOnly": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,

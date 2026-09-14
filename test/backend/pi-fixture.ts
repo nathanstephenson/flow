@@ -16,7 +16,8 @@ export type ModelRequest = {
   messages: Array<{ role: string; content: unknown; tool_call_id?: string }>;
   tools?: Array<{ function: { name: string } }>;
 };
-export type ModelReply = { text?: string; tools?: Array<{ id: string; name: string; arguments: unknown }>; error?: string; status?: number };
+export type ModelReply = { text?: string; tools?: Array<{ id: string; name: string; arguments: unknown }>; error?: string; status?: number;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } };
 
 export function userText(request: ModelRequest): string {
   const content = request.messages.filter((message) => message.role === "user").at(-1)?.content;
@@ -68,6 +69,7 @@ export async function piFixture(t: TestContext, respond: (request: ModelRequest)
         { index: 0, delta: {}, finish_reason: reply.tools ? "tool_calls" : "stop" }]) {
         response.write(`data: ${JSON.stringify({ id: `response-${requests.length}`, object: "chat.completion.chunk", model: parsed.model, choices: [choice] })}\n\n`);
       }
+      if (reply.usage) response.write(`data: ${JSON.stringify({ id: `response-${requests.length}`, object: "chat.completion.chunk", model: parsed.model, choices: [], usage: reply.usage })}\n\n`);
       response.end("data: [DONE]\n\n");
     } catch {
       response.destroy();

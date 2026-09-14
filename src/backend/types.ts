@@ -72,7 +72,26 @@ export type BackendCreateOptions = {
  * One live Backend Session. `prompt` always means "now" — the Steering Queue lives in the Session
  * Host (ADR 0002), so an adapter never queues on the host's behalf.
  */
+export type WorkflowSubagentOptions = {
+  id: string;
+  name: string;
+  instructions: string;
+  input: import("../protocol/workflows.ts").Json;
+  modelId: string;
+  effort: EffortLevel;
+  permissionMode: "ask" | "auto-accept";
+  emit: (activity: { subagentId: string; event: BackendEvent | { type: "spend"; spend: Spend } }) => void;
+};
+
+export interface WorkflowSubagentHandle {
+  readonly done: Promise<string>;
+  answerEnquiry(askId: string, answers: string[][]): Promise<boolean>;
+  answerPermission(callId: string, decision: PermissionDecision): Promise<boolean>;
+  cancel(): Promise<void>;
+}
+
 export interface BackendSession {
+  startWorkflowSubagent?(options: WorkflowSubagentOptions): WorkflowSubagentHandle;
   readonly capabilities: Capabilities;
   /** Opaque token allowing a later Revive to continue this Conversation Context. */
   resumeToken(): string | undefined;

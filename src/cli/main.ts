@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { registerBackends } from "../backend/registry.ts";
 import { readOrCreateToken } from "../daemon/auth.ts";
 import { ConfigStore } from "../daemon/config-store.ts";
+import { SecretStore } from '../daemon/secret-store.ts';
+import { WorkflowStore } from '../workflows/store.ts';
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
@@ -189,6 +191,8 @@ async function startHost(
     shells,
     config,
     store,
+    workflows: new WorkflowStore(root),
+    secrets: new SecretStore(root),
     assets: webClient(),
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),

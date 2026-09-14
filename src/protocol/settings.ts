@@ -15,7 +15,20 @@
 import type { EffortLevel } from "./events.ts";
 import type { Fonts } from "./fonts.ts";
 
+export type WorkflowRuntimeSettings = {
+  externalSandbox: boolean;
+  dockerImage: string;
+  nodePath?: string;
+  dockerPath?: string;
+};
+
+export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {
+  externalSandbox: true,
+  dockerImage: 'flow-workflow-runtime:local',
+};
+
 export type Settings = {
+  workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
     /**
      * How long a Settled Agent Session survives before it is reaped — a duration like `"1d"`, or
@@ -109,6 +122,7 @@ export type Settings = {
  * would erase it.
  */
 export type SettingsPatch = {
+  workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };
   fonts?: { chrome?: string; monospace?: string };
   /**
