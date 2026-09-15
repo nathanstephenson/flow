@@ -59,7 +59,7 @@ function LoopNode({
           disabled={!data.change}
           onValueChange={(value) => value !== null && data.change?.(value)}
         >
-          <SelectTrigger aria-label={`Max tries · ${data.title}`}>
+          <SelectTrigger size="sm" aria-label={`Max tries · ${data.title}`}>
             <SelectValue>{data.maxTries}</SelectValue>
           </SelectTrigger>
           <SelectContent>
