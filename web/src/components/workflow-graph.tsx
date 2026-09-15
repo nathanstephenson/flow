@@ -33,11 +33,11 @@ function WorkflowNode({
   return (
     <div
       data-status={data.status}
-      className="workflow-step rounded border bg-background p-3 min-w-48 text-foreground"
+      className="workflow-step min-w-48 rounded-lg border bg-card p-3 text-xs text-card-foreground"
     >
       <Handle type="target" position={Position.Left} />
-      <strong>{step.name}</strong>
-      <div>
+      <strong className="text-sm font-semibold">{step.name}</strong>
+      <div className="text-muted-foreground">
         {step.kind} · {data.permission}
       </div>
       {data.status && <div>{data.status.replaceAll("-", " ")}</div>}
@@ -45,11 +45,7 @@ function WorkflowNode({
         {outcomes.map((outcome) => (
           <div key={outcome} className="relative -mr-3 pr-3 text-right text-xs">
             {outcome}
-            <Handle
-              id={outcome}
-              type="source"
-              position={Position.Right}
-            />
+            <Handle id={outcome} type="source" position={Position.Right} />
           </div>
         ))}
       </div>
@@ -130,7 +126,7 @@ export function WorkflowGraph({
       });
   };
   return (
-    <div className="workflow-canvas border rounded">
+    <div className="workflow-canvas overflow-hidden rounded-lg border">
       <ReactFlow
         nodes={nodes}
         edges={edges}

@@ -1,8 +1,19 @@
 import { useState } from "react";
 import type { Json, VisualSchema } from "../../../src/protocol/workflows.ts";
-
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
+import { Textarea } from "./ui/textarea.tsx";
+import { Switch } from "./ui/switch.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.tsx";
 import { emptySchema, initialValue } from "../presentation/workflow-schema.ts";
 export { emptySchema, initialValue } from "../presentation/workflow-schema.ts";
+
 export function ValueEditor({
   schema,
   value,
@@ -17,35 +28,25 @@ export function ValueEditor({
   label?: string;
 }) {
   const [variant, setVariant] = useState(0);
-  if (schema.type === "object")
+  if (schema.type === "object") {
+    const fields =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
     return (
-      <div className="grid gap-2">
+      <div className="grid gap-3">
         {Object.entries(schema.fields).map(([name, field]) => (
-          <div key={name}>
-            <span>
+          <div key={name} className="grid gap-2">
+            <span className="text-sm font-medium">
               {name}
               {field.required ? " *" : ""}
             </span>
             {!field.required && (
-              <label>
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
                   aria-label={`Include ${name}`}
-                  checked={
-                    !!value &&
-                    typeof value === "object" &&
-                    !Array.isArray(value) &&
-                    Object.hasOwn(value, name)
-                  }
-                  onChange={(e) => {
-                    const next = {
-                      ...(value &&
-                      typeof value === "object" &&
-                      !Array.isArray(value)
-                        ? value
-                        : {}),
-                    };
-                    if (e.target.checked)
+                  checked={Object.hasOwn(fields, name)}
+                  onCheckedChange={(checked) => {
+                    const next = { ...fields };
+                    if (checked)
                       next[name] = field.default ?? initialValue(field.schema);
                     else delete next[name];
                     onChange(next);
@@ -55,44 +56,26 @@ export function ValueEditor({
               </label>
             )}
             <ValueEditor
+              schema={field.schema}
+              label={label === "Value" ? name : `${label}.${name}`}
+              value={fields[name] ?? field.default}
               onClear={() => {
-                const next = {
-                  ...(value &&
-                  typeof value === "object" &&
-                  !Array.isArray(value)
-                    ? value
-                    : {}),
-                };
+                const next = { ...fields };
                 delete next[name];
                 onChange(next);
               }}
-              schema={field.schema}
-              label={label === "Value" ? name : `${label}.${name}`}
-              value={
-                (value && typeof value === "object" && !Array.isArray(value)
-                  ? value[name]
-                  : undefined) ?? field.default
-              }
-              onChange={(v) =>
-                onChange({
-                  ...(value &&
-                  typeof value === "object" &&
-                  !Array.isArray(value)
-                    ? value
-                    : {}),
-                  [name]: v,
-                })
-              }
+              onChange={(v) => onChange({ ...fields, [name]: v })}
             />
           </div>
         ))}
       </div>
     );
+  }
   if (schema.type === "array")
     return (
-      <div>
+      <div className="grid gap-2">
         {(Array.isArray(value) ? value : []).map((v, i) => (
-          <div key={i}>
+          <div key={i} className="grid gap-2 rounded-lg border p-3">
             <ValueEditor
               schema={schema.items}
               label={`${label} item ${i + 1}`}
@@ -103,16 +86,22 @@ export function ValueEditor({
                 )
               }
             />
-            <button
+            <Button
+              size="sm"
+              variant="destructive"
+              className="justify-self-start"
               onClick={() =>
                 onChange((value as Json[]).filter((_, n) => n !== i))
               }
             >
               Remove item
-            </button>
+            </Button>
           </div>
         ))}
-        <button
+        <Button
+          size="sm"
+          variant="outline"
+          className="justify-self-start"
           onClick={() =>
             onChange([
               ...(Array.isArray(value) ? value : []),
@@ -121,27 +110,36 @@ export function ValueEditor({
           }
         >
           Add item
-        </button>
+        </Button>
       </div>
     );
   if (schema.type === "union")
     return (
-      <div>
-        <select
-          aria-label={label === "Value" ? "Input variant" : `${label} variant`}
+      <div className="grid gap-2">
+        <Select
           value={variant}
-          onChange={(e) => {
-            const index = Number(e.target.value);
+          onValueChange={(index) => {
+            if (index === null) return;
             setVariant(index);
             onChange(initialValue(schema.variants[index]!));
           }}
         >
-          {schema.variants.map((s, i) => (
-            <option key={i} value={i}>
-              Variant {i + 1}: {s.type}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            className="w-full"
+            aria-label={
+              label === "Value" ? "Input variant" : `${label} variant`
+            }
+          >
+            <SelectValue>{`Variant ${variant + 1}: ${schema.variants[variant]?.type ?? ""}`}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {schema.variants.map((s, i) => (
+              <SelectItem key={i} value={i}>
+                Variant {i + 1}: {s.type}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <ValueEditor
           schema={schema.variants[variant] ?? schema.variants[0]!}
           label={label}
@@ -152,28 +150,39 @@ export function ValueEditor({
     );
   if (schema.type === "boolean")
     return (
-      <input
-        type="checkbox"
+      <Switch
         aria-label={label}
         checked={value === true}
-        onChange={(e) => onChange(e.target.checked)}
+        onCheckedChange={onChange}
       />
     );
   if (schema.type === "enum")
     return (
-      <select
-        aria-label={label}
+      <Select
         value={typeof value === "string" ? value : ""}
-        onChange={(e) => onChange(e.target.value)}
+        onValueChange={(next) => {
+          if (next !== null) onChange(next);
+        }}
       >
-        <option value="">Select</option>
-        {schema.values.map((v) => (
-          <option key={v}>{v}</option>
-        ))}
-      </select>
+        <SelectTrigger className="w-full" aria-label={label}>
+          <SelectValue>
+            {typeof value === "string" && value ? value : "Select"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {!schema.values.includes("") && (
+            <SelectItem value="">Select</SelectItem>
+          )}
+          {schema.values.map((v) => (
+            <SelectItem key={v} value={v}>
+              {v || "Empty string"}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     );
   return (
-    <input
+    <Input
       aria-label={label}
       type={schema.type === "number" ? "number" : "text"}
       value={
@@ -193,6 +202,7 @@ export function ValueEditor({
     />
   );
 }
+
 export function SchemaEditor({
   schema,
   onChange,
@@ -203,27 +213,34 @@ export function SchemaEditor({
   root?: boolean;
 }) {
   return (
-    <fieldset className="border rounded p-2 grid gap-2">
-      <legend>Schema</legend>
+    <fieldset className="grid min-w-0 gap-3 rounded-lg border p-3">
+      <legend className="px-1 text-sm font-medium">Schema</legend>
       {!root && (
-        <select
-          aria-label="Schema type"
+        <Select
           value={schema.type}
-          onChange={(e) =>
-            onChange(emptySchema(e.target.value as VisualSchema["type"]))
-          }
+          onValueChange={(value) => {
+            if (value !== null)
+              onChange(emptySchema(value as VisualSchema["type"]));
+          }}
         >
-          {["object", "array", "string", "number", "boolean", "enum"].map(
-            (t) => (
-              <option key={t}>{t}</option>
-            ),
-          )}
-        </select>
+          <SelectTrigger className="w-full" aria-label="Schema type">
+            <SelectValue>{schema.type}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {["object", "array", "string", "number", "boolean", "enum"].map(
+              (t) => (
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
+              ),
+            )}
+          </SelectContent>
+        </Select>
       )}
       {schema.type === "enum" && (
-        <label>
-          Values (one per line)
-          <textarea
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Values (one per line)</span>
+          <Textarea
             value={schema.values.join("\n")}
             onChange={(e) =>
               onChange({ ...schema, values: e.target.value.split("\n") })
@@ -240,9 +257,15 @@ export function SchemaEditor({
       {schema.type === "object" && (
         <>
           {Object.entries(schema.fields).map(([name, field]) => (
-            <fieldset key={name} className="border p-2">
-              <legend>{name}</legend>
-              <button
+            <fieldset
+              key={name}
+              className="grid min-w-0 gap-3 rounded-lg border p-3"
+            >
+              <legend className="px-1 text-sm font-medium">{name}</legend>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="justify-self-start"
                 onClick={() =>
                   onChange({
                     ...schema,
@@ -253,17 +276,16 @@ export function SchemaEditor({
                 }
               >
                 Remove field
-              </button>
-              <label>
-                <input
-                  type="checkbox"
+              </Button>
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
                   checked={!!field.required}
-                  onChange={(e) =>
+                  onCheckedChange={(checked) =>
                     onChange({
                       ...schema,
                       fields: {
                         ...schema.fields,
-                        [name]: { ...field, required: e.target.checked },
+                        [name]: { ...field, required: checked },
                       },
                     })
                   }
@@ -282,14 +304,12 @@ export function SchemaEditor({
                   })
                 }
               />
-              <label>
-                <input
-                  type="checkbox"
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
                   checked={field.default !== undefined}
-                  onChange={(e) => {
+                  onCheckedChange={(checked) => {
                     const next = { ...field };
-                    if (e.target.checked)
-                      next.default = initialValue(field.schema);
+                    if (checked) next.default = initialValue(field.schema);
                     else delete next.default;
                     onChange({
                       ...schema,
@@ -317,6 +337,7 @@ export function SchemaEditor({
             </fieldset>
           ))}
           <form
+            className="flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               const form = e.currentTarget;
@@ -337,8 +358,16 @@ export function SchemaEditor({
               }
             }}
           >
-            <input name="field" aria-label="New field name" required />
-            <button>Add field</button>
+            <Input
+              className="min-w-0 flex-1"
+              name="field"
+              aria-label="New field name"
+              placeholder="Field name"
+              required
+            />
+            <Button type="submit" size="sm" variant="outline">
+              Add field
+            </Button>
           </form>
         </>
       )}
