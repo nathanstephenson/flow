@@ -113,7 +113,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
     <section className="workflow-panel grid content-start gap-3 overflow-auto p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">Workflows</h2>
-        <Button size="sm" variant="outline" disabled={busy || !history.data || history.data.occupied || session?.status === "running" || session?.status === "awaiting" || session?.status === "ended"} onClick={() => setCreating(value => !value)}>{creating ? "Close" : "New workflow"}</Button>
+        <Button size="sm" variant="outline" disabled={busy || !history.data || history.data.occupied || session?.status === "ended"} onClick={() => setCreating(value => !value)}>{creating ? "Close" : "New workflow"}</Button>
       </div>
       <p className="text-xs text-muted-foreground">
         Independent of parent chat. Steps share this Scope.
@@ -180,7 +180,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
                   busy ||
                   !history.data ||
                   history.data.occupied ||
-                  session?.status === "running" || session?.status === "awaiting" || session?.status === "ended" ||
+                  session?.status === "ended" ||
                   !!invalid ||
                   !!mismatch
                 }

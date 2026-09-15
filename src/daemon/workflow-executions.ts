@@ -540,6 +540,10 @@ export class WorkflowExecutionService {
         view = activity as PrivateView; view.enquiries = []; view.permissions = [];
       }
       catch { view = { activity: [], enquiries: [], permissions: [], stepSpend: {} }; }
+      const logPath = this.privatePath(sessionId, executionId) + 'l';
+      if (existsSync(logPath)) {
+        view.activity = readFileSync(logPath, 'utf8').split('\n').filter(Boolean).slice(-200).map(line => JSON.parse(line) as WorkflowActivity);
+      }
       this.views.set(executionId, view);
     }
     return view;

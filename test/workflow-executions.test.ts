@@ -505,6 +505,52 @@ it('persists complete redacted paginated activity across attempts and restart, i
   } finally { await f.close(); }
 });
 
+it('recovers activity sequences when the durable log is ahead of the preview', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start(f.id, definition, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
+    const stalePreview = readFileSync(path, 'utf8');
+    f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'durable before crash' });
+    await f.host.shutdown();
+    writeFileSync(path, stalePreview);
+    const backend = new FakeBackend();
+    const host = new SessionHost({ store: f.store, retention: 0 });
+    host.registerBackend(backend);
+    const restarted = new WorkflowExecutionService(host, f.workflows, f.secrets, f.config, runtimePath);
+    try {
+      await host.load();
+      restarted.reconcile();
+      await restarted.recover(f.id, eid, { kind: 'retry', stepId: 'agent' });
+      await until(() => backend.latest.workflowSubagents.length === 1);
+      const handle = backend.latest.workflowSubagents[0]!;
+      handle.emit({ type: 'notice', level: 'info', text: 'after recovery' });
+      handle.emit({ type: 'notice', level: 'info', text: 'another event' });
+      handle.complete('done');
+      await restarted.scheduler.wait(f.id, eid);
+      const events = [];
+      let after = 0;
+      for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+        const page = await restarted.activity(f.id, eid, { after, limit: 1 });
+        assert.equal(page.historyComplete, true);
+        events.push(...page.activity);
+        if (page.next === undefined) break;
+        assert.ok(page.next > after);
+        after = page.next;
+      }
+      assert.deepEqual(events.map(event => event.sequence), [1, 2, 3]);
+      assert.deepEqual(events.map(event => event.attempt), [1, 2, 2]);
+      assert.deepEqual(events.map(event => event.event), [
+        { type: 'notice', level: 'info', text: 'durable before crash' },
+        { type: 'notice', level: 'info', text: 'after recovery' },
+        { type: 'notice', level: 'info', text: 'another event' },
+      ]);
+    } finally { await host.shutdown(); }
+  } finally { await f.close(); }
+});
+
 it('provides fresh compact parent context and queues/deduplicates recovery notifications while busy', async () => {
   const f = await fixture();
   try {
