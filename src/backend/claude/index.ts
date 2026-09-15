@@ -1,3 +1,4 @@
+import { workflowParentServer } from "./workflow-parent.ts";
 import { randomUUID } from "node:crypto";
 import { claudeAutoCompactionEnv } from "./auto-compaction.ts";
 import { spawn, spawnSync } from "node:child_process";
@@ -228,6 +229,7 @@ class ClaudeSession implements BackendSession {
   private compacting = false;
   private disposed = false;
   private readonly workflowSubagents = new Set<WorkflowSubagentHandle>();
+  private readonly parentWorkflow: ReturnType<typeof workflowParentServer>;
   private readonly workflowGrants: Set<string>;
   private disposal: Promise<void> | undefined;
   private modelId: string | undefined;
@@ -271,6 +273,7 @@ class ClaudeSession implements BackendSession {
   private readonly backendOptions: ClaudeBackendOptions;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
+    this.parentWorkflow = workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.options = options;
     this.backendOptions = backendOptions;
     this.emit = options.emit;
@@ -284,7 +287,7 @@ class ClaudeSession implements BackendSession {
     // A one-shot text call pre-approves nothing and authorises nothing — see
     // `BackendCreateOptions.tools`. The deny in `canUseTool` below is the half that makes it hold.
     const toolless = options.tools === "none";
-    const preApproved = toolless ? [] : (backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS);
+    const preApproved = toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover"] : [])];
     this.allowed = new Set(toolless ? [] : [...preApproved, ...(options.standingAuthorisations ?? [])]);
     // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
@@ -295,7 +298,7 @@ class ClaudeSession implements BackendSession {
       cwd: options.scope,
       ...(env ? { env } : {}),
       includePartialMessages: true,
-      mcpServers: toolless ? {} : claudeMcpServers(options.mcp),
+      mcpServers: toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow },
       strictMcpConfig: true,
       // NOT bypassPermissions: it auto-approves before canUseTool is consulted, and the SDK warns
       // as much. "default" runs the permission flow, allowedTools auto-approves the pre-approved
@@ -652,7 +655,7 @@ class ClaudeSession implements BackendSession {
   }
 
   async refreshMcp(): Promise<void> {
-    await refreshClaudeMcp(this.stream, this.options.mcp);
+    await refreshClaudeMcp(this.stream, this.options.mcp, this.parentWorkflow);
   }
 
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {

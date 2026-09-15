@@ -1,3 +1,4 @@
+import type { WorkflowParent } from "../backend/workflow-tools.ts";
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
@@ -956,6 +957,8 @@ export class SessionHost {
 
   async abort(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
+    this.cancelWorkflowConfirmation(sessionId);
+    this.workflowNotifications.delete(sessionId);
     // Aborting means stop, not stop-then-continue: queued follow-ups go too.
     if (record.queue.length > 0) {
       record.queue.length = 0;
@@ -1030,6 +1033,12 @@ export class SessionHost {
    * otherwise produce an `answers` map the model reads as consent nobody gave.
    */
   async answerEnquiry(sessionId: string, askId: string, answers: string[][]): Promise<void> {
+    const workflow = this.workflowConfirmations.get(askId);
+    if (workflow?.sessionId === sessionId) {
+      if (answers.length !== 1 || answers[0]?.length !== 1 || !['Recover', 'Cancel'].includes(answers[0][0]!)) throw new CommandRefused('Choose Recover or Cancel');
+      workflow.finish(answers[0][0] === 'Recover');
+      return;
+    }
     const record = this.record(sessionId);
     const session = record.session;
     if (!session) {
@@ -1292,7 +1301,65 @@ export class SessionHost {
     record.log.append({ type: "branch_changed", branch });
   }
 
-  workflowOwner?: { stop(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
+  workflowOwner?: {
+    stop(sessionId: string): Promise<void>;
+    forget(sessionId: string): Promise<void>;
+    context(sessionId: string): string;
+    parent(sessionId: string): WorkflowParent;
+    takeNotification(sessionId: string, executionId: string, revision: string): string | undefined;
+  };
+  private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
+  private readonly workflowConfirmations = new Map<string, { sessionId: string; finish: (allowed?: boolean) => void }>();
+
+  cancelWorkflowConfirmation(sessionId: string): void {
+    for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
+  }
+
+  workflowWake(sessionId: string, executionId: string, revision: string): void {
+    if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
+    this.workflowNotifications.set(sessionId, { executionId, revision });
+    queueMicrotask(() => {
+      const record = this.sessions.get(sessionId);
+      if (record) void this.drainWorkflowNotification(record).catch(() => {});
+    });
+  }
+
+  private async drainWorkflowNotification(record: SessionRecord): Promise<void> {
+    if (record.turnInFlight || record.queue.length || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return;
+    const pending = this.workflowNotifications.get(record.id);
+    if (!pending) return;
+    this.workflowNotifications.delete(record.id);
+    const text = this.workflowOwner?.takeNotification(record.id, pending.executionId, pending.revision);
+    if (!text) return;
+    record.turnInFlight = true;
+    record.log.append({ type: 'notice', level: 'info', text: 'Workflow requires recovery. The parent is inspecting it.' });
+    try { await record.session.prompt(text); }
+    catch (error) {
+      record.turnInFlight = false;
+      record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
+    }
+  }
+
+  /** Confirmation belongs to this exact action, never a standing grant or model assertion. */
+  confirmWorkflow(sessionId: string, description: string, signal?: AbortSignal): Promise<boolean> {
+    const record = this.record(sessionId);
+    if (!record.session || record.lifecycle !== 'live' || !record.turnInFlight || signal?.aborted) return Promise.resolve(false);
+    const askId = `workflow-${randomUUID()}`;
+    const questions = [{ header: 'Workflow recovery', question: description, multiSelect: false,
+      options: [{ label: 'Recover', description: 'Authorize this action once. Earlier operations may already have made changes.' }, { label: 'Cancel', description: 'Do not perform this recovery.' }] }];
+    return new Promise(resolve => {
+      const abort = () => finish();
+      const finish = (allowed?: boolean) => {
+        if (!this.workflowConfirmations.delete(askId)) return;
+        signal?.removeEventListener('abort', abort);
+        this.onBackendEvent(sessionId, allowed === undefined ? { type: 'enquiry', askId, questions, state: 'aborted' } : { type: 'enquiry', askId, questions, state: 'answered', answers: [[allowed ? 'Recover' : 'Cancel']] });
+        resolve(allowed === true);
+      };
+      this.workflowConfirmations.set(askId, { sessionId, finish });
+      signal?.addEventListener('abort', abort, { once: true });
+      this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, state: 'asked' });
+    });
+  }
   private workflowShutdown = false;
   private readonly workflowStopping = new Set<string>();
 
@@ -1363,6 +1430,8 @@ export class SessionHost {
     record.session = undefined;
     record.lifecycle = "settled";
     this.workflowStopping.add(sessionId);
+    this.workflowNotifications.delete(sessionId);
+    for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
     // The retention window runs from here, not from the last thing that happened: settling
     // something untouched for a week still grants it a full window (ADR 0006).
     record.settledAt = new Date().toISOString();
@@ -1708,6 +1777,10 @@ export class SessionHost {
     const openingMcp = mcp.open();
     const session = await backend.create({
       mcp,
+      workflow: {
+        inspect: input => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).inspect(input); },
+        recover: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).recover(input, signal); },
+      },
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
       ...(this.autoCompaction ? { autoCompaction: this.autoCompaction(backend.name) } : {}),
@@ -1930,7 +2003,8 @@ export class SessionHost {
       void this.nameFromSummary(record, text);
     }
     this.touch(record);
-    await record.session.prompt(sent, this.loadAttachments(record.id, attachments));
+    const workflowContext = this.workflowOwner?.context(record.id);
+    await record.session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments));
   }
 
   /**
@@ -1988,6 +2062,7 @@ export class SessionHost {
     }
 
     if (event.type === "turn_ended") {
+      for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
       record.turnInFlight = false;
       this.captureResumeToken(record);
       // Tools are pre-approved (ADR 0004), so the model can have run `git checkout` during the turn
@@ -2061,7 +2136,7 @@ export class SessionHost {
 
   private async drain(record: SessionRecord): Promise<void> {
     const next = record.queue.shift();
-    if (next === undefined) return;
+    if (next === undefined) { await this.drainWorkflowNotification(record); return; }
     record.log.append(queueChanged(record.queue));
     try {
       await this.dispatch(record, next);

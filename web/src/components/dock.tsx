@@ -172,7 +172,7 @@ export function Dock({
       </div>
 
       {active?.content?.kind === "workflows" ? (
-        <Suspense fallback={<p>Loading workflows…</p>}><WorkflowsPane key={sessionId} sessionId={sessionId} /></Suspense>
+        <Suspense fallback={<p>Loading workflows…</p>}><WorkflowsPane key={sessionId} sessionId={sessionId} placement={side} /></Suspense>
       ) : active?.content?.kind === "git" ? (
         <GitPane key={`${sessionId}-${active.id}`} sessionId={sessionId} />
       ) : active?.content?.kind === "subagents" ? (

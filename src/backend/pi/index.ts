@@ -1,3 +1,4 @@
+import { workflowParentTools } from "./workflow-parent.ts";
 import { piMcpTools } from "./mcp.ts";
 import type { McpSession } from "../mcp.ts";
 import { randomUUID } from "node:crypto";
@@ -485,12 +486,14 @@ export class PiBackend implements AgentBackend {
       ...defaults, ASK_TOOL, SUBAGENT_TOOL, ...(defaults.includes("bash") ? ["bash_output", "kill_shell"] : []),
     ])];
     const mcp = options.tools === "none" ? undefined : options.mcp;
-    tools.push(...piMcpTools(mcp).map((tool) => tool.name));
+    const workflowTools = workflowParentTools(options.tools === "none" ? undefined : options.workflow);
+    tools.push(...workflowTools.map(tool => tool.name), ...piMcpTools(mcp).map((tool) => tool.name));
     const enabled = (name: string) => tools.includes(name);
     const enquiries = enabled(ASK_TOOL) ? new PiEnquiries(options.emit) : undefined;
     const work = new PiWork(options.emit, (completion) => piSession.completed(completion));
     const subagents = enabled(SUBAGENT_TOOL);
     const customTools = [
+      ...workflowTools,
       ...piMcpTools(mcp),
       ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
       ...(enquiries ? [enquiries.tool] : []),
@@ -539,7 +542,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
   if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
-  const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL);
+  const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
     appendSystemPrompt: ["You are a Subagent. Complete the delegated work and return the result. If human input is needed, return that request to the parent. You cannot ask the human or create further Subagents."] });

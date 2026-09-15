@@ -38,7 +38,7 @@
   overflow: auto;
 }
 .workflow-panel .workflow-canvas {
-  height: 280px;
+  height: max(360px, 55vh);
 }
 .workflow-canvas .react-flow {
   --xy-background-color: var(--background);

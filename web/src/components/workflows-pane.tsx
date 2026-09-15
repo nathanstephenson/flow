@@ -1,24 +1,19 @@
 import { useEffect, useState } from "react";
 import {
   limitedLoops,
-  extendLoop,
   loopProgress,
 } from "../presentation/workflow-loops.ts";
-import { Textarea } from "./ui/textarea.tsx";
 import {
-  recoveryCandidates,
   workflowIssue,
 } from "../presentation/workflows.ts";
 import type {
   Json,
   WorkflowDefinition,
-  WorkflowLoopRecord,
 } from "../../../src/protocol/workflows.ts";
 import type {
   WorkflowExecutionList,
   WorkflowExecutionView,
   WorkflowEnquiry,
-  RecoverWorkflow,
 } from "../../../src/protocol/workflow-executions.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
@@ -35,8 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select.tsx";
+import { attemptDuration } from "../presentation/workflow-execution.ts";
+import { WorkflowTranscript } from "./workflow-transcript.tsx";
 import "./workflows.css";
-export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
+export default function WorkflowsPane({ sessionId, placement = "right" }: { sessionId: string; placement?: "right" | "bottom" }) {
   const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(
     "/api/workflows",
   );
@@ -48,6 +45,9 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
   const [stepId, selectStep] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"Overview" | "Flow">("Overview");
+  const [creating, setCreating] = useState(false);
+  const [attempt, setAttempt] = useState<number>();
   const detail = useWorkflowResource<WorkflowExecutionView>(
     executionId ? `${base}/${executionId}` : undefined,
     1000,
@@ -70,6 +70,9 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
     setExecutionId("");
     selectStep("");
     setMessage("");
+    setCreating(false);
+    setTab("Overview");
+    setAttempt(undefined);
   }, [sessionId]);
   useEffect(() => {
     if (executionId || !executions.length) return;
@@ -79,18 +82,6 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
     );
     setExecutionId((active ?? executions[0]!).id);
   }, [executionId, history.data]);
-  useEffect(() => {
-    if (!execution || step) return;
-    const pending = view.enquiries[0]?.stepId ?? view.permissions[0]?.stepId;
-    selectStep(
-      pending ??
-        execution.definition.steps.find(
-          (item) => execution.steps[item.id]?.status === "running",
-        )?.id ??
-        execution.definition.steps[0]?.id ??
-        "",
-    );
-  }, [execution, step, view]);
   let invalid = "";
   try {
     if (definition) {
@@ -110,7 +101,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
         "POST",
         body,
       );
-      if (result.execution) setExecutionId(result.execution.id);
+      if (result.execution) { setExecutionId(result.execution.id); setCreating(false); }
       setMessage("Request accepted");
     } catch (e) {
       setMessage(workflowIssue(e));
@@ -120,7 +111,10 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
   };
   return (
     <section className="workflow-panel grid content-start gap-3 overflow-auto p-3 text-sm">
-      <h2 className="text-sm font-semibold">Workflows</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Workflows</h2>
+        <Button size="sm" variant="outline" disabled={busy || !history.data || history.data.occupied || session?.status === "running" || session?.status === "awaiting" || session?.status === "ended"} onClick={() => setCreating(value => !value)}>{creating ? "Close" : "New workflow"}</Button>
+      </div>
       <p className="text-xs text-muted-foreground">
         Independent of parent chat. Steps share this Scope.
       </p>
@@ -129,10 +123,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
           {definitions.error || history.error || detail.error || message}
         </p>
       )}
-      <details open={!execution && !history.data?.occupied}>
-        <summary className="cursor-pointer font-medium">
-          Start a workflow
-        </summary>
+      {creating && !history.data?.occupied && <section aria-label="New workflow">
         <div className="grid gap-3 pt-2">
           <Select
             value={workflowId}
@@ -189,6 +180,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   busy ||
                   !history.data ||
                   history.data.occupied ||
+                  session?.status === "running" || session?.status === "awaiting" || session?.status === "ended" ||
                   !!invalid ||
                   !!mismatch
                 }
@@ -204,7 +196,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
             </p>
           )}
         </div>
-      </details>
+      </section>}
       <label className="flex flex-col gap-1">
         <span className="text-sm font-medium">Execution history</span>
         <Select
@@ -221,6 +213,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
             if (value === null) return;
             setExecutionId(value);
             selectStep("");
+            setAttempt(undefined);
           }}
         >
           <SelectTrigger className="w-full" aria-label="Execution history">
@@ -262,24 +255,10 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
               </Button>
             </>
           )}
-          {execution.status === "recovery-required" &&
-            limitedLoops(execution).map(([headerId, loop]) => (
-              <LoopRecovery
-                key={`${execution.id}/${headerId}/${loop.activation}/${loop.try}`}
-                headerId={headerId}
-                loop={loop}
-                name={
-                  execution.definition.steps.find(
-                    (step) => step.id === headerId,
-                  )?.name ?? headerId
-                }
-                maxTries={
-                  execution.definition.loopSettings?.[headerId]?.maxTries ?? 3
-                }
-                busy={busy}
-                send={(body) => mutate(`${base}/${execution.id}/recover`, body)}
-              />
-            ))}
+          {execution.status === "recovery-required" && <div className="rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3">
+            <p>Recovery required. Ask the parent in chat to diagnose and recover this execution.</p>
+            {limitedLoops(execution).map(([id, loop]) => <p key={id}>{execution.definition.steps.find(step => step.id === id)?.name}: {loopProgress(loop, execution.definition.loopSettings?.[id]?.maxTries ?? 3)}</p>)}
+          </div>}
           {view.permissions.map((p) => (
             <fieldset
               key={`${p.subagentId}/${p.callId}`}
@@ -331,39 +310,28 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
               }
             />
           ))}
-          <WorkflowGraph
+          <div role="tablist" aria-label="Workflow execution view" className="flex gap-1 border-b pb-2">
+            {(["Overview", "Flow"] as const).map(name => <Button key={name} role="tab" aria-selected={tab === name} variant={tab === name ? "secondary" : "ghost"} size="sm" onClick={() => setTab(name)}>{name}</Button>)}
+          </div>
+          {tab === "Overview" && <section role="tabpanel" aria-label="Overview" className="grid min-w-0 gap-3">
+            <p className="text-xs text-muted-foreground">Original launch snapshot · read-only. Later workflow edits do not change this execution.</p>
+            <p>{execution.definition.steps.length} steps · {execution.definition.backend} · {new Date(execution.startedAt).toLocaleString()}</p>
+            <h3 className="font-semibold">Original inputs</h3>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.input, null, 2)}</pre>
+            <details><summary className="cursor-pointer font-medium">Original workflow</summary><pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.definition, null, 2)}</pre></details>
+            {Object.entries(execution.steps).filter(([, record]) => record.attempts.at(-1)?.error).map(([id, record]) => <p key={id} className="text-destructive">{execution.definition.steps.find(step => step.id === id)?.name}: {record.attempts.at(-1)?.error?.message}</p>)}
+          </section>}
+          {tab === "Flow" && !step && <WorkflowGraph
+            key={`${execution.id}/${placement}`}
             definition={execution.definition}
             execution={execution}
-            awaitingSteps={[...view.enquiries, ...view.permissions].map(
-              (item) => item.stepId,
-            )}
+            orientation={placement === "bottom" ? "horizontal" : "vertical"}
+            awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
             selectedStepId={stepId}
-            onSelect={selectStep}
-          />
-          <label className="flex flex-col gap-1">
-            <span className="text-sm font-medium">Step details</span>
-            <Select
-              value={stepId}
-              onValueChange={(value) => value !== null && selectStep(value)}
-            >
-              <SelectTrigger className="w-full" aria-label="Step details">
-                <SelectValue>
-                  {step
-                    ? `${step.name} · ${record?.status.replaceAll("-", " ") ?? ""}`
-                    : "Select step"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {execution.definition.steps.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.name} ·{" "}
-                    {execution.steps[item.id]?.status.replaceAll("-", " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          {step && record && (
+            onSelect={id => { selectStep(id); setAttempt(undefined); }}
+          />}
+          {tab === "Flow" && step && <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => selectStep("")}>← Back to flow</Button>}
+          {tab === "Flow" && step && record && (
             <div className="grid gap-2">
               <h3 className="font-semibold">
                 {step.name} · {record.status}
@@ -379,13 +347,12 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   ? `$${view.stepSpend[step.id]!.costUSD.toFixed(4)} · ${view.stepSpend[step.id]!.tokens.toLocaleString()} tokens`
                   : "Unknown"}
               </p>
-              {record.attempts.map((a) => (
+              <label className="grid gap-1"><span className="font-medium">Attempt</span><Select value={attempt ?? record.attempts.at(-1)?.number ?? 1} onValueChange={value => value !== null && setAttempt(value)}><SelectTrigger aria-label="Attempt"><SelectValue /></SelectTrigger><SelectContent>{record.attempts.map(a => <SelectItem key={a.number} value={a.number}>Attempt {a.number} · {a.action}{a.error ? " · failed" : ""}</SelectItem>)}</SelectContent></Select></label>
+              {record.attempts.filter(a => a.number === (attempt ?? record.attempts.at(-1)?.number)).map((a) => (
                 <details key={a.number} open>
                   <summary className="cursor-pointer font-medium">
                     Attempt {a.number} · {a.action} ·{" "}
-                    {a.finishedAt
-                      ? `${a.finishedAt - a.startedAt} ms`
-                      : "In progress"}
+                    {attemptDuration(a.startedAt, a.finishedAt)}
                   </summary>
                   {a.loops?.map((loop) => (
                     <p
@@ -407,6 +374,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
                   </pre>
+                  <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} />
                   {a.error && (
                     <p role="alert">
                       {a.error.kind}: {a.error.message}
@@ -414,55 +382,9 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   )}
                 </details>
               ))}
-              <details>
-                <summary className="cursor-pointer font-medium">
-                  Subagent activity
-                </summary>
-                {view.activity
-                  .filter((a) => a.stepId === step.id)
-                  .map((a) => (
-                    <pre
-                      key={a.sequence}
-                      className="whitespace-pre-wrap break-words font-mono text-xs"
-                    >
-                      {JSON.stringify(a.event, null, 2)}
-                    </pre>
-                  ))}
-              </details>
-              {execution.status === "recovery-required" &&
-                recoveryCandidates(execution).includes(step.id) && (
-                  <Recovery
-                    key={`${execution.id}/${step.id}`}
-                    definition={execution.definition}
-                    stepId={step.id}
-                    busy={busy}
-                    send={(body) =>
-                      mutate(`${base}/${execution.id}/recover`, body)
-                    }
-                  />
-                )}
             </div>
           )}
-          {execution.status === "recovery-required" &&
-            limitedLoops(execution).length === 0 &&
-            recoveryCandidates(execution).length === 0 && (
-              <>
-                <p>Earlier operations may already have made changes.</p>
-                <Button
-                  size="sm"
-                  className="justify-self-start"
-                  disabled={busy}
-                  onClick={() =>
-                    void mutate(`${base}/${execution.id}/recover`, {
-                      kind: "continue",
-                    })
-                  }
-                >
-                  Continue
-                </Button>
-              </>
-            )}
-          {execution.result !== undefined && (
+          {tab === "Overview" && execution.result !== undefined && (
             <>
               <h3 className="font-semibold">Result</h3>
               <pre className="whitespace-pre-wrap break-words font-mono text-xs">
@@ -473,111 +395,6 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
         </>
       )}
     </section>
-  );
-}
-function LoopRecovery({
-  headerId,
-  loop,
-  name,
-  maxTries,
-  busy,
-  send,
-}: {
-  headerId: string;
-  loop: WorkflowLoopRecord;
-  name: string;
-  maxTries: number;
-  busy: boolean;
-  send: (body: RecoverWorkflow) => Promise<void>;
-}) {
-  const [guidance, setGuidance] = useState("");
-  return (
-    <form
-      className="grid gap-3 rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void send(extendLoop(headerId, loop, guidance));
-      }}
-    >
-      <h3 className="font-semibold">Loop limit reached · {name}</h3>
-      <p>{loopProgress(loop, maxTries)}</p>
-      <p className="text-xs text-muted-foreground">
-        Cancel execution or allow one more try. Guidance is added to Agent
-        instructions only for the extra try. The saved definition is unchanged.
-      </p>
-      <label className="grid gap-1">
-        <span className="text-sm font-medium">Guidance (optional)</span>
-        <Textarea
-          aria-label={`Guidance · ${name}`}
-          maxLength={100000}
-          value={guidance}
-          onChange={(event) => setGuidance(event.target.value)}
-        />
-      </label>
-      <Button
-        type="submit"
-        size="sm"
-        className="justify-self-start"
-        disabled={busy || guidance.length > 100000}
-      >
-        Allow one more try
-      </Button>
-    </form>
-  );
-}
-function Recovery({
-  definition,
-  stepId,
-  busy,
-  send,
-}: {
-  definition: WorkflowDefinition;
-  stepId: string;
-  busy: boolean;
-  send: (r: RecoverWorkflow) => Promise<void>;
-}) {
-  const schema = validateDefinition(definition).outputSchemas.get(stepId)!;
-  const [output, setOutput] = useState<Json>(() => initialValue(schema));
-  let invalid = "";
-  try {
-    parseValue(schema, output);
-  } catch (e) {
-    invalid = workflowIssue(e);
-  }
-  return (
-    <fieldset className="grid gap-3 rounded-lg border p-3">
-      <legend className="px-1 font-medium">Manual recovery</legend>
-      <p role="alert">
-        Operations may already have made changes. Retry can repeat those
-        effects.
-      </p>
-      <Button
-        size="sm"
-        variant="outline"
-        className="justify-self-start"
-        disabled={busy}
-        onClick={() => void send({ kind: "retry", stepId })}
-      >
-        Retry step
-      </Button>
-      <ValueEditor schema={schema} value={output} onChange={setOutput} />
-      {invalid && (
-        <pre
-          className="whitespace-pre-wrap break-words font-mono text-xs text-destructive"
-          role="alert"
-        >
-          {invalid}
-        </pre>
-      )}
-      <Button
-        size="sm"
-        className="justify-self-start"
-        disabled={busy || !!invalid}
-        onClick={() => void send({ kind: "supply", stepId, output })}
-      >
-        Supply output and continue
-      </Button>
-    </fieldset>
   );
 }
 function EnquiryForm({

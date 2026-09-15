@@ -40,14 +40,15 @@ test('intermediate symlink swaps cannot redirect file opens', { timeout: 10000 }
     assert.equal(readFileSync(join(outside, 'value'), 'utf8'), 'outside');
   } finally { racer.kill('SIGKILL'); await new Promise(resolve => racer.once('close', resolve)); }
 });
-test('HTTP fetch, response bounds and redirects', async () => {
+test('HTTP fetch preserves large responses and bounds redirects', async () => {
   const server = createServer((req, res) => { if (req.url === '/large') res.end('x'.repeat(100_001)); else if (req.url === '/redirect') { res.writeHead(302, { location: '/redirect' }); res.end(); } else res.end('hello'); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
   const url = `http://127.0.0.1:${address.port}`;
   try {
     assert.equal(await local.typescript.execute(context(`return (await fetch('${url}')).text();`, { type: 'string' })), 'hello');
-    for (const path of ['/large', '/redirect']) await assert.rejects(local.typescript.execute(context(`return (await fetch('${url}${path}')).body;`, { type: 'string' })));
+    assert.equal(await local.typescript.execute(context(`return (await fetch('${url}/large')).body;`, { type: 'string' })), 'x'.repeat(100_001));
+    for (const path of ['/redirect']) await assert.rejects(local.typescript.execute(context(`return (await fetch('${url}${path}')).body;`, { type: 'string' })));
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 test('configured deadline permits eleven seconds of IO followed by CPU work', { timeout: 25000 }, async () => {
@@ -71,20 +72,20 @@ test('quoted multiline secrets are redacted before thrown errors are encoded', a
     });
   }
 });
-test('CPU, cancellation and output limits', { timeout: 10000 }, async () => {
+test('CPU, cancellation, large output and sandbox memory protection', { timeout: 10000 }, async () => {
   const infinite = context('while(true) {}'); infinite.step.timeoutMs = 250;
   await assert.rejects(local.typescript.execute(infinite));
   const controller = new AbortController(); const cancelled = context('while(true) {}'); cancelled.signal = controller.signal;
   const result = local.typescript.execute(cancelled); setTimeout(() => controller.abort(), 200);
   await assert.rejects(result);
-  await assert.rejects(local.typescript.execute(context('return "x".repeat(100001);', { type: 'string' })));
+  assert.equal(await local.typescript.execute(context('return "x".repeat(100001);', { type: 'string' })), 'x'.repeat(100001));
   await assert.rejects(local.typescript.execute(context('return "x".repeat(64 * 1024 * 1024);', { type: 'string' })));
 });
-test('Shell passes JSON without interpolation, bounds streams and removes inherited credentials', async () => {
+test('Shell passes JSON without interpolation, honours cancellation and removes inherited credentials', async () => {
   process.env.FLOW_TEST_CREDENTIAL = 'must-not-leak';
   const ctx = context(''); ctx.input = { text: '$(touch injected)' }; ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'printf "%s" "$OUTPUT"; printf "%s" "${FLOW_TEST_CREDENTIAL-unset}" >&2; exit 7' };
   assert.deepEqual(await local.shell.execute(ctx), { exitCode: 7, stdout: JSON.stringify(ctx.input), stderr: 'unset' });
-  ctx.step.command = 'yes x'; await assert.rejects(local.shell.execute(ctx));
+  ctx.step.command = 'while true; do sleep 1; done'; ctx.step.timeoutMs = 100; await assert.rejects(local.shell.execute(ctx));
   delete process.env.FLOW_TEST_CREDENTIAL;
 });
 test('explicit unavailable sandbox fails; disabled runs; named secrets stay out of env and output', async () => {
@@ -242,4 +243,16 @@ test('SEA extracts a complete runtime and runs without source-relative assets', 
   copyFileSync(process.execPath, binary);
   execFileSync(process.execPath, [fileURLToPath(new URL('../node_modules/postject/dist/cli.js', import.meta.url)), binary, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'], { stdio: 'pipe' });
   assert.equal(execFileSync(binary, [], { cwd: tmpdir(), encoding: 'utf8' }).trim(), '12');
+});
+
+test('large shell output survives transport, TypeScript downstream input and file IO', async () => {
+  const ctx = context('');
+  ctx.step = { id: 'a', name: 'Large shell', kind: 'shell', command: 'printf "%0250000d" 0; printf "%0150000d" 0 >&2' };
+  const output = await local.shell.execute(ctx) as { stdout: string; stderr: string; exitCode: number };
+  assert.equal(output.stdout.length, 250000);
+  assert.equal(output.stderr.length, 150000);
+  const downstream = context('await fs.writeText("large-output", input); return await fs.readText("large-output");', { type: 'string' });
+  downstream.input = output.stdout;
+  downstream.inputSchema = { type: 'string' };
+  assert.equal(await local.typescript.execute(downstream), output.stdout);
 });

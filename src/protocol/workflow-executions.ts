@@ -3,6 +3,7 @@ import type { ExecutionStatus, Json, WorkflowDefinition, WorkflowExecution } fro
 
 export interface WorkflowActivity {
   sequence: number;
+  attempt?: number;
   at: number;
   stepId: string;
   subagentId: string;
@@ -27,6 +28,8 @@ export interface WorkflowPermissionPrompt {
 export interface WorkflowExecutionView {
   execution: WorkflowExecution;
   activity: WorkflowActivity[];
+  /** False for legacy runs whose evicted history cannot be reconstructed. */
+  historyComplete?: boolean;
   enquiries: WorkflowEnquiry[];
   permissions: WorkflowPermissionPrompt[];
   stepSpend: Record<string, Spend>;
@@ -59,6 +62,12 @@ export interface WorkflowRuntimeStatus {
 
 export type StartWorkflow = { workflowId: string; input: Json };
 export type TestWorkflowStep = { definition: WorkflowDefinition; sessionId: string; stepId: string; input: Json };
-export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string };
+export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined };
 export type AnswerWorkflowEnquiry = { subagentId: string; askId: string; answers: string[][] };
 export type AnswerWorkflowPermission = { subagentId: string; callId: string; decision: PermissionDecision };
+
+export interface WorkflowActivityPage {
+  activity: WorkflowActivity[];
+  next?: number;
+  historyComplete: boolean;
+}

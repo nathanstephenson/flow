@@ -8,8 +8,8 @@ import type { McpSession } from "../mcp.ts";
 
 const initializedStreams = new WeakSet<object>();
 
-export async function refreshClaudeMcp(stream: Pick<Query, "setMcpServers" | "mcpServerStatus">, mcp?: McpSession): Promise<void> {
-  const servers = claudeMcpServers(mcp);
+export async function refreshClaudeMcp(stream: Pick<Query, "setMcpServers" | "mcpServerStatus">, mcp?: McpSession, additional: Record<string, McpSdkServerConfigWithInstance> = {}): Promise<void> {
+  const servers = { ...claudeMcpServers(mcp), ...additional };
   const deadline = Date.now() + 10_000;
   while (!initializedStreams.has(stream)) {
     const status = await stream.mcpServerStatus();

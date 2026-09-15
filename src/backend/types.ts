@@ -23,6 +23,7 @@ export type PromptAttachment = {
 };
 
 export type BackendCreateOptions = {
+  workflow?: import("./workflow-tools.ts").WorkflowParent;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: ModelAutoCompaction;

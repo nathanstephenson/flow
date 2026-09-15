@@ -12,6 +12,7 @@ import {
   type Node,
   type Connection,
 } from "@xyflow/react";
+import { executionLayout } from "../presentation/workflow-execution.ts";
 import "@xyflow/react/dist/style.css";
 import type {
   WorkflowDefinition,
@@ -81,7 +82,7 @@ function LoopNode({
 function WorkflowNode({
   data,
 }: NodeProps<
-  Node<{ step: WorkflowStep; permission: string; status?: string }>
+  Node<{ step: WorkflowStep; permission: string; status?: string; vertical?: boolean; execution?: boolean }>
 >) {
   const { step } = data;
   const outcomes =
@@ -93,10 +94,10 @@ function WorkflowNode({
       data-status={data.status}
       className="workflow-step h-36 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
     >
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={data.vertical ? Position.Top : Position.Left} />
       <strong
         title={step.name}
-        className="block truncate text-sm font-semibold"
+        className={`block text-sm font-semibold ${data.execution ? "whitespace-normal line-clamp-2" : "truncate"}`}
       >
         {step.name}
       </strong>
@@ -108,10 +109,11 @@ function WorkflowNode({
         {outcomes.map((outcome) => (
           <div key={outcome} className="relative -mr-3 pr-3 text-right text-xs">
             {outcome}
-            <Handle id={outcome} type="source" position={Position.Right} />
+            {!data.vertical && <Handle id={outcome} type="source" position={Position.Right} />}
           </div>
         ))}
       </div>
+      {data.vertical && outcomes.map((outcome, index) => <Handle key={outcome} id={outcome} type="source" position={Position.Bottom} style={{ left: `${(index + 1) * 100 / (outcomes.length + 1)}%` }} />)}
     </div>
   );
 }
@@ -122,6 +124,7 @@ export function WorkflowGraph({
   execution,
   awaitingSteps = [],
   selectedStepId,
+  orientation = "horizontal",
 }: {
   definition: WorkflowDefinition;
   onChange?: (d: WorkflowDefinition) => void;
@@ -129,6 +132,7 @@ export function WorkflowGraph({
   execution?: WorkflowExecution;
   awaitingSteps?: string[];
   selectedStepId?: string;
+  orientation?: "horizontal" | "vertical";
 }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -144,7 +148,7 @@ export function WorkflowGraph({
   useEffect(() => {
     let layout: Node[];
     try {
-      layout = loopLayout(definition);
+      layout = loopLayout(execution ? executionLayout(definition, orientation === "vertical") : definition);
     } catch {
       layout = definition.steps.map((step, i) => ({
         id: step.id,
@@ -192,6 +196,8 @@ export function WorkflowGraph({
               : selectedStepId === step.id,
           data: {
             step,
+            vertical: !!execution && orientation === "vertical",
+            execution: !!execution,
             permission:
               step.permission ?? definition.permission ?? "auto-accept",
             status: awaitingSteps.includes(step.id)
@@ -211,7 +217,7 @@ export function WorkflowGraph({
         selected: previous.find((old) => old.id === edge.id)?.selected,
       })),
     );
-  }, [definition, execution, selectedStepId, JSON.stringify(awaitingSteps)]);
+  }, [definition, execution, selectedStepId, JSON.stringify(awaitingSteps), orientation]);
   const connect = (connection: Connection) => {
     if (connection.source && connection.target)
       onChange?.({
@@ -241,7 +247,7 @@ export function WorkflowGraph({
         }
         onConnect={connect}
         onNodeClick={(_, node) => node.type === "workflow" && onSelect(node.id)}
-        onSelectionChange={selectionChanged}
+        onSelectionChange={execution ? undefined : selectionChanged}
         onNodeDragStop={(_, node, dragged) =>
           onChange?.({
             ...definition,
@@ -280,9 +286,10 @@ export function WorkflowGraph({
         nodesDraggable={!!onChange}
         nodesConnectable={!!onChange}
         deleteKeyCode={onChange ? ["Backspace", "Delete"] : null}
-        fitView
-        minZoom={0.1}
-        fitViewOptions={{ minZoom: 0.1, maxZoom: 1 }}
+        fitView={!execution}
+        defaultViewport={{ x: 32, y: definition.loopSettings && Object.keys(definition.loopSettings).length ? 120 : 24, zoom: 1 }}
+        minZoom={execution ? 0.8 : 0.1}
+        fitViewOptions={{ minZoom: execution ? 0.8 : 0.1, maxZoom: 1 }}
       >
         <Background />
         <Controls />

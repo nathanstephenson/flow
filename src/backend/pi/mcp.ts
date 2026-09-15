@@ -1,5 +1,4 @@
 import { Type } from "typebox";
-import { truncateHead } from "@earendil-works/pi-coding-agent";
 import type { McpSession } from "../mcp.ts";
 
 export function piMcpTools(mcp?: McpSession) {
@@ -22,10 +21,7 @@ export function piMcpTools(mcp?: McpSession) {
         (result.structuredContent
           ? JSON.stringify(result.structuredContent)
           : "");
-      const truncated = truncateHead(text);
-      const output =
-        truncated.content +
-        (truncated.truncated ? "\n[MCP output truncated]" : "");
+      const output = text;
       if (result.isError) throw new Error(output);
       return {
         content: [
