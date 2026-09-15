@@ -39,7 +39,7 @@ export function parseExecution(value: unknown): WorkflowExecution {
     const state = record.loops![loop.headerId]!;
     if ((state.phase === 'inactive' && state.try !== 0) || (state.phase !== 'inactive' && state.phase !== 'exited' && (!state.activation || !state.try))) throw new Error('Invalid loop phase');
     if (state.phase === 'exited' && loop.memberIds.some(id => ['pending', 'running', 'interrupted', 'blocked'].includes(record.steps[id]!.status))) throw new Error('Exited loop contains unfinished work');
-    if (state.phase === 'inactive' && loop.memberIds.some(id => !['pending', 'skipped', 'cancelled'].includes(record.steps[id]!.status))) throw new Error('Inactive loop contains active work');
+    if (state.phase === 'inactive' && loop.memberIds.some(id => !['pending', 'blocked', 'skipped', 'cancelled'].includes(record.steps[id]!.status))) throw new Error('Inactive loop contains active work');
     if (state.phase === 'active' && state.try > 1 && state.headerInput === undefined) throw new Error('Missing repeat header input');
     const grants = new Set<string>();
     for (const grant of state.grants) {
