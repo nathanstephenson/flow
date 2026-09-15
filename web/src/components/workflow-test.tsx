@@ -1,4 +1,12 @@
 import { useState } from "react";
+import { Button } from "./ui/button.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.tsx";
 import type {
   Json,
   WorkflowDefinition,
@@ -8,7 +16,11 @@ import type {
   WorkflowExecutionView,
 } from "../../../src/protocol/workflow-executions.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
-import { validatedStepInput, startIssue, workflowIssue } from "../presentation/workflows.ts";
+import {
+  validatedStepInput,
+  startIssue,
+  workflowIssue,
+} from "../presentation/workflows.ts";
 import { useAgentSessions } from "../agent-sessions.tsx";
 import { ValueEditor, initialValue } from "./workflow-editors.tsx";
 import { useWorkflowResource, workflowApi } from "./workflow-api.ts";
@@ -40,34 +52,52 @@ export function StepTest({
     ? startIssue(definition, session.backend, slot.data?.occupied ?? true)
     : "Select an Agent Session explicitly";
   return (
-    <fieldset className="border p-2 grid gap-2">
-      <legend>Test only this step</legend>
-      <p>
+    <fieldset className="grid gap-3 rounded-lg border p-3">
+      <legend className="px-1 text-sm font-medium">Test only this step</legend>
+      <p className="text-xs text-muted-foreground">
         Uses the selected Agent Session’s Scope and workflow slot. Outgoing
         connections do not execute. Tests use this unsaved definition.
       </p>
-      <select
-        aria-label="Test Agent Session"
+      <Select
         value={sessionId}
-        onChange={(e) => setSessionId(e.target.value)}
+        onValueChange={(value) => value !== null && setSessionId(value)}
       >
-        <option value="">Select Agent Session</option>
-        {sessions.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.id} · {s.backend}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger className="w-full" aria-label="Test Agent Session">
+          <SelectValue>
+            {session
+              ? `${session.id} · ${session.backend}`
+              : "Select Agent Session"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="">Select Agent Session</SelectItem>
+          {sessions.map((s) => (
+            <SelectItem key={s.id} value={s.id}>
+              {s.id} · {s.backend}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {schema && (
         <>
-          <button onClick={() => setInput(initialValue(schema))}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="justify-self-start"
+            onClick={() => setInput(initialValue(schema))}
+          >
             Use sample defaults
-          </button>
+          </Button>
           <ValueEditor schema={schema} value={input} onChange={setInput} />
         </>
       )}
-      <p role="status">{slot.error || issue || invalid || message}</p>
-      <button
+      <p className="text-xs text-muted-foreground" role="status">
+        {slot.error || issue || invalid || message}
+      </p>
+      <Button
+        size="sm"
+        variant="outline"
+        className="justify-self-start"
         disabled={busy || !!issue || !!invalid || !!slot.error}
         onClick={async () => {
           setBusy(true);
@@ -88,7 +118,7 @@ export function StepTest({
         }}
       >
         Test selected step
-      </button>
+      </Button>
     </fieldset>
   );
 }

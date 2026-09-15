@@ -5,6 +5,13 @@ For detailed rules, read only relevant term sections in `docs/domain-reference.m
 For architecture decisions, select relevant files by name in `docs/adr/`; do not read the whole directory.
 Read these references only when the task needs them.
 
+## Web UI consistency
+
+Inspect analogous UI before making changes. Reuse `web/src/components/ui/`, existing domain controls
+such as `ModelPicker`, and the Settings patterns in `settings-parts.tsx`. Use existing theme tokens,
+typography, spacing, and button variants. Do not add feature-wide native-control overrides or a
+separate visual language. Check both light and dark rendering.
+
 ## Driving the web UI in a browser
 
 Playwright's chromium is already installed at `/ms-playwright` and `PLAYWRIGHT_BROWSERS_PATH` is

@@ -1,63 +1,18 @@
-.workflows input:not([type="checkbox"]):not([type="radio"]),
-.workflows select,
-.workflows textarea {
-  display: block;
-  width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.4rem;
-  background: var(--background);
-  color: var(--foreground);
-}
-.workflows button:not(.react-flow__controls-button):not(.cm-button) {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.3rem 0.65rem;
-}
-.workflows button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.workflows button:hover:not(:disabled) {
-  background: var(--muted);
-}
-.workflows pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 0.8rem;
-}
-.workflows h1 {
-  font-size: 1.5rem;
-}
-.workflows h2 {
-  font-size: 1.15rem;
-}
-.workflows label {
-  display: block;
-}
 .workflow-editor {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 .workflow-header,
 .workflow-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-.workflow-header {
-  white-space: nowrap;
-}
-.workflow-header select {
-  width: min(360px, 45%);
 }
 .workflow-metadata {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-.workflow-toolbar {
-  flex-wrap: wrap;
+  gap: 12px;
 }
 .workflow-workspace {
   display: grid;
@@ -82,42 +37,50 @@
   max-height: 240px;
   overflow: auto;
 }
-.workflows .react-flow__node {
-  font-size: 12px;
-}
-.workflow-panel {
-  font-size: 13px;
-}
-.workflow-panel h2 {
-  font-size: 15px;
-}
 .workflow-panel .workflow-canvas {
   height: 280px;
 }
-.workflow-panel summary {
-  cursor: pointer;
-}
-.workflow-panel > p:empty {
-  display: none;
+.workflow-canvas .react-flow {
+  --xy-background-color: var(--background);
+  --xy-attribution-background-color: var(--background);
+  --xy-background-pattern-color: var(--border);
+  --xy-edge-stroke: var(--muted-foreground);
+  --xy-edge-stroke-selected: var(--foreground);
+  --xy-connectionline-stroke: var(--foreground);
+  --xy-edge-label-background-color: var(--background);
+  --xy-edge-label-color: var(--foreground);
+  --xy-handle-background-color: var(--muted-foreground);
+  --xy-handle-border-color: var(--background);
+  --xy-controls-button-background-color: var(--background);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: 0 0 0 1px var(--border);
+  font-family: var(--font-sans);
 }
 .workflow-step {
   max-width: 240px;
   overflow-wrap: anywhere;
   border-left-width: 3px;
 }
+.react-flow__node.selected .workflow-step {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .workflow-step[data-status="completed"] {
-  border-left-color: #16a34a;
+  border-left-color: var(--diff-added);
 }
 .workflow-step[data-status="running"] {
-  border-left-color: #2563eb;
+  border-left-color: var(--status-active);
 }
 .workflow-step[data-status="awaiting-input"],
 .workflow-step[data-status="timed-out"] {
-  border-left-color: #d97706;
+  border-left-color: var(--status-awaiting);
 }
 .workflow-step[data-status="failed"],
 .workflow-step[data-status="interrupted"] {
-  border-left-color: #dc2626;
+  border-left-color: var(--destructive);
 }
 .workflow-step[data-status="skipped"],
 .workflow-step[data-status="cancelled"] {

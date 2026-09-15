@@ -1,3 +1,10 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.tsx";
 import type {
   WorkflowDefinition,
   WorkflowStep,
@@ -41,40 +48,61 @@ export function ConditionEditor({
   }
   const condition = step.condition;
   return (
-    <fieldset className="grid gap-2 border p-2">
-      <legend>Visual condition</legend>
-      {error && <p role="alert">{error}</p>}
-      <label>
-        Input path
-        <select
+    <fieldset className="grid gap-3 rounded-lg border p-3">
+      <legend className="px-1 text-sm font-medium">Condition</legend>
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">Input path</span>
+        <Select
           value={JSON.stringify(condition.path)}
-          onChange={(e) =>
+          onValueChange={(value) =>
+            value !== null &&
             onChange({
               ...step,
               condition: {
                 ...condition,
-                path: JSON.parse(e.target.value) as string[],
+                path: JSON.parse(value) as string[],
               },
             })
           }
         >
-          <option value={JSON.stringify(condition.path)}>
-            {condition.path.join(".") || "Whole input"}
-          </option>
-          {schema &&
-            schemaPaths(schema).map((path) => (
-              <option key={JSON.stringify(path)} value={JSON.stringify(path)}>
-                {path.join(".") || "Whole input"}
-              </option>
-            ))}
-        </select>
+          <SelectTrigger className="w-full" aria-label="Input path">
+            <SelectValue>
+              {condition.path.join(".") || "Whole input"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={JSON.stringify(condition.path)}>
+              {condition.path.join(".") || "Whole input"}
+            </SelectItem>
+            {schema &&
+              schemaPaths(schema)
+                .filter(
+                  (path) =>
+                    JSON.stringify(path) !== JSON.stringify(condition.path),
+                )
+                .map((path) => (
+                  <SelectItem
+                    key={JSON.stringify(path)}
+                    value={JSON.stringify(path)}
+                  >
+                    {path.join(".") || "Whole input"}
+                  </SelectItem>
+                ))}
+          </SelectContent>
+        </Select>
       </label>
-      <label>
-        Operator
-        <select
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">Operator</span>
+        <Select
           value={condition.operator}
-          onChange={(e) => {
-            const operator = e.target.value as typeof condition.operator;
+          onValueChange={(value) => {
+            if (value === null) return;
+            const operator = value as typeof condition.operator;
             onChange({
               ...step,
               condition:
@@ -90,12 +118,23 @@ export function ConditionEditor({
             });
           }}
         >
-          {["truthy", "equals", "not-equals", "greater-than", "less-than"].map(
-            (o) => (
-              <option key={o}>{o}</option>
-            ),
-          )}
-        </select>
+          <SelectTrigger className="w-full" aria-label="Operator">
+            <SelectValue>{condition.operator}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {[
+              "truthy",
+              "equals",
+              "not-equals",
+              "greater-than",
+              "less-than",
+            ].map((o) => (
+              <SelectItem key={o} value={o}>
+                {o}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </label>
       {condition.operator !== "truthy" && (
         <ValueEditor

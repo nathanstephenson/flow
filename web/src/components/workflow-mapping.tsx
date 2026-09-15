@@ -1,8 +1,22 @@
+import { useState } from "react";
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.tsx";
 import type {
   WorkflowDefinition,
   WorkflowStep,
 } from "../../../src/protocol/workflows.ts";
-import { mappingChoices, withMappingField, workflowIssue } from "../presentation/workflows.ts";
+import {
+  mappingChoices,
+  withMappingField,
+  workflowIssue,
+} from "../presentation/workflows.ts";
 export function MappingEditor({
   definition,
   step,
@@ -12,31 +26,48 @@ export function MappingEditor({
   step: WorkflowStep;
   onChange: (s: WorkflowStep) => void;
 }) {
+  const [sourceIndex, setSourceIndex] = useState(0);
   let error = "";
   let choices: ReturnType<typeof mappingChoices> = [];
   try {
-    choices = mappingChoices(definition, step.id, step.mapping?.kind ?? "reference");
+    choices = mappingChoices(
+      definition,
+      step.id,
+      step.mapping?.kind ?? "reference",
+    );
   } catch (e) {
     error = workflowIssue(e);
   }
+  const reference =
+    step.mapping?.kind === "reference" ? step.mapping.reference : undefined;
+  const referenceLabel =
+    choices.find(
+      (c) => JSON.stringify(c.reference) === JSON.stringify(reference),
+    )?.label ?? "Unavailable source";
+  const selectedSource = choices[sourceIndex] ? sourceIndex : 0;
   return (
-    <fieldset className="border p-2 grid gap-2">
-      <legend>Visual input mapping</legend>
-      <p>
+    <fieldset className="grid gap-3 rounded-lg border p-3">
+      <legend className="px-1 text-sm font-medium">Input mapping</legend>
+      <p className="text-xs text-muted-foreground">
         Only guaranteed completed step outputs are offered. Without a mapping,
         input comes from the preceding step.
       </p>
-      {error && <p role="alert">{error}</p>}
-      <label>
-        Input mode
-        <select
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">Input mode</span>
+        <Select
           value={step.mapping?.kind ?? "default"}
-          onChange={(e) => {
+          onValueChange={(value) => {
+            if (value === null) return;
             const next = { ...step };
-            if (e.target.value === "default") delete next.mapping;
+            if (value === "default") delete next.mapping;
             else
               next.mapping =
-                e.target.value === "object"
+                value === "object"
                   ? { kind: "object", fields: {} }
                   : {
                       kind: "reference",
@@ -45,18 +76,28 @@ export function MappingEditor({
             onChange(next);
           }}
         >
-          <option value="default">Preceding output</option>
-          <option value="reference">One source</option>
-          <option value="object">Combine named fields</option>
-        </select>
+          <SelectTrigger className="w-full" aria-label="Input mode">
+            <SelectValue>
+              {step.mapping?.kind === "object"
+                ? "Combine named fields"
+                : step.mapping?.kind === "reference"
+                  ? "One source"
+                  : "Preceding output"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default">Preceding output</SelectItem>
+            <SelectItem value="reference">One source</SelectItem>
+            <SelectItem value="object">Combine named fields</SelectItem>
+          </SelectContent>
+        </Select>
       </label>
       {step.mapping?.kind === "reference" && (
-        <select
-          aria-label="Input source"
+        <Select
           value={JSON.stringify(step.mapping.reference)}
-          onChange={(e) => {
+          onValueChange={(value) => {
             const choice = choices.find(
-              (c) => JSON.stringify(c.reference) === e.target.value,
+              (c) => JSON.stringify(c.reference) === value,
             );
             if (choice)
               onChange({
@@ -65,52 +106,80 @@ export function MappingEditor({
               });
           }}
         >
-          <option value={JSON.stringify(step.mapping.reference)}>
-            {choices.find(
-              (c) =>
-                JSON.stringify(c.reference) ===
-                JSON.stringify(
-                  step.mapping?.kind === "reference"
-                    ? step.mapping.reference
-                    : null,
-                ),
-            )?.label ?? "Unavailable source"}
-          </option>
-          {choices.map((c) => (
-            <option key={c.label} value={JSON.stringify(c.reference)}>
-              {c.label}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-full" aria-label="Input source">
+            <SelectValue>{referenceLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={JSON.stringify(step.mapping.reference)}>
+              {referenceLabel}
+            </SelectItem>
+            {choices
+              .filter(
+                (c) =>
+                  JSON.stringify(c.reference) !==
+                  JSON.stringify(
+                    step.mapping?.kind === "reference"
+                      ? step.mapping.reference
+                      : null,
+                  ),
+              )
+              .map((c) => (
+                <SelectItem key={c.label} value={JSON.stringify(c.reference)}>
+                  {c.label}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
       )}
       {step.mapping?.kind === "object" && (
         <>
           {Object.entries(step.mapping.fields).map(([name, ref]) => (
-            <div key={name}>
-              {name}
-              <select
-                aria-label={`${name} source`}
+            <div key={name} className="grid gap-2">
+              <span className="text-sm font-medium">{name}</span>
+              <Select
                 value={JSON.stringify(ref)}
-                onChange={(e) => {
+                onValueChange={(value) => {
                   const choice = choices.find(
-                    (c) => JSON.stringify(c.reference) === e.target.value,
+                    (c) => JSON.stringify(c.reference) === value,
                   );
                   if (choice)
                     onChange(withMappingField(step, name, choice.reference));
                 }}
               >
-                <option value={JSON.stringify(ref)}>
-                  {choices.find(
-                    (c) => JSON.stringify(c.reference) === JSON.stringify(ref),
-                  )?.label ?? "Unavailable source"}
-                </option>
-                {choices.map((c) => (
-                  <option key={c.label} value={JSON.stringify(c.reference)}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <button
+                <SelectTrigger className="w-full" aria-label={`${name} source`}>
+                  <SelectValue>
+                    {choices.find(
+                      (c) =>
+                        JSON.stringify(c.reference) === JSON.stringify(ref),
+                    )?.label ?? "Unavailable source"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={JSON.stringify(ref)}>
+                    {choices.find(
+                      (c) =>
+                        JSON.stringify(c.reference) === JSON.stringify(ref),
+                    )?.label ?? "Unavailable source"}
+                  </SelectItem>
+                  {choices
+                    .filter(
+                      (c) =>
+                        JSON.stringify(c.reference) !== JSON.stringify(ref),
+                    )
+                    .map((c) => (
+                      <SelectItem
+                        key={c.label}
+                        value={JSON.stringify(c.reference)}
+                      >
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="justify-self-start"
                 onClick={() => {
                   if (step.mapping?.kind === "object")
                     onChange({
@@ -127,10 +196,11 @@ export function MappingEditor({
                 }}
               >
                 Remove mapping
-              </button>
+              </Button>
             </div>
           ))}
           <form
+            className="grid gap-2"
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
@@ -144,15 +214,41 @@ export function MappingEditor({
                 onChange(withMappingField(step, name, choice.reference));
             }}
           >
-            <input name="name" aria-label="Mapped field name" required />
-            <select name="source" aria-label="Mapped field source">
-              {choices.map((c, i) => (
-                <option key={c.label} value={i}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-            <button>Add mapping</button>
+            <Input
+              name="name"
+              aria-label="Mapped field name"
+              placeholder="Field name"
+              required
+            />
+            <Select
+              name="source"
+              value={choices.length ? selectedSource : null}
+              onValueChange={(value) => value !== null && setSourceIndex(value)}
+            >
+              <SelectTrigger
+                className="w-full"
+                aria-label="Mapped field source"
+              >
+                <SelectValue>
+                  {choices[selectedSource]?.label ?? "Select source"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((c, i) => (
+                  <SelectItem key={c.label} value={i}>
+                    {c.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="submit"
+              size="sm"
+              variant="outline"
+              className="justify-self-start"
+            >
+              Add mapping
+            </Button>
           </form>
         </>
       )}

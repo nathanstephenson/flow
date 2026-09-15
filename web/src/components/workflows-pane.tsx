@@ -19,6 +19,15 @@ import { useAgentSessions } from "../agent-sessions.tsx";
 import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { initialValue, ValueEditor } from "./workflow-editors.tsx";
 import { WorkflowGraph } from "./workflow-graph.tsx";
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select.tsx";
 import "./workflows.css";
 export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
   const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(
@@ -103,35 +112,42 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
     }
   };
   return (
-    <section className="workflows workflow-panel overflow-auto p-3 grid content-start gap-3">
-      <h2>Workflows</h2>
+    <section className="workflow-panel grid content-start gap-3 overflow-auto p-3 text-sm">
+      <h2 className="text-sm font-semibold">Workflows</h2>
       <p className="text-xs text-muted-foreground">
         Independent of parent chat. Steps share this Scope.
       </p>
-      <p role="status">
-        {definitions.error || history.error || detail.error || message}
-      </p>
+      {(definitions.error || history.error || detail.error || message) && (
+        <p className="text-xs text-muted-foreground" role="status">
+          {definitions.error || history.error || detail.error || message}
+        </p>
+      )}
       <details open={!execution && !history.data?.occupied}>
-        <summary>Start a workflow</summary>
+        <summary className="cursor-pointer font-medium">
+          Start a workflow
+        </summary>
         <div className="grid gap-3 pt-2">
-          <select
-            aria-label="Workflow"
+          <Select
             value={workflowId}
-            onChange={(e) => {
-              setWorkflowId(e.target.value);
-              const d = definitions.data?.workflows.find(
-                (d) => d.id === e.target.value,
-              );
+            onValueChange={(value) => {
+              if (value === null) return;
+              setWorkflowId(value);
+              const d = definitions.data?.workflows.find((d) => d.id === value);
               setInput(d ? initialValue(d.inputSchema) : {});
             }}
           >
-            <option value="">Select workflow</option>
-            {definitions.data?.workflows.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="w-full" aria-label="Workflow">
+              <SelectValue>{definition?.name ?? "Select workflow"}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Select workflow</SelectItem>
+              {definitions.data?.workflows.map((d) => (
+                <SelectItem key={d.id} value={d.id}>
+                  {d.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {definition && (
             <>
               <ValueEditor
@@ -151,8 +167,17 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   .
                 </p>
               )}
-              {invalid && <pre role="alert">{invalid}</pre>}
-              <button
+              {invalid && (
+                <pre
+                  className="whitespace-pre-wrap break-words font-mono text-xs text-destructive"
+                  role="alert"
+                >
+                  {invalid}
+                </pre>
+              )}
+              <Button
+                size="sm"
+                className="justify-self-start"
                 disabled={
                   busy ||
                   !history.data ||
@@ -163,7 +188,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                 onClick={() => void mutate(base, { workflowId, input })}
               >
                 Start workflow
-              </button>
+              </Button>
             </>
           )}
           {history.data?.occupied && (
@@ -173,25 +198,38 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
           )}
         </div>
       </details>
-      <label>
-        Execution history
-        <select
+      <label className="flex flex-col gap-1">
+        <span className="text-sm font-medium">Execution history</span>
+        <Select
+          items={[
+            { value: "", label: "Select execution" },
+            ...executions.map((e) => ({
+              value: e.id,
+              label: `${e.name} · ${e.status.replaceAll("-", " ")} · ${new Date(e.startedAt).toLocaleString()}${e.testStepId ? " · step test" : ""}`,
+            })),
+          ]}
           disabled={busy}
           value={executionId}
-          onChange={(e) => {
-            setExecutionId(e.target.value);
+          onValueChange={(value) => {
+            if (value === null) return;
+            setExecutionId(value);
             selectStep("");
           }}
         >
-          <option value="">Select execution</option>
-          {executions.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.name} · {e.status.replaceAll("-", " ")} ·{" "}
-              {new Date(e.startedAt).toLocaleString()}
-              {e.testStepId ? " · step test" : ""}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-full" aria-label="Execution history">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Select execution</SelectItem>
+            {executions.map((e) => (
+              <SelectItem key={e.id} value={e.id}>
+                {e.name} · {e.status.replaceAll("-", " ")} ·{" "}
+                {new Date(e.startedAt).toLocaleString()}
+                {e.testStepId ? " · step test" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </label>
       {execution && (
         <>
@@ -206,27 +244,32 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
               <p className="text-xs text-muted-foreground">
                 Cancel stops work; it does not undo changes.
               </p>
-              <button
+              <Button
+                size="sm"
+                variant="destructive"
+                className="justify-self-start"
                 disabled={busy}
                 onClick={() => void mutate(`${base}/${execution.id}/cancel`)}
               >
                 Cancel execution
-              </button>
+              </Button>
             </>
           )}
           {view.permissions.map((p) => (
             <fieldset
               key={`${p.subagentId}/${p.callId}`}
-              className="border p-2"
+              className="flex flex-wrap gap-2 rounded-lg border p-3"
             >
-              <legend>
+              <legend className="px-1 font-medium">
                 Permission ·{" "}
                 {execution.definition.steps.find((item) => item.id === p.stepId)
                   ?.name ?? p.stepId}
               </legend>
-              <p>{p.tool}</p>
+              <p className="w-full font-mono text-xs">{p.tool}</p>
               {(["allow", "always", "deny"] as const).map((decision) => (
-                <button
+                <Button
+                  size="sm"
+                  variant={decision === "deny" ? "destructive" : "outline"}
                   key={decision}
                   disabled={busy}
                   onClick={() =>
@@ -239,8 +282,10 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                 >
                   {decision === "always"
                     ? "Always allow on this machine"
-                    : decision}
-                </button>
+                    : decision === "allow"
+                      ? "Allow"
+                      : "Deny"}
+                </Button>
               ))}
             </fieldset>
           ))}
@@ -270,23 +315,32 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
             selectedStepId={stepId}
             onSelect={selectStep}
           />
-          <label>
-            Step details
-            <select
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Step details</span>
+            <Select
               value={stepId}
-              onChange={(event) => selectStep(event.target.value)}
+              onValueChange={(value) => value !== null && selectStep(value)}
             >
-              {execution.definition.steps.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ·{" "}
-                  {execution.steps[item.id]?.status.replaceAll("-", " ")}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full" aria-label="Step details">
+                <SelectValue>
+                  {step
+                    ? `${step.name} · ${record?.status.replaceAll("-", " ") ?? ""}`
+                    : "Select step"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {execution.definition.steps.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name} ·{" "}
+                    {execution.steps[item.id]?.status.replaceAll("-", " ")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
           {step && record && (
             <div className="grid gap-2">
-              <h3>
+              <h3 className="font-semibold">
                 {step.name} · {record.status}
               </h3>
               {step.kind === "agent" && (
@@ -302,16 +356,18 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
               </p>
               {record.attempts.map((a) => (
                 <details key={a.number} open>
-                  <summary>
+                  <summary className="cursor-pointer font-medium">
                     Attempt {a.number} · {a.action} ·{" "}
                     {a.finishedAt
                       ? `${a.finishedAt - a.startedAt} ms`
                       : "In progress"}
                   </summary>
-                  <h4>Input</h4>
-                  <pre>{JSON.stringify(a.input, null, 2)}</pre>
-                  <h4>Output</h4>
-                  <pre>
+                  <h4 className="mt-2 text-xs font-medium">Input</h4>
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                    {JSON.stringify(a.input, null, 2)}
+                  </pre>
+                  <h4 className="mt-2 text-xs font-medium">Output</h4>
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
                   </pre>
                   {a.error && (
@@ -322,11 +378,16 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                 </details>
               ))}
               <details>
-                <summary>Subagent activity</summary>
+                <summary className="cursor-pointer font-medium">
+                  Subagent activity
+                </summary>
                 {view.activity
                   .filter((a) => a.stepId === step.id)
                   .map((a) => (
-                    <pre key={a.sequence}>
+                    <pre
+                      key={a.sequence}
+                      className="whitespace-pre-wrap break-words font-mono text-xs"
+                    >
                       {JSON.stringify(a.event, null, 2)}
                     </pre>
                   ))}
@@ -349,7 +410,9 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
             recoveryCandidates(execution).length === 0 && (
               <>
                 <p>Earlier operations may already have made changes.</p>
-                <button
+                <Button
+                  size="sm"
+                  className="justify-self-start"
                   disabled={busy}
                   onClick={() =>
                     void mutate(`${base}/${execution.id}/recover`, {
@@ -358,13 +421,15 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   }
                 >
                   Continue
-                </button>
+                </Button>
               </>
             )}
           {execution.result !== undefined && (
             <>
-              <h3>Result</h3>
-              <pre>{JSON.stringify(execution.result, null, 2)}</pre>
+              <h3 className="font-semibold">Result</h3>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                {JSON.stringify(execution.result, null, 2)}
+              </pre>
             </>
           )}
         </>
@@ -392,26 +457,38 @@ function Recovery({
     invalid = workflowIssue(e);
   }
   return (
-    <fieldset className="border p-2">
-      <legend>Manual recovery</legend>
+    <fieldset className="grid gap-3 rounded-lg border p-3">
+      <legend className="px-1 font-medium">Manual recovery</legend>
       <p role="alert">
         Operations may already have made changes. Retry can repeat those
         effects.
       </p>
-      <button
+      <Button
+        size="sm"
+        variant="outline"
+        className="justify-self-start"
         disabled={busy}
         onClick={() => void send({ kind: "retry", stepId })}
       >
         Retry step
-      </button>
+      </Button>
       <ValueEditor schema={schema} value={output} onChange={setOutput} />
-      {invalid && <pre role="alert">{invalid}</pre>}
-      <button
+      {invalid && (
+        <pre
+          className="whitespace-pre-wrap break-words font-mono text-xs text-destructive"
+          role="alert"
+        >
+          {invalid}
+        </pre>
+      )}
+      <Button
+        size="sm"
+        className="justify-self-start"
         disabled={busy || !!invalid}
         onClick={() => void send({ kind: "supply", stepId, output })}
       >
         Supply output and continue
-      </button>
+      </Button>
     </fieldset>
   );
 }
@@ -430,7 +507,7 @@ function EnquiryForm({
   const [busy, setBusy] = useState(false);
   return (
     <form
-      className="rounded border border-amber-500/50 bg-amber-500/5 p-3 grid gap-3"
+      className="grid gap-3 rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3"
       onSubmit={(e) => {
         e.preventDefault();
         setBusy(true);
@@ -444,8 +521,9 @@ function EnquiryForm({
             {q.header}: {q.question}
           </legend>
           {q.options.map((o) => (
-            <label key={o.label} className="!flex items-start gap-2 mb-2">
+            <label key={o.label} className="mb-2 flex items-start gap-2">
               <input
+                className="mt-1 accent-primary"
                 type={q.multiSelect ? "checkbox" : "radio"}
                 name={`${enquiry.askId}-${i}`}
                 checked={answers[i]?.includes(o.label) ?? false}
@@ -468,9 +546,9 @@ function EnquiryForm({
               </span>
             </label>
           ))}
-          <label>
-            Your answer
-            <input
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium">Your answer</span>
+            <Input
               value={
                 answers[i]
                   ?.filter((a) => !q.options.some((o) => o.label === a))
@@ -485,9 +563,14 @@ function EnquiryForm({
           </label>
         </fieldset>
       ))}
-      <button disabled={busy || answers.some((a) => !a.some((v) => v.trim()))}>
+      <Button
+        type="submit"
+        size="sm"
+        className="justify-self-start"
+        disabled={busy || answers.some((a) => !a.some((v) => v.trim()))}
+      >
         Submit answers
-      </button>
+      </Button>
     </form>
   );
 }
