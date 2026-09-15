@@ -31,6 +31,7 @@ import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
 export type TitleSource = "scope" | "first-line" | "summary";
 
 export type SessionMeta = {
+  mcpConnectionIds?: string[];
   id: string;
   scope: string;
   backend: string;

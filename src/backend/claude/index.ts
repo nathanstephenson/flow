@@ -32,6 +32,7 @@ import type {
 import { clampEffort } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { ASK_TOOL, PendingEnquiries, questionsOf } from "./enquiries.ts";
+import { claudeMcpServers, refreshClaudeMcp } from "./mcp.ts";
 import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
@@ -294,6 +295,8 @@ class ClaudeSession implements BackendSession {
       cwd: options.scope,
       ...(env ? { env } : {}),
       includePartialMessages: true,
+      mcpServers: toolless ? {} : claudeMcpServers(options.mcp),
+      strictMcpConfig: true,
       // NOT bypassPermissions: it auto-approves before canUseTool is consulted, and the SDK warns
       // as much. "default" runs the permission flow, allowedTools auto-approves the pre-approved
       // set, and canUseTool catches only the fall-through so nothing can stall waiting on a prompt.
@@ -648,10 +651,15 @@ class ClaudeSession implements BackendSession {
     return known ?? { id: modelId ?? "default", provider: "anthropic" };
   }
 
+  async refreshMcp(): Promise<void> {
+    await refreshClaudeMcp(this.stream, this.options.mcp);
+  }
+
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
     if (this.disposed) throw new Error("Backend Session disposed");
     if (this.options.tools === "none") throw new Error("This Backend Session runs no tools");
     const handle = new ClaudeWorkflowSubagent({ cwd: this.options.scope,
+      mcpServers: claudeMcpServers(this.options.mcp),
       ...(this.backendOptions.disallowedTools ? { disallowedTools: this.backendOptions.disallowedTools } : {}),
       ...(this.backendOptions.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: this.backendOptions.pathToClaudeCodeExecutable } : {}),
     }, options, this.workflowGrants, {

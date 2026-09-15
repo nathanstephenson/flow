@@ -27,6 +27,7 @@ export const SETTINGS_SECTIONS = [
   "keyboard",
   "workflows",
   "secrets",
+  "mcp",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];

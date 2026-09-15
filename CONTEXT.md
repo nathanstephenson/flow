@@ -140,6 +140,9 @@ _Avoid_: transcript, history, log
 **Settings**: Session Host values governing all Agent Sessions on the machine, not one Scope.
 _Avoid_: config, preferences, profile
 
+**MCP Connection**: A machine-wide definition of an external tool service. Selected for an Agent Session and inherited by its Subagents and Workflow Steps. Its identity survives edits.
+_Avoid_: Provider, extension, plugin
+
 **Provider**: An inference endpoint serving models through a Backend Adapter, not an agent harness.
 _Avoid_: backend, adapter, vendor
 

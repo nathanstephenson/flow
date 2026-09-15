@@ -48,6 +48,7 @@ describe("the Settings on disk", () => {
   it("reports the defaults when there is no file, in the units a person typed", () => {
     const store = new ConfigStore(root);
     assert.deepEqual(store.view(), {
+      mcp: [],
       retention: { settled: "1d" },
       workflowRuntime: { externalSandbox: true, dockerImage: 'flow-workflow-runtime:local' },
       fonts: { chrome: DEFAULT_CHROME_FONT, monospace: DEFAULT_MONOSPACE_FONT },

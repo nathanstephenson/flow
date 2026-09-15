@@ -1,3 +1,4 @@
+import { McpConnectionStatus } from "./mcp-status.tsx";
 import { useState, type CSSProperties } from "react";
 
 import { sessionLabel } from "@client/session-label.ts";
@@ -197,7 +198,10 @@ function AttachedPane({
    */
   return (
     <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
-      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={docks} />
+      <div>
+        <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={docks} />
+        <McpConnectionStatus sessionId={sessionId} />
+      </div>
 
       <div
         // The frame the Docks are a share of, and the element their live sizes are written onto. It

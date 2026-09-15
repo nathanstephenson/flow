@@ -23,6 +23,7 @@ export type PromptAttachment = {
 };
 
 export type BackendCreateOptions = {
+  mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: ModelAutoCompaction;
   modelId?: string;
@@ -93,6 +94,7 @@ export interface WorkflowSubagentHandle {
 }
 
 export interface BackendSession {
+  refreshMcp?(): Promise<void>;
   startWorkflowSubagent?(options: WorkflowSubagentOptions): WorkflowSubagentHandle;
   readonly capabilities: Capabilities;
   /** Opaque token allowing a later Revive to continue this Conversation Context. */

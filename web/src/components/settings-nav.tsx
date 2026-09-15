@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils.ts";
  */
 const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: ComponentType }> = {
   workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Sliders },
+  mcp: { label: "MCP", hint: "Local and remote tools", icon: Sliders },
   secrets: { label: "Secrets", hint: "Named secrets and code runtime", icon: ShieldCheck },
   general: { label: "General", hint: "Retention, and this Session Host", icon: Sliders },
   projects: { label: "Projects", hint: "Where your repositories live", icon: FolderGit2 },

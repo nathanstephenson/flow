@@ -160,6 +160,8 @@ async function startHost(
   // One owner of config.json, read through by both the reaper and the HTTP surface, so a Setting
   // changed from a browser applies to this daemon rather than to the next one.
   const config = new ConfigStore(root);
+  const { McpAuth } = await import("../daemon/mcp-auth.ts");
+  const mcpAuth = new McpAuth(root);
   if (config.warning) console.error(`  WARNING: ${config.warning}`);
 
   // One store, shared: the Session Host writes Attachments through it and the HTTP surface reads
@@ -168,6 +170,8 @@ async function startHost(
   const host = new SessionHost({
     store,
     retention: config.retention,
+    mcpConnections: config.mcpConnections,
+    mcpAuth,
     standingAuthorisations: config.standingAuthorisations,
     allowTool: config.allowTool,
     defaultBackend: config.defaultBackend,
@@ -200,6 +204,7 @@ async function startHost(
     token,
     shells,
     config,
+    mcpAuth,
     store,
     workflows,
     secrets,

@@ -1,3 +1,5 @@
+import { piMcpTools } from "./mcp.ts";
+import type { McpSession } from "../mcp.ts";
 import { randomUUID } from "node:crypto";
 import {
   createAgentSession,
@@ -69,6 +71,10 @@ export class PiSession implements BackendSession {
   private readonly work: PiWork | undefined;
   private readonly completions: Completion[] = [];
   private readonly workflows = new Map<string, WorkflowSubagentHandle>();
+  private readonly mcp: McpSession | undefined;
+  async refreshMcp(): Promise<void> {
+    this.session.agent.state.tools = [...this.session.agent.state.tools.filter((tool) => !tool.name.startsWith("mcp__")), ...piMcpTools(this.mcp)];
+  }
   private readonly standingAuthorisations: readonly string[];
   private disposed = false;
   private disposal: Promise<void> | undefined;
@@ -94,7 +100,8 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void } = {}) {
+    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void } = {}) {
+    this.mcp = support.mcp;
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
@@ -112,7 +119,7 @@ export class PiSession implements BackendSession {
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
     if (this.disposed) throw new Error("Backend Session stopped");
     if (this.workflows.has(options.id)) throw new Error(`Duplicate workflow Subagent: ${options.id}`);
-    const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations);
+    const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations, this.mcp);
     this.workflows.set(options.id, handle);
     void handle.done.finally(() => this.workflows.delete(options.id)).catch(() => {});
     return handle;
@@ -474,18 +481,21 @@ export class PiBackend implements AgentBackend {
       : undefined;
 
     const defaults = settingsManager.getDefaultTools() ?? ["read", "bash", "edit", "write"];
-    const tools = options.tools === "none" ? [] : this.options.tools ?? [
+    const tools = options.tools === "none" ? [] : [...(this.options.tools ?? [
       ...defaults, ASK_TOOL, SUBAGENT_TOOL, ...(defaults.includes("bash") ? ["bash_output", "kill_shell"] : []),
-    ];
+    ])];
+    const mcp = options.tools === "none" ? undefined : options.mcp;
+    tools.push(...piMcpTools(mcp).map((tool) => tool.name));
     const enabled = (name: string) => tools.includes(name);
     const enquiries = enabled(ASK_TOOL) ? new PiEnquiries(options.emit) : undefined;
     const work = new PiWork(options.emit, (completion) => piSession.completed(completion));
     const subagents = enabled(SUBAGENT_TOOL);
     const customTools = [
+      ...piMcpTools(mcp),
       ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
       ...(enquiries ? [enquiries.tool] : []),
       ...(subagents ? [subagentTool(work, (id, input, signal) =>
-        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit))] : []),
+        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp))] : []),
     ];
     const { session } = await createAgentSession({
       cwd: options.scope,
@@ -498,7 +508,7 @@ export class PiBackend implements AgentBackend {
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, options.autoCompaction ?? {}), ...(enquiries ? { enquiries } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, options.autoCompaction ?? {}), ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
@@ -524,12 +534,12 @@ export class PiBackend implements AgentBackend {
 }
 
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
-  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void): Promise<ToolResult> {
+  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession): Promise<ToolResult> {
   const available = parent.modelRuntime.getAvailableSnapshot();
   const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
   if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
-  const tools = parent.getActiveToolNames().filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL);
+  const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL);
   const settingsManager = SettingsManager.create(scope, agentDir);
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
     appendSystemPrompt: ["You are a Subagent. Complete the delegated work and return the result. If human input is needed, return that request to the parent. You cannot ask the human or create further Subagents."] });
@@ -538,7 +548,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   const producer = { subagentId: id };
   const { session: child } = await createAgentSession({ cwd: scope, agentDir, model, modelRuntime: parent.modelRuntime,
     resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope), tools,
-    customTools: backgroundTools(scope, settingsManager, work, producer, input.run_in_background === false).filter((tool) => tools.includes(tool.name)),
+    customTools: [...piMcpTools(mcp), ...backgroundTools(scope, settingsManager, work, producer, input.run_in_background === false).filter((tool) => tools.includes(tool.name))],
   });
   let output = "";
   let failure: string | undefined;

@@ -85,6 +85,8 @@ export function NewAgentSessionPage({
 }) {
   const { config, refresh } = useHost();
   const run = useCommand();
+  const [mcpChoices, setMcpChoices] = useState<Record<string, boolean>>({});
+  const mcpConnectionIds = (config.mcp ?? []).filter((connection) => mcpChoices[connection.id] ?? connection.enabledByDefault).map((connection) => connection.id);
   const projects = config.projectList ?? [];
   const uncurated = (config.projectCandidates ?? []).length;
 
@@ -230,7 +232,7 @@ export function NewAgentSessionPage({
       if (command === undefined) return undefined;
       setFailure(undefined);
 
-      const created = await run<string>(command);
+      const created = await run<string>({ ...command, mcpConnectionIds });
       if (created === undefined) {
         // A create refused by git — a base branch that has gone, a directory in the way — is the one
         // failure worth saying out loud here, because the page stays put and can be corrected.
@@ -261,7 +263,7 @@ export function NewAgentSessionPage({
       onCreated(created);
       return queued;
     },
-    [command, drafts, onCreated, run],
+    [command, drafts, onCreated, run, mcpConnectionIds],
   );
 
   const actions = useMemo<ComposerActions>(
@@ -315,6 +317,13 @@ export function NewAgentSessionPage({
     <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-6 py-12">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
+        {(config.mcp ?? []).length > 0 && <fieldset className="flex flex-wrap gap-3 text-sm">
+          <legend className="mb-2 text-xs text-muted-foreground">MCP connections</legend>
+          {config.mcp!.map((connection) => <label key={connection.id} className="flex items-center gap-2">
+            <input type="checkbox" checked={mcpChoices[connection.id] ?? connection.enabledByDefault} onChange={(event) => setMcpChoices({ ...mcpChoices, [connection.id]: event.target.checked })} />
+            {connection.name}
+          </label>)}
+        </fieldset>}
 
         {projects.length === 0 ? (
           <NoProjects uncurated={uncurated} />
