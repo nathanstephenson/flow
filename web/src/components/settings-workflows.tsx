@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useHost } from "../host.tsx";
 import { resolveDefaultBackend } from "../../../src/protocol/settings.ts";
+import { cleanLoopSettings } from "../presentation/workflow-loops.ts";
 import { workflowIssue, nextStepName } from "../presentation/workflows.ts";
 import type {
   WorkflowDefinition,
@@ -693,13 +694,13 @@ export default function WorkflowsSettings() {
                     variant="destructive"
                     className="justify-self-start"
                     onClick={() => {
-                      setDefinition({
+                      setDefinition(cleanLoopSettings({
                         ...definition,
                         steps: definition.steps.filter((s) => s.id !== step.id),
                         edges: definition.edges.filter(
                           (e) => e.from !== step.id && e.to !== step.id,
                         ),
-                      });
+                      }));
                       select("");
                     }}
                   >

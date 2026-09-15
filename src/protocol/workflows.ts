@@ -27,6 +27,7 @@ interface StepBase {
   name: string;
   inputSchema?: VisualSchema;
   mapping?: InputMapping;
+  repeatMapping?: InputMapping;
   permission?: WorkflowPermission;
   timeoutMs?: number;
   secrets?: Record<string, string>;
@@ -63,6 +64,7 @@ export interface WorkflowDefinition {
   inputSchema: Extract<VisualSchema, { type: 'object' }>;
   steps: WorkflowStep[];
   edges: WorkflowEdge[];
+  loopSettings?: Record<string, { maxTries: number }>;
 }
 
 export interface WorkflowError {
@@ -71,7 +73,21 @@ export interface WorkflowError {
 }
 
 export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timed-out' | 'interrupted' | 'skipped' | 'blocked' | 'cancelled';
+export interface LoopTryIdentity {
+  headerId: string;
+  activation: number;
+  try: number;
+}
+export interface WorkflowLoopRecord {
+  activation: number;
+  try: number;
+  phase: 'inactive' | 'active' | 'repeating' | 'limit' | 'exited';
+  headerInput?: Json;
+  headerRecovery?: boolean;
+  grants: Array<{ activation: number; try: number; guidance?: string }>;
+}
 export interface StepAttempt {
+  loops?: LoopTryIdentity[];
   number: number;
   action: 'execute' | 'retry' | 'supply';
   startedAt: number;
@@ -101,5 +117,6 @@ export interface WorkflowExecution {
   startedAt: number;
   finishedAt?: number;
   steps: Record<string, WorkflowStepRecord>;
+  loops?: Record<string, WorkflowLoopRecord>;
   result?: Json;
 }

@@ -6,6 +6,7 @@ import type {
   WorkflowStep,
   WorkflowExecution,
 } from "../../../src/protocol/workflows.ts";
+import { analyzeLoops } from "../../../src/workflows/loops.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
 export function nextStepName(definition: WorkflowDefinition, kind: WorkflowStep["kind"]): string {
@@ -42,20 +43,41 @@ export function mappingChoices(
   definition: WorkflowDefinition,
   stepId: string,
   mode: "reference" | "object" = "reference",
+  phase: "mapping" | "repeatMapping" = "mapping",
 ): { label: string; reference: InputReference }[] {
   const step = definition.steps.find((s) => s.id === stepId);
   if (!step) return [];
-  const base = {
+  let base: WorkflowDefinition = {
     ...definition,
     steps: definition.steps.map((s) => {
       if (s.id !== stepId) return s;
       const copy = { ...s };
-      delete copy.mapping;
+      delete copy[phase];
       delete copy.inputSchema;
       return copy;
     }),
   };
-  const graph = validateDefinition(base);
+  let graph;
+  try { graph = validateDefinition(base); }
+  catch {
+    const headers = new Set(analyzeLoops(definition).loops.map(loop => loop.headerId));
+    base = {
+      ...definition,
+      loopSettings: {},
+      steps: definition.steps.map(source => {
+        const copy = { ...source };
+        delete copy.inputSchema;
+        copy.mapping = { kind: "reference", reference: { source: "input", path: [] } };
+        if (headers.has(source.id)) copy.repeatMapping = copy.mapping;
+        else delete copy.repeatMapping;
+        if (copy.kind === "branch") copy.condition = { operator: "equals", path: [], value: null };
+        if (copy.kind === "agent" && !copy.model) copy.model = "unselected";
+        if (copy.kind === "join") { delete copy.mapping; delete copy.repeatMapping; }
+        return copy;
+      }),
+    };
+    graph = validateDefinition(base);
+  }
   const candidates: { label: string; reference: InputReference }[] =
     schemaPaths(definition.inputSchema).map((path) => ({
       label: `Workflow input${path.length ? "." + path.join(".") : ""}`,
@@ -63,7 +85,7 @@ export function mappingChoices(
     }));
   const available = candidates.splice(0);
   for (const source of definition.steps) {
-    if (source.id === stepId) continue;
+    if (source.id === stepId && phase === "mapping") continue;
     const schema = graph.outputSchemas.get(source.id);
     if (!schema) continue;
     for (const path of schemaPaths(schema)) {
@@ -82,7 +104,7 @@ export function mappingChoices(
           ...base,
           steps: base.steps.map((s) =>
             s.id === stepId
-              ? { ...s, mapping: mode === "object" ? { kind: "object", fields: { value: reference } } : { kind: "reference", reference } }
+              ? { ...s, [phase]: mode === "object" ? { kind: "object", fields: { value: reference } } : { kind: "reference", reference } }
               : s,
           ),
         });

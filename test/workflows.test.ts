@@ -50,8 +50,8 @@ describe('workflow schemas and graphs', () => {
     assert.throws(() => validateSchema({ type: 'enum', values: [] }));
   });
 
-  it('rejects cycles, unknown endpoints, duplicate identities and names, and invalid outcomes', () => {
-    assert.throws(() => validateDefinition(definition([agent('a'), agent('b')], [edge('a', 'b'), edge('b', 'a')])), /DAG/);
+  it('rejects rootless cycles, unknown endpoints, duplicate identities and names, and invalid outcomes', () => {
+    assert.throws(() => validateDefinition(definition([agent('a'), agent('b')], [edge('a', 'b'), edge('b', 'a')])), /root|entry/);
     assert.throws(() => validateDefinition(definition([agent('a')], [edge('a', 'missing')])), /endpoint/);
     assert.throws(() => validateDefinition(definition([agent('a'), agent('a')])), /unique/);
     assert.throws(() => validateDefinition(definition([agent('a'), { ...agent('b'), name: 'A' }])), /unique/);

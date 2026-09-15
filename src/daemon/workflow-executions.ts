@@ -7,7 +7,7 @@ import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow } fr
 import type { Json, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
 import { createCodeExecutors } from '../workflows/executors.ts';
 import { parseValue } from '../workflows/schema.ts';
-import { WorkflowStepError, WorkflowScheduler, type WorkflowExecutor, type WorkflowExecutors, type ExecutorContext } from '../workflows/scheduler.ts';
+import { WorkflowStepError, WorkflowScheduler, WorkflowLoopConflict, type WorkflowExecutor, type WorkflowExecutors, type ExecutorContext } from '../workflows/scheduler.ts';
 import { workflowRuntimeOptions } from '../workflows/runtime-settings.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
 import type { ConfigStore } from './config-store.ts';
@@ -155,6 +155,7 @@ export class WorkflowExecutionService {
     let record: WorkflowExecution;
     this.checkingCode = code;
     try { record = this.scheduler.recover(session, executionId, action); }
+    catch (error) { if (error instanceof WorkflowLoopConflict) throw new WorkflowConflict(); throw error; }
     finally { this.checkingCode = undefined; }
     this.snapshots.set(executionId, code);
     this.watch(record);

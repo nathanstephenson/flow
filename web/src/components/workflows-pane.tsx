@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
 import {
+  limitedLoops,
+  extendLoop,
+  loopProgress,
+} from "../presentation/workflow-loops.ts";
+import { Textarea } from "./ui/textarea.tsx";
+import {
   recoveryCandidates,
   workflowIssue,
 } from "../presentation/workflows.ts";
 import type {
   Json,
   WorkflowDefinition,
+  WorkflowLoopRecord,
 } from "../../../src/protocol/workflows.ts";
 import type {
   WorkflowExecutionList,
@@ -255,6 +262,24 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
               </Button>
             </>
           )}
+          {execution.status === "recovery-required" &&
+            limitedLoops(execution).map(([headerId, loop]) => (
+              <LoopRecovery
+                key={`${execution.id}/${headerId}/${loop.activation}/${loop.try}`}
+                headerId={headerId}
+                loop={loop}
+                name={
+                  execution.definition.steps.find(
+                    (step) => step.id === headerId,
+                  )?.name ?? headerId
+                }
+                maxTries={
+                  execution.definition.loopSettings?.[headerId]?.maxTries ?? 3
+                }
+                busy={busy}
+                send={(body) => mutate(`${base}/${execution.id}/recover`, body)}
+              />
+            ))}
           {view.permissions.map((p) => (
             <fieldset
               key={`${p.subagentId}/${p.callId}`}
@@ -362,6 +387,18 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                       ? `${a.finishedAt - a.startedAt} ms`
                       : "In progress"}
                   </summary>
+                  {a.loops?.map((loop) => (
+                    <p
+                      key={loop.headerId}
+                      className="text-xs text-muted-foreground"
+                    >
+                      Loop ·{" "}
+                      {execution.definition.steps.find(
+                        (step) => step.id === loop.headerId,
+                      )?.name ?? loop.headerId}{" "}
+                      · Try {loop.try} · Activation {loop.activation}
+                    </p>
+                  ))}
                   <h4 className="mt-2 text-xs font-medium">Input</h4>
                   <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {JSON.stringify(a.input, null, 2)}
@@ -407,6 +444,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
             </div>
           )}
           {execution.status === "recovery-required" &&
+            limitedLoops(execution).length === 0 &&
             recoveryCandidates(execution).length === 0 && (
               <>
                 <p>Earlier operations may already have made changes.</p>
@@ -435,6 +473,56 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
         </>
       )}
     </section>
+  );
+}
+function LoopRecovery({
+  headerId,
+  loop,
+  name,
+  maxTries,
+  busy,
+  send,
+}: {
+  headerId: string;
+  loop: WorkflowLoopRecord;
+  name: string;
+  maxTries: number;
+  busy: boolean;
+  send: (body: RecoverWorkflow) => Promise<void>;
+}) {
+  const [guidance, setGuidance] = useState("");
+  return (
+    <form
+      className="grid gap-3 rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send(extendLoop(headerId, loop, guidance));
+      }}
+    >
+      <h3 className="font-semibold">Loop limit reached · {name}</h3>
+      <p>{loopProgress(loop, maxTries)}</p>
+      <p className="text-xs text-muted-foreground">
+        Cancel execution or allow one more try. Guidance is added to Agent
+        instructions only for the extra try. The saved definition is unchanged.
+      </p>
+      <label className="grid gap-1">
+        <span className="text-sm font-medium">Guidance (optional)</span>
+        <Textarea
+          aria-label={`Guidance · ${name}`}
+          maxLength={100000}
+          value={guidance}
+          onChange={(event) => setGuidance(event.target.value)}
+        />
+      </label>
+      <Button
+        type="submit"
+        size="sm"
+        className="justify-self-start"
+        disabled={busy || guidance.length > 100000}
+      >
+        Allow one more try
+      </Button>
+    </form>
   );
 }
 function Recovery({
