@@ -5,7 +5,7 @@ import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 
-export function StackPane({ sessionId, disabled = false, onChange }: { sessionId: string; disabled?: boolean; onChange: () => void }) {
+export function StackPane({ sessionId, disabled = false, onChange, onAvailable, revision = 0 }: { sessionId: string; disabled?: boolean; onChange: () => void; onAvailable?: (available: boolean) => void; revision?: number }) {
   const { connection } = useHost();
   const [status, setStatus] = useState<StackStatus>();
   const [review, setReview] = useState<StackReview>();
@@ -25,7 +25,8 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
       (failure: unknown) => { if (!cancelled) setError(String(failure)); },
     );
     return () => { cancelled = true; };
-  }, [connection, sessionId]);
+  }, [connection, sessionId, revision]);
+  useEffect(() => { onAvailable?.(Boolean(status?.available && (status.view || status.candidate || status.rebasing))); }, [status, onAvailable]);
   async function run(action?: StackAction, branches?: string[], token?: string) {
     setBusy(true);
     setError("");
@@ -77,7 +78,7 @@ export function StackPane({ sessionId, disabled = false, onChange }: { sessionId
   }
   const blocked = busy || disabled;
   if (!error && !output && !busy && !review && !syncFailed && (!status || (status.available && !status.view && !status.candidate && !status.rebasing && !status.problem))) return null;
-  return <section aria-label="Stack" className="space-y-3 border-t pt-4">
+  return <section aria-label="Stack" className="space-y-3">
     <div className="flex items-center gap-2"><h2 className="font-medium">Stack</h2><Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button>{pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.title || !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}</div>
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {error ? <p role="alert">{error}</p> : null}

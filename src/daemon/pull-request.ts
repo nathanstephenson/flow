@@ -1,5 +1,7 @@
 import { gh, type Gh } from "./publish.ts";
-import { head, isRepository, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
+import { cleanStack } from "./stack.ts";
+import type { MergeMethod, PullRequestActionInput } from "../protocol/pull-request.ts";
+import { head, isRepository, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import type { PullRequestComment, PullRequestDetails, PullRequestCommentInput, PullRequestThreadInput, PullRequestRef, PullRequestThread } from "../protocol/pull-request.ts";
 
 type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
@@ -79,8 +81,8 @@ async function select(scope: string, github: Gh): Promise<PullRequestRef | null>
 export async function pullRequest(scope: string, github: Gh = gh): Promise<PullRequestDetails | null> {
   const ref = await select(scope, github);
   if (!ref) return null;
-  const data = await api<{ node: Omit<PullRequestDetails, "author" | "viewerCanComment" | "headRepository"> & { author: { login: string } | null; headRepository: { nameWithOwner: string } | null; locked: boolean; repository: { isArchived: boolean; viewerPermission: string | null }; commits: { nodes: { commit: { statusCheckRollup: { id: string } | null } }[] } } }>(scope, github,
-    `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision author{login} headRefName headRepository{nameWithOwner} baseRefName createdAt updatedAt mergeable mergeStateStatus locked repository{isArchived viewerPermission} commits(last:1){nodes{commit{statusCheckRollup{id}}}}}}}`, ref);
+  const data = await api<{ node: Omit<PullRequestDetails, "author" | "viewerCanComment" | "headRepository"> & { author: { login: string } | null; headRepository: { nameWithOwner: string } | null; locked: boolean; repository: { isArchived: boolean; viewerPermission: string | null; mergeCommitAllowed: boolean; squashMergeAllowed: boolean; rebaseMergeAllowed: boolean }; commits: { nodes: { commit: { statusCheckRollup: { id: string } | null } }[] } } }>(scope, github,
+    `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision author{login} headRefName headRefOid headRepository{nameWithOwner} baseRefName createdAt updatedAt mergeable mergeStateStatus locked repository{isArchived viewerPermission mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed} commits(last:1){nodes{commit{statusCheckRollup{id}}}}}}}`, ref);
   const { commits, author, headRepository, locked, repository, ...details } = data.node;
   const viewerCanComment = !repository.isArchived && (!locked || ["ADMIN", "MAINTAIN", "WRITE"].includes(repository.viewerPermission ?? ""));
   const comments = (await connection<Comment>(scope, github, ref.id, "PullRequest", "comments", commentFields)).map(comment);
@@ -93,7 +95,59 @@ export async function pullRequest(scope: string, github: Gh = gh): Promise<PullR
   }
   const rollup = commits.nodes[0]?.commit.statusCheckRollup;
   const statusCheckRollup = rollup ? await connection<PullRequestDetails["statusCheckRollup"][number]>(scope, github, rollup.id, "StatusCheckRollup", "contexts", "... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state targetUrl }") : [];
-  return { ...details, ...ref, ...(headRepository ? { headRepository: headRepository.nameWithOwner } : {}), author: author?.login ?? "[deleted]", viewerCanComment, comments, reviews, threads, statusCheckRollup };
+  const mergeMethods: MergeMethod[] = [];
+  if (!repository.isArchived && ["ADMIN", "MAINTAIN", "WRITE"].includes(repository.viewerPermission ?? "")) {
+    if (repository.mergeCommitAllowed) mergeMethods.push("MERGE");
+    if (repository.squashMergeAllowed) mergeMethods.push("SQUASH");
+    if (repository.rebaseMergeAllowed) mergeMethods.push("REBASE");
+  }
+  return { ...details, ...ref, mergeMethods, ...(headRepository ? { headRepository: headRepository.nameWithOwner } : {}), author: author?.login ?? "[deleted]", viewerCanComment, comments, reviews, threads, statusCheckRollup };
+}
+
+async function git(scope: string, args: string[]): Promise<string> {
+  const result = await run(scope, args, GIT_WRITE_TIMEOUT_MS);
+  if (!result.ok) throw new Error(result.failure.message);
+  return result.value.trim();
+}
+
+export async function pullBranch(scope: string, branch: string): Promise<void> {
+  await cleanStack(scope);
+  const selected = await head(scope);
+  if (!selected.ok || selected.value.detached || selected.value.name !== branch) throw new Error("The branch has changed. Refresh Git status before pulling.");
+  await git(scope, ["pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-squash"]);
+}
+
+export async function changePullRequest(scope: string, action: "rebase" | "merge", input: PullRequestActionInput, github: Gh = gh): Promise<void> {
+  validate(input?.pr);
+  if (action !== "rebase" && action !== "merge") throw new Error("Invalid pull request action.");
+  if (!/^[0-9a-f]{40,64}$/.test(input.headOid) || typeof input.baseBranch !== "string") throw new Error("Invalid pull request action.");
+  const pr = await current(scope, input.pr, github);
+  if (pr.state !== "OPEN" || pr.headRefOid !== input.headOid || pr.baseRefName !== input.baseBranch) throw new Error("The pull request has changed. Reload it before continuing.");
+  if (action === "merge") {
+    if (pr.isDraft || !input.method || !pr.mergeMethods?.includes(input.method)) throw new Error("This merge method is not permitted for this pull request.");
+    await api(scope, github, "mutation($id:ID!,$head:GitObjectID!,$method:PullRequestMergeMethod!){mergePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head,mergeMethod:$method}){pullRequest{id state}}}", { id: pr.id, head: input.headOid, method: input.method });
+    return;
+  }
+  await cleanStack(scope);
+  await git(scope, ["check-ref-format", `refs/heads/${pr.baseRefName}`]);
+  const before = await git(scope, ["rev-parse", "HEAD"]);
+  let baseUrl = `https://github.com/${pr.repo}.git`;
+  for (const remote of (await git(scope, ["remote"])).split("\n").filter(Boolean)) {
+    const url = await git(scope, ["remote", "get-url", remote]);
+    const repo = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1];
+    if (repo?.toLowerCase() === pr.repo.toLowerCase()) { baseUrl = url; break; }
+  }
+  await git(scope, ["fetch", "--no-tags", baseUrl, `refs/heads/${pr.baseRefName}`]);
+  const base = await git(scope, ["rev-parse", "FETCH_HEAD"]);
+  const latest = await current(scope, input.pr, github);
+  const branch = await head(scope);
+  if (latest.state !== "OPEN" || latest.headRefOid !== input.headOid || latest.baseRefName !== input.baseBranch || !branch.ok || branch.value.detached || branch.value.name !== pr.headRefName || await git(scope, ["rev-parse", "HEAD"]) !== before) throw new Error("The branch or pull request has changed. Reload it before rebasing.");
+  await cleanStack(scope);
+  const rebased = await run(scope, ["-c", "rebase.autoStash=false", "-c", "rebase.updateRefs=false", "rebase", base], GIT_WRITE_TIMEOUT_MS);
+  if (!rebased.ok) {
+    const aborted = await run(scope, ["rebase", "--abort"], GIT_WRITE_TIMEOUT_MS);
+    throw new Error(`${rebased.failure.message}\n${aborted.ok ? "Rebase aborted. Local changes were not pushed." : `Rebase did not complete. Check Git status in the Shell; if a rebase remains, run git rebase --abort. ${aborted.failure.message}`}`);
+  }
 }
 
 function validId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9_+/=-]+$/.test(value) && value.length <= 256; }

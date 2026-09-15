@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { PullRequestComment, PullRequestDetails, PullRequestCommentInput, PullRequestThreadInput } from "../../../src/protocol/pull-request.ts";
+import type { MergeMethod, PullRequestActionInput, PullRequestComment, PullRequestDetails, PullRequestCommentInput, PullRequestThreadInput } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
@@ -11,7 +11,7 @@ function Link({ url, children }: { url: string; children: ReactNode }) {
   return href ? <a className="underline underline-offset-2 break-words" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId }: { sessionId: string }) {
+export function PullRequestPane({ sessionId, revision = 0, disabled = false, onAvailable, onChange }: { sessionId: string; revision?: number; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void }) {
   const { connection } = useHost();
   const loader = useRef<PullRequestLoader<PullRequestDetails | null> | null>(null);
   const [state, setState] = useState<PullRequestLoadState<PullRequestDetails | null>>({ value: undefined, busy: true, error: "", success: "" });
@@ -26,6 +26,13 @@ export function PullRequestPane({ sessionId }: { sessionId: string }) {
     return () => { current.dispose(); loader.current = null; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
   }, [connection, sessionId]);
 
+  useEffect(() => { void loader.current?.refresh(); }, [revision]);
+  useEffect(() => { onAvailable?.(Boolean(state.value)); }, [state.value, onAvailable]);
+
+  function change(action: "rebase" | "merge", input: PullRequestActionInput) {
+    void loader.current?.write(() => connection.command<void>({ type: "change_pull_request", sessionId, action, input }), action === "merge" ? "Pull request merged." : "Branch rebased locally. Nothing was pushed.", () => { onChange?.(); }, value => Boolean(value && pullRequestKey(value) === pullRequestKey(input.pr)));
+  }
+
   function comment(input: PullRequestCommentInput, confirmed: () => void) {
     if (!state.value || pullRequestKey(input.pr) !== pullRequestKey(state.value)) return;
     void loader.current?.write(() => connection.command<void>({ type: "comment_pull_request", sessionId, input }), "Comment posted.", confirmed, (value) => Boolean(value && pullRequestKey(value) === pullRequestKey(input.pr)));
@@ -34,11 +41,35 @@ export function PullRequestPane({ sessionId }: { sessionId: string }) {
     if (!state.value || pullRequestKey(input.pr) !== pullRequestKey(state.value)) return;
     void loader.current?.write(() => connection.command<void>({ type: "resolve_pull_request_thread", sessionId, input }), input.resolved ? "Thread resolved." : "Thread reopened.", () => {}, (value) => Boolean(value && pullRequestKey(value) === pullRequestKey(input.pr)));
   }
-  return <section aria-label="Pull request" className="min-w-0 space-y-4 border-t pt-4">
+  return <section aria-label="Pull request" className="min-w-0 space-y-4">
     <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">Pull request</h2><Button size="sm" variant="outline" disabled={state.busy} onClick={() => void loader.current?.refresh()} aria-label="Refresh pull request">{state.busy ? "Refreshing…" : "Refresh"}</Button></div>
     {state.error ? <p role="alert">{state.value ? "Showing the last loaded pull request. " : ""}{state.error}</p> : null}
     {state.success ? <p role="status">{state.success}</p> : null}
-    {state.value === undefined ? <p>{state.error ? "Pull request unavailable." : "Reading pull request…"}</p> : state.value === null ? <p>No pull request found for this branch.</p> : <PullRequestContent key={pullRequestKey(state.value)} pr={state.value} busy={state.busy} comment={comment} resolve={resolve} />}
+    {state.value ? <PullRequestActions key={`${pullRequestKey(state.value)}:${state.value.headRefOid}:${state.value.baseRefName}`} pr={state.value} busy={state.busy || disabled} change={change} /> : null}
+    {state.value === undefined ? <p>{state.error ? "Pull request unavailable." : "Reading pull request…"}</p> : state.value === null ? <p>No pull request found for this branch.</p> : <PullRequestContent key={pullRequestKey(state.value)} pr={state.value} busy={state.busy || disabled} comment={comment} resolve={resolve} />}
+  </section>;
+}
+
+export function PullRequestActions({ pr, busy, change }: { pr: PullRequestDetails; busy: boolean; change: (action: "rebase" | "merge", input: PullRequestActionInput) => void }) {
+  const [confirm, setConfirm] = useState<"rebase" | "merge">();
+  const [method, setMethod] = useState<MergeMethod | "">("");
+  if (pr.state !== "OPEN" || !pr.headRefOid) return null;
+  const methods = pr.mergeMethods ?? [];
+  return <section aria-label="Pull request actions" className="space-y-3">
+    <div className="flex gap-2">
+      <Button size="sm" variant="outline" disabled={busy || !!confirm} onClick={() => setConfirm("rebase")}>Rebase</Button>
+      <Button size="sm" disabled={busy || !!confirm || pr.isDraft || methods.length === 0} onClick={() => { setMethod(methods[0] ?? ""); setConfirm("merge"); }}>Merge</Button>
+    </div>
+    {confirm ? <form aria-label={confirm === "merge" ? "Confirm merge" : "Confirm rebase"} className="space-y-3 rounded border p-3" onSubmit={event => {
+      event.preventDefault();
+      if (busy || (confirm === "merge" && !methods.includes(method as MergeMethod))) return;
+      change(confirm, { pr: { repo: pr.repo, id: pr.id, number: pr.number }, headOid: pr.headRefOid!, baseBranch: pr.baseRefName, ...(confirm === "merge" ? { method: method as MergeMethod } : {}) });
+      setConfirm(undefined);
+    }}>
+      <p>{confirm === "merge" ? `Merge #${pr.number} into ${pr.baseRefName} on GitHub?` : `Rebase only ${pr.headRefName} locally onto the latest ${pr.baseRefName}. No push or stack rebase. Requires a clean Scope. Conflicts abort the rebase.`}</p>
+      {confirm === "merge" ? <label className="block space-y-1">Merge method<select aria-label="Merge method" className="ml-2 rounded border bg-background p-1" value={method} disabled={busy} onChange={event => setMethod(event.target.value as MergeMethod)}>{methods.map(value => <option key={value} value={value}>{value === "MERGE" ? "Merge commit" : value === "SQUASH" ? "Squash and merge" : "Rebase and merge"}</option>)}</select></label> : null}
+      <div className="flex gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm(undefined)}>Cancel</Button><Button type="submit" disabled={busy || (confirm === "merge" && !methods.includes(method as MergeMethod))}>Confirm {confirm}</Button></div>
+    </form> : null}
   </section>;
 }
 

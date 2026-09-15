@@ -19,6 +19,33 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const [error, setError] = useState("");
   const [result, setResult] = useState<PublishResult>();
   const [prRevision, setPrRevision] = useState(0);
+  const [prRefreshRevision, setPrRefreshRevision] = useState(0);
+  const [stackRevision, setStackRevision] = useState(0);
+  const [hasPr, setHasPr] = useState(false);
+  const [hasStack, setHasStack] = useState(false);
+  const [tab, setTab] = useState<"Diff" | "Stack" | "PR">();
+  const tabs: ("Diff" | "Stack" | "PR")[] = ["Diff", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
+  const selected = tab === "Diff" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Diff";
+
+  function changed() {
+    setReview(undefined);
+    setResult(undefined);
+    setHasPr(false);
+    setPrRevision(value => value + 1);
+    setStackRevision(value => value + 1);
+    void refresh();
+  }
+
+  async function pull() {
+    if (!status?.branch) return;
+    setBusy(true);
+    setError("");
+    try {
+      await connection.command({ type: "pull_branch", sessionId, branch: status.branch.name });
+      changed();
+    } catch (failure) { setError(String(failure)); }
+    finally { setBusy(false); }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -29,7 +56,11 @@ export function GitPane({ sessionId }: { sessionId: string }) {
     return () => { cancelled = true; };
   }, [connection, sessionId]);
 
-  async function refresh() {
+  async function refresh(discover = false) {
+    if (discover) {
+      setPrRefreshRevision(value => value + 1);
+      setStackRevision(value => value + 1);
+    }
     setBusy(true);
     setError("");
     try { setStatus(await connection.command<GitStatus>({ type: "git_status", sessionId })); }
@@ -38,6 +69,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   }
 
   async function openPublish() {
+    setTab("Diff");
     setBusy(true);
     setOpening(true);
     setError("");
@@ -63,6 +95,8 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       confirmed = true;
       setResult(value);
       setReview(undefined);
+      setPrRevision(value => value + 1);
+      setStackRevision(value => value + 1);
       setStatus(await connection.command<GitStatus>({ type: "git_status", sessionId }));
     } catch (failure) {
       setReview(undefined);
@@ -73,15 +107,29 @@ export function GitPane({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm">
+      <div className="border-b pb-4">
+      <div role="tablist" aria-label="Git views" className="mx-auto flex w-fit gap-1 rounded-lg border border-border/60 bg-muted p-1" onKeyDown={event => {
+        if (busy || review !== undefined || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (tabs.indexOf(selected) + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        setTab(tabs[index]);
+        event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
+      }}>
+        {tabs.map(value => <Button key={value} role="tab" aria-selected={selected === value} aria-controls={`git-${sessionId}-${value}`} id={`git-${sessionId}-${value}-tab`} tabIndex={selected === value ? 0 : -1} size="sm" variant="ghost" className="h-7 min-w-14 rounded-md px-3 text-xs font-medium text-muted-foreground hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm" disabled={busy || review !== undefined} onClick={() => setTab(value)}>{value}</Button>)}
+      </div>
+      </div>
+      {error ? <p role="alert">{error}</p> : null}
+      <div role="tabpanel" id={`git-${sessionId}-Diff`} aria-labelledby={`git-${sessionId}-Diff-tab`} hidden={selected !== "Diff"} className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <strong>{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
-        <Button size="sm" variant="outline" disabled={busy || review !== undefined} onClick={() => void refresh()}>Refresh</Button>
+        <Button size="sm" variant="outline" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
         <Button size="sm" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}>{busy ? "Please wait…" : "Publish"}</Button>
+        <Button size="sm" variant="outline" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>
       </div>
-      <h2 className="font-medium">Local files</h2>
+      <p className="text-xs text-muted-foreground">Pull fast-forwards from the upstream branch. Local changes are never stashed.</p>
+      <h2 className="font-medium">Changed files</h2>
       {!status ? <p>Reading Git status…</p> : !status.repository ? <p>This Scope is not a Git repository.</p> : <FileList files={status.files} />}
       {status?.problem ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
-      {error ? <p role="alert">{error}</p> : null}
       {result ? <div role="status" className="space-y-2">
         {result.branch ? <p>Branch: {result.branch}.</p> : null}
         <p>{result.committed ? `Committed ${result.committed.slice(0, 8)}. ` : "No new commit confirmed. "}{result.pushed ? "Pushed." : "Push not confirmed."}</p>
@@ -113,8 +161,13 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           </form> : null}
         </section>
       ) : null}
-      {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} disabled={busy || review !== undefined} onChange={() => { setReview(undefined); setResult(undefined); setPrRevision(value => value + 1); void refresh(); }} /> : null}
-      <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} />
+      </div>
+      <div role="tabpanel" id={`git-${sessionId}-Stack`} aria-labelledby={`git-${sessionId}-Stack-tab`} hidden={selected !== "Stack"}>
+        {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} revision={stackRevision} disabled={busy || review !== undefined} onAvailable={setHasStack} onChange={changed} /> : null}
+      </div>
+      <div role="tabpanel" id={`git-${sessionId}-PR`} aria-labelledby={`git-${sessionId}-PR-tab`} hidden={selected !== "PR"}>
+        <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} revision={prRefreshRevision} disabled={busy || review !== undefined} onAvailable={setHasPr} onChange={() => { setStackRevision(value => value + 1); void refresh(); }} />
+      </div>
     </div>
   );
 }
