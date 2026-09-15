@@ -2,6 +2,7 @@ import { AgentSessionViewProvider } from "@/agent-session-view.tsx";
 import { SessionsProvider } from "@/agent-sessions.tsx";
 import { HostProvider } from "@/host.tsx";
 import { AppShell } from "@/components/app-shell.tsx";
+import { McpAuthResult } from "@/components/mcp-actions.ts";
 import { Toaster } from "@/components/ui/toaster.tsx";
 import { TooltipProvider } from "@/components/ui/tooltip.tsx";
 
@@ -24,6 +25,7 @@ export function App() {
           <TooltipProvider>
             <AppShell />
             <Toaster />
+            <McpAuthResult />
           </TooltipProvider>
         </AgentSessionViewProvider>
       </SessionsProvider>

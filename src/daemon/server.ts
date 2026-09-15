@@ -117,6 +117,18 @@ async function handle(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
+  if (request.method === "GET" && url.pathname === "/api/mcp/callback") {
+    try {
+      if (!options.mcpAuth) throw new Error("MCP auth unavailable");
+      const location = await options.mcpAuth.callback(url);
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" });
+      response.end(`<!doctype html><title>Return to Flow</title><script>window.location.replace(${JSON.stringify(location).replace(/</g, "\\u003c")})</script>`);
+    } catch {
+      send(response, 400, { error: "Invalid or expired MCP sign-in. Return to Flow and try again." });
+    }
+    return;
+  }
+
   // A page on any origin can reach loopback; only same-origin requests may command us.
   if (!originAllowed(request)) {
     send(response, 403, { error: "Origin not allowed" });
@@ -165,7 +177,12 @@ async function handle(
     const connection = options.config?.mcpConnections().find((entry) => entry.id === mcpLogin[1]);
     try {
       if (!connection || !options.mcpAuth) throw new Error("Unknown connection");
-      send(response, 200, { url: await options.mcpAuth.login(connection) });
+      const body = JSON.parse(await readBody(request));
+      const returnUrl = new URL(body.returnUrl);
+      if (returnUrl.host !== request.headers.host ||
+          (request.headers.origin && returnUrl.origin !== request.headers.origin))
+        throw new Error("Invalid return origin");
+      send(response, 200, { url: await options.mcpAuth.login(connection, returnUrl.href) });
     } catch { send(response, 400, { error: "MCP sign-in failed or is already in progress" }); }
     return;
   }
@@ -712,8 +729,8 @@ function originAllowed(request: IncomingMessage): boolean {
   const origin = request.headers.origin;
   if (!origin) return true;
   try {
-    const { hostname } = new URL(origin);
-    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+    const { hostname, host } = new URL(origin);
+    return host === request.headers.host || hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
   } catch {
     return false;
   }
