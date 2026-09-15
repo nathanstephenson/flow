@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, it } from 'node:test';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -462,3 +462,197 @@ for (const secret of ['type', 'asked', 'raw', 'question', 'options', 'header', '
     } finally { await f.close(); }
   });
 }
+
+it('persists complete redacted paginated activity across attempts and restart, including large events', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('TOKEN', 'private-token-value');
+    const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'TOKEN' } }] }, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const first = f.backend.latest.workflowSubagents[0]!;
+    for (let i = 0; i < 215; i++) first.emit({ type: 'notice', level: 'info', text: `${i}: private-token-value ${'x'.repeat(i === 0 ? 250_000 : 1000)}` });
+    first.fail();
+    await f.service.scheduler.wait(f.id, eid);
+    await f.service.recover(f.id, eid, { kind: 'retry', stepId: 'agent' });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    const second = f.backend.latest.workflowSubagents[1]!;
+    second.emit({ type: 'notice', level: 'info', text: 'second attempt' });
+    second.complete('y'.repeat(250_000));
+    assert.equal((await f.service.scheduler.wait(f.id, eid)).result, 'y'.repeat(250_000));
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    let cursor = 0;
+    const events = [];
+    while (true) {
+      const page = await restarted.activity(f.id, eid, { after: cursor, limit: 37, attempt: 1 });
+      assert.equal(page.historyComplete, true);
+      events.push(...page.activity);
+      if (page.next === undefined) break;
+      cursor = page.next;
+    }
+    const serialized = JSON.stringify(events);
+    assert.ok(events.length >= 215);
+    assert.ok(serialized.includes('x'.repeat(250_000)));
+    assert.ok(!serialized.includes('private-token-value'));
+    assert.ok(serialized.includes('[REDACTED]'));
+    const last = await restarted.activity(f.id, eid, { attempt: 2 });
+    assert.ok(JSON.stringify(last).includes('second attempt'));
+    assert.ok(last.activity.every(event => event.attempt === 2));
+    const response = await f.request(`${f.base}/${eid}/activity?attempt=1&limit=10`);
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { activity: unknown[] }).activity.length, 10);
+    await assert.rejects(restarted.activity('wrong-session', eid));
+  } finally { await f.close(); }
+});
+
+it('recovers activity sequences when the durable log is ahead of the preview', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start(f.id, definition, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
+    const stalePreview = readFileSync(path, 'utf8');
+    f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'durable before crash' });
+    await f.host.shutdown();
+    writeFileSync(path, stalePreview);
+    const backend = new FakeBackend();
+    const host = new SessionHost({ store: f.store, retention: 0 });
+    host.registerBackend(backend);
+    const restarted = new WorkflowExecutionService(host, f.workflows, f.secrets, f.config, runtimePath);
+    try {
+      await host.load();
+      restarted.reconcile();
+      await restarted.recover(f.id, eid, { kind: 'retry', stepId: 'agent' });
+      await until(() => backend.latest.workflowSubagents.length === 1);
+      const handle = backend.latest.workflowSubagents[0]!;
+      handle.emit({ type: 'notice', level: 'info', text: 'after recovery' });
+      handle.emit({ type: 'notice', level: 'info', text: 'another event' });
+      handle.complete('done');
+      await restarted.scheduler.wait(f.id, eid);
+      const events = [];
+      let after = 0;
+      for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+        const page = await restarted.activity(f.id, eid, { after, limit: 1 });
+        assert.equal(page.historyComplete, true);
+        events.push(...page.activity);
+        if (page.next === undefined) break;
+        assert.ok(page.next > after);
+        after = page.next;
+      }
+      assert.deepEqual(events.map(event => event.sequence), [1, 2, 3]);
+      assert.deepEqual(events.map(event => event.attempt), [1, 2, 2]);
+      assert.deepEqual(events.map(event => event.event), [
+        { type: 'notice', level: 'info', text: 'durable before crash' },
+        { type: 'notice', level: 'info', text: 'after recovery' },
+        { type: 'notice', level: 'info', text: 'another event' },
+      ]);
+    } finally { await host.shutdown(); }
+  } finally { await f.close(); }
+});
+
+it('provides fresh compact parent context and queues/deduplicates recovery notifications while busy', async () => {
+  const f = await fixture();
+  try {
+    await f.host.send(f.id, 'Keep working', 'now');
+    const started = await f.service.start(f.id, definition, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'transcript-not-context' });
+    f.backend.latest.workflowSubagents[0]!.fail();
+    await f.service.scheduler.wait(f.id, eid);
+    await pause();
+    assert.equal(f.backend.latest.prompts.length, 1);
+    f.backend.latest.completeTurn('complete');
+    await until(() => f.backend.latest.prompts.length === 2);
+    const notification = f.backend.latest.prompts[1]!;
+    assert.ok(notification.includes(eid));
+    assert.ok(notification.includes('recovery-required'));
+    assert.ok(!notification.includes('transcript-not-context'));
+    const summary = await f.service.parent(f.id).inspect({}) as { revision: string; executionId: string };
+    assert.equal(summary.executionId, eid);
+    f.host.workflowWake(f.id, eid, summary.revision);
+    f.backend.latest.completeTurn('complete');
+    await pause();
+    assert.equal(f.backend.latest.prompts.length, 2);
+    await f.host.send(f.id, 'What happened?', 'now');
+    assert.ok(f.backend.latest.prompts.at(-1)!.includes(eid));
+    assert.ok(f.service.context(f.id).includes('recovery-required'));
+    await assert.rejects(f.service.parent(f.id).recover({ executionId: eid, revision: summary.revision, action: { kind: 'retry', stepId: 'agent' } }), /User direction required/);
+    await assert.rejects(f.service.parent(f.id).recover({ executionId: eid, revision: 'stale', action: { kind: 'retry', stepId: 'agent' } }), /no longer available/);
+    await f.service.cancel(f.id, eid);
+    assert.ok(f.service.context(f.id).includes('cancelled'));
+  } finally { await f.close(); }
+});
+
+it('wakes an idle parent and requires an actual one-shot confirmation for replacement output', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start(f.id, definition, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    await f.service.scheduler.wait(f.id, eid);
+    await until(() => f.backend.latest.prompts.length === 1);
+    const summary = await f.service.parent(f.id).inspect({}) as { revision: string };
+    const input = { executionId: eid, revision: summary.revision, action: { kind: 'supply' as const, stepId: 'agent', output: 'fixed' }, confirm: true };
+    const pending = f.service.parent(f.id).recover(input);
+    const getEnquiry = () => reduceAll(f.host.logFor(f.id).since(0)).asking;
+    await until(() => !!getEnquiry());
+    assert.equal(f.service.view(f.id, eid).execution.status, 'recovery-required');
+    await f.host.answerEnquiry(f.id, getEnquiry()!.askId, [['Recover']]);
+    await pending;
+    assert.equal((await f.service.scheduler.wait(f.id, eid)).result, 'fixed');
+    await assert.rejects(f.service.parent(f.id).recover(input), /no longer available/);
+  } finally { await f.close(); }
+});
+
+it('allows only one safe automatic recovery before progress, including after restart', async () => {
+  const f = await fixture();
+  try {
+    const graph: WorkflowDefinition = { ...definition, inputSchema: { type: 'object', fields: { ready: { schema: { type: 'boolean' }, required: true } } }, steps: [{ id: 'check', name: 'Check flag', kind: 'branch', condition: { operator: 'truthy', path: ['ready'] } }], edges: [] };
+    const started = await f.service.start(f.id, graph, { ready: true });
+    const eid = started.execution.id;
+    // A retained input-mapping failure: retry must keep the failed attempt's input,
+    // not silently substitute a new input or mint another automatic allowance.
+    const failed = await f.service.scheduler.wait(f.id, eid);
+    failed.status = 'recovery-required';
+    delete failed.result;
+    failed.steps.check = { status: 'failed', outcome: 'failure', attempts: [{ number: 1, action: 'execute', startedAt: 1, finishedAt: 2, input: null, error: { kind: 'failure', message: 'Input mapping failed' } }] };
+    f.workflows.saveExecution(failed);
+    const service = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    const parent = service.parent(f.id);
+    const before = await parent.inspect({}) as { revision: string; automaticRecoveryAvailable: boolean };
+    assert.equal(before.automaticRecoveryAvailable, true);
+    await parent.recover({ executionId: eid, revision: before.revision, action: { kind: 'retry', stepId: 'check' } });
+    assert.equal((await service.scheduler.wait(f.id, eid)).status, 'recovery-required');
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    const after = await restarted.parent(f.id).inspect({}) as typeof before;
+    assert.notEqual(after.revision, before.revision);
+    assert.equal(after.automaticRecoveryAvailable, false);
+    await assert.rejects(restarted.parent(f.id).recover({ executionId: eid, revision: after.revision, action: { kind: 'retry', stepId: 'check' } }), /User direction required/);
+    assert.equal(restarted.view(f.id, eid).execution.steps.check!.attempts.length, 2);
+  } finally { await f.close(); }
+});
+
+it('reports unavailable legacy history honestly while keeping retained events inspectable', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start(f.id, definition, {});
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'retained legacy activity' });
+    f.backend.latest.workflowSubagents[0]!.complete('done');
+    await f.service.scheduler.wait(f.id, eid);
+    const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
+    const saved = JSON.parse(readFileSync(path, 'utf8'));
+    delete saved.historyComplete;
+    for (const item of saved.activity) delete item.attempt;
+    writeFileSync(path, JSON.stringify(saved));
+    rmSync(path + 'l');
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    const page = await restarted.activity(f.id, eid);
+    assert.equal(page.historyComplete, false);
+    assert.ok(JSON.stringify(page.activity).includes('retained legacy activity'));
+  } finally { await f.close(); }
+});

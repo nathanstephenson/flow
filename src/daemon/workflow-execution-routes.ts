@@ -7,7 +7,7 @@ import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
 import { workflowRequestError } from './workflow-routes.ts';
 
 export async function workflowExecutionRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, service?: WorkflowExecutionService, store?: WorkflowStore): Promise<boolean> {
-  const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflows(?:\/([a-zA-Z0-9_-]+)(?:\/(cancel|recover|enquiry|permission))?)?$/.exec(pathname);
+  const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflows(?:\/([a-zA-Z0-9_-]+)(?:\/(cancel|recover|enquiry|permission|activity))?)?$/.exec(pathname);
   const discovery = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflow-mcp(?:\/([a-zA-Z0-9_-]+))?$/.exec(pathname);
   const test = pathname === '/api/workflows/test' && request.method === 'POST';
   const runtime = pathname === '/api/workflow-runtime';
@@ -17,10 +17,14 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
   try {
     if (request.method === 'GET' && discovery) reply(200, discovery[2] ? await service.discoverMcp(discovery[1]!, discovery[2]) : service.mcpConnections(discovery[1]!));
     else if (request.method === 'GET' && runtime) reply(200, service.status());
+    else if (request.method === 'GET' && match?.[3] === 'activity') {
+      const query = new URL(request.url!, 'http://localhost').searchParams;
+      reply(200, await service.activity(match[1]!, match[2]!, { after: Number(query.get('after') ?? 0), limit: Number(query.get('limit') ?? 100), ...(query.has('stepId') ? { stepId: query.get('stepId')! } : {}), ...(query.has('attempt') ? { attempt: Number(query.get('attempt')) } : {}) }));
+    }
     else if (request.method === 'GET' && match && !match[3]) reply(200, match[2] ? service.view(match[1]!, match[2]) : service.list(match[1]!));
     else if (request.method === 'POST' && !runtime) {
-      let size = 0; const chunks: Buffer[] = [];
-      for await (const chunk of request) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 1_000_000) { reply(413, { error: 'Body too large' }); return true; } chunks.push(bytes); }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) { const bytes = Buffer.from(chunk); chunks.push(bytes); }
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
       const keys = (...names: string[]) => { if (Object.keys(body).some(key => !names.includes(key))) throw new Error(); };

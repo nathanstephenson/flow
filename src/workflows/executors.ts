@@ -70,7 +70,6 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     if (sandbox.enabled && (scope.includes(',') || options.runtimePath.includes(','))) throw new Error('Runtime mount paths cannot contain commas');
     const timeout = Math.min(context.step.timeoutMs ?? 60_000, 2_147_000_000);
     const request = JSON.stringify({ ...context.step, scope: sandbox.enabled ? '/scope' : scope, input: context.input, inputType: inputSchema ? toTypeScript(inputSchema) : 'unknown', outputType: context.step.kind === 'typescript' ? toTypeScript(context.step.outputSchema) : 'unknown', secrets, timeout });
-    if (Buffer.byteLength(request) > 1_000_000) throw new Error('Runtime input limit exceeded');
     context.signal.throwIfAborted();
     const child = spawn(sandbox.enabled ? options.nodePath : '/bin/bash', sandbox.enabled ? ['--max-old-space-size=128', options.runtimePath, '--docker-supervisor'] : args, { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', stopped = false;
@@ -85,9 +84,8 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     child.stdin.write((sandbox.enabled ? JSON.stringify({ docker, args, name, request: JSON.parse(request) }) : request) + '\n');
     const heartbeat = setInterval(() => { if (!stopped) child.stdin.write('\n'); }, 500);
     const deadline = setTimeout(abort, timeout + 1000);
-    for (const [stream, label] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) stream.on('data', (chunk: Buffer) => {
+    for (const [stream, label] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) stream.setEncoding('utf8').on('data', (chunk: string) => {
       if (label === 'stdout') stdout += chunk.toString(); else stderr += chunk.toString();
-      if (stdout.length + stderr.length > 1_000_000) { stdout = stdout.slice(0, 1_000_000); stderr = stderr.slice(0, 1000); abort(); }
     });
     try {
       const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });

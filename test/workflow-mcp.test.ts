@@ -16,7 +16,7 @@ import { WorkflowExecutionService } from '../src/daemon/workflow-executions.ts';
 import { connectionIdentity, sameSchema } from '../src/daemon/workflow-mcp.ts';
 import { validateDefinition, resolveMapping } from '../src/workflows/graph.ts';
 import { compileJsonSchema, validateJsonSchema } from '../src/workflows/json-schema.ts';
-import { assertMcpResultSize, boundedMcpValue, validateMcpOutput } from '../src/workflows/mcp.ts';
+import { boundedMcpValue, validateMcpOutput } from '../src/workflows/mcp.ts';
 import { parseExecution } from '../src/workflows/records.ts';
 import type { Json, JsonSchema, McpToolSnapshot, WorkflowDefinition, WorkflowExecution } from '../src/protocol/workflows.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
@@ -208,14 +208,13 @@ test('configured HTTP call timeout can exceed the old 10 second fetch limit', { 
   } finally { await f.close(); }
 });
 
-test('oversized multibyte output fails without truncation or partial retention; invalid arguments do not call', async () => {
+test('large multibyte output is retained without truncation; invalid arguments do not call', async () => {
   const f = await fixture();
   try {
     f.result({ content: [{ type: 'text', text: 'é'.repeat(50_000) }] });
     const failed = await f.run();
-    assert.equal(failed.status, 'recovery-required');
-    assert.equal(failed.steps.fetch!.attempts[0]!.partialOutput, undefined);
-    assert.match(failed.steps.fetch!.attempts[0]!.error!.message, /100,000 bytes/);
+    assert.equal(failed.status, 'completed');
+    assert.deepEqual(failed.steps.fetch!.output, { structuredContent: null, content: [{ type: 'text', text: 'é'.repeat(50_000) }] });
     await f.service.cancel(f.id, failed.id);
     const invalid: WorkflowDefinition = { ...f.definition, steps: [{ ...f.definition.steps[0]!, mapping: { kind: 'template', template: { kind: 'literal', value: { id: '' } } } }] };
     const bad = await f.run(invalid);
@@ -251,7 +250,7 @@ test('full JSON Schema dialects validate original constraints, reject unknown va
   assert.throws(() => compileJsonSchema({ $ref: 'https://not-fetched.test/schema' }), /No validation was skipped/);
   assert.deepEqual(validateMcpOutput(snapshot, { structuredContent: null, content: [] }), { structuredContent: null, content: [] });
   assert.throws(() => validateMcpOutput({ ...snapshot, outputSchema: { type: 'object', required: ['id'] } }, { structuredContent: null, content: [] }));
-  assert.throws(() => boundedMcpValue('💡'.repeat(25_000)), /100,000/);
+  assert.equal(boundedMcpValue('💡'.repeat(25_000)), '💡'.repeat(25_000));
 });
 
 test('MCP envelope validation preserves JSON content and rejects non-JSON extras', () => {
@@ -264,13 +263,13 @@ test('MCP envelope validation preserves JSON content and rejects non-JSON extras
     { ...output, content: [{}] },
     { ...output, structuredContent: undefined },
   ]) assert.throws(() => validateMcpOutput(snapshot, invalid));
-  assert.throws(() => validateMcpOutput(snapshot, { structuredContent: null, content: [{ type: 'text', text: '💡'.repeat(25_000) }] }), /100,000/);
+  assert.doesNotThrow(() => validateMcpOutput(snapshot, { structuredContent: null, content: [{ type: 'text', text: '💡'.repeat(25_000) }] }));
 });
 
-test('post-redaction size guard rejects expansion of an otherwise bounded JSON result', () => {
+test('post-redaction expansion retains the complete JSON result', () => {
   const raw = boundedMcpValue({ structuredContent: null, content: [{ type: 'text', text: 'key '.repeat(12_000) }] });
   const redacted = JSON.parse(JSON.stringify(raw).replaceAll('key', '[REDACTED]'));
-  assert.throws(() => assertMcpResultSize(redacted), /100,000/);
+  assert.deepEqual(boundedMcpValue(redacted), redacted);
 });
 
 test('templates preserve literals and nested references, reject unavailable predecessors, and round-trip records', async () => {
@@ -285,7 +284,7 @@ test('templates preserve literals and nested references, reject unavailable pred
     assert.throws(() => validateDefinition(invalid), /earlier step/);
     const corrupted = structuredClone(record);
     corrupted.steps.fetch!.output = { structuredContent: null, content: [{ type: 'text', text: 'x'.repeat(100_000) }] };
-    assert.throws(() => parseExecution(corrupted), /100,000/);
+    assert.deepEqual(parseExecution(corrupted), corrupted);
     assert.notEqual(connectionIdentity(f.connection), connectionIdentity({ ...f.connection, id: 'another' }));
   } finally { await f.close(); }
 });

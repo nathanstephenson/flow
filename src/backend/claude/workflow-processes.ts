@@ -4,7 +4,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { BackendEvent } from "../../protocol/events.ts";
 
-type Call = { process: ChildProcess; done: Promise<void>; output: string; truncated: boolean; exitCode: number | null; stopped: boolean };
+type Call = { process: ChildProcess; done: Promise<void>; output: string; exitCode: number | null; stopped: boolean };
 
 export class WorkflowProcesses {
   private readonly calls = new Map<string, Call>();
@@ -39,17 +39,15 @@ export class WorkflowProcesses {
     if (process.platform === "win32") throw new Error("Workflow shell tools require POSIX process groups");
     if (this.calls.has(id)) throw new Error(`Duplicate workflow shell call: ${id}`);
     const child = spawn("/bin/bash", ["-c", command], { cwd: this.scope, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    const call: Call = { process: child, done: Promise.resolve(), output: "", truncated: false, exitCode: null, stopped: false };
+    const call: Call = { process: child, done: Promise.resolve(), output: "", exitCode: null, stopped: false };
     this.calls.set(id, call);
     if (background) this.emit({ type: "background_call", callId: id, tool: "mcp__workflow__bash", state: "running" });
-    const append = (data: Buffer) => {
-      const output = call.output + data.toString();
-      call.truncated ||= output.length > 100_000;
-      call.output = output.slice(-100_000);
+    const append = (data: string) => {
+      call.output += data.toString();
     };
-    child.stdout!.on("data", append);
-    child.stderr!.on("data", append);
-    child.on("error", (error) => append(Buffer.from(error.message)));
+    child.stdout!.setEncoding("utf8").on("data", append);
+    child.stderr!.setEncoding("utf8").on("data", append);
+    child.on("error", (error) => append(error.message));
     child.on("exit", () => this.killGroup(call));
     call.done = new Promise((resolve) => child.once("close", (code) => {
       call.exitCode = code;
@@ -69,7 +67,7 @@ export class WorkflowProcesses {
   private result(id: string) {
     const call = this.get(id);
     return { content: [{ type: "text" as const, text: JSON.stringify({ call_id: id, output: call.output,
-      ...(call.truncated ? { truncated: true } : {}), exitCode: call.exitCode, running: call.process.exitCode === null && call.process.signalCode === null }) }] };
+      exitCode: call.exitCode, running: call.process.exitCode === null && call.process.signalCode === null }) }] };
   }
 
   private killGroup(call: Call): void {

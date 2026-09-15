@@ -101,7 +101,7 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       const names = [...parent.getActiveToolNames(), ...piMcpTools(this.mcp).map((tool) => tool.name)].filter((name) => name !== "subagent");
       const definitions = [...piMcpTools(this.mcp), createReadToolDefinition(scope), createEditToolDefinition(scope), createWriteToolDefinition(scope),
         createGrepToolDefinition(scope), createFindToolDefinition(scope), createLsToolDefinition(scope), createPowerShellToolDefinition(scope),
-        ...backgroundTools(scope, settingsManager, this.work)];
+        ...backgroundTools(scope, settingsManager, this.work, undefined, false, true)];
       const customTools = definitions.filter((tool) => names.includes(tool.name)).map((tool) => this.wrap(tool as ToolDefinition));
       customTools.push(this.enquiries.tool);
       const { session } = await createAgentSession({ cwd: scope, model, modelRuntime: parent.modelRuntime,

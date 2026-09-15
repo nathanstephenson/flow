@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { constants, mkdirSync, openSync, closeSync, readSync, writeFileSync, realpathSync } from 'node:fs';
+import { constants, mkdirSync, openSync, closeSync, readFileSync, fstatSync, writeFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import ts from 'typescript';
@@ -33,8 +33,8 @@ async function dockerSupervisor(config: { docker: string; args: string[]; name: 
   child.stdin.on('error', () => {});
   child.stdin.write(JSON.stringify(config.request) + '\n');
   const heartbeat = setInterval(() => { if (!stopped) child.stdin.write('\n'); }, 500);
-  child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); if (output.length > 1_000_000) stop(); });
-  child.stderr.on('data', (chunk: Buffer) => { error = (error + chunk.toString()).slice(-1000); });
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => { error = (error + chunk).slice(-1000); });
   try {
     const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
     if (stopped || code !== 0) throw new Error(`Docker runtime stopped (${code}): ${error}`);
@@ -70,8 +70,8 @@ function supervisedGuest(request: unknown) {
     child.stdin.on('error', () => {});
     child.stdin.write(JSON.stringify(request) + '\n');
     const heartbeat = setInterval(() => { if (!controller.signal.aborted) child.stdin.write('\n'); }, 500);
-    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); if (output.length > 1_000_000) stop(); });
-    child.stderr.on('data', (chunk: Buffer) => { error = (error + chunk.toString()).slice(-1000); });
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { error = (error + chunk).slice(-1000); });
     child.once('error', reject);
     child.once('close', code => {
       clearInterval(heartbeat); clearTimeout(killTimer);
@@ -83,19 +83,20 @@ function supervisedGuest(request: unknown) {
 
 function shell(request: { scope: string; command?: string; input: unknown; secrets: Record<string, string> }) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', request.command!], {
-      cwd: request.scope, detached: true, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', OUTPUT: JSON.stringify(request.input), ...request.secrets }, stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'IFS= read -r -d \'\' OUTPUT\n' + request.command!], {
+      cwd: request.scope, detached: true, env: { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', ...request.secrets }, stdio: ['pipe', 'pipe', 'pipe'],
     });
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(request.input) + '\0');
     let stdout = '', stderr = '', failed = false;
     const kill = () => { if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; } } };
     stop = () => { failed = true; controller.abort(); kill(); };
-    for (const [stream, name] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) stream.on('data', (data: Buffer) => {
+    for (const [stream, name] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) stream.setEncoding('utf8').on('data', (data: string) => {
       if (name === 'stdout') stdout += data.toString(); else stderr += data.toString();
-      if (stdout.length + stderr.length > LIMIT) { stdout = stdout.slice(0, LIMIT); stderr = stderr.slice(0, LIMIT - stdout.length); stop(); }
     });
     child.on('error', reject);
     child.on('exit', kill);
-    child.on('close', code => failed ? reject(new Error('Shell stopped or output limit exceeded')) : resolveResult({ stdout, stderr, exitCode: code ?? 128 }));
+    child.on('close', code => failed ? reject(new Error('Shell stopped')) : resolveResult({ stdout, stderr, exitCode: code ?? 128 }));
   });
 }
 
@@ -161,10 +162,10 @@ async function guest(request: { scope: string; code?: string; input: unknown; in
   const operations: Record<string, (...args: any[]) => Promise<unknown>> = {
     readText: async (path: string) => {
       const fd = scoped(path, false, target => openSync(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK));
-      try { const buffer = Buffer.alloc(LIMIT + 1); const size = readSync(fd, buffer, 0, buffer.length, 0); if (size > LIMIT) throw new Error('File limit exceeded'); return buffer.subarray(0, size).toString(); } finally { closeSync(fd); }
+      try { if (!fstatSync(fd).isFile()) throw new Error('Only regular files can be read'); return readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
     },
     writeText: async (path: string, text: string) => {
-      if (typeof text !== 'string' || Buffer.byteLength(text) > LIMIT) throw new Error('File limit exceeded');
+      if (typeof text !== 'string') throw new Error('File content must be text');
       const fd = scoped(path, false, target => openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600));
       try { writeFileSync(fd, text); } finally { closeSync(fd); }
     },
@@ -181,8 +182,8 @@ async function guest(request: { scope: string; code?: string; input: unknown; in
           if (response.status === 303 || ((response.status === 301 || response.status === 302) && options.method === 'POST')) { options = { ...options, method: 'GET' }; delete options.body; }
           url = next; continue;
         }
-        let size = 0; const chunks: Uint8Array[] = [];
-        if (response.body) for await (const chunk of response.body) { size += chunk.length; if (size > LIMIT) { controller.abort(); throw new Error('Response limit exceeded'); } chunks.push(chunk); }
+        const chunks: Uint8Array[] = [];
+        if (response.body) for await (const chunk of response.body) { chunks.push(chunk); }
         return { status: response.status, body: Buffer.concat(chunks).toString() };
       }
       throw new Error('Redirect limit exceeded');
@@ -201,7 +202,6 @@ async function guest(request: { scope: string; code?: string; input: unknown; in
     const operation = Object.hasOwn(operations, vm.getString(name)) ? operations[vm.getString(name)] : undefined;
     if (!operation) throw new Error('Unknown operation');
     const encoded = vm.getString(args);
-    if (Buffer.byteLength(encoded) > LIMIT) throw new Error('Operation input limit exceeded');
     const values = JSON.parse(encoded);
     if (!Array.isArray(values)) throw new Error('Operation arguments must be an array');
     const promise = vm.newPromise();
@@ -224,7 +224,7 @@ async function guest(request: { scope: string; code?: string; input: unknown; in
         const state = vm.getPromiseState(result);
         if (state.type === 'fulfilled') {
           const stringify = vm.unwrapResult(vm.evalCode('(value) => { const text = JSON.stringify(value, (_key, item) => { if (item === undefined || typeof item === "function" || typeof item === "symbol" || typeof item === "bigint" || (typeof item === "number" && !Number.isFinite(item))) throw Error("Output must be JSON"); return item; }); if (text === undefined) throw Error("Output must be JSON"); return text; }'));
-          try { const encoded = vm.unwrapResult(vm.callFunction(stringify, vm.undefined, state.value)); try { const text = vm.getString(encoded); if (Buffer.byteLength(text) > LIMIT) throw new Error('Output limit exceeded'); return JSON.parse(text); } finally { encoded.dispose(); } } finally { stringify.dispose(); state.value.dispose(); }
+          try { const encoded = vm.unwrapResult(vm.callFunction(stringify, vm.undefined, state.value)); try { const text = vm.getString(encoded); return JSON.parse(text); } finally { encoded.dispose(); } } finally { stringify.dispose(); state.value.dispose(); }
         }
         if (state.type === 'rejected') { const error = vm.dump(state.error); state.error.dispose(); throw new Error(errorText(error)); }
         if (!pending.size) throw new Error('Guest promise cannot settle');

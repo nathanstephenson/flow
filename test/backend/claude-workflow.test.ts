@@ -170,13 +170,13 @@ it("owns Background Calls until exit and kills process groups on disposal", { ti
   assert.deepEqual(events.map((e) => (e as { state: string }).state), ["running", "aborted"]);
 });
 
-it("reports truncated WorkflowProcesses output", { timeout: 5000 }, async () => {
+it("retains complete WorkflowProcesses output above 100k", { timeout: 5000 }, async () => {
   const work = new WorkflowProcesses("/tmp", () => {});
   const id = work.start("printf '%100001s' x", false);
   await work.drain();
   const output = JSON.parse(work["result"](id).content[0]!.text);
-  assert.equal(output.truncated, true);
-  assert.equal(output.output.length, 100_000);
+  assert.equal(output.truncated, undefined);
+  assert.equal(output.output.length, 100_001);
 });
 
 for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed Claude CLI isolates input and owns human input and background work (${scenario})`, { timeout: 30_000 }, async (t) => {
