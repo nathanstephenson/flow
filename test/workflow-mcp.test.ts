@@ -16,7 +16,7 @@ import { WorkflowExecutionService } from '../src/daemon/workflow-executions.ts';
 import { connectionIdentity, sameSchema } from '../src/daemon/workflow-mcp.ts';
 import { validateDefinition, resolveMapping } from '../src/workflows/graph.ts';
 import { compileJsonSchema, validateJsonSchema } from '../src/workflows/json-schema.ts';
-import { boundedMcpValue, validateMcpOutput } from '../src/workflows/mcp.ts';
+import { assertMcpResultSize, boundedMcpValue, validateMcpOutput } from '../src/workflows/mcp.ts';
 import { parseExecution } from '../src/workflows/records.ts';
 import type { Json, JsonSchema, McpToolSnapshot, WorkflowDefinition, WorkflowExecution } from '../src/protocol/workflows.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
@@ -252,6 +252,25 @@ test('full JSON Schema dialects validate original constraints, reject unknown va
   assert.deepEqual(validateMcpOutput(snapshot, { structuredContent: null, content: [] }), { structuredContent: null, content: [] });
   assert.throws(() => validateMcpOutput({ ...snapshot, outputSchema: { type: 'object', required: ['id'] } }, { structuredContent: null, content: [] }));
   assert.throws(() => boundedMcpValue('💡'.repeat(25_000)), /100,000/);
+});
+
+test('MCP envelope validation preserves JSON content and rejects non-JSON extras', () => {
+  const output = { structuredContent: { ok: true }, content: [{ type: 'resource', resource: { uri: 'test://item', text: 'body' }, annotations: { audience: ['user'] } }] };
+  assert.deepEqual(validateMcpOutput(snapshot, output), output);
+  for (const invalid of [
+    { ...output, extra: true },
+    { ...output, content: [{ type: 'text', text: undefined }] },
+    { ...output, content: [{ type: 'text', extra: NaN }] },
+    { ...output, content: [{}] },
+    { ...output, structuredContent: undefined },
+  ]) assert.throws(() => validateMcpOutput(snapshot, invalid));
+  assert.throws(() => validateMcpOutput(snapshot, { structuredContent: null, content: [{ type: 'text', text: '💡'.repeat(25_000) }] }), /100,000/);
+});
+
+test('post-redaction size guard rejects expansion of an otherwise bounded JSON result', () => {
+  const raw = boundedMcpValue({ structuredContent: null, content: [{ type: 'text', text: 'key '.repeat(12_000) }] });
+  const redacted = JSON.parse(JSON.stringify(raw).replaceAll('key', '[REDACTED]'));
+  assert.throws(() => assertMcpResultSize(redacted), /100,000/);
 });
 
 test('templates preserve literals and nested references, reject unavailable predecessors, and round-trip records', async () => {

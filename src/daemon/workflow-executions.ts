@@ -1,7 +1,7 @@
 import { redactCredentials } from './credential-redaction.ts';
 import { connectionIdentity, snapshotTool, sameSchema } from './workflow-mcp.ts';
 import { compileJsonSchema, validateJsonSchema } from '../workflows/json-schema.ts';
-import { boundedMcpValue, validateMcpOutput } from '../workflows/mcp.ts';
+import { assertMcpResultSize, boundedMcpValue } from '../workflows/mcp.ts';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -317,11 +317,12 @@ export class WorkflowExecutionService {
       activity('Calling MCP directly. No model or tokens. Cancellation is not rollback; remote effects may already occur.');
       const result = await tool.call(context.input, context.signal, context.step.timeoutMs ?? 60_000);
       const output = boundedMcpValue({ structuredContent: result.structuredContent ?? null, content: result.content });
-      const safe = boundedMcpValue(redact(output, values()));
+      const safe = redact(output, values());
+      // Bound even error/timeout partial output; the scheduler validates successful envelopes.
+      assertMcpResultSize(safe);
       if (result.isError) throw new WorkflowStepError('MCP tool returned an error. Inspect partial output before retrying; effects may already have occurred.', safe);
-      const validated = validateMcpOutput(expected, safe);
       activity('MCP call completed.');
-      return validated;
+      return safe;
     } catch (error) { throw safeError(error, values()); }
     finally { context.signal.removeEventListener('abort', abort); await session.dispose(); }
   }

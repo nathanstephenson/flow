@@ -117,6 +117,7 @@ export class McpSession {
         transport as import("@modelcontextprotocol/sdk/shared/transport.js").Transport,
         { timeout: 10_000, signal },
       );
+      const serverIdentity = createHash("sha256").update(JSON.stringify(client.getServerVersion() ?? null)).digest("hex");
       const tools: McpTool[] = [];
       let cursor: string | undefined;
       const seen = new Set<string>();
@@ -138,7 +139,7 @@ export class McpSession {
             name,
             connectionId: id,
             definition,
-            serverIdentity: createHash("sha256").update(JSON.stringify(client.getServerVersion() ?? null)).digest("hex"),
+            serverIdentity,
             call: async (input, signal, timeoutMs = 60_000) => {
               if (this.disposed) throw new Error("Backend Session stopped");
               this.activeCalls.set(id, (this.activeCalls.get(id) ?? 0) + 1);
