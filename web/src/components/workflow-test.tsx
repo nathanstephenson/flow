@@ -42,7 +42,8 @@ export function StepTest({
   let schema;
   let invalid = "";
   try {
-    schema = validateDefinition(definition).inputSchemas.get(stepId);
+    const step = definition.steps.find(step => step.id === stepId);
+    schema = step?.kind === "mcp" ? { type: "json" as const, schema: step.tool.inputSchema } : validateDefinition(definition).inputSchemas.get(stepId);
     validatedStepInput(definition, stepId, input);
   } catch (e) {
     invalid = workflowIssue(e);

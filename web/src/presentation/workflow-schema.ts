@@ -8,6 +8,8 @@ export function emptySchema(type: VisualSchema["type"]): VisualSchema {
 }
 export function initialValue(schema: VisualSchema): Json {
   switch (schema.type) {
+    case "json": return {};
+    case "null": return null;
     case "object":
       return Object.fromEntries(
         Object.entries(schema.fields)
