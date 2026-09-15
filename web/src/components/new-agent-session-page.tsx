@@ -17,6 +17,9 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { Composer } from "@/components/composer.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { Button } from "@/components/ui/button.tsx";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion.tsx";
+import { Badge } from "@/components/ui/badge.tsx";
+import { Switch } from "@/components/ui/switch.tsx";
 import {
   Combobox,
   ComboboxCollection,
@@ -317,13 +320,6 @@ export function NewAgentSessionPage({
     <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-6 py-12">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
-        {(config.mcp ?? []).length > 0 && <fieldset className="flex flex-wrap gap-3 text-sm">
-          <legend className="mb-2 text-xs text-muted-foreground">MCP connections</legend>
-          {config.mcp!.map((connection) => <label key={connection.id} className="flex items-center gap-2">
-            <input type="checkbox" checked={mcpChoices[connection.id] ?? connection.enabledByDefault} onChange={(event) => setMcpChoices({ ...mcpChoices, [connection.id]: event.target.checked })} />
-            {connection.name}
-          </label>)}
-        </fieldset>}
 
         {projects.length === 0 ? (
           <NoProjects uncurated={uncurated} />
@@ -452,6 +448,30 @@ export function NewAgentSessionPage({
               // Nothing can be delegating yet, so the strip that offers this never renders.
               onShowSubagents={() => {}}
             />
+
+            {(config.mcp ?? []).length > 0 && (
+              <Accordion>
+                <AccordionItem value="mcp">
+                  <AccordionTrigger>
+                    MCP connections
+                    <Badge variant="secondary" aria-label={`${mcpConnectionIds.length} enabled`}>
+                      {mcpConnectionIds.length}
+                    </Badge>
+                  </AccordionTrigger>
+                  <AccordionContent className="flex flex-col gap-3">
+                    {config.mcp!.map((connection) => (
+                      <label key={connection.id} className="flex items-center justify-between gap-3 text-sm">
+                        {connection.name}
+                        <Switch
+                          checked={mcpChoices[connection.id] ?? connection.enabledByDefault}
+                          onCheckedChange={(checked) => setMcpChoices((choices) => ({ ...choices, [connection.id]: checked }))}
+                        />
+                      </label>
+                    ))}
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            )}
 
             {repository && config.git !== false ? (
               <div className="flex flex-col gap-1">
