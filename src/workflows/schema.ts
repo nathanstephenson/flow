@@ -1,3 +1,4 @@
+import { compileJsonSchema, validateJsonSchema, jsonSchemaAt } from './json-schema.ts';
 import { z } from 'zod';
 import type { Json, VisualSchema, WorkflowStep } from '../protocol/workflows.ts';
 
@@ -15,6 +16,8 @@ export function dictionaryRecord<T extends z.ZodType>(value: T) {
 
 const jsonSchema: z.ZodType<Json> = z.lazy(() => z.union([z.null(), z.boolean(), z.number(), z.string(), z.array(jsonSchema), z.record(z.string(), jsonSchema)]));
 export const visualSchemaValidator: z.ZodType<VisualSchema> = z.lazy(() => z.discriminatedUnion('type', [
+  z.object({ type: z.literal('null') }).strict(),
+  z.object({ type: z.literal('json'), schema: z.union([z.boolean(), z.record(z.string(), jsonSchema)]).optional() }).strict(),
   z.object({ type: z.literal('string') }).strict(),
   z.object({ type: z.literal('number'), integer: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('boolean') }).strict(),
@@ -26,6 +29,11 @@ export const visualSchemaValidator: z.ZodType<VisualSchema> = z.lazy(() => z.dis
 
 export function toZod(schema: VisualSchema): z.ZodType {
   switch (schema.type) {
+    case 'null': return z.null();
+    case 'json': {
+      if (schema.schema !== undefined) compileJsonSchema(schema.schema);
+      return jsonSchema.superRefine((value, ctx) => { try { if (schema.schema !== undefined) validateJsonSchema(schema.schema, value); } catch (error) { ctx.addIssue({ code: 'custom', message: (error as Error).message }); } });
+    }
     case 'string': return z.string();
     case 'number': return schema.integer ? z.number().int() : z.number();
     case 'boolean': return z.boolean();
@@ -52,6 +60,7 @@ export function validateSchema(schema: VisualSchema): void {
 
 export function toTypeScript(schema: VisualSchema): string {
   switch (schema.type) {
+    case 'json': return 'unknown';
     case 'enum': return schema.values.map(value => JSON.stringify(value)).join(' | ');
     case 'array': return `Array<${toTypeScript(schema.items)}>`;
     case 'union': return schema.variants.map(toTypeScript).join(' | ');
@@ -67,6 +76,7 @@ export const shellOutputSchema: VisualSchema = { type: 'object', fields: {
 } };
 
 export function declaredOutputSchema(step: WorkflowStep): VisualSchema | undefined {
+  if (step.kind === 'mcp') return { type: 'object', fields: { structuredContent: { required: true, schema: { type: 'json', ...(step.tool.outputSchema === undefined ? {} : { schema: step.tool.outputSchema }) } }, content: { required: true, schema: { type: 'array', items: { type: 'json' } } } } };
   if (step.kind === 'shell') return shellOutputSchema;
   if (step.kind === 'branch') return { type: 'boolean' };
   if (step.kind === 'join') return undefined;
@@ -75,6 +85,8 @@ export function declaredOutputSchema(step: WorkflowStep): VisualSchema | undefin
 
 export function schemaAt(schema: VisualSchema, path: string[]): { schema: VisualSchema; optional: boolean } {
   if (!path.length) return { schema, optional: false };
+  if (schema.type === 'json') return { schema: { type: 'json', schema: jsonSchemaAt(schema.schema ?? true, path) }, optional: false };
+  if (schema.type === 'null') return { schema: { type: 'json' }, optional: false };
   if (schema.type === 'union') {
     const fields = schema.variants.map(variant => schemaAt(variant, path));
     return { schema: unionSchema(fields.map(field => field.schema)), optional: fields.some(field => field.optional) };
@@ -91,6 +103,8 @@ export function schemaAt(schema: VisualSchema, path: string[]): { schema: Visual
 }
 
 export function schemaAssignable(source: VisualSchema, target: VisualSchema): boolean {
+  if (target.type === 'json') return true;
+  if (source.type === 'json') return true; // Resolved values are checked at the consuming step.
   if (source.type === 'union') return source.variants.every(variant => schemaAssignable(variant, target));
   if (target.type === 'union') return target.variants.some(variant => schemaAssignable(source, variant));
   if (source.type === 'enum') return target.type === 'string' || (target.type === 'enum' && source.values.every(value => target.values.includes(value)));

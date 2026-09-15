@@ -5,6 +5,7 @@ import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
 import { resolveMapping, validateDefinition } from './graph.ts';
 import type { WorkflowGraph } from './graph.ts';
 import { declaredOutputSchema, parseValue, valueAt } from './schema.ts';
+import { validateMcpOutput } from './mcp.ts';
 import { WorkflowStore } from './store.ts';
 
 export interface WorkflowSession {
@@ -28,6 +29,7 @@ export interface WorkflowExecutor {
   execute(context: ExecutorContext): Promise<Json>;
 }
 export interface WorkflowExecutors {
+  mcp?: WorkflowExecutor;
   agent?: WorkflowExecutor;
   shell?: WorkflowExecutor;
   typescript?: WorkflowExecutor;
@@ -275,8 +277,11 @@ export class WorkflowScheduler {
       const identities = active.graph.loops.filter(loop => !active.record.testStepId && loop.memberIds.includes(step.id)).map(loop => ({ headerId: loop.headerId, activation: active.record.loops![loop.headerId]!.activation, try: active.record.loops![loop.headerId]!.try }));
       const previous = state.attempts.at(-1);
       const retry = previous && isDeepStrictEqual(previous.loops ?? [], identities);
-      state.attempts.push({ number: state.attempts.length + 1, action: retry ? 'retry' : 'execute', startedAt: Date.now(), input: retry ? previous.input : header?.headerInput !== undefined ? header.headerInput : this.input(active, step, selected), ...(identities.length ? { loops: identities } : {}) });
-      const done = Promise.resolve().then(() => this.execute(active, step, controller)).finally(() => {
+      let input: Json = null;
+      let inputError: unknown;
+      try { input = retry ? previous.input : header?.headerInput !== undefined ? header.headerInput : this.input(active, step, selected); } catch (error) { inputError = error; }
+      state.attempts.push({ number: state.attempts.length + 1, action: retry ? 'retry' : 'execute', startedAt: Date.now(), input, ...(identities.length ? { loops: identities } : {}) });
+      const done = Promise.resolve().then(() => this.execute(active, step, controller, inputError)).finally(() => {
         active.running.delete(step.id);
         if (active.stopped) {
           if (!active.running.size && active.persistenceError) this.settle(active);
@@ -436,12 +441,13 @@ export class WorkflowScheduler {
   }
 
   private validateOutput(active: ActiveExecution, step: WorkflowStep, value: unknown): Json {
+    if (step.kind === 'mcp') return validateMcpOutput(step.tool, value);
     const output = parseValue(declaredOutputSchema(step) ?? active.graph.outputSchemas.get(step.id)!, value);
     if (step.kind === 'shell' && !(step.acceptedExitCodes ?? [0]).includes((output as { exitCode: number }).exitCode)) throw new WorkflowStepError('Shell exit code was not accepted', output);
     return output;
   }
 
-  private async execute(active: ActiveExecution, step: WorkflowStep, controller: AbortController): Promise<void> {
+  private async execute(active: ActiveExecution, step: WorkflowStep, controller: AbortController, inputError?: unknown): Promise<void> {
     const state = active.record.steps[step.id]!;
     if (active.stopped) {
       state.attempts.at(-1)!.finishedAt ??= Date.now();
@@ -452,9 +458,10 @@ export class WorkflowScheduler {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     try {
+      if (inputError) throw inputError;
       if (step.inputSchema) attempt.input = parseValue(step.inputSchema, attempt.input);
       this.persist(active);
-      const timeout = step.timeoutMs ?? (step.kind === 'shell' || step.kind === 'typescript' ? 60_000 : undefined);
+      const timeout = step.timeoutMs ?? (step.kind === 'shell' || step.kind === 'typescript' || step.kind === 'mcp' ? 60_000 : undefined);
       if (timeout !== undefined) timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
       let value: Json;
       if (step.kind === 'join') value = attempt.input;

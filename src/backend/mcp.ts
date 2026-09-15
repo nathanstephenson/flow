@@ -10,9 +10,11 @@ export type McpTool = {
   name: string;
   connectionId: string;
   definition: Tool;
+  serverIdentity: string;
   call: (
     input: Record<string, unknown>,
     signal?: AbortSignal,
+    timeoutMs?: number,
   ) => Promise<CallToolResult>;
 };
 export class McpSession {
@@ -22,6 +24,7 @@ export class McpSession {
   private readonly pending = new Map<string, Promise<void>>();
   private readonly activeCalls = new Map<string, number>();
   private disposed = false;
+  private readonly direct: boolean;
   readonly connections: readonly McpConnection[];
   private readonly scope: string;
   private readonly auth:
@@ -31,10 +34,12 @@ export class McpSession {
     connections: readonly McpConnection[],
     scope: string,
     auth?: (connection: McpConnection) => OAuthClientProvider,
+    direct = false,
   ) {
     this.connections = structuredClone(connections);
     this.scope = scope;
     this.auth = auth;
+    this.direct = direct;
   }
   registrationFailed(): void {
     for (const [id] of this.states) this.states.set(id, { id, state: "failed", tools: 0 });
@@ -79,6 +84,12 @@ export class McpSession {
       { capabilities: {} },
     );
     this.clients.set(id, client);
+    // Direct workflow sessions never initiate login or replay a POST after a 401.
+    const tokens = this.direct && connection.transport === 'http' && connection.oauth ? await this.auth?.(connection).tokens() : undefined;
+    if (this.direct && connection.transport === 'http' && connection.oauth && !tokens?.access_token) {
+      this.states.set(id, { id, state: 'failed', tools: 0 });
+      return;
+    }
     const transport =
       connection.transport === "stdio"
         ? new StdioClientTransport({
@@ -88,13 +99,14 @@ export class McpSession {
             stderr: "ignore",
           })
         : new StreamableHTTPClientTransport(new URL(connection.url), {
-            ...(connection.oauth && this.auth
+            ...(connection.oauth && this.auth && !this.direct
               ? { authProvider: this.auth(connection) }
               : {}),
             fetch: (input, init) =>
               fetch(input, {
                 ...init,
-                signal: init?.signal
+                ...(tokens ? { headers: { ...Object.fromEntries(new Headers(init?.headers).entries()), Authorization: `Bearer ${tokens.access_token}` } } : {}),
+                signal: this.direct ? init?.signal ?? null : init?.signal
                   ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)])
                   : AbortSignal.timeout(10_000),
               }),
@@ -105,6 +117,7 @@ export class McpSession {
         transport as import("@modelcontextprotocol/sdk/shared/transport.js").Transport,
         { timeout: 10_000, signal },
       );
+      const serverIdentity = createHash("sha256").update(JSON.stringify(client.getServerVersion() ?? null)).digest("hex");
       const tools: McpTool[] = [];
       let cursor: string | undefined;
       const seen = new Set<string>();
@@ -126,7 +139,8 @@ export class McpSession {
             name,
             connectionId: id,
             definition,
-            call: async (input, signal) => {
+            serverIdentity,
+            call: async (input, signal, timeoutMs = 60_000) => {
               if (this.disposed) throw new Error("Backend Session stopped");
               this.activeCalls.set(id, (this.activeCalls.get(id) ?? 0) + 1);
               try {
@@ -135,7 +149,7 @@ export class McpSession {
                   .callTool(
                     { name: definition.name, arguments: input },
                     undefined,
-                    { timeout: 60_000, ...(signal ? { signal } : {}) },
+                    { timeout: timeoutMs, ...(signal ? { signal } : {}) },
                   )) as CallToolResult;
               } catch {
                 if (!signal?.aborted)

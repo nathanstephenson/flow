@@ -1,3 +1,4 @@
+import { JsonValueEditor } from "./workflow-json-schema.tsx";
 import { useState } from "react";
 import type { Json, VisualSchema } from "../../../src/protocol/workflows.ts";
 import { Button } from "./ui/button.tsx";
@@ -28,6 +29,8 @@ export function ValueEditor({
   label?: string;
 }) {
   const [variant, setVariant] = useState(0);
+  if (schema.type === "json") return <JsonValueEditor schema={schema.schema ?? true} value={value ?? null} label={label} onChange={onChange} />;
+  if (schema.type === "null") return <span className="text-xs text-muted-foreground">null</span>;
   if (schema.type === "object") {
     const fields =
       value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -227,7 +230,7 @@ export function SchemaEditor({
             <SelectValue>{schema.type}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {["object", "array", "string", "number", "boolean", "enum"].map(
+            {["object", "array", "string", "number", "boolean", "enum", "json", "null"].map(
               (t) => (
                 <SelectItem key={t} value={t}>
                   {t}

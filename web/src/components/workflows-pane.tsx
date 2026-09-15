@@ -291,7 +291,7 @@ export default function WorkflowsPane({ sessionId }: { sessionId: string }) {
                   ?.name ?? p.stepId}
               </legend>
               <p className="w-full font-mono text-xs">{p.tool}</p>
-              {(["allow", "always", "deny"] as const).map((decision) => (
+              {((p.direct ? ["allow", "deny"] : ["allow", "always", "deny"]) as Array<"allow" | "deny" | "always">).map((decision) => (
                 <Button
                   size="sm"
                   variant={decision === "deny" ? "destructive" : "outline"}

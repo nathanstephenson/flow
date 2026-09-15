@@ -17,6 +17,7 @@ import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { ConditionEditor } from "./workflow-condition.tsx";
 import { WorkflowCode } from "./workflow-code.tsx";
 import { MappingEditor } from "./workflow-mapping.tsx";
+import { McpStepEditor } from "./workflow-mcp.tsx";
 import { StepTest } from "./workflow-test.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { ModelPicker } from "./model-picker.tsx";
@@ -125,7 +126,7 @@ export default function WorkflowsSettings() {
             ? { ...base, kind, code: "return {};", outputSchema }
             : kind === "branch"
               ? { ...base, kind, condition: { operator: "truthy", path: [] } }
-              : { ...base, kind };
+              : kind === "mcp" ? { ...base, kind, tool: { connectionId: "unselected", connectionName: "", identity: "0".repeat(64), serverIdentity: "0".repeat(64), toolName: "unselected", inputSchema: { type: "object" } }, mapping: { kind: "template", template: { kind: "object", fields: {} } } } : { ...base, kind };
     setDefinition({ ...definition, steps: [...definition.steps, next] });
     select(id);
   };
@@ -306,7 +307,7 @@ export default function WorkflowsSettings() {
             </details>
             <div className="workflow-toolbar">
               {(
-                ["agent", "shell", "typescript", "branch", "join"] as const
+                ["agent", "mcp", "shell", "typescript", "branch", "join"] as const
               ).map((kind) => (
                 <Button
                   size="sm"
@@ -314,7 +315,7 @@ export default function WorkflowsSettings() {
                   key={kind}
                   onClick={() => add(kind)}
                 >
-                  Add {kind === "typescript" ? "TypeScript" : kind}
+                  Add {kind === "typescript" ? "TypeScript" : kind === "mcp" ? "MCP" : kind}
                 </Button>
               ))}
               <Button
@@ -499,6 +500,7 @@ export default function WorkflowsSettings() {
                       </label>
                     </>
                   )}
+                  {step.kind === "mcp" && <McpStepEditor definition={definition} step={step} onChange={update} />}
                   {step.kind === "shell" && (
                     <>
                       <label className="flex flex-col gap-1">
@@ -567,7 +569,7 @@ export default function WorkflowsSettings() {
                       onChange={update}
                     />
                   )}
-                  {step.kind !== "join" && (
+                  {step.kind !== "join" && step.kind !== "mcp" && (
                     <MappingEditor
                       definition={definition}
                       step={step}

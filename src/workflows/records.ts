@@ -1,3 +1,4 @@
+import { boundedMcpValue, validateMcpOutput } from './mcp.ts';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import type { WorkflowExecution } from '../protocol/workflows.ts';
@@ -52,6 +53,14 @@ export function parseExecution(value: unknown): WorkflowExecution {
     if (state.phase === 'limit' && ['completed', 'completed-with-recovery'].includes(record.status)) throw new Error('Completed execution has a loop limit');
   }
   for (const [id, step] of Object.entries(record.steps)) {
+    const definition = graph.order.find(candidate => candidate.id === id)!;
+    if (definition.kind === 'mcp') {
+      if (step.output !== undefined) validateMcpOutput(definition.tool, step.output);
+      for (const attempt of step.attempts) {
+        if (attempt.output !== undefined) validateMcpOutput(definition.tool, attempt.output);
+        if (attempt.partialOutput !== undefined) boundedMcpValue(attempt.partialOutput);
+      }
+    }
     const containing = loops.filter(loop => loop.memberIds.includes(id));
     for (const [index, attempt] of step.attempts.entries()) {
       if ((attempt.loops ?? []).length !== containing.length || containing.some(loop => !attempt.loops?.some(identity => identity.headerId === loop.headerId))) throw new Error('Invalid attempt loop identities');

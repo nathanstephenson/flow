@@ -1,3 +1,4 @@
+import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -1640,6 +1641,34 @@ export class SessionHost {
       case "list":
         return this.list();
     }
+  }
+
+  workflowMcpCredentials(): string[] {
+    const values = [...(this.mcpAuth?.credentialValues() ?? [])];
+    for (const connection of this.mcpConnections?.() ?? []) {
+      if (connection.transport === 'http') {
+        for (const [key, value] of new URL(connection.url).searchParams) if (credentialKey.test(key) && value) values.push(value);
+      } else {
+        connection.args.forEach((arg, index) => {
+          if (credentialKey.test(arg.split('=')[0]!)) { const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : connection.args[index + 1]; if (value) values.push(value); }
+        });
+      }
+    }
+    return values;
+  }
+
+  workflowMcpConnections(id: string) {
+    const record = this.sessions.get(id);
+    if (!record) throw new Error('Unknown Agent Session');
+    return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
+  }
+
+  async openWorkflowMcp(id: string, connectionId: string) {
+    const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
+    if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
+    const { McpSession } = await import('../backend/mcp.ts');
+    const scope = this.workflowSession(id).scope;
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true);
   }
 
   mcpStatus(id: string) {
