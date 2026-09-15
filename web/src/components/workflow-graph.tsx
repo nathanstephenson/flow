@@ -41,17 +41,16 @@ function WorkflowNode({
         {step.kind} · {data.permission}
       </div>
       {data.status && <div>{data.status.replaceAll("-", " ")}</div>}
-      <div className="flex gap-3 pb-3">
-        {outcomes.map((outcome, i) => (
-          <span key={outcome} className="text-xs">
+      <div className="mt-2 flex flex-col gap-1">
+        {outcomes.map((outcome) => (
+          <div key={outcome} className="relative -mr-3 pr-3 text-right text-xs">
             {outcome}
             <Handle
               id={outcome}
               type="source"
-              position={Position.Bottom}
-              style={{ left: `${((i + 1) * 100) / (outcomes.length + 1)}%` }}
+              position={Position.Right}
             />
-          </span>
+          </div>
         ))}
       </div>
     </div>
