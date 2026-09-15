@@ -279,10 +279,11 @@ export class SessionHost {
     if (this.closingScopes.has(scopeKey(scope))) throw new CommandRefused("A Backend Session in this Scope is stopping. Wait for it to finish.");
   }
 
-  private async stopBackendSession(scope: string, session: BackendSession | undefined): Promise<void> {
+  private async stopBackendSession(scope: string, session: BackendSession | undefined, sessionId: string): Promise<void> {
     const key = scopeKey(scope);
     this.closingScopes.add(key);
     try {
+      if (this.workflowOwner) await this.workflowOwner.stop(sessionId);
       await session?.dispose();
     } finally {
       this.closingScopes.delete(key);
@@ -1270,6 +1271,44 @@ export class SessionHost {
     record.log.append({ type: "branch_changed", branch });
   }
 
+  workflowOwner?: { stop(sessionId: string): Promise<void>; forget(sessionId: string): Promise<void> };
+  private workflowShutdown = false;
+  private readonly workflowStopping = new Set<string>();
+
+  workflowSession(sessionId: string) {
+    const record = this.record(sessionId);
+    if (record.lifecycle === 'ended') throw new CommandRefused('Agent Session has ended');
+    return { sessionId, backend: record.backendName, scope: scopeKey(record.scope), projectId: scopeKey(record.worktree?.repo ?? record.scope), session: record.session };
+  }
+
+  assertWorkflowSession(sessionId: string, session: BackendSession | undefined): void {
+    const record = this.record(sessionId);
+    if (this.workflowShutdown || this.workflowStopping.has(sessionId) || record.lifecycle !== 'live' || !session || record.session !== session) throw new CommandRefused('Backend Session is stopping or no longer owned');
+  }
+
+  async openWorkflowSession(sessionId: string) {
+    if (this.workflowShutdown || this.workflowStopping.has(sessionId)) throw new CommandRefused('Backend Session is stopping');
+    this.workflowSession(sessionId);
+    if (!this.record(sessionId).session) await this.revive(sessionId);
+    return this.workflowSession(sessionId);
+  }
+
+  workflowNotice(sessionId: string, text: string): void {
+    const record = this.record(sessionId);
+    if (!record.log.since(0).some(({ event }) => event.type === 'notice' && event.text === text)) {
+      record.log.append({ type: 'notice', level: 'info', text });
+    }
+  }
+
+  workflowSpend(sessionId: string, executionId: string, spend: Spend): void {
+    const record = this.record(sessionId);
+    const previous = record.log.since(0).findLast(({ event }) => event.type === 'workflow_spend' && event.executionId === executionId);
+    if (previous?.event.type === 'workflow_spend' && JSON.stringify(previous.event.spend) === JSON.stringify(spend)) return;
+    record.log.append({ type: 'workflow_spend', executionId, spend });
+  }
+
+  authoriseWorkflowTool(tool: string): void { this.allowTool?.(tool); }
+
   async dispose(sessionId: string, reason = "disposed"): Promise<void> {
     const record = this.sessions.get(sessionId);
     if (!record) return;
@@ -1279,7 +1318,7 @@ export class SessionHost {
     record.lifecycle = "ended";
     record.turnInFlight = false;
     record.queue.length = 0;
-    await this.stopBackendSession(record.scope, session);
+    await this.stopBackendSession(record.scope, session, sessionId);
     record.log.append({ type: "session_ended", reason });
     this.touch(record);
     this.announceClosed(sessionId);
@@ -1302,12 +1341,13 @@ export class SessionHost {
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "settled";
+    this.workflowStopping.add(sessionId);
     // The retention window runs from here, not from the last thing that happened: settling
     // something untouched for a week still grants it a full window (ADR 0006).
     record.settledAt = new Date().toISOString();
     record.queue.length = 0;
     record.turnInFlight = false;
-    await this.stopBackendSession(record.scope, session);
+    await this.stopBackendSession(record.scope, session, sessionId);
     // Close a turn we are interrupting before recording the Settle. Leaving it open would let the
     // restart path close it *after* session_settled, and a trailing turn_ended reduces to idle —
     // the rail would say settled while the pane said idle.
@@ -1321,6 +1361,7 @@ export class SessionHost {
     // Stamps updatedAt, which is what starts the retention clock: a Settled Agent Session runs
     // nothing and so records no further activity, and it always gets a full window.
     this.touch(record);
+    this.workflowStopping.delete(sessionId);
     this.announceClosed(sessionId);
   }
 
@@ -1350,6 +1391,7 @@ export class SessionHost {
       if (this.gitOperations.has(key) || this.closingScopes.has(key)) continue;
       this.gitOperations.add(key);
       try {
+        await this.workflowOwner?.forget(record.id);
         await this.releaseWorktree(record);
         record.log.closeSubscribers();
         this.sessions.delete(record.id);
@@ -1484,6 +1526,7 @@ export class SessionHost {
 
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
   async shutdown(): Promise<void> {
+    this.workflowShutdown = true;
     // First, so that a naming still in flight cannot warm a replacement on the way out — the
     // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
@@ -1497,7 +1540,7 @@ export class SessionHost {
       record.turnInFlight = false;
       record.queue.length = 0;
       record.turnInFlight = false;
-      await this.stopBackendSession(record.scope, session);
+      await this.stopBackendSession(record.scope, session, record.id);
       this.closeOpenSubagents(record, record.log.since(0));
       this.closeOpenBackgroundCalls(record, record.log.since(0));
       this.closeOpenEnquiries(record, record.log.since(0));
@@ -1772,6 +1815,7 @@ export class SessionHost {
     record.log.append(event);
     this.touch(record);
     this.indexOpen(record, event);
+    if (event.type === 'notice' && event.level === 'error') void this.workflowOwner?.stop(sessionId).catch(() => {});
 
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
     // counts only its own run.

@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { registerBackends } from "../backend/registry.ts";
 import { readOrCreateToken } from "../daemon/auth.ts";
 import { ConfigStore } from "../daemon/config-store.ts";
+import { SecretStore } from '../daemon/secret-store.ts';
+import { WorkflowStore } from '../workflows/store.ts';
+import { WorkflowExecutionService } from '../daemon/workflow-executions.ts';
+import { embeddedWorkflowRuntime } from '../workflows/runtime-asset.ts';
+import { fileURLToPath } from 'node:url';
+import { isSea } from 'node:sea';
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
@@ -170,8 +176,13 @@ async function startHost(
     summaryModel: config.summaryModel,
   });
   registerBackends(host);
+  const workflows = new WorkflowStore(root);
+  const secrets = new SecretStore(root);
+  const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config,
+    isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)));
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
   await host.load();
+  workflowExecutions.reconcile();
   // unref: a one-shot prompt and the tests build a host in-process and must still be able to exit.
   // `void`-ed rather than awaited: the sweep now runs git to decide whether a worktree is safe to
   // remove, and nothing is waiting on the answer.
@@ -189,6 +200,9 @@ async function startHost(
     shells,
     config,
     store,
+    workflows,
+    secrets,
+    workflowExecutions,
     assets: webClient(),
     scope: process.cwd(),
     ...(port === undefined ? {} : { port }),

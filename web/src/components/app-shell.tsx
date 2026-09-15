@@ -309,7 +309,7 @@ export function AppShell() {
              * had its say, so a reader with work waiting is not shown a form on the way to it.
              */
             landed ? (
-              <NewAgentSessionPage drafts={drafts} onCreated={focus} />
+              <NewAgentSessionPage drafts={drafts} onCreated={focus} initialBackend={route.view === 'session' ? route.backend : undefined} />
             ) : (
               <div className="min-h-0" />
             )

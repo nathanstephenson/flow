@@ -8,6 +8,8 @@ import {
   type Fonts,
 } from "../protocol/fonts.ts";
 import {
+  DEFAULT_WORKFLOW_RUNTIME,
+  type WorkflowRuntimeSettings,
   formatDuration,
   parseDuration,
   type Settings,
@@ -43,6 +45,7 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
  * typed. `view()` on the ConfigStore is where the two meet.
  */
 export type Config = {
+  workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
   fonts: Fonts;
   /**
@@ -121,7 +124,7 @@ export { formatDuration, parseDuration };
 export const DEFAULT_SETTLED_RETENTION = 24 * 60 * 60 * 1000;
 
 export function defaultConfig(): Config {
-  return { retention: { settled: DEFAULT_SETTLED_RETENTION }, fonts: defaultFonts() };
+  return { retention: { settled: DEFAULT_SETTLED_RETENTION }, fonts: defaultFonts(), workflowRuntime: { ...DEFAULT_WORKFLOW_RUNTIME } };
 }
 
 export type LoadedConfig = {
@@ -157,6 +160,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
     config: {
       retention,
       fonts,
+      workflowRuntime: readWorkflowRuntime(parsed, warnings),
       ...(projects === undefined ? {} : { projects }),
       ...(permissions === undefined ? {} : { permissions }),
       ...(providers === undefined ? {} : { providers }),
@@ -173,6 +177,40 @@ export function loadConfig(stateRoot: string): LoadedConfig {
  * config.json written on a machine with pi installed must survive being read on one without it —
  * the same courtesy `ConfigStore.update` extends to a key no version of this daemon has parsed.
  */
+function patchWorkflowRuntime(current: WorkflowRuntimeSettings | undefined, patch: unknown): WorkflowRuntimeSettings {
+  const next = { ...DEFAULT_WORKFLOW_RUNTIME, ...current };
+  if (patch === undefined) return next;
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new ConfigError('workflowRuntime must be an object');
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'externalSandbox') {
+      if (typeof value !== 'boolean') throw new ConfigError('workflowRuntime.externalSandbox must be boolean');
+      next.externalSandbox = value;
+    } else if (key === 'dockerImage' || key === 'nodePath' || key === 'dockerPath') {
+      if (typeof value !== 'string' || value.length > 4096 || /[\x00-\x1f]/.test(value)) throw new ConfigError('Invalid workflowRuntime field');
+      if (key !== 'dockerImage' && value === '') { delete next[key]; continue; }
+      if (key === 'dockerImage' ? !/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(value) : !value.startsWith('/')) throw new ConfigError('Invalid workflowRuntime field');
+      next[key] = value;
+    } else throw new ConfigError('Unknown workflowRuntime field');
+  }
+  return next;
+}
+
+function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRuntimeSettings {
+  const section = (parsed as { workflowRuntime?: unknown } | null)?.workflowRuntime;
+  let result = { ...DEFAULT_WORKFLOW_RUNTIME };
+  if (section === undefined) return result;
+  if (!section || typeof section !== 'object' || Array.isArray(section)) {
+    warnings.push('Invalid workflowRuntime; using defaults');
+    return result;
+  }
+  for (const [key, value] of Object.entries(section)) {
+    if (!['externalSandbox', 'dockerImage', 'nodePath', 'dockerPath'].includes(key)) continue;
+    try { result = patchWorkflowRuntime(result, { [key]: value }); }
+    catch { warnings.push('Invalid workflowRuntime field; using default'); }
+  }
+  return result;
+}
+
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
   const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
@@ -428,11 +466,12 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   return {
+    workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
     ...(projects === undefined ? {} : { projects }),

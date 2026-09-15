@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import type {
   BackendEvent,
   BackgroundCallState,
@@ -61,6 +61,14 @@ export class FakeSession implements BackendSession {
   readonly toolless: boolean;
   /** Every Subagent begun in this session, in the style of `prompts`. */
   readonly subagents: FakeSubagent[] = [];
+  readonly workflowSubagents: FakeWorkflowSubagent[] = [];
+
+  startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
+    if (this.disposed) throw new Error('Backend Session is disposed');
+    const handle = new FakeWorkflowSubagent(options);
+    this.workflowSubagents.push(handle);
+    return handle;
+  }
   /** Every Enquiry asked in this session, open or not, in the style of `prompts`. */
   readonly enquiries: Array<{ askId: string; questions: Question[] }> = [];
   /** What was answered, so a test can assert what reached the backend rather than what it emitted. */
@@ -234,6 +242,7 @@ export class FakeSession implements BackendSession {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    await Promise.all(this.workflowSubagents.map(handle => handle.cancel()));
   }
 
   /**
@@ -560,5 +569,62 @@ export class FakeBackend implements AgentBackend {
     const session = this.sessions.at(-1);
     if (!session) throw new Error("No fake session created yet");
     return session;
+  }
+}
+
+export class FakeWorkflowSubagent implements WorkflowSubagentHandle {
+  readonly options: WorkflowSubagentOptions;
+  readonly done: Promise<string>;
+  readonly answers: Array<{ askId: string; answers: string[][] }> = [];
+  readonly decisions: Array<{ callId: string; decision: PermissionDecision }> = [];
+  private resolve!: (value: string) => void;
+  private reject!: (error: Error) => void;
+  private stopped = false;
+  private readonly enquiries = new Map<string, Question[]>();
+  private readonly permissions = new Map<string, string>();
+
+  constructor(options: WorkflowSubagentOptions) {
+    this.options = options;
+    this.done = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
+  }
+
+  emit(event: BackendEvent | { type: 'spend'; spend: Spend }): void {
+    if (!this.stopped) this.options.emit({ subagentId: this.options.id, event });
+  }
+
+  complete(output: unknown): void { if (!this.stopped) { this.stopped = true; this.resolve(JSON.stringify(output)); } }
+  completeText(text: string): void { if (!this.stopped) { this.stopped = true; this.resolve(text); } }
+  fail(): void { if (!this.stopped) { this.stopped = true; this.reject(new Error('Fake workflow failed')); } }
+  async cancel(): Promise<void> { if (!this.stopped) { this.stopped = true; this.reject(new Error('Fake workflow cancelled')); } }
+
+  ask(questions: Question[], askId: string = randomUUID()): string {
+    this.enquiries.set(askId, questions);
+    this.emit({ type: 'enquiry', state: 'asked', askId, questions });
+    return askId;
+  }
+
+  requestPermission(tool: string, callId: string = randomUUID()): string {
+    if (this.options.permissionMode === 'auto-accept') return callId;
+    this.permissions.set(callId, tool);
+    this.emit({ type: 'permission', state: 'asked', callId, tool });
+    return callId;
+  }
+
+  async answerEnquiry(askId: string, answers: string[][]): Promise<boolean> {
+    const questions = this.enquiries.get(askId);
+    if (this.stopped || !questions || answers.length !== questions.length) return false;
+    this.enquiries.delete(askId);
+    this.answers.push({ askId, answers });
+    this.emit({ type: 'enquiry', state: 'answered', askId, questions, answers });
+    return true;
+  }
+
+  async answerPermission(callId: string, decision: PermissionDecision): Promise<boolean> {
+    const tool = this.permissions.get(callId);
+    if (this.stopped || !tool) return false;
+    this.permissions.delete(callId);
+    this.decisions.push({ callId, decision });
+    this.emit({ type: 'permission', state: 'decided', callId, tool, decision });
+    return true;
   }
 }

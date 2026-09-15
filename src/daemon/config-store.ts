@@ -10,6 +10,7 @@ import {
   type SettingsPatch,
   type SummaryModel,
 } from "./config.ts";
+import { DEFAULT_WORKFLOW_RUNTIME } from '../protocol/settings.ts';
 import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
 
@@ -190,6 +191,7 @@ function settingsOf(config: Config): Settings {
   return {
     retention: { settled: settled === "never" ? "never" : formatDuration(settled) },
     fonts: config.fonts,
+    workflowRuntime: { ...DEFAULT_WORKFLOW_RUNTIME, ...config.workflowRuntime },
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),

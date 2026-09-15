@@ -98,6 +98,12 @@ export class PiWork {
     await Promise.all(jobs.map((work) => work.done));
   }
 
+  async drain(): Promise<void> {
+    while ([...this.jobs.values()].some((work) => work.state === "running" || work.state === "waiting")) {
+      await Promise.all([...this.jobs.values()].map((work) => work.done));
+    }
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true;
     const jobs = [...this.jobs.values()];

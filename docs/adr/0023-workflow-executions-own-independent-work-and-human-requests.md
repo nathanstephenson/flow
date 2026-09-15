@@ -1,0 +1,46 @@
+# 23. Workflow Executions own independent work and human requests
+
+## Status
+
+Accepted.
+
+## Decision
+
+The Session Host owns one Workflow Execution slot per Agent Session. Tests and executions awaiting
+manual recovery retain that same slot. This work is independent of the parent turn and Steering
+Queue. A Dormant eligible Agent Session is Revived on demand; an Ended Agent Session cannot start
+or recover work.
+
+The execution retains its Workflow Definition, typed inputs and runtime Settings. Definition edits
+and deletion do not change it. Project restrictions compare directory identity, using the source
+Project for a host-owned Worktree. Runtime readiness probes are asynchronous and cached. Settings
+changes refresh readiness for new work, not the executors already serving an execution.
+
+Each Agent attempt owns a distinct backend handle and launch ID. Code steps own their runtime
+processes. Cancellation, Settle, End and shutdown wait for owned work to stop. Backend error notices
+conservatively interrupt workflow work, because the current adapter contract does not distinguish
+backend loss from other errors. Interrupted work requires explicit recovery; it is never replayed.
+Reap stops work, releases scheduler records, and deletes the Agent Session's execution history.
+
+Workflow Enquiries and Permission Prompts belong to the attempt, not the parent composer. Answers
+address the execution, launch ID and original request ID. An old answer cannot revive work. Always
+becomes Standing Authorisation only after the current callback accepts it. Auto-accept does not
+answer Enquiries. This extends ADRs 0016, 0018 and 0022 for host-launched work without changing the
+request rules for ordinary parent turns or model-launched Subagents.
+
+Private activity is bounded and saved separately from the Presentation Transcript. Named secrets
+are resolved for explicit step aliases. Agent JSON is validated and literal secret values are
+redacted before persistence. Literal redaction is not a defence against deliberate encoding or
+transmission by a model or program.
+
+The final structured JSON result is a host notice with a deterministic execution identity. It does
+not create a parent prompt, model message, tool call or Conversation Context entry. Restart checks
+prevent duplicate notices. Dedicated per-execution Spend snapshots add workflow billing to the
+Agent Session without changing Conversation Context occupancy or entering backend prior Spend.
+
+## Consequences
+
+A parent turn can continue while workflow work awaits a human. Clients must read the execution
+view to display and answer these requests. A restarted host retains private activity and Spend,
+but no request callback survives. Failed tests and interrupted executions require an explicit
+Retry, Supply output, Continue or Cancel before the slot is free.

@@ -1,0 +1,425 @@
+import assert from 'node:assert/strict';
+import { after, before, it } from 'node:test';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { FakeBackend } from '../src/backend/fake/index.ts';
+import { SessionHost } from '../src/daemon/host.ts';
+import { TranscriptStore } from '../src/daemon/store.ts';
+import { WorkflowStore } from '../src/workflows/store.ts';
+import { SecretStore } from '../src/daemon/secret-store.ts';
+import { ConfigStore } from '../src/daemon/config-store.ts';
+import { WorkflowExecutionService } from '../src/daemon/workflow-executions.ts';
+import { serve } from '../src/daemon/server.ts';
+import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
+import type { WorkflowExecutionView } from '../src/protocol/workflow-executions.ts';
+import { reduceAll } from '../src/client/reduce.ts';
+import { WorkflowStepError } from '../src/workflows/scheduler.ts';
+
+const runtimeDirectory = mkdtempSync(join(tmpdir(), 'flow-execution-runtime-'));
+const runtimePath = join(runtimeDirectory, 'runtime.cjs');
+before(() => execFileSync(process.execPath, ['scripts/build-workflow-runtime.mjs', runtimePath]));
+after(() => rmSync(runtimeDirectory, { recursive: true, force: true }));
+
+const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample', backend: 'fake', permission: 'ask', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'agent', name: 'Agent', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'Return JSON', outputSchema: { type: 'string' } }], edges: [] };
+const pause = () => new Promise(resolve => setTimeout(resolve, 10));
+async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
+
+async function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'flow-executions-'));
+  const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
+  config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
+  const backend = new FakeBackend();
+  const host = new SessionHost({ store, retention: 0, allowTool: config.allowTool }); host.registerBackend(backend);
+  const service = new WorkflowExecutionService(host, workflows, secrets, config, runtimePath);
+  await host.load(); service.reconcile();
+  const id = await host.create({ scope: root, backend: 'fake' });
+  workflows.saveDefinition(definition);
+  const server = await serve({ host, store, workflows, secrets, config, workflowExecutions: service, token: 'test', assets: {} });
+  const request = (path: string, method = 'GET', body?: unknown) => fetch(server.url + path, { method, headers: { authorization: 'Bearer test' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const base = `/api/sessions/${id}/workflows`;
+  return { root, store, workflows, secrets, config, backend, host, service, id, request, base, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
+}
+
+for (const stop of ['shutdown', 'dispose'] as const) for (const recovery of [false, true]) {
+  it(`refuses ${recovery ? 'recovery' : 'start'} after ${stop} completes during open`, async () => {
+    const f = await fixture();
+    try {
+      let executionId = '';
+      if (recovery) {
+        const started = await f.service.start(f.id, definition, {});
+        executionId = started.execution.id;
+        await until(() => f.backend.latest.workflowSubagents.length === 1);
+        f.backend.latest.workflowSubagents[0]!.fail();
+        await f.service.scheduler.wait(f.id, executionId);
+      }
+      const open = f.host.openWorkflowSession.bind(f.host);
+      f.host.openWorkflowSession = async id => {
+        const identity = await open(id);
+        if (stop === 'shutdown') await f.host.shutdown(); else await f.host.dispose(id);
+        return identity;
+      };
+      if (recovery) await assert.rejects(f.service.recover(f.id, executionId, { kind: 'retry', stepId: 'agent' }), /stopping|owned|ended/);
+      else await assert.rejects(f.service.start(f.id, { ...definition, steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'touch after-shutdown' }] }, {}), /stopping|owned|ended/);
+      assert.equal(existsSync(join(f.root, 'after-shutdown')), false);
+      assert.equal(f.backend.latest.workflowSubagents.length, recovery ? 1 : 0);
+    } finally { await f.close(); }
+  });
+}
+
+for (const permission of ['auto-accept', 'ask'] as const) {
+  it(`uses workflow handle permissions with parent permissions false: ${permission}`, async () => {
+    const f = await fixture();
+    try {
+      f.backend.latest.capabilities.permissions = false;
+      const graph: WorkflowDefinition = { ...definition, permission: 'auto-accept', steps: [{ ...definition.steps[0]!, ...(permission === 'ask' ? { permission } : {}) }] };
+      const started = await f.service.start(f.id, graph, {});
+      await until(() => f.backend.latest.workflowSubagents.length === 1);
+      const handle = f.backend.latest.workflowSubagents[0]!;
+      assert.equal(handle.options.permissionMode, permission);
+      if (permission === 'ask') {
+        handle.requestPermission('Bash');
+        const callId = f.service.view(f.id, started.execution.id).permissions[0]!.callId;
+        assert.equal(f.host.statusOf(f.id), 'idle');
+        assert.equal(f.service.view(f.id, started.execution.id).permissions.length, 1);
+        await f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, callId, decision: 'allow' });
+        assert.equal(f.service.view(f.id, started.execution.id).permissions.length, 0);
+      }
+      handle.complete('ok');
+      assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).result, 'ok');
+    } finally { await f.close(); }
+  });
+}
+
+it('ignores unrelated secrets and unselected step references', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('UNUSED', 'a');
+    const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'selected', name: 'Sample', kind: 'join' }, { ...definition.steps[0]!, secrets: { token: 'MISSING' } }], edges: [{ id: 'next', from: 'selected', to: 'agent', outcome: 'success' }] };
+    const started = await f.service.start(f.id, graph, {}, 'selected');
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'completed');
+    const response = await f.request(f.base, 'POST', { workflowId: definition.id, input: {} });
+    assert.equal(response.status, 200);
+  } finally { await f.close(); }
+});
+
+it('rechecks changed named secret values on recovery and keeps references literal', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'KEY');
+    const graph: WorkflowDefinition = { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] };
+    const started = await f.service.start(f.id, graph, {});
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.set('KEY', 'changed-"quote\nline');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'supply', stepId: 'agent', output: 'changed-"quote\nline' }), /secret values/);
+    await f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent' });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.complete('changed-"quote\nline');
+    const result = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(result.result, '[REDACTED]');
+    assert.equal(result.definition.steps[0]!.secrets?.token, 'KEY');
+  } finally { await f.close(); }
+});
+
+it('returns graph and capability reasons without submitted Zod values', async () => {
+  const f = await fixture();
+  try {
+    for (const [graph, message] of [
+      [{ ...definition, edges: [{ id: 'bad', from: 'missing', to: 'agent', outcome: 'success' }] }, 'Unknown edge endpoint'],
+      [{ ...definition, steps: [{ ...definition.steps[0]!, model: 'missing' }] }, 'Agent model is unavailable'],
+      [{ ...definition, permission: 'submitted-credential' }, 'Invalid workflow request'],
+    ] as const) {
+      const response = await f.request('/api/workflows/test', 'POST', { definition: graph, sessionId: f.id, stepId: 'agent', input: {} });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), { error: message });
+    }
+  } finally { await f.close(); }
+});
+
+it('preserves safe structured partial output from Workflow Step errors', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'private-partial');
+    const open = f.backend.latest.startWorkflowSubagent.bind(f.backend.latest);
+    f.backend.latest.startWorkflowSubagent = options => {
+      const handle = open(options);
+      void handle.done.catch(() => {});
+      Object.defineProperty(handle, 'done', { value: Promise.reject(new WorkflowStepError('Missing build manifest: private-partial', { detail: 'private-partial', count: 2 })) });
+      return handle;
+    };
+    const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, {});
+    const result = await f.service.scheduler.wait(f.id, started.execution.id);
+    const attempt = result.steps.agent!.attempts[0]!;
+    assert.equal(attempt.error?.message, 'Missing build manifest: [REDACTED]');
+    assert.deepEqual(attempt.partialOutput, { detail: '[REDACTED]', count: 2 });
+  } finally { await f.close(); }
+});
+
+it('preserves useful TypeScript failures and redacts JSON-escaped secrets', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'private-"quote\nline');
+    for (const code of ['throw new Error("Missing required build manifest")', 'throw new Error("Build failed: " + JSON.stringify(secrets.token))']) {
+      const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'code', name: 'Code', kind: 'typescript', code, secrets: { token: 'KEY' }, outputSchema: { type: 'string' } }] };
+      const started = await f.service.start(f.id, graph, {});
+      const result = await f.service.scheduler.wait(f.id, started.execution.id);
+      const text = JSON.stringify(result);
+      assert.ok(text.includes(code.includes('Missing') ? 'Missing required build manifest' : 'Build failed:'));
+      assert.ok(!text.includes('private-'));
+      await f.service.cancel(f.id, started.execution.id);
+    }
+  } finally { await f.close(); }
+});
+
+it('runs an owned Agent beside chat, keeps requests private, rejects stale decisions, records result and Spend once', async () => {
+  const f = await fixture();
+  try {
+    await f.host.send(f.id, 'parent chat', 'now');
+    const response = await f.request(f.base, 'POST', { workflowId: 'sample', input: {} });
+    assert.equal(response.status, 200);
+    const started = await response.json() as WorkflowExecutionView;
+    const path = f.base + '/' + started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    assert.equal(f.host.statusOf(f.id), 'running');
+    assert.equal((await f.request(f.base, 'POST', { workflowId: 'sample', input: {} })).status, 409);
+    assert.equal(f.backend.latest.prompts.length, 1);
+    const questions = [{ header: 'Pick', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }];
+    handle.ask(questions, 'raw-ask');
+    handle.requestPermission('Bash', 'raw-call');
+    const askId = f.service.view(f.id, started.execution.id).enquiries[0]!.askId;
+    const callId = f.service.view(f.id, started.execution.id).permissions[0]!.callId;
+    let view = await (await f.request(path)).json() as WorkflowExecutionView;
+    assert.equal(view.enquiries[0]?.askId, askId); assert.equal(view.permissions[0]?.callId, callId);
+    assert.ok(!JSON.stringify(f.host.logFor(f.id).since(0)).includes('raw-ask'));
+    assert.equal((await f.request(path + '/enquiry', 'POST', { subagentId: handle.options.id, askId, answers: [['A']] })).status, 200);
+    assert.equal((await f.request(path + '/enquiry', 'POST', { subagentId: handle.options.id, askId, answers: [['A']] })).status, 409);
+    assert.equal((await f.request(path + '/permission', 'POST', { subagentId: 'stale', callId, decision: 'always' })).status, 409);
+    assert.deepEqual(f.config.standingAuthorisations(), []);
+    assert.equal((await f.request(path + '/permission', 'POST', { subagentId: handle.options.id, callId, decision: 'always' })).status, 200);
+    assert.deepEqual(f.config.standingAuthorisations(), ['Bash']);
+    handle.emit({ type: 'spend', spend: { tokens: 12, cached: 2, costUSD: 0.01, models: [] } });
+    handle.complete('result');
+    await f.service.scheduler.wait(f.id, started.execution.id); await pause();
+    view = await (await f.request(path)).json() as WorkflowExecutionView;
+    assert.equal(view.execution.result, 'result'); assert.equal(view.spend?.tokens, 12);
+    assert.equal(view.enquiries.length, 0);
+    f.backend.latest.completeTurn();
+    f.service.reconcile(); f.service.reconcile();
+    assert.equal(f.host.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text.includes(started.execution.id)).length, 1);
+    assert.equal(reduceAll(f.host.logFor(f.id).since(0)).spend?.tokens, 12);
+    f.backend.latest.reportSpend({ tokens: 100, cached: 20, costUSD: 1, models: [] });
+    f.backend.latest.reportSpend({ tokens: 100, cached: 20, costUSD: 1, models: [] });
+    const state = reduceAll(f.host.logFor(f.id).since(0));
+    assert.equal(state.contextUsage?.spend?.tokens, 112);
+    assert.equal(state.contextUsage?.used, 10);
+    assert.equal(f.backend.latest.prompts.length, 1);
+  } finally { await f.close(); }
+});
+
+it('tests only the selected step, validates model/backend/Project, and keeps fixed definitions through recovery and deletion', async () => {
+  const f = await fixture();
+  try {
+    for (const bad of [{ ...definition, backend: 'pi' }, { ...definition, projectId: f.root + '/child' }, { ...definition, steps: [{ ...definition.steps[0]!, model: 'absent' }] }]) {
+      assert.equal((await f.request('/api/workflows/test', 'POST', { definition: bad, sessionId: f.id, stepId: 'agent', input: {} })).status, 400);
+    }
+    const graph = { ...definition, steps: [...definition.steps, { id: 'later', name: 'Later', kind: 'join' }], edges: [{ id: 'next', from: 'agent', to: 'later', outcome: 'success' }] };
+    const started = await (await f.request('/api/workflows/test', 'POST', { definition: graph, sessionId: f.id, stepId: 'agent', input: {} })).json() as WorkflowExecutionView;
+    const path = f.base + '/' + started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.workflows.deleteDefinition(definition.id);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal((await f.request(path + '/recover', 'POST', { kind: 'supply', stepId: 'agent', output: 4 })).status, 400);
+    assert.equal((await f.request(path + '/recover', 'POST', { kind: 'supply', stepId: 'agent', output: 'supplied' })).status, 200);
+    const view = await (await f.request(path)).json() as WorkflowExecutionView;
+    assert.equal(view.execution.status, 'completed-with-recovery');
+    assert.equal(view.execution.steps.later?.status, 'skipped');
+    await f.host.settle(f.id); await f.host.reap(Date.now() + 10);
+    assert.equal(existsSync(join(f.root, 'sessions', f.id)), false);
+    assert.equal(f.service.scheduler.occupied(f.id), false);
+  } finally { await f.close(); }
+});
+
+it('interrupts on shutdown, recovers a deleted saved definition without replay, and deduplicates after restart', async () => {
+  const f = await fixture();
+  let other: SessionHost | undefined;
+  try {
+    const started = await f.service.start(f.id, definition, {});
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'private before restart' });
+    await f.host.shutdown();
+    assert.equal(f.service.view(f.id, started.execution.id).execution.status, 'recovery-required');
+    f.workflows.deleteDefinition(definition.id);
+    other = new SessionHost({ store: f.store }); const backend = new FakeBackend(); other.registerBackend(backend);
+    const service = new WorkflowExecutionService(other, f.workflows, f.secrets, f.config, runtimePath);
+    await other.load(); service.reconcile();
+    assert.equal(other.statusOf(f.id), 'dormant');
+    assert.equal(service.view(f.id, started.execution.id).activity.length, 1);
+    assert.equal(service.scheduler.occupied(f.id), true);
+    await service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent' });
+    await until(() => backend.latest.workflowSubagents.length === 1);
+    assert.equal(backend.latest.prompts.length, 0);
+    backend.latest.workflowSubagents[0]!.complete('after restart');
+    await service.scheduler.wait(f.id, started.execution.id); await pause();
+    await other.shutdown();
+    const finalHost = new SessionHost({ store: f.store }); finalHost.registerBackend(new FakeBackend());
+    const finalService = new WorkflowExecutionService(finalHost, f.workflows, f.secrets, f.config, runtimePath);
+    await finalHost.load(); finalService.reconcile(); finalService.reconcile();
+    assert.equal(finalHost.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text.includes(started.execution.id)).length, 1);
+    assert.equal(finalService.scheduler.occupied(f.id), false);
+    await finalHost.shutdown();
+  } finally { await other?.shutdown(); await f.close(); }
+});
+
+it('checks actual Project identity and accepts its owned Worktree, not a path prefix', async () => {
+  const f = await fixture();
+  try {
+    execFileSync('git', ['init', '-b', 'main', f.root], { stdio: 'ignore' });
+    execFileSync('git', ['-C', f.root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'initial'], { stdio: 'ignore' });
+    const id = await f.host.create({ scope: f.root, backend: 'fake', worktree: { from: 'main' } });
+    const restricted: WorkflowDefinition = { ...definition, projectId: f.root, steps: [{ id: 'join', name: 'Join', kind: 'join' }] };
+    const started = await f.service.start(id, restricted, {});
+    assert.equal((await f.service.scheduler.wait(id, started.execution.id)).status, 'completed');
+    mkdirSync(join(f.root, 'child'));
+    const child = await f.host.create({ scope: join(f.root, 'child'), backend: 'fake' });
+    await assert.rejects(f.service.start(child, restricted, {}), /another Project/);
+    const alias = f.root + '-alias'; symlinkSync(f.root, alias);
+    try {
+      const aliased = await f.service.start(f.id, { ...restricted, projectId: alias }, {});
+      assert.equal((await f.service.scheduler.wait(f.id, aliased.execution.id)).status, 'completed');
+    } finally { rmSync(alias); }
+  } finally { await f.close(); }
+});
+
+it('keeps auto-accept Enquiries independent, interrupts on backend errors, and rejects Ended launches', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start(f.id, { ...definition, permission: 'auto-accept' }, {});
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    handle.ask([{ header: 'Pick', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }]);
+    assert.equal(f.host.statusOf(f.id), 'idle');
+    assert.equal(f.service.view(f.id, started.execution.id).enquiries.length, 1);
+    assert.equal(handle.answers.length, 0);
+    f.backend.latest.fail();
+    await until(() => f.service.view(f.id, started.execution.id).execution.status === 'recovery-required');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(f.service.view(f.id, started.execution.id).enquiries.length, 0);
+    await f.service.cancel(f.id, started.execution.id);
+    await f.host.dispose(f.id);
+    assert.equal((await f.request(f.base, 'POST', { workflowId: definition.id, input: {} })).status, 400);
+    assert.equal((await f.request(f.base)).status, 200);
+  } finally { await f.close(); }
+});
+
+it('runs real Shell and TypeScript through HTTP with a fixed runtime while Settings change', async () => {
+  const f = await fixture();
+  try {
+    const shell: WorkflowDefinition = { ...definition, steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'sleep 0.1; printf ok' }] };
+    f.workflows.saveDefinition(shell);
+    const response = await f.request(f.base, 'POST', { workflowId: shell.id, input: {} });
+    assert.equal(response.status, 200);
+    const started = await response.json() as WorkflowExecutionView;
+    f.workflows.saveDefinition({ ...shell, name: 'Edited', steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'printf changed' }] });
+    await f.request('/api/config', 'PUT', { workflowRuntime: { nodePath: '/missing/node' } });
+    const result = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.deepEqual(result.result, { exitCode: 0, stdout: 'ok', stderr: '' });
+    assert.equal((await f.request(f.base, 'POST', { workflowId: shell.id, input: {} })).status, 400);
+    await f.request('/api/config', 'PUT', { workflowRuntime: { nodePath: process.execPath } });
+    f.secrets.set('CODE_KEY', 'code-"quote\nline');
+    const ts: WorkflowDefinition = { ...definition, steps: [{ id: 'ts', name: 'TypeScript', kind: 'typescript', code: 'return secrets.token;', secrets: { token: 'CODE_KEY' }, outputSchema: { type: 'string' } }] };
+    const response2 = await f.request('/api/workflows/test', 'POST', { definition: ts, sessionId: f.id, stepId: 'ts', input: {} });
+    assert.equal(response2.status, 200);
+    const started2 = await response2.json() as WorkflowExecutionView;
+    assert.equal((await f.service.scheduler.wait(f.id, started2.execution.id)).result, '[REDACTED]');
+  } finally { await f.close(); }
+});
+
+it('redacts quote/newline secrets in private Agent activity and output; cancellation does not start successors', async () => {
+  const f = await fixture();
+  try {
+    const canary = 'secret-"quote\nline'; f.secrets.set('KEY', canary);
+    const secretDefinition = { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] };
+    f.workflows.saveDefinition(secretDefinition);
+    const started = await (await f.request(f.base, 'POST', { workflowId: definition.id, input: {} })).json() as WorkflowExecutionView;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    assert.ok(handle.options.instructions.includes(JSON.stringify(canary)));
+    handle.emit({ type: 'notice', level: 'info', text: JSON.stringify({ token: canary }) });
+    handle.complete(canary);
+    await f.service.scheduler.wait(f.id, started.execution.id); await pause();
+    const view = await (await f.request(f.base + '/' + started.execution.id)).json() as WorkflowExecutionView;
+    assert.equal(view.execution.result, '[REDACTED]');
+    assert.ok(!JSON.stringify(view).includes('secret-'));
+    const activity = readFileSync(join(f.root, 'sessions', f.id, 'workflow-activity', started.execution.id + '.json'), 'utf8');
+    assert.ok(!activity.includes('secret-'));
+    assert.ok(!JSON.stringify(f.host.logFor(f.id).since(0)).includes('secret-'));
+    const second = await (await f.request(f.base, 'POST', { workflowId: definition.id, input: {} })).json() as WorkflowExecutionView;
+    assert.equal((await f.request(f.base + '/' + second.execution.id + '/cancel', 'POST')).status, 200);
+    assert.equal(f.service.scheduler.occupied(f.id), false);
+  } finally { await f.close(); }
+});
+
+for (const secret of ['type', 'asked', 'raw', 'question', 'options', 'header', 'multiSelect', 'label', 'description', 'private-"quote\nline']) {
+  it(`preserves private request structure and routing with secret ${secret}`, async () => {
+    const f = await fixture();
+    try {
+      f.secrets.set('KEY', secret);
+      const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, {});
+      const executionId = started.execution.id;
+      await until(() => f.backend.latest.workflowSubagents.length === 1);
+      const handle = f.backend.latest.workflowSubagents[0]!;
+      const view = () => f.service.view(f.id, executionId);
+      const questions = [{ header: secret, question: secret, multiSelect: false, options: [{ label: secret, description: secret }, { label: 'Other' }] }];
+      const ids = new Set<string>();
+      for (let i = 0; i < 2; i++) {
+        const rawCall = `${secret}-call-${i}`, rawAsk = `${secret}-ask-${i}`;
+        handle.emit({ type: 'tool_started', callId: rawCall, name: 'Bash', input: { [secret]: secret, nested: { type: secret } } });
+        handle.requestPermission(`Bash ${secret}`, rawCall);
+        handle.ask(questions, rawAsk);
+        const permission = view().permissions[0]!, enquiry = view().enquiries[0]!;
+        assert.ok(permission); assert.ok(enquiry);
+        assert.notEqual(permission.callId, rawCall); assert.notEqual(enquiry.askId, rawAsk);
+        ids.add(permission.callId); ids.add(enquiry.askId);
+        assert.deepEqual(enquiry.questions, [{ header: '[REDACTED]', question: '[REDACTED]', multiSelect: false, options: [{ label: '[REDACTED]', description: '[REDACTED]' }, { label: 'Other' }] }]);
+        const tool = view().activity.at(-3)!.event;
+        assert.equal(tool.type, 'tool_started');
+        if (tool.type === 'tool_started') {
+          assert.equal(tool.callId, permission.callId);
+          assert.ok(!JSON.stringify(tool.input).includes(secret));
+        }
+        await f.service.answer(f.id, executionId, { subagentId: handle.options.id, callId: permission.callId, decision: 'allow' });
+        await f.service.answer(f.id, executionId, { subagentId: handle.options.id, askId: enquiry.askId, answers: [[secret]] });
+        assert.deepEqual(handle.decisions.at(-1), { callId: rawCall, decision: 'allow' });
+        assert.deepEqual(handle.answers.at(-1), { askId: rawAsk, answers: [[secret]] });
+        assert.equal(view().permissions.length, 0); assert.equal(view().enquiries.length, 0);
+        const answered = view().activity.at(-1)!.event;
+        assert.equal(answered.type, 'enquiry');
+        if (answered.type === 'enquiry') {
+          assert.equal(answered.state, 'answered'); assert.equal(answered.askId, enquiry.askId);
+          if (answered.state === 'answered') assert.deepEqual(answered.answers, [['[REDACTED]']]);
+        }
+        await assert.rejects(f.service.answer(f.id, executionId, { subagentId: handle.options.id, askId: enquiry.askId, answers: [['Other']] }));
+      }
+      assert.equal(ids.size, 4);
+      handle.requestPermission('Bash', `${secret}-aborted-call`);
+      handle.ask(questions, `${secret}-aborted-ask`);
+      handle.emit({ type: 'permission', state: 'aborted', callId: `${secret}-aborted-call`, tool: 'Bash' });
+      handle.emit({ type: 'enquiry', state: 'aborted', askId: `${secret}-aborted-ask`, questions });
+      assert.equal(view().permissions.length, 0); assert.equal(view().enquiries.length, 0);
+      handle.complete(secret);
+      const result = await f.service.scheduler.wait(f.id, executionId);
+      assert.equal(result.result, '[REDACTED]');
+      assert.equal(f.workflows.getExecution(f.id, executionId).result, '[REDACTED]');
+      const saved = readFileSync(join(f.root, 'sessions', f.id, 'workflow-activity', executionId + '.json'), 'utf8');
+      assert.ok(!saved.includes(`${secret}-call-`)); assert.ok(!saved.includes(`${secret}-ask-`));
+      const persisted = JSON.parse(saved);
+      assert.deepEqual(persisted.activity, view().activity);
+      assert.equal(persisted.permissions.length, 0); assert.equal(persisted.enquiries.length, 0);
+    } finally { await f.close(); }
+  });
+}

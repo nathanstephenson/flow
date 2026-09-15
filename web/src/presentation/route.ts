@@ -25,13 +25,15 @@ export const SETTINGS_SECTIONS = [
   "providers",
   "appearance",
   "keyboard",
+  "workflows",
+  "secrets",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export type Route =
   /** The Agent Session view. `sessionId` is undefined when the URL names none. */
-  | { view: "session"; sessionId: string | undefined }
+  | { view: "session"; sessionId: string | undefined; backend?: string }
   | { view: "settings"; section: SettingsSection };
 
 /** What an app with a clean URL is looking at. */
@@ -49,6 +51,7 @@ export function parseRoute(hash: string): Route {
     return { view: "settings", section: asSection(parts[1]) ?? SETTINGS_SECTIONS[0] };
   }
 
+  if (parts[0] === "new" && parts[1]) return { view: "session", sessionId: undefined, backend: decode(parts[1]) };
   if (parts[0] !== "s" || parts[1] === undefined) return DEFAULT_ROUTE;
 
   const sessionId = decode(parts[1]);
@@ -60,6 +63,7 @@ export function parseRoute(hash: string): Route {
 
 export function formatRoute(route: Route): string {
   if (route.view === "settings") return `#/settings/${route.section}`;
+  if (route.sessionId === undefined && route.backend) return `#/new/${encodeURIComponent(route.backend)}`;
   return route.sessionId === undefined ? "" : `#/s/${encodeURIComponent(route.sessionId)}`;
 }
 

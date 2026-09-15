@@ -6,6 +6,7 @@ import {
   defaultLayout,
   fillWithShell,
   fillWithGit,
+  fillWithWorkflows,
   fillWithSubagents,
   parseLayouts,
   pruneLayouts,
@@ -55,6 +56,7 @@ export type DockAction =
    * wins, so a reader who keeps the Subagents in the bottom Dock is not handed a second copy on the
    * right. The picker passes a side because it is *in* a Dock, and that is the one being filled.
    */
+  | { type: "open-workflows"; side?: DockSide; tabId?: string }
   | { type: "open-subagents"; side?: DockSide; tabId?: string; subagentId?: string }
   /** Drill into one Subagent, or back to the list when `subagentId` is absent. */
   | { type: "select-subagent"; side: DockSide; tabId: string; subagentId?: string }
@@ -84,6 +86,13 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
       update(sessionId, (layout) => {
         // Resolved from the layout rather than named by the caller, so it runs before the shared
         // derivation below — which assumes every other action says which Dock it means.
+        if (action.type === "open-workflows") {
+          const side = (["right", "bottom"] as const).find(s => layout[s].tabs.some(t => t.content?.kind === "workflows")) ?? action.side ?? "right";
+          const target = layout[side];
+          const existing = target.tabs.find(t => t.content?.kind === "workflows");
+          const filled = fillWithWorkflows(target, existing?.id ?? action.tabId ?? newTabId());
+          return { ...layout, [side]: { ...filled, minimised: false } };
+        }
         if (action.type === "open-subagents") {
           // Wherever the Subagents already are, else the side asked for, else the right Dock.
           const side = subagentsSide(layout) ?? action.side ?? "right";

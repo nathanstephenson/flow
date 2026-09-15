@@ -75,9 +75,11 @@ import { cn } from "@/lib/utils.ts";
  * Session is focused, so arriving is always a fresh mount and the seeds below are the whole of it.
  */
 export function NewAgentSessionPage({
+  initialBackend,
   drafts,
   onCreated,
 }: {
+  initialBackend?: string;
   drafts: DraftStash;
   onCreated: (sessionId: string) => void;
 }) {
@@ -103,7 +105,7 @@ export function NewAgentSessionPage({
   const scope = project?.path;
 
   // Not held: the host's defaults, every time.
-  const [chosenBackend, setBackend] = useState<string | undefined>(undefined);
+  const [chosenBackend, setBackend] = useState<string | undefined>(initialBackend);
   const backend = chosenBackend ?? resolveDefaultBackend(config.backends, config.providers?.defaultBackend) ?? "";
   const [chosenModel, setChosenModel] = useState<string | undefined>(undefined);
   const [effort, setEffort] = useState<EffortLevel | undefined>(undefined);

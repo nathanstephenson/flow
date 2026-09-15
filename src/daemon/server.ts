@@ -6,6 +6,11 @@ import { mediaTypeOf } from "../protocol/attachments.ts";
 import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
+import { workflowRoutes } from './workflow-routes.ts';
+import { workflowExecutionRoutes } from './workflow-execution-routes.ts';
+import type { WorkflowExecutionService } from './workflow-executions.ts';
+import type { WorkflowStore } from '../workflows/store.ts';
+import type { SecretStore } from './secret-store.ts';
 import type { ConfigStore } from "./config-store.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
 import type { Project } from "../protocol/projects.ts";
@@ -34,6 +39,9 @@ import type { TranscriptStore } from "./store.ts";
 
 export type ServeOptions = {
   host: SessionHost;
+  workflows?: WorkflowStore;
+  workflowExecutions?: WorkflowExecutionService;
+  secrets?: SecretStore;
   token: string;
   port?: number;
   /** Default Scope offered to clients creating a session. */
@@ -135,6 +143,9 @@ async function handle(
     return;
   }
 
+  if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
+  if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets)) return;
+
   if (request.method === "GET" && url.pathname === "/api/sessions") {
     send(response, 200, options.host.list());
     return;
@@ -182,6 +193,7 @@ async function handle(
 
   if (request.method === "PUT" && url.pathname === "/api/config") {
     await handleSettingsUpdate(request, response, options.config);
+    options.workflowExecutions?.refresh();
     return;
   }
 

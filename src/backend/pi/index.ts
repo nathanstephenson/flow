@@ -9,7 +9,8 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -65,6 +66,8 @@ export class PiSession implements BackendSession {
   private readonly enquiries: PiEnquiries | undefined;
   private readonly work: PiWork | undefined;
   private readonly completions: Completion[] = [];
+  private readonly workflows = new Map<string, WorkflowSubagentHandle>();
+  private readonly standingAuthorisations: readonly string[];
   private disposed = false;
   private disposal: Promise<void> | undefined;
   private turnReason: TurnEndReason = "complete";
@@ -88,7 +91,8 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean } = {}) {
+    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[] } = {}) {
+    this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.emit = emit;
     this.sessionDir = sessionDir;
@@ -98,6 +102,15 @@ export class PiSession implements BackendSession {
     if (enquiries) this.answerEnquiry = async (askId, answers) => enquiries.answer(askId, answers);
     this.capabilities = capabilitiesOf(session, support.enquiries !== undefined, support.subagents ?? false);
     this.unsubscribe = session.subscribe((event) => this.translate(event));
+  }
+
+  startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
+    if (this.disposed) throw new Error("Backend Session stopped");
+    if (this.workflows.has(options.id)) throw new Error(`Duplicate workflow Subagent: ${options.id}`);
+    const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations);
+    this.workflows.set(options.id, handle);
+    void handle.done.finally(() => this.workflows.delete(options.id)).catch(() => {});
+    return handle;
   }
 
   resumeToken(): string | undefined {
@@ -254,7 +267,7 @@ export class PiSession implements BackendSession {
     this.disposed = true;
     this.completions.length = 0;
     try {
-      await Promise.all([this.abort(), this.work?.dispose()]);
+      await Promise.all([this.abort(), this.work?.dispose(), ...[...this.workflows.values()].map((handle) => handle.cancel())]);
     } finally {
       this.unsubscribe();
       this.session.dispose();
@@ -479,7 +492,7 @@ export class PiBackend implements AgentBackend {
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, ...(enquiries ? { enquiries } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);

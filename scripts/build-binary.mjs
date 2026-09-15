@@ -15,6 +15,8 @@ const out = join(root, "build");
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
+const workflowRuntime = join(out, 'workflow-runtime.cjs');
+execFileSync(process.execPath, [join(root, 'scripts/build-workflow-runtime.mjs'), workflowRuntime], { stdio: 'inherit' });
 
 /**
  * This build is the only one that embeds a web client, so it is the only place the manifest enters
@@ -78,7 +80,7 @@ console.log(`bundle: ${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 writeFileSync(
   join(out, "sea-config.json"),
-  JSON.stringify({ main: join(out, "flow.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true }, null, 2),
+  JSON.stringify({ main: join(out, "flow.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true, assets: { 'workflow-runtime.cjs': workflowRuntime } }, null, 2),
 );
 
 execFileSync(process.execPath, ["--experimental-sea-config", join(out, "sea-config.json")], { stdio: "inherit" });

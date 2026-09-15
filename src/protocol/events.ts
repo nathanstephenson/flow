@@ -440,6 +440,7 @@ export type AgentEvent =
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
   | { type: "branch_changed"; branch: Branch }
+  | { type: 'workflow_spend'; executionId: string; spend: Spend }
   | { type: "notice"; level: NoticeLevel; text: string }
   | { type: "session_dormant"; reason: string }
   | { type: "session_settled" }
@@ -466,6 +467,7 @@ export const HOST_OWNED_EVENT_TYPES = [
   "session_settled",
   "session_ended",
   "branch_changed",
+  "workflow_spend",
 ] as const;
 
 export type HostOwnedEventType = (typeof HOST_OWNED_EVENT_TYPES)[number];

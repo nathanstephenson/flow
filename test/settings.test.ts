@@ -49,6 +49,7 @@ describe("the Settings on disk", () => {
     const store = new ConfigStore(root);
     assert.deepEqual(store.view(), {
       retention: { settled: "1d" },
+      workflowRuntime: { externalSandbox: true, dockerImage: 'flow-workflow-runtime:local' },
       fonts: { chrome: DEFAULT_CHROME_FONT, monospace: DEFAULT_MONOSPACE_FONT },
       // No `projects` key, deliberately: unlike a retention window and a typeface, a Project Root
       // has no right answer for a machine nobody has configured, so it is absent rather than
