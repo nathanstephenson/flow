@@ -17,6 +17,9 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { Composer } from "@/components/composer.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { Button } from "@/components/ui/button.tsx";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion.tsx";
+import { Badge } from "@/components/ui/badge.tsx";
+import { Switch } from "@/components/ui/switch.tsx";
 import {
   Combobox,
   ComboboxCollection,
@@ -85,6 +88,8 @@ export function NewAgentSessionPage({
 }) {
   const { config, refresh } = useHost();
   const run = useCommand();
+  const [mcpChoices, setMcpChoices] = useState<Record<string, boolean>>({});
+  const mcpConnectionIds = (config.mcp ?? []).filter((connection) => mcpChoices[connection.id] ?? connection.enabledByDefault).map((connection) => connection.id);
   const projects = config.projectList ?? [];
   const uncurated = (config.projectCandidates ?? []).length;
 
@@ -230,7 +235,7 @@ export function NewAgentSessionPage({
       if (command === undefined) return undefined;
       setFailure(undefined);
 
-      const created = await run<string>(command);
+      const created = await run<string>({ ...command, mcpConnectionIds });
       if (created === undefined) {
         // A create refused by git — a base branch that has gone, a directory in the way — is the one
         // failure worth saying out loud here, because the page stays put and can be corrected.
@@ -261,7 +266,7 @@ export function NewAgentSessionPage({
       onCreated(created);
       return queued;
     },
-    [command, drafts, onCreated, run],
+    [command, drafts, onCreated, run, mcpConnectionIds],
   );
 
   const actions = useMemo<ComposerActions>(
@@ -443,6 +448,30 @@ export function NewAgentSessionPage({
               // Nothing can be delegating yet, so the strip that offers this never renders.
               onShowSubagents={() => {}}
             />
+
+            {(config.mcp ?? []).length > 0 && (
+              <Accordion>
+                <AccordionItem value="mcp">
+                  <AccordionTrigger>
+                    MCP connections
+                    <Badge variant="secondary" aria-label={`${mcpConnectionIds.length} enabled`}>
+                      {mcpConnectionIds.length}
+                    </Badge>
+                  </AccordionTrigger>
+                  <AccordionContent className="flex flex-col gap-3">
+                    {config.mcp!.map((connection) => (
+                      <label key={connection.id} className="flex items-center justify-between gap-3 text-sm">
+                        {connection.name}
+                        <Switch
+                          checked={mcpChoices[connection.id] ?? connection.enabledByDefault}
+                          onCheckedChange={(checked) => setMcpChoices((choices) => ({ ...choices, [connection.id]: checked }))}
+                        />
+                      </label>
+                    ))}
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            )}
 
             {repository && config.git !== false ? (
               <div className="flex flex-col gap-1">

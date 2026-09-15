@@ -95,6 +95,8 @@ export class ConfigStore {
    */
   readonly standingAuthorisations = (): readonly string[] => this.config.permissions?.allow ?? [];
 
+  readonly mcpConnections = () => structuredClone(this.config.mcp ?? []);
+
   /**
    * The Default Model for one Backend Adapter, asked fresh, or undefined when none is configured.
    *
@@ -193,6 +195,7 @@ function settingsOf(config: Config): Settings {
   return {
     retention: { settled: settled === "never" ? "never" : formatDuration(settled) },
     fonts: config.fonts,
+    mcp: config.mcp ?? [],
     workflowRuntime: { ...DEFAULT_WORKFLOW_RUNTIME, ...config.workflowRuntime },
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.

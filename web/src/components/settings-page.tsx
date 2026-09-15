@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 const WorkflowsSettings = lazy(() => import('./settings-workflows.tsx'));
+const McpSettings = lazy(() => import('./settings-mcp.tsx'));
 const SecretsSettings = lazy(() => import('./settings-secrets.tsx'));
 import type { SettingsSection } from "@/presentation/route.ts";
 import { GeneralSettings } from "@/components/settings-general.tsx";
@@ -35,6 +36,7 @@ export function SettingsPage({ section }: { section: SettingsSection }) {
         <Suspense fallback={<p>Loading settings…</p>}>
           {section === 'workflows' && <WorkflowsSettings />}
           {section === 'secrets' && <SecretsSettings />}
+          {section === 'mcp' && <McpSettings />}
         </Suspense>
         {section === "general" ? <GeneralSettings /> : null}
         {section === "projects" ? <ProjectsSettings /> : null}

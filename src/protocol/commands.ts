@@ -110,6 +110,7 @@ export type SessionSummary = {
 export type Command =
   | {
       type: "create";
+      mcpConnectionIds?: string[];
       scope: string;
       /** Omitted means the Session Host's current Default Backend. */
       backend?: string;

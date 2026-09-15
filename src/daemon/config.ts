@@ -1,3 +1,4 @@
+import { mcpConnectionsSchema, type McpConnection } from "../protocol/mcp.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -45,6 +46,7 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
  * typed. `view()` on the ConfigStore is where the two meet.
  */
 export type Config = {
+  mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
   fonts: Fonts;
@@ -160,6 +162,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
     config: {
       retention,
       fonts,
+      mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
       ...(projects === undefined ? {} : { projects }),
       ...(permissions === undefined ? {} : { permissions }),
@@ -469,16 +472,28 @@ export class ConfigError extends Error {}
  * outright because there is a person waiting on the other end who can fix it, and silently keeping
  * the old value while reporting success is the one behaviour a settings page must never have.
  */
+function parseMcp(value: unknown): McpConnection[] {
+  const result = mcpConnectionsSchema.safeParse(value);
+  if (!result.success) throw new ConfigError("Invalid MCP connections");
+  return result.data;
+}
+
+function readMcp(value: unknown, warnings: string[]): McpConnection[] {
+  try { return parseMcp((value as { mcp?: unknown })?.mcp ?? []); }
+  catch { warnings.push("Invalid MCP connections; using none"); return []; }
+}
+
 export function applyPatch(current: Config, patch: unknown): Config {
   if (typeof patch !== "object" || patch === null || Array.isArray(patch)) {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   return {
+    mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),

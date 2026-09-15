@@ -68,6 +68,10 @@ export class CommandRefused extends Error {}
 type QueuedMessage = { id: string; text: string; attachments: string[] };
 
 type SessionRecord = {
+  mcpConnectionIds?: string[];
+  mcp?: import("../backend/mcp.ts").McpSession;
+  mcpReady?: Promise<void>;
+  mcpWorkflows?: number;
   id: string;
   scope: string;
   backendName: string;
@@ -198,6 +202,8 @@ type SessionRecord = {
 };
 
 export type SessionHostOptions = {
+  mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
+  mcpAuth?: import("./mcp-auth.ts").McpAuth;
   store?: TranscriptStore;
   /**
    * How long a Settled Agent Session survives before it is reaped, in milliseconds. `"never"`
@@ -423,7 +429,12 @@ export class SessionHost {
     (kept: { path: string; branch: string; reason: string }) => void
   >();
 
+  private readonly mcpConnections: SessionHostOptions["mcpConnections"];
+  private readonly mcpAuth: SessionHostOptions["mcpAuth"];
+
   constructor(options: SessionHostOptions = {}) {
+    this.mcpConnections = options.mcpConnections;
+    this.mcpAuth = options.mcpAuth;
     this.store = options.store;
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
@@ -642,6 +653,7 @@ export class SessionHost {
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
         spend: spendFrom(entries),
+        mcpConnectionIds: meta.mcpConnectionIds ?? [],
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
         effort: meta.effort,
@@ -663,6 +675,7 @@ export class SessionHost {
   }
 
   async create(options: {
+    mcpConnectionIds?: string[];
     scope: string;
     backend?: string;
     modelId?: string;
@@ -670,6 +683,9 @@ export class SessionHost {
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
   }): Promise<string> {
+    const connections = this.mcpConnections?.() ?? [];
+    if (options.mcpConnectionIds !== undefined && (!Array.isArray(options.mcpConnectionIds) || options.mcpConnectionIds.some((id) => typeof id !== "string"))) throw new Error("Invalid MCP selection");
+    const mcpConnectionIds = connections.filter((connection) => options.mcpConnectionIds ? options.mcpConnectionIds.includes(connection.id) : connection.enabledByDefault).map((connection) => connection.id);
     const backendName = options.backend ?? resolveDefaultBackend([...this.backends.keys()], this.defaultBackend?.());
     if (backendName === undefined) throw new Error("No backends available");
     const backend = this.backendFor(backendName);
@@ -709,6 +725,7 @@ export class SessionHost {
       pendingBranchNote: undefined,
       capabilities: undefined,
       spend: undefined,
+      mcpConnectionIds,
       resumeToken: undefined,
       /*
        * Resolved here and never again.
@@ -1561,6 +1578,7 @@ export class SessionHost {
           ...(command.backend === undefined ? {} : { backend: command.backend }),
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
           ...(command.effort === undefined ? {} : { effort: command.effort }),
+          ...(command.mcpConnectionIds === undefined ? {} : { mcpConnectionIds: command.mcpConnectionIds }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
         });
       case "send":
@@ -1624,9 +1642,43 @@ export class SessionHost {
     }
   }
 
+  mcpStatus(id: string) {
+    const record = this.sessions.get(id);
+    if (!record) throw new Error("Unknown Agent Session");
+    return record.session ? record.mcp?.status() ?? [] : [];
+  }
+
+  async retryMcp(id: string, connectionId: string): Promise<void> {
+    const record = this.sessions.get(id);
+    if (!record?.session || !record.mcp || record.turnInFlight || record.openSubagentIds.size || record.openBackgroundCallIds.size || record.mcpWorkflows) throw new Error("Retry requires an Idle Agent Session without background work");
+    const session = record.session;
+    const mcp = record.mcp;
+    const retry = (record.mcpReady ?? Promise.resolve()).then(async () => {
+      if (record.session !== session) return;
+      await mcp.retry(connectionId);
+      if (record.session === session) await session.refreshMcp?.();
+    });
+    this.trackMcpReadiness(record, retry.catch(() => { mcp.registrationFailed(); }));
+    await retry;
+  }
+
+  private trackMcpReadiness(record: SessionRecord, ready?: Promise<void>): void {
+    if (ready) record.mcpReady = ready;
+    else delete record.mcpReady;
+    void ready?.then(() => {
+      if (record.mcpReady === ready) delete record.mcpReady;
+    });
+  }
+
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
     const backend = this.backendFor(record.backendName);
+    const { McpSession } = await import("../backend/mcp.ts");
+    const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
+      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined);
+    record.mcp = mcp;
+    const openingMcp = mcp.open();
     const session = await backend.create({
+      mcp,
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
       ...(this.autoCompaction ? { autoCompaction: this.autoCompaction(backend.name) } : {}),
@@ -1640,9 +1692,79 @@ export class SessionHost {
       ...(this.standingAuthorisations
         ? { standingAuthorisations: this.standingAuthorisations() }
         : {}),
-    });
+    }).catch(async (error: unknown) => { await mcp.dispose(); throw error; });
+    const dispose = session.dispose.bind(session);
+    let disposed = false;
+    session.dispose = async () => { disposed = true; try { await dispose(); } finally { await mcp.dispose(); } };
     record.session = session;
     record.capabilities = session.capabilities;
+    const ready = openingMcp.then(async () => {
+      if (!disposed && mcp.connections.length && record.session === session) await session.refreshMcp?.();
+    }).catch(() => {
+      mcp.registrationFailed();
+      if (!disposed) this.onBackendEvent(record.id, { type: "notice", level: "warn", text: "MCP tools could not be updated. Retry the connection." });
+    });
+    this.trackMcpReadiness(record, mcp.connections.length ? ready : undefined);
+    let cancelPendingTurn: (() => void) | undefined;
+    let pendingTurn: Promise<void> | undefined;
+    const waitForMcp = async (run: () => Promise<void>): Promise<void> => {
+      if (disposed) return;
+      if (!record.mcpReady) return run();
+      let cancel!: () => void;
+      let stopped = false;
+      const cancelled = new Promise<false>((resolve) => { cancel = () => { stopped = true; resolve(false); }; });
+      cancelPendingTurn = cancel;
+      const ready = await Promise.race([record.mcpReady!.then(() => true), cancelled]);
+      if (cancelPendingTurn === cancel) cancelPendingTurn = undefined;
+      if ((!ready || stopped) && !disposed) {
+        const turnId = randomUUID();
+        this.onBackendEvent(record.id, { type: "turn_started", turnId });
+        this.onBackendEvent(record.id, { type: "turn_ended", turnId, reason: "aborted" });
+      }
+      if (ready && !stopped && !disposed) await run();
+    };
+    const abort = session.abort.bind(session);
+    session.abort = async () => {
+      if (cancelPendingTurn) {
+        cancelPendingTurn();
+        await pendingTurn;
+      } else await abort();
+    };
+    const prompt = session.prompt.bind(session);
+    session.prompt = (text, attachments) => {
+      pendingTurn = waitForMcp(() => prompt(text, attachments));
+      return pendingTurn;
+    };
+    if (session.compact) {
+      const compact = session.compact.bind(session);
+      session.compact = (instructions) => {
+        pendingTurn = waitForMcp(() => compact(instructions));
+        return pendingTurn;
+      };
+    }
+    if (session.startWorkflowSubagent) {
+      const start = session.startWorkflowSubagent.bind(session);
+      session.startWorkflowSubagent = (options) => {
+        record.mcpWorkflows = (record.mcpWorkflows ?? 0) + 1;
+        let cancel!: () => void;
+        let stopped = false;
+        const cancelled = new Promise<false>((resolve) => { cancel = () => { stopped = true; resolve(false); }; });
+        const handle = (async () => {
+          const ready = record.mcpReady ? await Promise.race([record.mcpReady.then(() => true), cancelled]) : true;
+          if (disposed || stopped || !ready) throw new Error("Workflow Step stopped");
+          return start(options);
+        })();
+        const done = handle.then((handle) => handle.done).finally(() => {
+          record.mcpWorkflows = record.mcpWorkflows! - 1;
+        });
+        return {
+          done,
+          answerEnquiry: async (...args) => (await handle).answerEnquiry(...args),
+          answerPermission: async (...args) => (await handle).answerPermission(...args),
+          cancel: async () => { cancel(); await handle.then((handle) => handle.cancel(), () => {}); },
+        };
+      };
+    }
     this.captureResumeToken(record);
     return session;
   }
@@ -1960,6 +2082,7 @@ export class SessionHost {
       status: record.lifecycle === "live" ? "idle" : record.lifecycle,
       restingAt: record.restingAt,
       ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
+      mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),

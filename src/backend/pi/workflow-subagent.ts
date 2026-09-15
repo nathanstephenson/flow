@@ -1,3 +1,5 @@
+import { piMcpTools } from "./mcp.ts";
+import type { McpSession } from "../mcp.ts";
 import {
   createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
   createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition,
@@ -21,7 +23,9 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private readonly permissions = new Map<string, (decision?: PermissionDecision) => void>();
   private readonly options: WorkflowSubagentOptions;
 
-  constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[]) {
+  private readonly mcp: McpSession | undefined;
+  constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession) {
+    this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
     this.grants = new Set(grants);
     this.enquiries = new PiEnquiries((event) => this.emit(event));
@@ -94,8 +98,8 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       });
       await resourceLoader.reload();
       controller.signal.throwIfAborted();
-      const names = parent.getActiveToolNames().filter((name) => name !== "subagent");
-      const definitions = [createReadToolDefinition(scope), createEditToolDefinition(scope), createWriteToolDefinition(scope),
+      const names = [...parent.getActiveToolNames(), ...piMcpTools(this.mcp).map((tool) => tool.name)].filter((name) => name !== "subagent");
+      const definitions = [...piMcpTools(this.mcp), createReadToolDefinition(scope), createEditToolDefinition(scope), createWriteToolDefinition(scope),
         createGrepToolDefinition(scope), createFindToolDefinition(scope), createLsToolDefinition(scope), createPowerShellToolDefinition(scope),
         ...backgroundTools(scope, settingsManager, this.work)];
       const customTools = definitions.filter((tool) => names.includes(tool.name)).map((tool) => this.wrap(tool as ToolDefinition));

@@ -18,6 +18,7 @@ const connection: Connection = host;
 
 /** What the host offers a new Agent Session: a default Scope, and every backend it has registered. */
 export type HostConfig = {
+  mcp?: Settings["mcp"];
   scope: string;
   backends: string[];
   /**

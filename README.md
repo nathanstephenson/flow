@@ -334,6 +334,25 @@ Shortening `retention.settled` arms a delete. Nothing is removed on save — the
 the hour — but the Settings page counts the Agent Sessions the new window newly reaches and makes you
 confirm before saving. Only Settled Agent Sessions are ever reaped; an Ended one stays on disk.
 
+#### MCP connections
+
+Use **Settings → MCP** to add a local command and its arguments, or a remote Streamable HTTP URL.
+Connections are selected by default for new Agent Sessions; turn off the switch to change that default.
+The New Agent Session page lets you choose the connections for that Agent Session.
+
+Revive keeps the selected IDs and uses the latest definitions. Edits and deletions do not change an
+open Backend Session. Subagents and Workflow Steps inherit its connections and existing permission
+rules. Pi parent turns and ordinary Subagents still run tools without Flow Permission Prompts.
+
+Connection startup does not block Agent Session creation. The first model prompt and Workflow Step
+wait for bounded discovery and tool registration, then proceed even if connections fail. Its MCP
+status shows failures and **Retry**. Retry requires no parent turn, Subagent, Background Call, or
+Workflow Step in flight; new model work waits until Retry finishes.
+For OAuth, select **Sign in**, complete authorization, then return to Flow and select **Retry**.
+OAuth uses one machine-wide identity per connection. Credentials are kept separately from Settings
+in `mcp-credentials.json` with private file permissions. OAuth servers must support dynamic client
+registration. Resources, prompts, and legacy HTTP+SSE are not supported.
+
 #### Projects
 
 A **Project** is a directory you have opted into starting Agent Sessions from — a *candidate* Scope,

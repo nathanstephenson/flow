@@ -28,6 +28,7 @@ export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {
 };
 
 export type Settings = {
+  mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
     /**
@@ -126,6 +127,7 @@ export type ModelAutoCompaction = Record<string, AutoCompaction>;
  * would erase it.
  */
 export type SettingsPatch = {
+  mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };
   fonts?: { chrome?: string; monospace?: string };

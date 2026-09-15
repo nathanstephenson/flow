@@ -56,6 +56,7 @@ export type ServeOptions = {
    * so the clients fall back to the defaults in src/protocol/fonts.ts.
    */
   config?: ConfigStore;
+  mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
    * Where Attachment bytes are read from. Omitted means this deployment keeps no state, so it has
    * no Attachments to serve and the route 404s — the same shape of omission `shells` and `config`
@@ -100,10 +101,12 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   return {
     server,
     url: `http://${address}:${port}`,
-    close: () =>
-      new Promise<void>((resolve, reject) =>
+    close: () => {
+      options.mcpAuth?.dispose();
+      return new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      );
+    },
   };
 }
 
@@ -145,6 +148,27 @@ async function handle(
 
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
   if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets)) return;
+
+  const mcpRoute = /^\/api\/sessions\/([^/]+)\/mcp(?:\/([^/]+)\/retry)?$/.exec(url.pathname);
+  if (mcpRoute) {
+    try {
+      if (request.method === "POST" && mcpRoute[2]) {
+        await options.host.retryMcp(mcpRoute[1]!, mcpRoute[2]);
+        send(response, 200, options.host.mcpStatus(mcpRoute[1]!));
+      } else if (request.method === "GET" && !mcpRoute[2]) send(response, 200, options.host.mcpStatus(mcpRoute[1]!));
+      else send(response, 405, { error: "Method not allowed" });
+    } catch { send(response, 400, { error: "MCP operation failed. Retry requires an Idle Agent Session without background work." }); }
+    return;
+  }
+  const mcpLogin = /^\/api\/mcp\/([^/]+)\/login$/.exec(url.pathname);
+  if (request.method === "POST" && mcpLogin) {
+    const connection = options.config?.mcpConnections().find((entry) => entry.id === mcpLogin[1]);
+    try {
+      if (!connection || !options.mcpAuth) throw new Error("Unknown connection");
+      send(response, 200, { url: await options.mcpAuth.login(connection) });
+    } catch { send(response, 400, { error: "MCP sign-in failed or is already in progress" }); }
+    return;
+  }
 
   if (request.method === "GET" && url.pathname === "/api/sessions") {
     send(response, 200, options.host.list());

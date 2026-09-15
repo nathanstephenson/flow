@@ -26,10 +26,10 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
   private stopping = false;
   private readonly options: WorkflowSubagentOptions;
 
-  private readonly launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools">;
+  private readonly launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">;
   private readonly dependencies: WorkflowQueryDependencies;
 
-  constructor(launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools">,
+  constructor(launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">,
     options: WorkflowSubagentOptions, grants: Set<string>,
     dependencies: WorkflowQueryDependencies = {}) {
     this.launch = launch;
@@ -110,7 +110,7 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
         persistSession: false, settingSources: [], skills: [], strictMcpConfig: true,
         tools: ["Read", "Write", "Edit", "Glob", "Grep", "AskUserQuestion"],
         disallowedTools: ["Agent", "Task", "Bash", "BashOutput", "KillShell", "TaskOutput", "TaskStop", "Monitor", "Skill", ...(this.launch.disallowedTools ?? [])],
-        mcpServers: { workflow: this.work.server }, permissionMode: "default", allowedTools: [],
+        mcpServers: { ...this.launch.mcpServers, workflow: this.work.server }, permissionMode: "default", allowedTools: [],
         abortController: controller,
         env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
           CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1", CLAUDE_CODE_EFFORT_LEVEL: undefined },
