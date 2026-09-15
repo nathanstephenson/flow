@@ -212,7 +212,7 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -263,7 +263,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries"] as const) {
+  for (const field of ["efforts", "summaries", "autoCompaction"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -272,7 +272,15 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
     for (const [backend, value] of Object.entries(entries)) {
       try {
-        providers = patchProviders(providers, { [field]: { [backend]: value } }) ?? {};
+        if (field === "autoCompaction" && typeof value === "object" && value !== null && !Array.isArray(value)) {
+          for (const [model, setting] of Object.entries(value)) {
+            try {
+              providers = patchProviders(providers, { autoCompaction: { [backend]: { [model]: setting } } } as SettingsPatch["providers"]) ?? {};
+            } catch (error) {
+              warnings.push(String(error));
+            }
+          }
+        } else providers = patchProviders(providers, { [field]: { [backend]: value } }) ?? {};
       } catch (error) {
         warnings.push(String(error));
       }
@@ -497,9 +505,10 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction"], "providers");
 
   const next: Providers = {
+    ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
     ...(current?.defaultBackend === undefined ? {} : { defaultBackend: current.defaultBackend }),
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
@@ -514,6 +523,39 @@ function patchProviders(
       if (problem) throw new ConfigError(problem);
       next.defaultBackend = patch.defaultBackend.trim();
     }
+  }
+
+  if (patch.autoCompaction !== undefined) {
+    const entries = patch.autoCompaction;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+      throw new ConfigError("providers.autoCompaction must be an object");
+    }
+    const merged = { ...next.autoCompaction };
+    for (const [backend, models] of Object.entries(entries)) {
+      const path = `providers.autoCompaction.${backend}`;
+      if (backend !== backend.trim() || checkModelId(backend, path) || typeof models !== "object" || models === null || Array.isArray(models)) {
+        throw new ConfigError(`${path} must map model ids to auto-compaction settings`);
+      }
+      const values = { ...merged[backend] };
+      for (const [model, value] of Object.entries(models)) {
+        const field = `${path}.${model}`;
+        if (model !== model.trim() || checkModelId(model, field)) throw new ConfigError(`${field} must name a model without surrounding whitespace`);
+        if (value === null) {
+          delete values[model];
+          continue;
+        }
+        if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`${field} must be an auto-compaction setting`);
+        refuseUnknownKeys(value, value.mode === "disabled" ? ["mode"] : ["mode", "targetPercent"], field);
+        if (value.mode === "disabled") values[model] = { mode: "disabled" };
+        else if (value.mode === "enabled" && Number.isInteger(value.targetPercent) && value.targetPercent >= 1 && value.targetPercent <= 99) {
+          values[model] = { mode: "enabled", targetPercent: value.targetPercent };
+        } else throw new ConfigError(`${field} must be disabled or enabled with an integer targetPercent from 1 to 99`);
+      }
+      if (Object.keys(values).length) merged[backend] = values;
+      else delete merged[backend];
+    }
+    if (Object.keys(merged).length) next.autoCompaction = merged;
+    else delete next.autoCompaction;
   }
 
   const defaults: unknown = patch.defaults;

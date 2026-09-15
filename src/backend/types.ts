@@ -1,3 +1,4 @@
+import type { ModelAutoCompaction } from "../protocol/settings.ts";
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
 import type {
   BackendEvent,
@@ -23,6 +24,7 @@ export type PromptAttachment = {
 
 export type BackendCreateOptions = {
   scope: string;
+  autoCompaction?: ModelAutoCompaction;
   modelId?: string;
   effort?: EffortLevel;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */

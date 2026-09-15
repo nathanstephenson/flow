@@ -20,6 +20,7 @@ import type {
   TurnEndReason,
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
+import { piAutoCompaction } from "./auto-compaction.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
@@ -46,6 +47,7 @@ type AgentMessage = Extract<AgentSessionEvent, { type: "message_start" }>["messa
 type ThinkingLevel = AgentSession["thinkingLevel"];
 type PiModel = {
   id: string;
+  contextWindow?: number;
   provider?: string;
   name?: string;
   reasoning?: boolean;
@@ -72,6 +74,7 @@ export class PiSession implements BackendSession {
   private disposal: Promise<void> | undefined;
   private turnReason: TurnEndReason = "complete";
   private readonly session: AgentSession;
+  private readonly applyAutoCompaction: ((model: PiModel | undefined) => void) | undefined;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
   private readonly sessionDir: string | undefined;
@@ -91,9 +94,11 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[] } = {}) {
+    support: { enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void } = {}) {
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
+    this.applyAutoCompaction = support.autoCompaction;
+    this.applyAutoCompaction?.(session.model);
     this.emit = emit;
     this.sessionDir = sessionDir;
     this.enquiries = support.enquiries;
@@ -143,6 +148,7 @@ export class PiSession implements BackendSession {
     const model = qualified ?? (legacy.length === 1 ? legacy[0] : undefined);
     if (!model) throw new Error(`Unknown model: ${modelId}`);
     await this.session.setModel(model);
+    this.applyAutoCompaction?.(this.session.model);
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
     // on the way through, so both the list and the level in force are re-read here.
     this.capabilities = capabilitiesOf(this.session, this.enquiries !== undefined, this.capabilities.subagents);
@@ -492,7 +498,7 @@ export class PiBackend implements AgentBackend {
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(enquiries ? { enquiries } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, options.autoCompaction ?? {}), ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
@@ -591,6 +597,7 @@ function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: bo
     providers: providers.length > 0 ? providers : ["pi"],
     models,
     compaction: true,
+    autoCompaction: "model-change",
     fork: false,
     subagents,
     enquiries,
@@ -602,6 +609,7 @@ function describeModel(model: PiModel): ModelInfo {
   const effortLevels = inferredEffort(model);
   return {
     id: model.provider ? `${model.provider}/${model.id}` : model.id,
+    ...(model.contextWindow !== undefined && Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
     ...(model.name ? { label: model.name } : {}),
     ...(effortLevels.length > 0 ? { effortLevels } : {}),

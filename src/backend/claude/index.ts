@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { claudeAutoCompactionEnv } from "./auto-compaction.ts";
 import { spawn, spawnSync } from "node:child_process";
 
 import {
@@ -213,7 +214,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, fork: true, subagents: true, enquiries: true, permissions: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, subagents: true, enquiries: true, permissions: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -288,8 +289,10 @@ class ClaudeSession implements BackendSession {
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
     // `disallowedTools` — which an operator meant — still outranks a grant a human clicked.
     const startingEffort = sdkEffort(options.effort);
+    const env = claudeAutoCompactionEnv(options.modelId ? options.autoCompaction?.[options.modelId] : undefined);
     const queryOptions: Options = {
       cwd: options.scope,
+      ...(env ? { env } : {}),
       includePartialMessages: true,
       // NOT bypassPermissions: it auto-approves before canUseTool is consulted, and the SDK warns
       // as much. "default" runs the permission flow, allowedTools auto-approves the pre-approved

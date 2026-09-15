@@ -67,11 +67,11 @@ export async function probeModels(backend: AgentBackend, scope: string): Promise
      * exactly what was on the session all along. Only Claude, which fetches over its control
      * channel after the session is up, has anything to wait for.
      */
-    if (session.capabilities.models.length > 0) return { backend: backend.name, models: [...session.capabilities.models] };
+    if (session.capabilities.models.length > 0) return { backend: backend.name, models: [...session.capabilities.models], ...(session.capabilities.autoCompaction ? { autoCompaction: session.capabilities.autoCompaction } : {}) };
 
     await within(listed, PROBE_TIMEOUT_MS);
     return models.length > 0
-      ? { backend: backend.name, models }
+      ? { backend: backend.name, models, ...(session.capabilities.autoCompaction ? { autoCompaction: session.capabilities.autoCompaction } : {}) }
       : { backend: backend.name, models: [], problem: `${backend.name} listed no models` };
   } finally {
     await session.dispose().catch(() => {});
