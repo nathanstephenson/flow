@@ -144,6 +144,79 @@ for (const operation of ["prompt", "compact"] as const) {
   });
 }
 
+for (const readiness of ["no connections", "registered", "retried"] as const) {
+  test(`settled MCP readiness starts backend work synchronously: ${readiness}`, { timeout: 5000 }, async () => {
+    const host = new SessionHost({ mcpConnections: () => readiness === "no connections" ? [] : [connection] });
+    const fake = new FakeBackend();
+    let session!: BackendSession;
+    const calls: string[] = [];
+    host.registerBackend({ name: "fake", create: async (options) => {
+      session = await fake.create(options);
+      session.prompt = async () => { calls.push("prompt"); };
+      session.compact = async () => { calls.push("compact"); };
+      session.refreshMcp = async () => {};
+      session.startWorkflowSubagent = () => {
+        calls.push("workflow");
+        return { done: Promise.resolve("done"), answerEnquiry: async () => false,
+          answerPermission: async () => false, cancel: async () => {} };
+      };
+      return session;
+    } });
+    try {
+      const id = await host.create({ scope: process.cwd() });
+      if (readiness !== "no connections") await session.prompt("initial");
+      if (readiness === "retried") await host.retryMcp(id, "fixture");
+      calls.length = 0;
+      const prompt = session.prompt("next");
+      assert.deepEqual(calls, ["prompt"]);
+      await prompt;
+      const compact = session.compact!();
+      assert.deepEqual(calls, ["prompt", "compact"]);
+      await compact;
+      const handle = session.startWorkflowSubagent!({ id: "step", name: "Step", instructions: "", input: null,
+        modelId: "fake", effort: "low", permissionMode: "ask", emit: () => {} });
+      assert.deepEqual(calls, ["prompt", "compact", "workflow"]);
+      await handle.done;
+    } finally { await host.shutdown(); }
+  });
+}
+
+test("queued Retries keep prompts gated until the final registration", { timeout: 5000 }, async () => {
+  const host = new SessionHost({ mcpConnections: () => [connection] });
+  const fake = new FakeBackend();
+  const entered = [deferred(), deferred()];
+  const release = [deferred(), deferred()];
+  let registrations = 0;
+  let prompts = 0;
+  host.registerBackend({ name: "fake", create: async (options) => {
+    const session = await fake.create(options);
+    session.prompt = async () => { prompts++; };
+    session.refreshMcp = async () => {
+      const retry = registrations++ - 1;
+      if (retry < 0) return;
+      entered[retry]!.resolve();
+      await release[retry]!.promise;
+    };
+    return session;
+  } });
+  try {
+    const id = await host.create({ scope: process.cwd() });
+    const first = host.retryMcp(id, "fixture");
+    const second = host.retryMcp(id, "fixture");
+    await entered[0]!.promise;
+    assert.equal(registrations, 2);
+    release[0]!.resolve();
+    await first;
+    await entered[1]!.promise;
+    const prompt = host.send(id, "after both Retries", "now");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(prompts, 0);
+    release[1]!.resolve();
+    await Promise.all([second, prompt]);
+    assert.equal(prompts, 1);
+  } finally { release.forEach((gate) => gate.resolve()); await host.shutdown(); }
+});
+
 test("Workflow cancellation settles before MCP registration", { timeout: 5000 }, async () => {
   const host = new SessionHost({ mcpConnections: () => [connection] });
   const fake = new FakeBackend();

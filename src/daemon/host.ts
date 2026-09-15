@@ -1658,8 +1658,16 @@ export class SessionHost {
       await mcp.retry(connectionId);
       if (record.session === session) await session.refreshMcp?.();
     });
-    record.mcpReady = retry.catch(() => { mcp.registrationFailed(); });
+    this.trackMcpReadiness(record, retry.catch(() => { mcp.registrationFailed(); }));
     await retry;
+  }
+
+  private trackMcpReadiness(record: SessionRecord, ready?: Promise<void>): void {
+    if (ready) record.mcpReady = ready;
+    else delete record.mcpReady;
+    void ready?.then(() => {
+      if (record.mcpReady === ready) delete record.mcpReady;
+    });
   }
 
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
@@ -1690,15 +1698,18 @@ export class SessionHost {
     session.dispose = async () => { disposed = true; try { await dispose(); } finally { await mcp.dispose(); } };
     record.session = session;
     record.capabilities = session.capabilities;
-    record.mcpReady = openingMcp.then(async () => {
+    const ready = openingMcp.then(async () => {
       if (!disposed && mcp.connections.length && record.session === session) await session.refreshMcp?.();
     }).catch(() => {
       mcp.registrationFailed();
       if (!disposed) this.onBackendEvent(record.id, { type: "notice", level: "warn", text: "MCP tools could not be updated. Retry the connection." });
     });
+    this.trackMcpReadiness(record, mcp.connections.length ? ready : undefined);
     let cancelPendingTurn: (() => void) | undefined;
     let pendingTurn: Promise<void> | undefined;
     const waitForMcp = async (run: () => Promise<void>): Promise<void> => {
+      if (disposed) return;
+      if (!record.mcpReady) return run();
       let cancel!: () => void;
       let stopped = false;
       const cancelled = new Promise<false>((resolve) => { cancel = () => { stopped = true; resolve(false); }; });
@@ -1738,10 +1749,11 @@ export class SessionHost {
         let cancel!: () => void;
         let stopped = false;
         const cancelled = new Promise<false>((resolve) => { cancel = () => { stopped = true; resolve(false); }; });
-        const handle = Promise.race([record.mcpReady!.then(() => true), cancelled]).then((ready) => {
+        const handle = (async () => {
+          const ready = record.mcpReady ? await Promise.race([record.mcpReady.then(() => true), cancelled]) : true;
           if (disposed || stopped || !ready) throw new Error("Workflow Step stopped");
           return start(options);
-        });
+        })();
         const done = handle.then((handle) => handle.done).finally(() => {
           record.mcpWorkflows = record.mcpWorkflows! - 1;
         });
