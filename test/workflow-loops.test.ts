@@ -175,6 +175,23 @@ const loopFixture = (execute: (context: ExecutorContext) => Promise<import('../s
 };
 
 describe('workflow loop execution', () => {
+  it('keeps history readable and permits cancellation after failure before loop entry', async () => {
+    const f = loopFixture(async () => { throw new Error('Entry failed'); });
+    try {
+      const started = f.scheduler.start(loopDefinition(), session, {});
+      const result = await f.scheduler.wait(session.sessionId, started.id);
+      assert.equal(result.status, 'recovery-required');
+      assert.equal(result.loops!.head!.phase, 'inactive');
+      assert.equal(result.steps.head!.status, 'blocked');
+      assert.deepEqual(f.store.listExecutions(session.sessionId), [result]);
+      const restarted = new WorkflowScheduler(f.store, f.executors);
+      assert.equal(restarted.occupied(session.sessionId), true);
+      await restarted.cancel(session.sessionId, started.id);
+      assert.equal(f.store.getExecution(session.sessionId, started.id).status, 'cancelled');
+      assert.equal(restarted.occupied(session.sessionId), false);
+    } finally { f.close(); }
+  });
+
   it('grants one try, scopes guidance to corrective and header Agents, and rejects stale grants', async () => {
     const seen: ExecutorContext[] = [];
     let checks = 0;
