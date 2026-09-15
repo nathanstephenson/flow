@@ -58,6 +58,6 @@ export interface WorkflowRuntimeStatus {
 
 export type StartWorkflow = { workflowId: string; input: Json };
 export type TestWorkflowStep = { definition: WorkflowDefinition; sessionId: string; stepId: string; input: Json };
-export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' };
+export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string };
 export type AnswerWorkflowEnquiry = { subagentId: string; askId: string; answers: string[][] };
 export type AnswerWorkflowPermission = { subagentId: string; callId: string; decision: PermissionDecision };

@@ -42,6 +42,9 @@ _Avoid_: parent turn, Background Call
 **Workflow Step**: One typed operation in a Workflow Definition. Each attempt owns its work until it stops.
 _Avoid_: turn, node
 
+**Workflow Loop**: A group of Workflow Steps that repeats until a check selects an exit, subject to a maximum number of tries. The first pass counts as a try; nested loops have separate limits.
+_Avoid_: retry, loop step
+
 ### Human interaction
 
 **Attachment**: A file added to a message, stored with its Presentation Transcript and carried into Conversation Context. Only images are supported today; output markdown images are distinct.

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { validSecretName } from '../protocol/secrets.ts';
 import { Decisions } from './decisions.ts';
+import { analyzeLoops, type WorkflowLoop } from './loops.ts';
 import type { InputReference, Json, VisualSchema, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
 import { dictionaryKey, dictionaryRecord, declaredOutputSchema, partialSchema, schemaAssignable, schemaAt, unionSchema, validateSchema, valueAt, visualSchemaValidator } from './schema.ts';
 
@@ -8,9 +9,10 @@ const reference = z.discriminatedUnion('source', [
   z.object({ source: z.literal('input'), path: z.array(z.string()) }).strict(),
   z.object({ source: z.literal('step'), stepId: z.string(), path: z.array(z.string()) }).strict(),
 ]);
+const mapping = z.discriminatedUnion('kind', [z.object({ kind: z.literal('reference'), reference }).strict(), z.object({ kind: z.literal('object'), fields: dictionaryRecord(reference) }).strict()]);
 const base = {
   id: dictionaryKey.min(1), name: dictionaryKey.min(1), inputSchema: visualSchemaValidator.optional(),
-  mapping: z.discriminatedUnion('kind', [z.object({ kind: z.literal('reference'), reference }).strict(), z.object({ kind: z.literal('object'), fields: dictionaryRecord(reference) }).strict()]).optional(),
+  mapping: mapping.optional(), repeatMapping: mapping.optional(),
   permission: z.enum(['ask', 'auto-accept']).optional(), timeoutMs: z.number().int().positive().max(2147483647).optional(),
   secrets: dictionaryRecord(z.string().refine(validSecretName, 'Invalid secret reference')).optional(), position: z.object({ x: z.number(), y: z.number() }).strict().optional(),
 };
@@ -29,6 +31,7 @@ export const workflowDefinitionValidator = z.object({
     z.object({ ...base, kind: z.literal('branch'), condition }).strict(),
     z.object({ ...base, kind: z.literal('join') }).strict(),
   ])).min(1),
+  loopSettings: dictionaryRecord(z.object({ maxTries: z.number().int().min(1).max(100) }).strict()).optional(),
   edges: z.array(z.object({ id: z.string().min(1), from: z.string(), to: z.string(), outcome: z.enum(['success', 'failure', 'timeout', 'true', 'false']) }).strict()),
 }).strict();
 
@@ -39,6 +42,10 @@ export interface WorkflowGraph {
   outgoing: Map<string, WorkflowEdge[]>;
   outputSchemas: Map<string, VisualSchema>;
   inputSchemas: Map<string, VisualSchema>;
+  firstInputSchemas: Map<string, VisualSchema>;
+  repeatInputSchemas: Map<string, VisualSchema>;
+  loops: (WorkflowLoop & { maxTries: number })[];
+  forwardIncoming: Map<string, WorkflowEdge[]>;
 }
 
 export function validateDefinition(value: unknown): WorkflowGraph {
@@ -60,13 +67,14 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     incoming.get(edge.to)!.push(edge);
     outgoing.get(edge.from)!.push(edge);
   }
-  const order: WorkflowStep[] = [];
-  const remaining = new Set(steps.keys());
-  while (remaining.size) {
-    const ready = [...remaining].filter(id => incoming.get(id)!.every(edge => !remaining.has(edge.from)));
-    if (!ready.length) throw new Error('Workflow must be a DAG');
-    for (const id of ready) { order.push(steps.get(id)!); remaining.delete(id); }
-  }
+  const topology = analyzeLoops(definition);
+  const loops = topology.loops.map(loop => ({ ...loop, maxTries: definition.loopSettings?.[loop.headerId]?.maxTries ?? 3 }));
+  const headers = new Map(loops.map(loop => [loop.headerId, loop]));
+  for (const id of Object.keys(definition.loopSettings ?? {})) if (!headers.has(id)) throw new Error('Loop settings require a loop header');
+  for (const step of steps.values()) if (step.repeatMapping && !headers.has(step.id)) throw new Error('Repeat mapping requires a loop header');
+  const backIds = new Set(loops.flatMap(loop => loop.backEdgeIds));
+  const forwardIncoming = new Map([...incoming].map(([id, edges]) => [id, edges.filter(edge => !backIds.has(edge.id))]));
+  const order = topology.order.map(id => steps.get(id)!);
   const decisions = new Decisions();
   const completed = new Map<string, number>();
   const recovery = new Map<string, number>();
@@ -76,12 +84,19 @@ export function validateDefinition(value: unknown): WorkflowGraph {
   const ancestors = new Map<string, Set<string>>();
   const outputSchemas = new Map<string, VisualSchema>();
   const inputSchemas = new Map<string, VisualSchema>();
-  const graph = { definition, order, incoming, outgoing, outputSchemas, inputSchemas };
+  const firstInputSchemas = new Map<string, VisualSchema>();
+  const repeatInputSchemas = new Map<string, VisualSchema>();
+  const reaches = new Map<string, number>();
+  const graph = { definition, order, incoming, outgoing, forwardIncoming, loops, outputSchemas, inputSchemas, firstInputSchemas, repeatInputSchemas };
   for (const step of order) {
-    const edges = incoming.get(step.id)!;
+    const edges = forwardIncoming.get(step.id)!;
     const blockedHere = any(edges.map(edge => blockedEdges.get(edge.id)!));
     const reach = decisions.and(edges.length ? any(edges.map(edge => selectedEdges.get(edge.id)!)) : 1, decisions.not(blockedHere));
-    const recovering = any(edges.map(edge => decisions.and(selectedEdges.get(edge.id)!, edge.outcome === 'failure' || edge.outcome === 'timeout' ? 1 : recovery.get(edge.from)!)));
+    const recovering = decisions.or(
+      any(edges.map(edge => decisions.and(selectedEdges.get(edge.id)!, edge.outcome === 'failure' || edge.outcome === 'timeout' ? 1 : recovery.get(edge.from)!))),
+      headers.has(step.id) ? decisions.and(reach, decisions.outcome(order.length + order.indexOf(step), 1)) : 0,
+    );
+    reaches.set(step.id, reach);
     recovery.set(step.id, recovering);
     const variable = order.indexOf(step);
     const failure = decisions.outcome(variable, 1);
@@ -100,21 +115,47 @@ export function validateDefinition(value: unknown): WorkflowGraph {
       blockedEdges.set(edge.id, decisions.or(blockedHere, isRecovery ? 0 : decisions.and(reach, unhandled)));
     }
     ancestors.set(step.id, new Set(edges.flatMap(edge => [edge.from, ...ancestors.get(edge.from)!])));
+  }
+  for (const loop of loops) {
+    const repeat = any(loop.backEdgeIds.map(id => selectedEdges.get(id)!));
+    const terminals = loop.memberIds.map(id => {
+      const connected = any(outgoing.get(id)!.map(edge => selectedEdges.get(edge.id)!));
+      return decisions.and(completed.get(id)!, decisions.not(connected));
+    });
+    const exit = any([...loop.exitEdgeIds.map(id => selectedEdges.get(id)!), ...terminals]);
+    if (decisions.and(repeat, exit) !== 0) throw new Error(`Loop ${loop.headerId} can select exit and repeat together`);
+  }
+  const resolving = new Set<string>();
+  const outputFor = (id: string): VisualSchema => {
+    const cached = outputSchemas.get(id);
+    if (cached) return cached;
+    const step = steps.get(id)!;
+    const output = declaredOutputSchema(step) ?? step.inputSchema ?? inputFor(id);
+    validateSchema(output);
+    outputSchemas.set(id, output);
+    return output;
+  };
+  const phaseInput = (step: WorkflowStep, repeat: boolean): VisualSchema => {
+    const loop = headers.get(step.id);
+    const edges = repeat ? incoming.get(step.id)!.filter(edge => loop!.backEdgeIds.includes(edge.id)) : forwardIncoming.get(step.id)!;
+    const reach = repeat ? any(edges.map(edge => selectedEdges.get(edge.id)!)) : reaches.get(step.id)!;
+    const available = repeat ? new Set(edges.flatMap(edge => [edge.from, ...ancestors.get(edge.from)!])) : ancestors.get(step.id)!;
+    const mapping = repeat ? step.repeatMapping : step.mapping;
     const referenceSchema = (ref: InputReference) => {
       if (ref.source === 'input') return schemaAt(definition.inputSchema, ref.path);
       const source = steps.get(ref.stepId);
-      if (!source || !ancestors.get(step.id)!.has(ref.stepId)) throw new Error('Mapping must reference an earlier step');
+      if (!source || !available.has(ref.stepId)) throw new Error('Mapping must reference an earlier step');
       if (!decisions.implies(reach, completed.get(source.id)!)) throw new Error(`Output is not guaranteed: ${source.name}`);
-      return schemaAt(outputSchemas.get(source.id)!, ref.path);
+      return schemaAt(outputFor(source.id), ref.path);
     };
-    if (step.kind === 'join' && step.mapping) throw new Error('Joins collect selected incoming outputs without mappings');
+    if (step.kind === 'join' && mapping) throw new Error('Joins collect selected incoming outputs without mappings');
     let input: VisualSchema;
-    if (step.mapping?.kind === 'reference') {
-      const field = referenceSchema(step.mapping.reference);
+    if (mapping?.kind === 'reference') {
+      const field = referenceSchema(mapping.reference);
       if (field.optional) throw new Error('A direct input reference must be required or have a default');
       input = field.schema;
     }
-    else if (step.mapping?.kind === 'object') input = { type: 'object', fields: Object.fromEntries(Object.entries(step.mapping.fields).map(([name, ref]) => {
+    else if (mapping?.kind === 'object') input = { type: 'object', fields: Object.fromEntries(Object.entries(mapping.fields).map(([name, ref]) => {
       const field = referenceSchema(ref);
       return [name, { schema: field.schema, required: !field.optional }];
     })) };
@@ -124,7 +165,7 @@ export function validateDefinition(value: unknown): WorkflowGraph {
       const fields = Object.fromEntries(sources.map(id => {
         const source = steps.get(id)!;
         const connections = edges.filter(edge => edge.from === id);
-        const schema = unionSchema(connections.map(edge => edge.outcome === 'failure' || edge.outcome === 'timeout' ? recoverySchema(inputSchemas.get(id)!, outputSchemas.get(id)!) : outputSchemas.get(id)!));
+        const schema = unionSchema(connections.map(edge => edge.outcome === 'failure' || edge.outcome === 'timeout' ? recoverySchema(steps.get(id)!.inputSchema ?? inputFor(id), outputFor(id)) : outputFor(id)));
         return [source.name, { schema, required: decisions.implies(reach, any(connections.map(edge => selectedEdges.get(edge.id)!))) }];
       }));
       const collected: VisualSchema = { type: 'object', fields };
@@ -137,15 +178,34 @@ export function validateDefinition(value: unknown): WorkflowGraph {
       validateSchema(step.inputSchema);
       if (!schemaAssignable(input, step.inputSchema)) throw new Error('Input does not match the declared input schema');
     }
-    inputSchemas.set(step.id, step.inputSchema ?? input);
+    return step.inputSchema ?? input;
+  };
+  const inputFor = (id: string): VisualSchema => {
+    const cached = inputSchemas.get(id);
+    if (cached) return cached;
+    if (resolving.has(id)) throw new Error(`Cyclic input schema at ${id}; declare a loop header inputSchema`);
+    resolving.add(id);
+    const step = steps.get(id)!;
+    const first = phaseInput(step, false);
+    firstInputSchemas.set(id, first);
+    let input = first;
+    if (headers.has(id)) {
+      const repeat = phaseInput(step, true);
+      repeatInputSchemas.set(id, repeat);
+      input = unionSchema([first, repeat]);
+    }
+    inputSchemas.set(id, input);
+    resolving.delete(id);
+    return input;
+  };
+  for (const step of order) {
+    const input = inputFor(step.id);
     if (step.kind === 'branch') {
       const field = schemaAt(step.inputSchema ?? input, step.condition.path);
       const expected = step.condition.operator === 'truthy' ? 'boolean' : ['greater-than', 'less-than'].includes(step.condition.operator) ? 'number' : undefined;
       if (expected && (field.optional || !schemaAssignable(field.schema, { type: expected }))) throw new Error(`Branch condition requires a required ${expected}`);
     }
-    const output = declaredOutputSchema(step) ?? step.inputSchema ?? input;
-    validateSchema(output);
-    outputSchemas.set(step.id, output);
+    outputFor(step.id);
   }
   return graph;
 }

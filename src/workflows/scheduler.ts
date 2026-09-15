@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { Json, StepAttempt, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowPermission, WorkflowStep } from '../protocol/workflows.ts';
+import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
 import { resolveMapping, validateDefinition } from './graph.ts';
 import type { WorkflowGraph } from './graph.ts';
 import { declaredOutputSchema, parseValue, valueAt } from './schema.ts';
@@ -43,6 +44,8 @@ interface ActiveExecution {
   stopped: boolean;
   persistenceError?: unknown;
 }
+
+export class WorkflowLoopConflict extends Error {}
 
 type EdgeState = 'waiting' | 'selected' | 'skipped' | 'blocked';
 const occupied = (record: WorkflowExecution) => record.status === 'running' || record.status === 'recovery-required';
@@ -99,7 +102,7 @@ export class WorkflowScheduler {
       version: 1, id: randomUUID(), sessionId: session.sessionId, scope: session.scope,
       definition: graph.definition, input: parsed, status: 'running', startedAt: Date.now(),
       steps: Object.fromEntries(graph.order.map(step => [step.id, { status: testStep && step.id !== testStep.id ? 'skipped' : 'pending', attempts: [] }])),
-      ...(testStepId === undefined ? {} : { testStepId }),
+      ...(testStepId === undefined ? { loops: Object.fromEntries(graph.loops.map(loop => [loop.headerId, { activation: 0, try: 0, phase: 'inactive', grants: [] }])) } : { testStepId }),
     };
     this.store.saveExecution(record);
     const active = this.install(record);
@@ -154,20 +157,28 @@ export class WorkflowScheduler {
     return structuredClone(active.record);
   }
 
-  recover(session: WorkflowSession, executionId: string, action: { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: unknown } | { kind: 'continue' }): WorkflowExecution {
+  recover(session: WorkflowSession, executionId: string, action: RecoverWorkflow): WorkflowExecution {
     const active = this.require(session.sessionId, executionId);
     const record = active.record;
     if (record.status !== 'recovery-required' || active.running.size) throw new Error('Execution is not ready for recovery');
     if (record.definition.backend !== session.backend || record.scope !== session.scope) throw new Error('Recovery requires the original Scope and Backend Adapter');
     this.check(active.graph.order.filter(step => (!record.testStepId || step.id === record.testStepId) && record.steps[step.id]!.status !== 'completed' && !(action.kind === 'supply' && step.id === action.stepId)), session);
-    if (action.kind !== 'continue') {
+    const limits = Object.entries(record.loops ?? {}).filter(([, loop]) => loop.phase === 'limit');
+    if (action.kind === 'continue' && limits.length) throw new WorkflowLoopConflict('Loop limit requires an extra try or cancellation');
+    if (action.kind === 'extend-loop') {
+      const loop = record.loops?.[action.headerId];
+      if (!loop || loop.phase !== 'limit' || loop.activation !== action.activation || loop.try !== action.try || loop.grants.some(grant => grant.activation === action.activation && grant.try === action.try + 1)) throw new WorkflowLoopConflict('Loop limit decision is no longer available');
+      if (action.guidance !== undefined && (typeof action.guidance !== 'string' || action.guidance.length > 100_000)) throw new Error('Invalid loop guidance');
+      loop.grants.push({ activation: loop.activation, try: loop.try + 1, ...(action.guidance === undefined ? {} : { guidance: action.guidance }) });
+      loop.phase = 'active';
+    } else if (action.kind !== 'continue') {
       const step = active.graph.order.find(step => step.id === action.stepId);
       const state = record.steps[action.stepId];
       if (!step || !state || !['interrupted', 'failed', 'timed-out'].includes(state.status)) throw new Error('Step does not require recovery');
       if (state.status !== 'interrupted' && !record.testStepId && !state.recovery && active.graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) throw new Error('Recover the failed handling step, not the handled failure');
       if (action.kind === 'supply') {
         const output = this.validateOutput(active, step, action.output);
-        const attempt: StepAttempt = { number: state.attempts.length + 1, action: 'supply', startedAt: Date.now(), finishedAt: Date.now(), input: state.attempts.at(-1)!.input, output };
+        const attempt: StepAttempt = { number: state.attempts.length + 1, action: 'supply', startedAt: Date.now(), finishedAt: Date.now(), input: state.attempts.at(-1)!.input, output, ...(state.attempts.at(-1)!.loops ? { loops: structuredClone(state.attempts.at(-1)!.loops) } : {}) };
         state.attempts.push(attempt);
         state.output = output;
         state.status = 'completed';
@@ -177,8 +188,20 @@ export class WorkflowScheduler {
         state.status = 'pending';
         delete state.outcome;
       }
+      if (!record.testStepId) {
+        const affected = new Set([step.id]);
+        for (const downstream of active.graph.order) {
+          const next = record.steps[downstream.id]!;
+          if (!['pending', 'blocked', 'skipped'].includes(next.status) || !active.graph.forwardIncoming.get(downstream.id)!.some(edge => affected.has(edge.from))) continue;
+          const exited = active.graph.loops.filter(loop => loop.memberIds.includes(downstream.id)).map(loop => record.loops![loop.headerId]!).filter(loop => loop.phase === 'exited');
+          if (exited.some(loop => loop.try > 0)) continue;
+          for (const loop of exited) loop.phase = 'inactive';
+          affected.add(downstream.id);
+          next.status = 'pending';
+        }
+      }
     } else if (Object.values(record.steps).some(step => ['interrupted', 'failed', 'timed-out'].includes(step.status) && !step.outcome)) throw new Error('Recover interrupted steps first');
-    for (const step of Object.values(record.steps)) if (step.status === 'blocked' || (step.status === 'skipped' && !record.testStepId)) step.status = 'pending';
+    for (const step of Object.values(record.steps)) if (step.status === 'blocked' || (step.status === 'skipped' && !record.testStepId && !active.graph.loops.length)) step.status = 'pending';
     record.status = 'running';
     delete record.finishedAt;
     active.stopped = false;
@@ -211,6 +234,7 @@ export class WorkflowScheduler {
   }
 
   private edgeState(active: ActiveExecution, edge: WorkflowEdge): EdgeState {
+    if (!active.record.testStepId && active.graph.loops.some(loop => loop.exitEdgeIds.includes(edge.id) && active.record.loops?.[loop.headerId]?.phase !== 'exited')) return 'waiting';
     const state = active.record.steps[edge.from]!;
     if (state.status === 'pending' || state.status === 'running') return 'waiting';
     if (state.status === 'skipped' || state.status === 'cancelled') return 'skipped';
@@ -223,18 +247,35 @@ export class WorkflowScheduler {
 
   private pump(active: ActiveExecution): void {
     if (active.stopped || active.record.status !== 'running') return;
+    this.transitionLoops(active);
     for (const step of active.graph.order) {
       const state = active.record.steps[step.id]!;
       if (state.status !== 'pending') continue;
-      const edges = active.record.testStepId ? [] : active.graph.incoming.get(step.id)!;
+      if (active.graph.loops.some(loop => loop.memberIds.includes(step.id) && active.record.loops?.[loop.headerId]?.phase === 'limit')) continue;
+      const header = active.record.loops?.[step.id];
+      const edges = active.record.testStepId || (header && header.phase === 'active' && header.try > 1) ? [] : active.graph.forwardIncoming.get(step.id)!;
       const statuses = edges.map(edge => this.edgeState(active, edge));
       if (statuses.includes('waiting')) continue;
       if (statuses.includes('blocked')) { state.status = 'blocked'; continue; }
       if (edges.length && !statuses.includes('selected')) { state.status = 'skipped'; continue; }
       const selected = edges.filter((_, index) => statuses[index] === 'selected');
-      state.recovery = selected.some(edge => edge.outcome === 'failure' || edge.outcome === 'timeout' || active.record.steps[edge.from]!.recovery);
+      if (!active.record.testStepId) {
+        let limited = false;
+        for (const loop of active.graph.loops) {
+          const runtime = active.record.loops![loop.headerId]!;
+          if (runtime.phase === 'active' && loop.memberIds.includes(step.id) && step.id !== loop.headerId && active.record.steps[loop.headerId]!.status === 'completed' && this.repeatOnly(active, loop, step.id)) {
+            if (!this.reserveTry(active, loop)) limited = true;
+          }
+        }
+        if (limited) continue;
+        if (header?.phase === 'inactive') { header.activation++; header.try = 1; header.phase = 'active'; delete header.headerInput; }
+      }
+      state.recovery = !!header?.headerRecovery || selected.some(edge => edge.outcome === 'failure' || edge.outcome === 'timeout' || active.record.steps[edge.from]!.recovery);
       const controller = new AbortController();
-      state.attempts.push({ number: state.attempts.length + 1, action: state.attempts.length ? 'retry' : 'execute', startedAt: Date.now(), input: this.input(active, step, selected) });
+      const identities = active.graph.loops.filter(loop => !active.record.testStepId && loop.memberIds.includes(step.id)).map(loop => ({ headerId: loop.headerId, activation: active.record.loops![loop.headerId]!.activation, try: active.record.loops![loop.headerId]!.try }));
+      const previous = state.attempts.at(-1);
+      const retry = previous && isDeepStrictEqual(previous.loops ?? [], identities);
+      state.attempts.push({ number: state.attempts.length + 1, action: retry ? 'retry' : 'execute', startedAt: Date.now(), input: retry ? previous.input : header?.headerInput !== undefined ? header.headerInput : this.input(active, step, selected), ...(identities.length ? { loops: identities } : {}) });
       const done = Promise.resolve().then(() => this.execute(active, step, controller)).finally(() => {
         active.running.delete(step.id);
         if (active.stopped) {
@@ -252,17 +293,101 @@ export class WorkflowScheduler {
     }
     this.persist(active);
     if (active.running.size) return;
+    if (this.transitionLoops(active)) { this.persist(active); this.pump(active); return; }
     const states = Object.entries(active.record.steps);
-    const unresolved = states.some(([id, state]) => ['interrupted', 'blocked'].includes(state.status) || ((state.status === 'failed' || state.status === 'timed-out') && (active.record.testStepId || state.recovery || !active.graph.outgoing.get(id)!.some(edge => edge.outcome === state.outcome))));
+    const unresolved = Object.values(active.record.loops ?? {}).some(loop => loop.phase === 'limit') || states.some(([id, state]) => ['pending', 'interrupted', 'blocked'].includes(state.status) || ((state.status === 'failed' || state.status === 'timed-out') && (active.record.testStepId || state.recovery || !active.graph.outgoing.get(id)!.some(edge => edge.outcome === state.outcome))));
     if (unresolved) active.record.status = 'recovery-required';
     else {
       const terminals = active.graph.order.filter(step => active.record.steps[step.id]!.status === 'completed' && (active.record.testStepId || !active.graph.outgoing.get(step.id)!.some(edge => this.edgeState(active, edge) === 'selected')));
       active.record.result = terminals.length === 1 ? active.record.steps[terminals[0]!.id]!.output! : Object.fromEntries(terminals.map(step => [step.name, active.record.steps[step.id]!.output!]));
-      active.record.status = states.some(([, state]) => state.attempts.some(attempt => attempt.error || attempt.action !== 'execute')) ? 'completed-with-recovery' : 'completed';
+      active.record.status = Object.values(active.record.loops ?? {}).some(loop => loop.grants.length) || states.some(([, state]) => state.attempts.some(attempt => attempt.error || attempt.action !== 'execute')) ? 'completed-with-recovery' : 'completed';
       active.record.finishedAt = Date.now();
     }
     this.persist(active);
     this.settle(active);
+  }
+
+  private repeatOnly(active: ActiveExecution, loop: WorkflowGraph['loops'][number], id: string): boolean {
+    const seen = new Set<string>();
+    const pending = [id];
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const step = active.graph.order.find(step => step.id === current)!;
+      const edges = active.graph.outgoing.get(current)!;
+      for (const outcome of step.kind === 'branch' ? ['true', 'false'] : ['success']) {
+        const selected = edges.filter(edge => edge.outcome === outcome);
+        if (!selected.length) return false;
+        for (const edge of selected) {
+          if (loop.backEdgeIds.includes(edge.id)) continue;
+          if (!loop.memberIds.includes(edge.to)) return false;
+          pending.push(edge.to);
+        }
+      }
+    }
+    return true;
+  }
+
+  private reserveTry(active: ActiveExecution, loop: WorkflowGraph['loops'][number]): boolean {
+    const state = active.record.loops![loop.headerId]!;
+    if (state.phase === 'repeating') return true;
+    if (state.try >= loop.maxTries && !state.grants.some(grant => grant.activation === state.activation && grant.try === state.try + 1)) {
+      state.phase = 'limit';
+      return false;
+    }
+    state.try++;
+    state.phase = 'repeating';
+    return true;
+  }
+
+  private transitionLoops(active: ActiveExecution): boolean {
+    if (active.record.testStepId) return false;
+    let changed = false;
+    for (const loop of [...active.graph.loops].reverse()) {
+      const runtime = active.record.loops![loop.headerId]!;
+      if (runtime.phase === 'exited' || runtime.phase === 'limit') continue;
+      if (loop.memberIds.some(id => active.running.has(id) || ['pending', 'running', 'interrupted', 'blocked'].includes(active.record.steps[id]!.status))) continue;
+      if (active.graph.loops.some(child => child.headerId !== loop.headerId && loop.memberIds.includes(child.headerId) && active.record.loops![child.headerId]!.phase !== 'exited')) continue;
+      const failed = loop.memberIds.some(id => {
+        const state = active.record.steps[id]!;
+        return ['failed', 'timed-out'].includes(state.status) && (state.recovery || !active.graph.outgoing.get(id)!.some(edge => edge.outcome === state.outcome));
+      });
+      if (failed) continue;
+      const back = active.graph.definition.edges.filter(edge => loop.backEdgeIds.includes(edge.id) && this.edgeState(active, edge) === 'selected');
+      if (back.length) {
+        if (!this.reserveTry(active, loop)) { changed = true; continue; }
+        const header = active.graph.order.find(step => step.id === loop.headerId)!;
+        const { mapping: _, ...unmapped } = header;
+        const repeated = { ...unmapped, ...(header.repeatMapping ? { mapping: header.repeatMapping } : {}) };
+        const input = this.input(active, repeated, back);
+        runtime.headerInput = structuredClone(parseValue(active.graph.repeatInputSchemas.get(header.id)!, input));
+        runtime.headerRecovery = back.some(edge => edge.outcome === 'failure' || edge.outcome === 'timeout' || active.record.steps[edge.from]!.recovery);
+        runtime.phase = 'active';
+        for (const id of loop.memberIds) {
+          const state = active.record.steps[id]!;
+          state.status = 'pending';
+          delete state.output; delete state.outcome; delete state.recovery;
+        }
+        for (const child of active.graph.loops.filter(child => child.headerId !== loop.headerId && loop.memberIds.includes(child.headerId))) {
+          const state = active.record.loops![child.headerId]!;
+          state.phase = 'inactive'; state.try = 0; delete state.headerInput; delete state.headerRecovery;
+        }
+        changed = true;
+      } else { runtime.phase = 'exited'; changed = true; }
+    }
+    return changed;
+  }
+
+  private guidedStep(active: ActiveExecution, step: WorkflowStep, attempt: StepAttempt): WorkflowStep {
+    const copy = structuredClone(step);
+    if (copy.kind === 'agent') {
+      for (const identity of attempt.loops ?? []) {
+        const grant = active.record.loops![identity.headerId]!.grants.find(grant => grant.activation === identity.activation && grant.try === identity.try);
+        if (grant?.guidance) copy.instructions += '\nExtra try guidance:\n' + grant.guidance;
+      }
+    }
+    return copy;
   }
 
   private settle(active: ActiveExecution): void {
@@ -345,7 +470,7 @@ export class WorkflowScheduler {
             value = condition.operator === 'greater-than' ? actual > condition.value : actual < condition.value;
             break;
         }
-      } else value = await this.executors[step.kind]!.execute({ sessionId: active.record.sessionId, scope: active.record.scope, executionId: active.record.id, step: structuredClone(step), input: structuredClone(attempt.input), inputSchema: active.graph.inputSchemas.get(step.id)!, permission: step.permission ?? active.record.definition.permission ?? 'auto-accept', signal: controller.signal });
+      } else value = await this.executors[step.kind]!.execute({ sessionId: active.record.sessionId, scope: active.record.scope, executionId: active.record.id, step: this.guidedStep(active, step, attempt), input: structuredClone(attempt.input), inputSchema: active.graph.inputSchemas.get(step.id)!, permission: step.permission ?? active.record.definition.permission ?? 'auto-accept', signal: controller.signal });
       if (active.stopped) return;
       if (timedOut) throw new WorkflowStepError('Step timed out', value);
       const output = this.validateOutput(active, step, value);

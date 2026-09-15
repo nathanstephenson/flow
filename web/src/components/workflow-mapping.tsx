@@ -17,6 +17,7 @@ import {
   withMappingField,
   workflowIssue,
 } from "../presentation/workflows.ts";
+import { analyzeLoops } from "../../../src/workflows/loops.ts";
 export function MappingEditor({
   definition,
   step,
@@ -24,7 +25,61 @@ export function MappingEditor({
 }: {
   definition: WorkflowDefinition;
   step: WorkflowStep;
+  onChange: (step: WorkflowStep) => void;
+}) {
+  const [phase, setPhase] = useState<"mapping" | "repeatMapping">("mapping");
+  let header = false;
+  try {
+    header = analyzeLoops(definition).loops.some(
+      (loop) => loop.headerId === step.id,
+    );
+  } catch {
+    header = !!step.repeatMapping;
+  }
+  const selectedPhase = header ? phase : "mapping";
+  return (
+    <div className="grid gap-3">
+      {header && (
+        <Select
+          value={selectedPhase}
+          onValueChange={(value) => value && setPhase(value)}
+        >
+          <SelectTrigger aria-label="Mapping phase">
+            <SelectValue>
+              {selectedPhase === "mapping" ? "First entry" : "Repeat"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="mapping">First entry</SelectItem>
+            <SelectItem value="repeatMapping">Repeat</SelectItem>
+          </SelectContent>
+        </Select>
+      )}
+      <MappingPhaseEditor
+        key={`${step.id}/${selectedPhase}`}
+        definition={definition}
+        step={{ ...step, mapping: step[selectedPhase] }}
+        phase={selectedPhase}
+        onChange={(changed) => {
+          const next = { ...step };
+          if (changed.mapping) next[selectedPhase] = changed.mapping;
+          else delete next[selectedPhase];
+          onChange(next);
+        }}
+      />
+    </div>
+  );
+}
+function MappingPhaseEditor({
+  definition,
+  step,
+  onChange,
+  phase,
+}: {
+  definition: WorkflowDefinition;
+  step: WorkflowStep;
   onChange: (s: WorkflowStep) => void;
+  phase: "mapping" | "repeatMapping";
 }) {
   const [sourceIndex, setSourceIndex] = useState(0);
   let error = "";
@@ -34,6 +89,7 @@ export function MappingEditor({
       definition,
       step.id,
       step.mapping?.kind ?? "reference",
+      phase,
     );
   } catch (e) {
     error = workflowIssue(e);

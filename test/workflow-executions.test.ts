@@ -42,6 +42,45 @@ async function fixture() {
   return { root, store, workflows, secrets, config, backend, host, service, id, request, base, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
+it('accepts bounded extra-try guidance through HTTP and sends it to each owned Agent without changing the definition', async () => {
+  const f = await fixture();
+  try {
+    const agent = { ...definition.steps[0]!, outputSchema: { type: 'number' as const } };
+    const graph: WorkflowDefinition = {
+      ...definition, loopSettings: { head: { maxTries: 1 } },
+      steps: [{ id: 'root', name: 'Root', kind: 'join' }, { ...agent, id: 'head', name: 'Head' }, { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'greater-than', path: [], value: 0 } }, { ...agent, id: 'worker', name: 'Worker' }],
+      edges: [{ id: 'entry', from: 'root', to: 'head', outcome: 'success' }, { id: 'check', from: 'head', to: 'check', outcome: 'success' }, { id: 'correct', from: 'check', to: 'worker', outcome: 'true' }, { id: 'back', from: 'worker', to: 'head', outcome: 'success' }],
+    };
+    const started = await f.service.start(f.id, graph, {});
+    const path = `${f.base}/${started.execution.id}/recover`;
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const spend = { type: 'spend' as const, spend: { tokens: 10, cached: 0, costUSD: 0.01, models: [] } };
+    f.backend.latest.workflowSubagents[0]!.emit(spend);
+    f.backend.latest.workflowSubagents[0]!.complete(1);
+    const limit = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(limit.status, 'recovery-required');
+    assert.equal(limit.steps.worker!.attempts.length, 0);
+    const grant = { kind: 'extend-loop', headerId: 'head', activation: 1, try: 1, guidance: 'Check the missing case' };
+    for (const guidance of [4, 'x'.repeat(100_001)]) assert.equal((await f.request(path, 'POST', { ...grant, guidance })).status, 400);
+    for (const action of [{ kind: 'continue' }, { ...grant, activation: 2 }, { ...grant, try: 2 }]) assert.equal((await f.request(path, 'POST', action)).status, 409);
+    assert.equal((await f.request(path, 'POST', grant)).status, 200);
+    assert.equal((await f.request(path, 'POST', grant)).status, 409);
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    const worker = f.backend.latest.workflowSubagents[1]!;
+    assert.ok(worker.options.instructions.includes(grant.guidance));
+    worker.emit(spend); worker.complete(1);
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    const head = f.backend.latest.workflowSubagents[2]!;
+    assert.ok(head.options.instructions.includes(grant.guidance));
+    head.emit(spend); head.complete(0);
+    const result = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(result.status, 'completed-with-recovery');
+    assert.deepEqual(result.definition, graph);
+    assert.equal(f.service.view(f.id, started.execution.id).spend?.tokens, 30);
+    assert.equal(f.service.view(f.id, started.execution.id).stepSpend.head?.tokens, 20);
+  } finally { await f.close(); }
+});
+
 for (const stop of ['shutdown', 'dispose'] as const) for (const recovery of [false, true]) {
   it(`refuses ${recovery ? 'recovery' : 'start'} after ${stop} completes during open`, async () => {
     const f = await fixture();

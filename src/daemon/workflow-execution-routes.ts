@@ -36,6 +36,11 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
           case 'cancel': keys(); reply(200, await service.cancel(sessionId, executionId)); break;
           case 'recover': {
             if (body.kind === 'continue') keys('kind');
+            else if (body.kind === 'extend-loop') {
+              keys('kind', 'headerId', 'activation', 'try', 'guidance'); string('headerId');
+              if (![body.activation, body.try].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error();
+              if (body.guidance !== undefined && (typeof body.guidance !== 'string' || body.guidance.length > 100_000)) throw new Error();
+            }
             else if (body.kind === 'retry') { keys('kind', 'stepId'); string('stepId'); }
             else if (body.kind === 'supply') { keys('kind', 'stepId', 'output'); string('stepId'); if (!Object.hasOwn(body, 'output')) throw new Error(); }
             else throw new Error();

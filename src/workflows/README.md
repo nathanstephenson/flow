@@ -72,6 +72,14 @@ Roots run in parallel. Connections select success, failure, timeout, or a boolea
 
 Selected completed nodes with no selected outgoing connection provide the final result. One terminal returns directly; multiple terminals are keyed by name. No End node is used. Successful explicit or manual recovery retains original attempt errors and reports `completed-with-recovery`.
 
+## Workflow Loops in the browser
+
+Cycles automatically form nested groups. There is no loop creation action. Groups use topology analysis even when a mapping or schema needs repair. Max tries defaults to 3, accepts 1–100, and includes the first check. Inner limits reset on each outer try. Branch connections select exits; overlapping and multiple-entry cycles are rejected.
+
+Step positions remain absolute in saved definitions. The browser derives parent-relative positions and converts them back on drag. Groups cannot be selected or deleted as steps. Removing a cycle removes its settings and header repeat mapping. Headers have separate First entry and Repeat mapping controls.
+
+Execution groups show fixed limits and current tries, including extra grants for the current activation. At a limit, Cancel execution or Allow one more try replaces generic Continue. Optional guidance is added to Agent instructions only for that extra try and does not change the saved definition. Recovery submits the current header, activation and try identity. Step attempts show their enclosing loop identities; normal loop work is not a manual retry.
+
 ## Shell and TypeScript executors
 
 `createCodeExecutors` in `executors.ts` supplies the scheduler's `shell` and `typescript` contracts. Configure an absolute `runtimePath`, an absolute Node 22 `nodePath` (not the Flow SEA executable), and explicit sandbox mode. Inject `resolveSecret(reference, signal)` when named secrets are used. Resolution must obey cancellation. The scheduler supplies generated `inputSchema`; direct callers must supply it or TypeScript input is `unknown`. `check` rejects missing files, missing secret resolution, unsupported platforms and unavailable enabled sandboxes before execution is saved. No host or Settings dependency is required. Await `createCodeExecutors(options)` during runtime setup; it returns `Promise<Executors>`. Node and Docker readiness probes run asynchronously in parallel, each with a five-second limit. The factory saves their results, so synchronous `check` calls and setup do not block another Agent Session's execution heartbeats. Recreate it when runtime Settings change. Loss of the runtime after that check fails execution without fallback.
