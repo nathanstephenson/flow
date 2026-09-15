@@ -6,7 +6,10 @@ via a launch URL that immediately sets an HttpOnly cookie and redirects, keeping
 and referrers. Origin is checked strictly and CORS is not enabled. This is stronger than typical
 local dev tooling because tools are pre-approved: an endpoint that accepts a prompt and runs Bash
 without prompting is an arbitrary-code-execution endpoint, reachable by any local process or any web
-page that can resolve to loopback. Remote access is explicitly not supported.
+page that can resolve to loopback. Remote access is not enabled by default. A reverse proxy must
+preserve the browser's Host header; requests from that same origin still require the bearer token
+or Flow cookie. MCP OAuth callbacks are the exception: a five-minute single-use state value
+authorises only completion of a sign-in started by an authenticated request (ADR 0024).
 
 A `--address` flag can bind the socket wider, because a sandboxed or containerised host is often
 reached through a published port that cannot see a loopback-only socket. It is deliberately a flag

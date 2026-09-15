@@ -1,5 +1,4 @@
 import { randomBytes, createHash } from "node:crypto";
-import { createServer } from "node:http";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -19,9 +18,17 @@ type Credentials = {
 export class McpAuth {
   private readonly path: string;
   private values: Record<string, Credentials>;
-  private readonly pending = new Map<string, () => void>();
+  private readonly pending = new Map<string, {
+    connectionId: string;
+    consumed: boolean;
+    provider: OAuthClientProvider;
+    serverUrl: string;
+    returnTo: string;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   dispose(): void {
-    for (const close of this.pending.values()) close();
+    for (const entry of this.pending.values()) clearTimeout(entry.timer);
+    this.pending.clear();
   }
   constructor(root: string) {
     mkdirSync(root, { recursive: true });
@@ -80,33 +87,28 @@ export class McpAuth {
       },
     };
   }
-  async login(connection: McpConnection): Promise<string> {
+  async login(connection: McpConnection, returnUrl: string): Promise<string> {
     if (connection.transport !== "http" || !connection.oauth)
       throw new Error("OAuth is not enabled");
-    if (this.pending.has(connection.id))
+    const destination = new URL(returnUrl);
+    if (
+      !["http:", "https:"].includes(destination.protocol) ||
+      destination.username ||
+      destination.password
+    )
+      throw new Error("Invalid return URL");
+    if (
+      [...this.pending.values()].some((entry) => entry.connectionId === connection.id)
+    )
       throw new Error("Sign-in already in progress");
     const state = randomBytes(32).toString("hex");
-    const server = createServer();
-    const close = () => {
-      clearTimeout(timer);
-      server.close();
-      this.pending.delete(connection.id);
-    };
-    const timer = setTimeout(close, 300_000);
+    const timer = setTimeout(() => this.pending.delete(state), 300_000);
     timer.unref();
-    this.pending.set(connection.id, () => { server.closeAllConnections(); close(); });
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string")
-        throw new Error("No OAuth callback address");
       let authorizationUrl = "";
       const provider = this.provider(
         connection,
-        `http://127.0.0.1:${address.port}/callback`,
+        new URL("/api/mcp/callback", destination.origin).href,
         (url) => {
           authorizationUrl = url.href;
         },
@@ -124,48 +126,45 @@ export class McpAuth {
       };
       provider.clientInformation = () => client;
       provider.tokens = () => undefined;
-      let consumed = false;
-      server.on("request", (request, response) => {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        if (
-          consumed ||
-          url.pathname !== "/callback" ||
-          url.searchParams.get("state") !== state
-        ) {
-          response.writeHead(400).end("Invalid callback");
-          return;
-        }
-        consumed = true;
-        const code = url.searchParams.get("code");
-        if (!code) {
-          response.writeHead(400).end("Sign-in refused");
-          close();
-          return;
-        }
-        void auth(provider, {
-          serverUrl: connection.url,
-          authorizationCode: code,
-          fetchFn: timedFetch,
-        })
-          .then(
-            () => {
-              response.end("Signed in. Return to Flow and select Retry.");
-            },
-            () => {
-              response
-                .writeHead(400)
-                .end("Sign-in failed. Return to Flow and try again.");
-            },
-          )
-          .finally(close);
+      this.pending.set(state, {
+        connectionId: connection.id,
+        consumed: false,
+        provider,
+        serverUrl: connection.url,
+        returnTo: destination.href,
+        timer,
       });
       await auth(provider, { serverUrl: connection.url, fetchFn: timedFetch });
       if (!authorizationUrl) throw new Error("No authorization URL");
       return authorizationUrl;
     } catch (error) {
-      close();
+      clearTimeout(timer);
+      this.pending.delete(state);
       throw error;
     }
+  }
+  async callback(url: URL): Promise<string> {
+    const state = url.searchParams.get("state") ?? "";
+    const entry = this.pending.get(state);
+    if (!entry || entry.consumed) throw new Error("Invalid or expired callback");
+    entry.consumed = true;
+    clearTimeout(entry.timer);
+    const destination = new URL(entry.returnTo);
+    const code = url.searchParams.get("code");
+    let result = "failed";
+    if (code && !url.searchParams.has("error")) {
+      try {
+        const status = await auth(entry.provider, {
+          serverUrl: entry.serverUrl,
+          authorizationCode: code,
+          fetchFn: timedFetch,
+        });
+        if (status === "AUTHORIZED") result = "signed-in";
+      } catch {}
+    }
+    this.pending.delete(state);
+    destination.searchParams.set("mcpAuth", result);
+    return destination.href;
   }
 }
 export const timedFetch: typeof fetch = (input, init) =>
