@@ -107,14 +107,16 @@ export function GitPane({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm">
-      <div role="tablist" aria-label="Git views" className="flex gap-2" onKeyDown={event => {
+      <div className="border-b pb-4">
+      <div role="tablist" aria-label="Git views" className="mx-auto flex w-fit gap-1 rounded-lg border border-border/60 bg-muted p-1" onKeyDown={event => {
         if (busy || review !== undefined || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
         const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (tabs.indexOf(selected) + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
         setTab(tabs[index]);
         event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
       }}>
-        {tabs.map(value => <Button key={value} role="tab" aria-selected={selected === value} aria-controls={`git-${sessionId}-${value}`} id={`git-${sessionId}-${value}-tab`} tabIndex={selected === value ? 0 : -1} size="sm" variant={selected === value ? "secondary" : "ghost"} disabled={busy || review !== undefined} onClick={() => setTab(value)}>{value}</Button>)}
+        {tabs.map(value => <Button key={value} role="tab" aria-selected={selected === value} aria-controls={`git-${sessionId}-${value}`} id={`git-${sessionId}-${value}-tab`} tabIndex={selected === value ? 0 : -1} size="sm" variant="ghost" className="h-7 min-w-14 rounded-md px-3 text-xs font-medium text-muted-foreground hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm" disabled={busy || review !== undefined} onClick={() => setTab(value)}>{value}</Button>)}
+      </div>
       </div>
       {error ? <p role="alert">{error}</p> : null}
       <div role="tabpanel" id={`git-${sessionId}-Diff`} aria-labelledby={`git-${sessionId}-Diff-tab`} hidden={selected !== "Diff"} className="space-y-4">

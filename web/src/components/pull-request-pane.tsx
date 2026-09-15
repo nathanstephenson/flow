@@ -41,7 +41,7 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
     if (!state.value || pullRequestKey(input.pr) !== pullRequestKey(state.value)) return;
     void loader.current?.write(() => connection.command<void>({ type: "resolve_pull_request_thread", sessionId, input }), input.resolved ? "Thread resolved." : "Thread reopened.", () => {}, (value) => Boolean(value && pullRequestKey(value) === pullRequestKey(input.pr)));
   }
-  return <section aria-label="Pull request" className="min-w-0 space-y-4 border-t pt-4">
+  return <section aria-label="Pull request" className="min-w-0 space-y-4">
     <div className="flex items-center justify-between gap-2"><h2 className="font-semibold">Pull request</h2><Button size="sm" variant="outline" disabled={state.busy} onClick={() => void loader.current?.refresh()} aria-label="Refresh pull request">{state.busy ? "Refreshing…" : "Refresh"}</Button></div>
     {state.error ? <p role="alert">{state.value ? "Showing the last loaded pull request. " : ""}{state.error}</p> : null}
     {state.success ? <p role="status">{state.success}</p> : null}
