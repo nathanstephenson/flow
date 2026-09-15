@@ -159,7 +159,7 @@ async function handle(
   }
 
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
-  if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets)) return;
+  if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets, options.workflowExecutions)) return;
 
   const mcpRoute = /^\/api\/sessions\/([^/]+)\/mcp(?:\/([^/]+)\/retry)?$/.exec(url.pathname);
   if (mcpRoute) {

@@ -88,7 +88,7 @@ function MappingPhaseEditor({
     choices = mappingChoices(
       definition,
       step.id,
-      step.mapping?.kind ?? "reference",
+      step.mapping?.kind === "object" ? "object" : "reference",
       phase,
     );
   } catch (e) {

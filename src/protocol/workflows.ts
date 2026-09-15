@@ -2,7 +2,13 @@ import type { EffortLevel } from './events.ts';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
+export type JsonSchema = boolean | { [key: string]: Json };
+export type ArgumentTemplate = { kind: 'literal'; value: Json } | { kind: 'reference'; reference: InputReference } | { kind: 'object'; fields: Record<string, ArgumentTemplate> } | { kind: 'array'; items: ArgumentTemplate[] };
+export interface McpToolSnapshot { connectionId: string; connectionName: string; identity: string; serverIdentity: string; toolName: string; inputSchema: JsonSchema; outputSchema?: JsonSchema }
+
 export type VisualSchema =
+  | { type: 'null' }
+  | { type: 'json'; schema?: JsonSchema }
   | { type: 'string' }
   | { type: 'number'; integer?: boolean }
   | { type: 'boolean' }
@@ -18,7 +24,7 @@ export interface SchemaField {
 }
 
 export type InputReference = { source: 'input'; path: string[] } | { source: 'step'; stepId: string; path: string[] };
-export type InputMapping = { kind: 'reference'; reference: InputReference } | { kind: 'object'; fields: Record<string, InputReference> };
+export type InputMapping = { kind: 'template'; template: ArgumentTemplate } | { kind: 'reference'; reference: InputReference } | { kind: 'object'; fields: Record<string, InputReference> };
 export type WorkflowPermission = 'ask' | 'auto-accept';
 export type WorkflowOutcome = 'success' | 'failure' | 'timeout' | 'true' | 'false';
 
@@ -40,6 +46,7 @@ export type WorkflowStep = StepBase & (
   | { kind: 'typescript'; code: string; outputSchema: VisualSchema }
   | { kind: 'branch'; condition: BranchCondition }
   | { kind: 'join' }
+  | { kind: 'mcp'; tool: McpToolSnapshot }
 );
 
 export type BranchCondition =

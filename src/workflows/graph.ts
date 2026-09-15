@@ -1,15 +1,23 @@
+import { compileJsonSchema } from './json-schema.ts';
 import { z } from 'zod';
 import { validSecretName } from '../protocol/secrets.ts';
 import { Decisions } from './decisions.ts';
 import { analyzeLoops, type WorkflowLoop } from './loops.ts';
-import type { InputReference, Json, VisualSchema, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
+import type { ArgumentTemplate, InputReference, Json, VisualSchema, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
 import { dictionaryKey, dictionaryRecord, declaredOutputSchema, partialSchema, schemaAssignable, schemaAt, unionSchema, validateSchema, valueAt, visualSchemaValidator } from './schema.ts';
 
 const reference = z.discriminatedUnion('source', [
   z.object({ source: z.literal('input'), path: z.array(z.string()) }).strict(),
   z.object({ source: z.literal('step'), stepId: z.string(), path: z.array(z.string()) }).strict(),
 ]);
-const mapping = z.discriminatedUnion('kind', [z.object({ kind: z.literal('reference'), reference }).strict(), z.object({ kind: z.literal('object'), fields: dictionaryRecord(reference) }).strict()]);
+const template: z.ZodType<ArgumentTemplate> = z.lazy(() => z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('literal'), value: z.json() }).strict(),
+  z.object({ kind: z.literal('reference'), reference }).strict(),
+  z.object({ kind: z.literal('object'), fields: dictionaryRecord(template) }).strict(),
+  z.object({ kind: z.literal('array'), items: z.array(template) }).strict(),
+]));
+const originalSchema = z.union([z.boolean(), z.record(z.string(), z.json())]);
+const mapping = z.discriminatedUnion('kind', [z.object({ kind: z.literal('template'), template }).strict(), z.object({ kind: z.literal('reference'), reference }).strict(), z.object({ kind: z.literal('object'), fields: dictionaryRecord(reference) }).strict()]);
 const base = {
   id: dictionaryKey.min(1), name: dictionaryKey.min(1), inputSchema: visualSchemaValidator.optional(),
   mapping: mapping.optional(), repeatMapping: mapping.optional(),
@@ -30,6 +38,7 @@ export const workflowDefinitionValidator = z.object({
     z.object({ ...base, kind: z.literal('typescript'), code: z.string(), outputSchema: visualSchemaValidator }).strict(),
     z.object({ ...base, kind: z.literal('branch'), condition }).strict(),
     z.object({ ...base, kind: z.literal('join') }).strict(),
+    z.object({ ...base, kind: z.literal('mcp'), tool: z.object({ connectionId: z.string().min(1), connectionName: z.string(), identity: z.string().regex(/^[a-f0-9]{64}$/), serverIdentity: z.string().regex(/^[a-f0-9]{64}$/), toolName: z.string().min(1), inputSchema: originalSchema, outputSchema: originalSchema.optional() }).strict() }).strict(),
   ])).min(1),
   loopSettings: dictionaryRecord(z.object({ maxTries: z.number().int().min(1).max(100) }).strict()).optional(),
   edges: z.array(z.object({ id: z.string().min(1), from: z.string(), to: z.string(), outcome: z.enum(['success', 'failure', 'timeout', 'true', 'false']) }).strict()),
@@ -150,7 +159,15 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     };
     if (step.kind === 'join' && mapping) throw new Error('Joins collect selected incoming outputs without mappings');
     let input: VisualSchema;
-    if (mapping?.kind === 'reference') {
+    if (mapping?.kind === 'template') {
+      const inspect = (node: ArgumentTemplate): void => {
+        if (node.kind === 'reference') referenceSchema(node.reference);
+        if (node.kind === 'object') Object.values(node.fields).forEach(inspect);
+        if (node.kind === 'array') node.items.forEach(inspect);
+      };
+      inspect(mapping.template); input = { type: 'json' };
+    }
+    else if (mapping?.kind === 'reference') {
       const field = referenceSchema(mapping.reference);
       if (field.optional) throw new Error('A direct input reference must be required or have a default');
       input = field.schema;
@@ -199,6 +216,7 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     return input;
   };
   for (const step of order) {
+    if (step.kind === 'mcp') { compileJsonSchema(step.tool.inputSchema); if (step.tool.outputSchema !== undefined) compileJsonSchema(step.tool.outputSchema); }
     const input = inputFor(step.id);
     if (step.kind === 'branch') {
       const field = schemaAt(step.inputSchema ?? input, step.condition.path);
@@ -220,6 +238,15 @@ export function recoverySchema(input: VisualSchema, output: VisualSchema): Visua
 
 export function resolveMapping(execution: WorkflowExecution, step: WorkflowStep): Json | undefined {
   const get = (ref: InputReference) => valueAt(ref.source === 'input' ? execution.input : execution.steps[ref.stepId]!.output!, ref.path);
+  if (step.mapping?.kind === 'template') {
+    const resolve = (node: ArgumentTemplate): Json => {
+      if (node.kind === 'literal') return node.value;
+      if (node.kind === 'reference') { const value = get(node.reference); if (value === undefined) throw new Error('Mapped MCP argument is missing'); return value; }
+      if (node.kind === 'array') return node.items.map(resolve);
+      return Object.fromEntries(Object.entries(node.fields).map(([key, value]) => [key, resolve(value)]));
+    };
+    return resolve(step.mapping.template);
+  }
   if (step.mapping?.kind === 'reference') return get(step.mapping.reference);
   if (step.mapping?.kind === 'object') return Object.fromEntries(Object.entries(step.mapping.fields).flatMap(([name, ref]) => {
     const value = get(ref);

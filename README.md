@@ -451,3 +451,38 @@ Sources under `src/`, `test/` and `web/src/presentation/` are run through Node's
 properties, enums, or namespaces. Relative imports carry the `.ts` extension and are rewritten on
 build. The rest of `web/` is Vite's and free of that constraint — but `src/client/**` is not,
 however browser-facing it becomes, because the TUI still runs it stripped.
+
+### Direct MCP Workflow Steps
+
+In **Settings → Workflows**, choose **Add MCP**, select an Agent Session and one of its enabled
+MCP servers, then **Discover tools**. Select the original tool name and compose its arguments using
+literals and available workflow-input/predecessor references. The editor provides JSON Schema
+fields, local references, alternatives, conditional/dependent fields, arrays/tuples and additional
+properties, with the original constraints available for inspection. Validation uses the original
+schema, not a reduced visual approximation. Unknown dialects, formats or validation keywords fail
+explicitly; no constraint is silently discarded. Supported dialects are draft-07, 2019-09 and
+2020-12 (the MCP default).
+
+Direct steps support both stdio and Streamable HTTP, including existing OAuth sign-in. They make
+no model call, create no Subagent and add no model tokens. Code-runtime sandbox settings do not
+apply: a stdio server runs as the host user, and HTTP calls use the configured remote service.
+Credentials belong in MCP Settings, never in workflow arguments. Expired/missing authentication
+requires signing in there and a manual Retry; executions never launch a login flow or replay an
+HTTP tool request after a 401.
+
+The result is always `{ structuredContent: JSON | null, content: MCPContentBlock[] }`. Absent
+structured content becomes null; text is not parsed as JSON, and links are not downloaded.
+Map `structuredContent` (or its fields) into an Agent's input to review it directly. Successful
+empty/not-found data stays successful and can drive a Branch. Tool errors retain bounded,
+credential-redacted partial output. Results exceeding **100,000 UTF-8 bytes** fail without truncation.
+
+Each execution pins connection configuration, server identity and original input/output schemas.
+Changing the definition or reconfiguring a server never retargets an existing execution. Discovery
+and each attempt revalidate these identities. Missing, disabled, changed or unauthenticated tools
+require explicit reconfiguration rather than a fallback.
+
+Ask mode prompts privately before **every call**, including single-step tests; auto-accept does not
+prompt. The timeout defaults to **60 seconds**, configurable on the step. Existing failure/timeout
+edges, loops, joins, Retry and Supply output work as for other steps. **Cancellation is not rollback:**
+interrupted or timed-out writes may already have happened. Inspect the remote state before retrying.
+See [the direct MCP execution decision](docs/adr/0025-direct-mcp-workflow-steps.md).

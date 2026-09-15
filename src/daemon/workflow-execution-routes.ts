@@ -8,13 +8,15 @@ import { workflowRequestError } from './workflow-routes.ts';
 
 export async function workflowExecutionRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, service?: WorkflowExecutionService, store?: WorkflowStore): Promise<boolean> {
   const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflows(?:\/([a-zA-Z0-9_-]+)(?:\/(cancel|recover|enquiry|permission))?)?$/.exec(pathname);
+  const discovery = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflow-mcp(?:\/([a-zA-Z0-9_-]+))?$/.exec(pathname);
   const test = pathname === '/api/workflows/test' && request.method === 'POST';
   const runtime = pathname === '/api/workflow-runtime';
-  if (!match && !test && !runtime) return false;
+  if (!match && !test && !runtime && !discovery) return false;
   const reply = (status: number, body: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(body)); };
   if (!service || !store) { reply(404, { error: 'Workflow execution is unavailable' }); return true; }
   try {
-    if (request.method === 'GET' && runtime) reply(200, service.status());
+    if (request.method === 'GET' && discovery) reply(200, discovery[2] ? await service.discoverMcp(discovery[1]!, discovery[2]) : service.mcpConnections(discovery[1]!));
+    else if (request.method === 'GET' && runtime) reply(200, service.status());
     else if (request.method === 'GET' && match && !match[3]) reply(200, match[2] ? service.view(match[1]!, match[2]) : service.list(match[1]!));
     else if (request.method === 'POST' && !runtime) {
       let size = 0; const chunks: Buffer[] = [];

@@ -1,3 +1,4 @@
+import { credentialKey } from './credential-redaction.ts';
 import { randomBytes, createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -49,6 +50,19 @@ export class McpAuth {
       )
       .digest("hex");
   }
+  credentialValues(): string[] {
+    const values: string[] = [];
+    const visit = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      for (const [key, child] of Object.entries(value)) {
+        if ((credentialKey.test(key) || key === 'id_token' || key === 'registration_access_token') && typeof child === 'string' && child) values.push(child);
+        else if (child && typeof child === 'object') visit(child);
+      }
+    };
+    visit(this.values);
+    return values;
+  }
+
   provider(
     connection: McpConnection,
     redirectUrl = "http://127.0.0.1/",

@@ -8,7 +8,7 @@ export function workflowRequestError(error: unknown): string {
   return error instanceof Error && error.name !== 'ZodError' && error.name !== 'SyntaxError' && error.message ? error.message.split(':')[0]! : 'Invalid workflow request';
 }
 
-export async function workflowRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, workflows?: WorkflowStore, secrets?: SecretStore): Promise<boolean> {
+export async function workflowRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, workflows?: WorkflowStore, secrets?: SecretStore, executions?: import('./workflow-executions.ts').WorkflowExecutionService): Promise<boolean> {
   const match = /^\/api\/(workflows|secrets)(?:\/(.*))?$/.exec(pathname);
   if (!match) return false;
   const reply = (status: number, value: unknown) => {
@@ -57,6 +57,7 @@ export async function workflowRoutes(request: IncomingMessage, response: ServerR
         let definition;
         try {
           definition = validateDefinition(body).definition;
+          executions?.validateDefinitionCredentials(definition);
           if (definition.id !== id) throw new Error();
         } catch (error) { reply(400, { error: workflowRequestError(error) }); return true; }
         workflows!.saveDefinition(definition);

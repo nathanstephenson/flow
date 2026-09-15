@@ -17,6 +17,7 @@ export interface WorkflowEnquiry {
 }
 
 export interface WorkflowPermissionPrompt {
+  direct?: boolean;
   stepId: string;
   subagentId: string;
   callId: string;

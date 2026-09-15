@@ -45,11 +45,12 @@ function ids(directory: string): string[] {
 
 export class WorkflowStore {
   readonly stateRoot: string;
+  redact: <T>(value: T) => T = value => value;
   constructor(stateRoot: string) { this.stateRoot = stateRoot; }
 
   saveDefinition(definition: WorkflowDefinition): void {
     const validated = validateDefinition(definition).definition;
-    atomicWrite(join(this.stateRoot, 'workflows'), validated.id, validated);
+    atomicWrite(join(this.stateRoot, 'workflows'), validated.id, this.redact(validated));
   }
 
   getDefinition(id: string): WorkflowDefinition {
@@ -67,7 +68,7 @@ export class WorkflowStore {
   }
 
   saveExecution(execution: WorkflowExecution): void {
-    atomicWrite(this.historyPath(execution.sessionId), execution.id, execution);
+    atomicWrite(this.historyPath(execution.sessionId), execution.id, this.redact(execution));
   }
 
   getExecution(sessionId: string, id: string): WorkflowExecution {

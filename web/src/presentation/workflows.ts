@@ -32,6 +32,8 @@ export function schemaPaths(
 ): string[][] {
   return [
     path,
+    ...(schema.type === 'json' && typeof schema.schema === 'object' && schema.schema.properties && typeof schema.schema.properties === 'object' && !Array.isArray(schema.schema.properties)
+      ? Object.entries(schema.schema.properties).flatMap(([key, child]) => schemaPaths({ type: 'json', schema: child as import('../../../src/protocol/workflows.ts').JsonSchema }, [...path, key])) : []),
     ...(schema.type === "object"
       ? Object.entries(schema.fields).flatMap(([key, field]) =>
           schemaPaths(field.schema, [...path, key]),
@@ -118,7 +120,9 @@ export function validatedStepInput(
   stepId: string,
   input: Json,
 ): Json {
-  const schema = validateDefinition(definition).inputSchemas.get(stepId);
+  const step = definition.steps.find(step => step.id === stepId);
+  const graph = validateDefinition(definition);
+  const schema: VisualSchema | undefined = step?.kind === "mcp" ? { type: "json", schema: step.tool.inputSchema } : graph.inputSchemas.get(stepId);
   if (!schema) throw new Error("Select a step");
   return parseValue(schema, input);
 }
