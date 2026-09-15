@@ -26,6 +26,7 @@ export type EffortLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh
  */
 export type BackendModels = {
   backend: string;
+  autoCompaction?: Capabilities["autoCompaction"];
   models: ModelInfo[];
   /**
    * Why the list is empty, when it is empty for a reason rather than because there are no models.
@@ -40,6 +41,7 @@ export type BackendModels = {
 
 export type ModelInfo = {
   id: string;
+  contextWindow?: number;
   provider?: string;
   label?: string;
   /**
@@ -112,6 +114,7 @@ export type Capabilities = {
   providers: string[];
   models: ModelInfo[];
   compaction: boolean;
+  autoCompaction?: "startup" | "model-change";
   fork: boolean;
   /**
    * Set when this Backend Adapter reports Subagents. False is not "this backend has no subagents"

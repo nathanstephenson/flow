@@ -6,7 +6,7 @@ import { stackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMe
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
 import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
-import { resolveDefaultBackend } from "../protocol/settings.ts";
+import { resolveDefaultBackend, type ModelAutoCompaction } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
 import {
@@ -236,6 +236,7 @@ export type SessionHostOptions = {
    */
   defaultBackend?: () => string | undefined;
   defaultModel?: (backend: string) => string | undefined;
+  autoCompaction?: (backend: string) => ModelAutoCompaction;
   defaultEffort?: (backend: string) => EffortLevel | undefined;
   /**
    * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
@@ -412,6 +413,7 @@ export class SessionHost {
   private readonly allowTool: ((name: string) => void) | undefined;
   private readonly defaultBackend: (() => string | undefined) | undefined;
   private readonly defaultModel: ((backend: string) => string | undefined) | undefined;
+  private readonly autoCompaction: SessionHostOptions["autoCompaction"];
   private readonly defaultEffort: ((backend: string) => EffortLevel | undefined) | undefined;
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
@@ -428,6 +430,7 @@ export class SessionHost {
     this.allowTool = options.allowTool;
     this.defaultBackend = options.defaultBackend;
     this.defaultModel = options.defaultModel;
+    this.autoCompaction = options.autoCompaction;
     this.defaultEffort = options.defaultEffort;
     this.summaryModel = options.summaryModel;
   }
@@ -1626,6 +1629,7 @@ export class SessionHost {
     const session = await backend.create({
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
+      ...(this.autoCompaction ? { autoCompaction: this.autoCompaction(backend.name) } : {}),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),

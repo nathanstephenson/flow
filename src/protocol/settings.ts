@@ -95,6 +95,7 @@ export type Settings = {
     defaultBackend?: string;
     /** The Default Model per Backend Adapter: the model a new Agent Session starts on. */
     defaults?: Record<string, string>;
+    autoCompaction?: Record<string, ModelAutoCompaction>;
     /** Creation-only main-model effort per Backend Adapter; never used for naming. */
     efforts?: Record<string, EffortLevel>;
     /** Naming stays within the Agent Session's Backend Adapter. Absent means keep the first line. */
@@ -113,6 +114,9 @@ export type Settings = {
     summary?: { backend: string; modelId: string; automatic: boolean };
   };
 };
+
+export type AutoCompaction = { mode: "disabled" } | { mode: "enabled"; targetPercent: number };
+export type ModelAutoCompaction = Record<string, AutoCompaction>;
 
 /**
  * What a client asks to change. Partial at every level, and merged rather than replacing.
@@ -150,6 +154,7 @@ export type SettingsPatch = {
     /** Empty string restores automatic backend selection. */
     defaultBackend?: string;
     defaults?: Record<string, string>;
+    autoCompaction?: Record<string, Record<string, AutoCompaction | null>>;
     /** Merges per backend; an empty string clears its Default Effort. */
     efforts?: Record<string, EffortLevel | "">;
     /** Merges per backend; null clears one summary, including its legacy singleton value. */

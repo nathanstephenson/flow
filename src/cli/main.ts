@@ -173,6 +173,7 @@ async function startHost(
     defaultBackend: config.defaultBackend,
     defaultModel: config.defaultModel,
     defaultEffort: config.defaultEffort,
+    autoCompaction: config.autoCompaction,
     summaryModel: config.summaryModel,
   });
   registerBackends(host);
