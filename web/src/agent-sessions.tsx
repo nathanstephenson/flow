@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type { Command, SessionSummary } from "../../src/protocol/commands.ts";
 import { toast } from "@/components/ui/toaster.tsx";
 import { useHost } from "@/host.tsx";
+import { pruneRetainedWorkflowLaunch } from "@/workflow-launch.ts";
 
 /**
  * The Agent Session list, polled.
@@ -78,6 +79,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
         if (stopped || ticket <= delivered) return;
         delivered = ticket;
         failures = 0;
+        pruneRetainedWorkflowLaunch(new Set(next.map(session => session.id)));
         setSessions(next);
         setLoaded(true);
         schedule(POLL_MS);

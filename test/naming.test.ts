@@ -69,6 +69,13 @@ describe("workflow naming context", () => {
     assert.match(context, /count/);
     assert.doesNotMatch(context, /private-key|private-token|private-auth|private-cookie|private-refresh|private-bearer|apiKey|access_token|authorization|cookie|refresh_token|bearer/);
   });
+
+  it("bounds arbitrarily large validated workflow inputs", () => {
+    const context = workflowNameInput("Large workflow", { value: "x".repeat(20_000) });
+    assert.ok(context.length <= 4_010);
+    assert.match(context, /Large workflow/);
+    assert.match(context, /…/);
+  });
 });
 
 describe("a transcript as something to name", () => {

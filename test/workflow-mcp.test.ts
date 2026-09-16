@@ -74,7 +74,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   const definition: WorkflowDefinition = { version: 1, id: 'mcp', name: 'MCP', backend: 'fake', inputSchema: { type: 'object', fields: { id: { schema: { type: 'string' }, required: true } } }, steps: [{ id: 'fetch', name: 'Fetch', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { [transport === 'http' ? 'id' : 'text']: { kind: 'reference', reference: { source: 'input', path: ['id'] } } } } } }], edges: [] };
   return { listCount: () => lists, advertiseUnsupported: () => { unsupported = true; }, root, requests, connection, auth, workflows, config, backend, host, service, id, tool, definition,
     result(value: Json) { result = value; }, schema(value: JsonSchema) { schema = value; }, version(value: string) { version = value; }, authenticated(value: boolean) { authenticated = value; },
-    async run(def = definition, input: Json = { id: 'LIN-123' }, stepId?: string) { const view = await service.start(id, def, input, stepId); return service.scheduler.wait(id, view.execution.id); },
+    async run(def = definition, input: Json = { id: 'LIN-123' }, stepId?: string) { const view = await service.start({ sessionId: id, definition: def, input, ...(stepId ? { stepId } : {}) }); return service.scheduler.wait(id, view.execution.id); },
     async close() { await host.shutdown(); auth.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); },
   };
 }
@@ -109,7 +109,7 @@ test('MCP structured fields feed an Agent directly; empty/not-found data drives 
   const f = await fixture();
   try {
     const def: WorkflowDefinition = { ...f.definition, steps: [...f.definition.steps, { id: 'agent', name: 'Grill', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'Grill issue', outputSchema: { type: 'string' }, mapping: { kind: 'reference', reference: { source: 'step', stepId: 'fetch', path: ['structuredContent'] } } }], edges: [{ id: 'next', from: 'fetch', to: 'agent', outcome: 'success' }] };
-    const started = await f.service.start(f.id, def, { id: 'LIN-123' });
+    const started = await f.service.start({ sessionId: f.id, definition: def, input: { id: 'LIN-123' } });
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     assert.deepEqual(f.backend.latest.workflowSubagents[0]!.options.input, { id: 'LIN-123', exists: true });
     f.backend.latest.workflowSubagents[0]!.complete('grilled');
@@ -126,7 +126,7 @@ for (const single of [false, true]) test(`ask permission is private and required
   const f = await fixture();
   try {
     const def = { ...f.definition, permission: 'ask' as const };
-    const started = await f.service.start(f.id, def, { id: 'LIN-123' }, single ? 'fetch' : undefined);
+    const started = await f.service.start({ sessionId: f.id, definition: def, input: { id: 'LIN-123' }, ...(single ? { stepId: 'fetch' } : {}) });
     await until(() => f.service.view(f.id, started.execution.id).permissions.length === 1);
     const prompt = f.service.view(f.id, started.execution.id).permissions[0]!;
     assert.equal(prompt.direct, true);
@@ -176,7 +176,7 @@ for (const drift of ['schema', 'server', 'config', 'disabled', 'auth'] as const)
       assert.equal((await f.service.scheduler.wait(f.id, failed.id)).status, 'recovery-required');
     } catch (error) { assert.match(String(error), /MCP/); }
     assert.equal(f.requests.length, 1);
-    await assert.rejects(f.service.start(f.id, f.definition, { id: 'other' }));
+    await assert.rejects(f.service.start({ sessionId: f.id, definition: f.definition, input: { id: 'other' } }));
   } finally { await f.close(); }
 });
 
@@ -192,7 +192,7 @@ test('timeout and cancellation stop owned work, never replay, and leave unrelate
     assert.equal(f.requests.length, 1);
     assert.ok(await parent.tools()[0]!.call({ id: 'parent' }));
     await f.service.cancel(f.id, timedOut.id);
-    const started = await f.service.start(f.id, { ...def, steps: [{ ...def.steps[0]!, timeoutMs: 2000 }] }, { id: 'id' });
+    const started = await f.service.start({ sessionId: f.id, definition: { ...def, steps: [{ ...def.steps[0]!, timeoutMs: 2000 }] }, input: { id: 'id' } });
     await until(() => f.requests.length === 3);
     await f.service.cancel(f.id, started.execution.id);
     assert.equal(f.service.view(f.id, started.execution.id).execution.status, 'cancelled');
@@ -227,7 +227,7 @@ test('credentials are refused in saved arguments, input and supplied output and 
   const f = await fixture();
   try {
     assert.throws(() => f.service.validateDefinitionCredentials({ ...f.definition, name: secret }), /secret/);
-    await assert.rejects(f.service.start(f.id, f.definition, { id: secret }), /secret/);
+    await assert.rejects(f.service.start({ sessionId: f.id, definition: f.definition, input: { id: secret } }), /secret/);
     f.result({ content: [{ type: 'text', text: secret }], structuredContent: { [secret]: secret } });
     const record = await f.run();
     assert.ok(!JSON.stringify(record).includes(secret));

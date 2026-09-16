@@ -5,6 +5,7 @@ import {
   clearRetainedWorkflowLaunch,
   retainWorkflowLaunch,
   retainedWorkflowLaunch,
+  pruneRetainedWorkflowLaunch,
 } from "./workflow-launch.ts";
 
 describe("a workflow launch retained after Agent Session creation", () => {
@@ -22,6 +23,14 @@ describe("a workflow launch retained after Agent Session creation", () => {
       error: "Runtime unavailable",
     });
     assert.equal(retainedWorkflowLaunch("session-b"), undefined);
+  });
+
+  it("prunes launches whose Agent Session disappeared", () => {
+    retainWorkflowLaunch("session-a", { launchId: "launch-a", workflowId: "release", input: {}, error: "failed" });
+    retainWorkflowLaunch("session-b", { launchId: "launch-b", workflowId: "release", input: {}, error: "failed" });
+    pruneRetainedWorkflowLaunch(new Set(["session-b"]));
+    assert.equal(retainedWorkflowLaunch("session-a"), undefined);
+    assert.ok(retainedWorkflowLaunch("session-b"));
   });
 
   it("clears only after retry succeeds", () => {

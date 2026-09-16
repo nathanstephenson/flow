@@ -42,12 +42,14 @@ async function fixture() {
   return { root, store, workflows, secrets, config, backend, host, service, id, request, base, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
-it('deduplicates an ambiguous retained launch by its durable launch id', async () => {
+it('deduplicates concurrent ambiguous launches by their durable launch id', async () => {
   const f = await fixture();
   try {
     const body = { workflowId: definition.id, input: {}, launchId: 'retained-launch', nameSession: true };
-    const first = await f.request(f.base, 'POST', body);
-    const second = await f.request(f.base, 'POST', body);
+    const [first, second] = await Promise.all([
+      f.request(f.base, 'POST', body),
+      f.request(f.base, 'POST', body),
+    ]);
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
     const a = await first.json() as WorkflowExecutionView;
@@ -66,7 +68,7 @@ it('accepts bounded extra-try guidance through HTTP and sends it to each owned A
       steps: [{ id: 'root', name: 'Root', kind: 'join' }, { ...agent, id: 'head', name: 'Head' }, { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'greater-than', path: [], value: 0 } }, { ...agent, id: 'worker', name: 'Worker' }],
       edges: [{ id: 'entry', from: 'root', to: 'head', outcome: 'success' }, { id: 'check', from: 'head', to: 'check', outcome: 'success' }, { id: 'correct', from: 'check', to: 'worker', outcome: 'true' }, { id: 'back', from: 'worker', to: 'head', outcome: 'success' }],
     };
-    const started = await f.service.start(f.id, graph, {});
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
     const path = `${f.base}/${started.execution.id}/recover`;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     const spend = { type: 'spend' as const, spend: { tokens: 10, cached: 0, costUSD: 0.01, models: [] } };
@@ -102,7 +104,7 @@ for (const stop of ['shutdown', 'dispose'] as const) for (const recovery of [fal
     try {
       let executionId = '';
       if (recovery) {
-        const started = await f.service.start(f.id, definition, {});
+        const started = await f.service.start({ sessionId: f.id, definition, input: {} });
         executionId = started.execution.id;
         await until(() => f.backend.latest.workflowSubagents.length === 1);
         f.backend.latest.workflowSubagents[0]!.fail();
@@ -115,7 +117,7 @@ for (const stop of ['shutdown', 'dispose'] as const) for (const recovery of [fal
         return identity;
       };
       if (recovery) await assert.rejects(f.service.recover(f.id, executionId, { kind: 'retry', stepId: 'agent' }), /stopping|owned|ended/);
-      else await assert.rejects(f.service.start(f.id, { ...definition, steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'touch after-shutdown' }] }, {}), /stopping|owned|ended/);
+      else await assert.rejects(f.service.start({ sessionId: f.id, definition: { ...definition, steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'touch after-shutdown' }] }, input: {} }), /stopping|owned|ended/);
       assert.equal(existsSync(join(f.root, 'after-shutdown')), false);
       assert.equal(f.backend.latest.workflowSubagents.length, recovery ? 1 : 0);
     } finally { await f.close(); }
@@ -128,7 +130,7 @@ for (const permission of ['auto-accept', 'ask'] as const) {
     try {
       f.backend.latest.capabilities.permissions = false;
       const graph: WorkflowDefinition = { ...definition, permission: 'auto-accept', steps: [{ ...definition.steps[0]!, ...(permission === 'ask' ? { permission } : {}) }] };
-      const started = await f.service.start(f.id, graph, {});
+      const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
       await until(() => f.backend.latest.workflowSubagents.length === 1);
       const handle = f.backend.latest.workflowSubagents[0]!;
       assert.equal(handle.options.permissionMode, permission);
@@ -154,7 +156,7 @@ it('ignores unrelated secrets and unselected step references', async () => {
   try {
     f.secrets.set('UNUSED', 'a');
     const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'selected', name: 'Sample', kind: 'join' }, { ...definition.steps[0]!, secrets: { token: 'MISSING' } }], edges: [{ id: 'next', from: 'selected', to: 'agent', outcome: 'success' }] };
-    const started = await f.service.start(f.id, graph, {}, 'selected');
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, stepId: 'selected' });
     assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'completed');
     const response = await f.request(f.base, 'POST', { workflowId: definition.id, input: {}, nameSession: true });
     assert.equal(response.status, 200, 'automatic naming is non-blocking when no Summary Model is configured');
@@ -166,7 +168,7 @@ it('rechecks changed named secret values on recovery and keeps references litera
   try {
     f.secrets.set('KEY', 'KEY');
     const graph: WorkflowDefinition = { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] };
-    const started = await f.service.start(f.id, graph, {});
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     f.backend.latest.workflowSubagents[0]!.fail();
     await f.service.scheduler.wait(f.id, started.execution.id);
@@ -207,7 +209,7 @@ it('preserves safe structured partial output from Workflow Step errors', async (
       Object.defineProperty(handle, 'done', { value: Promise.reject(new WorkflowStepError('Missing build manifest: private-partial', { detail: 'private-partial', count: 2 })) });
       return handle;
     };
-    const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, {});
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, input: {} });
     const result = await f.service.scheduler.wait(f.id, started.execution.id);
     const attempt = result.steps.agent!.attempts[0]!;
     assert.equal(attempt.error?.message, 'Missing build manifest: [REDACTED]');
@@ -221,7 +223,7 @@ it('preserves useful TypeScript failures and redacts JSON-escaped secrets', asyn
     f.secrets.set('KEY', 'private-"quote\nline');
     for (const code of ['throw new Error("Missing required build manifest")', 'throw new Error("Build failed: " + JSON.stringify(secrets.token))']) {
       const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'code', name: 'Code', kind: 'typescript', code, secrets: { token: 'KEY' }, outputSchema: { type: 'string' } }] };
-      const started = await f.service.start(f.id, graph, {});
+      const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
       const result = await f.service.scheduler.wait(f.id, started.execution.id);
       const text = JSON.stringify(result);
       assert.ok(text.includes(code.includes('Missing') ? 'Missing required build manifest' : 'Build failed:'));
@@ -314,7 +316,7 @@ it('interrupts on shutdown, recovers a deleted saved definition without replay, 
   const f = await fixture();
   let other: SessionHost | undefined;
   try {
-    const started = await f.service.start(f.id, definition, {});
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'private before restart' });
     await f.host.shutdown();
@@ -352,14 +354,14 @@ it('checks actual Project identity and accepts its owned Worktree, not a path pr
     execFileSync('git', ['-C', f.root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'initial'], { stdio: 'ignore' });
     const id = await f.host.create({ scope: f.root, backend: 'fake', worktree: { from: 'main' } });
     const restricted: WorkflowDefinition = { ...definition, projectId: f.root, steps: [{ id: 'join', name: 'Join', kind: 'join' }] };
-    const started = await f.service.start(id, restricted, {});
+    const started = await f.service.start({ sessionId: id, definition: restricted, input: {} });
     assert.equal((await f.service.scheduler.wait(id, started.execution.id)).status, 'completed');
     mkdirSync(join(f.root, 'child'));
     const child = await f.host.create({ scope: join(f.root, 'child'), backend: 'fake' });
-    await assert.rejects(f.service.start(child, restricted, {}), /another Project/);
+    await assert.rejects(f.service.start({ sessionId: child, definition: restricted, input: {} }), /another Project/);
     const alias = f.root + '-alias'; symlinkSync(f.root, alias);
     try {
-      const aliased = await f.service.start(f.id, { ...restricted, projectId: alias }, {});
+      const aliased = await f.service.start({ sessionId: f.id, definition: { ...restricted, projectId: alias }, input: {} });
       assert.equal((await f.service.scheduler.wait(f.id, aliased.execution.id)).status, 'completed');
     } finally { rmSync(alias); }
   } finally { await f.close(); }
@@ -368,7 +370,7 @@ it('checks actual Project identity and accepts its owned Worktree, not a path pr
 it('keeps auto-accept Enquiries independent, interrupts on backend errors, and rejects Ended launches', async () => {
   const f = await fixture();
   try {
-    const started = await f.service.start(f.id, { ...definition, permission: 'auto-accept' }, {});
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, permission: 'auto-accept' }, input: {} });
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     const handle = f.backend.latest.workflowSubagents[0]!;
     handle.ask([{ header: 'Pick', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }]);
@@ -439,7 +441,7 @@ for (const secret of ['type', 'asked', 'raw', 'question', 'options', 'header', '
     const f = await fixture();
     try {
       f.secrets.set('KEY', secret);
-      const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, {});
+      const started = await f.service.start({ sessionId: f.id, definition: { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'KEY' } }] }, input: {} });
       const executionId = started.execution.id;
       await until(() => f.backend.latest.workflowSubagents.length === 1);
       const handle = f.backend.latest.workflowSubagents[0]!;
@@ -498,7 +500,7 @@ it('persists complete redacted paginated activity across attempts and restart, i
   const f = await fixture();
   try {
     f.secrets.set('TOKEN', 'private-token-value');
-    const started = await f.service.start(f.id, { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'TOKEN' } }] }, {});
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, steps: [{ ...definition.steps[0]!, secrets: { token: 'TOKEN' } }] }, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     const first = f.backend.latest.workflowSubagents[0]!;
@@ -539,7 +541,7 @@ it('persists complete redacted paginated activity across attempts and restart, i
 it('recovers activity sequences when the durable log is ahead of the preview', async () => {
   const f = await fixture();
   try {
-    const started = await f.service.start(f.id, definition, {});
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
@@ -586,7 +588,7 @@ it('provides fresh compact parent context and queues/deduplicates recovery notif
   const f = await fixture();
   try {
     await f.host.send(f.id, 'Keep working', 'now');
-    const started = await f.service.start(f.id, definition, {});
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'transcript-not-context' });
@@ -619,7 +621,7 @@ it('provides fresh compact parent context and queues/deduplicates recovery notif
 it('wakes an idle parent and requires an actual one-shot confirmation for replacement output', async () => {
   const f = await fixture();
   try {
-    const started = await f.service.start(f.id, definition, {});
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     f.backend.latest.workflowSubagents[0]!.fail();
@@ -642,7 +644,7 @@ it('allows only one safe automatic recovery before progress, including after res
   const f = await fixture();
   try {
     const graph: WorkflowDefinition = { ...definition, inputSchema: { type: 'object', fields: { ready: { schema: { type: 'boolean' }, required: true } } }, steps: [{ id: 'check', name: 'Check flag', kind: 'branch', condition: { operator: 'truthy', path: ['ready'] } }], edges: [] };
-    const started = await f.service.start(f.id, graph, { ready: true });
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: { ready: true } });
     const eid = started.execution.id;
     // A retained input-mapping failure: retry must keep the failed attempt's input,
     // not silently substitute a new input or mint another automatic allowance.
@@ -669,7 +671,7 @@ it('allows only one safe automatic recovery before progress, including after res
 it('reports unavailable legacy history honestly while keeping retained events inspectable', async () => {
   const f = await fixture();
   try {
-    const started = await f.service.start(f.id, definition, {});
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'retained legacy activity' });

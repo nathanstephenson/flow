@@ -26,3 +26,7 @@ export function retainedWorkflowLaunch(sessionId: string): RetainedWorkflowLaunc
 export function clearRetainedWorkflowLaunch(sessionId: string): void {
   retained.delete(sessionId);
 }
+
+export function pruneRetainedWorkflowLaunch(sessionIds: ReadonlySet<string>): void {
+  for (const sessionId of retained.keys()) if (!sessionIds.has(sessionId)) retained.delete(sessionId);
+}

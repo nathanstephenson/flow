@@ -40,9 +40,9 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   );
   const base = `/api/sessions/${encodeURIComponent(sessionId)}/workflows`;
   const history = useWorkflowResource<WorkflowExecutionList>(base);
-  // Clone the retained launch once for this render; callers must not repeatedly clone the same
-  // potentially large input merely to decide labels and visibility.
-  const retainedLaunch = retainedWorkflowLaunch(sessionId);
+  // Keep the cloned launch in component state: polling this pane must not clone a potentially
+  // large validated input on every render.
+  const [retainedLaunch, setRetainedLaunch] = useState(() => retainedWorkflowLaunch(sessionId));
   const [workflowId, setWorkflowId] = useState(retainedLaunch?.workflowId ?? "");
   const [input, setInput] = useState<Json>(retainedLaunch?.input ?? {});
   const [executionId, setExecutionId] = useState("");
@@ -70,6 +70,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   );
   useEffect(() => {
     const retained = retainedWorkflowLaunch(sessionId);
+    setRetainedLaunch(retained);
     setWorkflowId(retained?.workflowId ?? "");
     setInput(retained?.input ?? {});
     setExecutionId("");
@@ -109,7 +110,10 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
       if (result.execution) {
         setExecutionId(result.execution.id);
         setCreating(false);
-        if (path === base) clearRetainedWorkflowLaunch(sessionId);
+        if (path === base) {
+          clearRetainedWorkflowLaunch(sessionId);
+          setRetainedLaunch(undefined);
+        }
       }
       setMessage("Request accepted");
     } catch (e) {

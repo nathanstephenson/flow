@@ -117,7 +117,7 @@ export class WorkflowExecutionService {
       for (const record of this.store.listExecutions(sessionId)) {
         const view = this.privateView(sessionId, record.id);
         if (view.spend) this.host.workflowSpend(sessionId, record.id, view.spend);
-        this.publishResult(record);
+        if (!view.completionAnnounced) this.publishResult(record);
       }
     }
   }
@@ -261,7 +261,8 @@ export class WorkflowExecutionService {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
 
-  async start(sessionId: string, definition: WorkflowDefinition, input: Json, stepId?: string, nameSession = false, launchId?: string) {
+  async start(options: { sessionId: string; definition: WorkflowDefinition; input: Json; stepId?: string; nameSession?: boolean; launchId?: string }) {
+    const { sessionId, definition, input, stepId, nameSession = false, launchId } = options;
     if (launchId && !stepId) {
       const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
       if (existing) return this.view(sessionId, existing.id);
@@ -279,7 +280,6 @@ export class WorkflowExecutionService {
       if (!sameProject(definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
       session.projectId = definition.projectId;
     }
-    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
     this.host.assertWorkflowSession(sessionId, session.session);
     const pinned = new Map<string, import('../protocol/workflows.ts').McpToolSnapshot[]>();
     for (const step of definition.steps) {
@@ -290,12 +290,14 @@ export class WorkflowExecutionService {
     }
     for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools);
     this.host.assertWorkflowSession(sessionId, session.session);
-    // Check again after opening the workflow session: an overlapping retry may have completed the
-    // first request while this one awaited session setup.
+    // All setup above may yield. Resolve an overlapping retry by its durable identity before
+    // treating the session as occupied, then make occupancy the final check before the synchronous
+    // scheduler start.
     if (launchId && !stepId) {
       const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
       if (existing) return this.view(sessionId, existing.id);
     }
+    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
     const record = this.scheduler.start(definition, session, input, stepId, launchId);
     this.secretValues.set(record.id, values);
     this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));

@@ -136,11 +136,11 @@ export function workflowNameInput(workflowName: string, input: unknown): string 
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key]) => !credentialKey.test(key) && !/(?:passphrase|credential)/i.test(key))
+        .filter(([key]) => !credentialKey.test(key))
         .map(([key, nested]) => [key, safe(nested)]),
     );
   };
-  return `Workflow: ${workflowName}\nValidated inputs: ${JSON.stringify(safe(input))}`;
+  return boundedNameInput(`Workflow: ${workflowName}\nValidated inputs: ${JSON.stringify(safe(input))}`);
 }
 
 export type SummaryRequest = {
@@ -496,6 +496,12 @@ export function nameFrom(raw: string): string | undefined {
  * What a human said and what the model said back, in order. Tool calls are left out: they are the
  * bulk of a transcript and the least of what it is about.
  */
+function boundedNameInput(whole: string): string {
+  if (whole.length <= MAX_INPUT_LENGTH) return whole;
+  const half = Math.floor(MAX_INPUT_LENGTH / 2);
+  return `${whole.slice(0, half)}\n\n…\n\n${whole.slice(-half)}`;
+}
+
 export function nameInput(entries: LoggedEvent[]): string {
   const lines: string[] = [];
   for (const entry of entries) {
@@ -508,10 +514,7 @@ export function nameInput(entries: LoggedEvent[]): string {
     }
   }
 
-  const whole = lines.join("\n\n");
-  if (whole.length <= MAX_INPUT_LENGTH) return whole;
-  const half = Math.floor(MAX_INPUT_LENGTH / 2);
-  return `${whole.slice(0, half)}\n\n…\n\n${whole.slice(-half)}`;
+  return boundedNameInput(lines.join("\n\n"));
 }
 
 /**

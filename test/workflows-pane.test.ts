@@ -23,7 +23,7 @@ function pane(status: string) {
   const code = transformSync(readFileSync(new URL('../web/src/components/workflows-pane.tsx', import.meta.url), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
   runInNewContext(code, { module, exports: module.exports, require: (name: string) => {
     if (name === 'react') return {
-      useState: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = initial; return [states[slot], (value: any) => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
+      useState: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = typeof initial === 'function' ? initial() : initial; return [states[slot], (value: any) => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
       useEffect: () => {},
     };
     if (name === 'react/jsx-runtime') return require(name);
