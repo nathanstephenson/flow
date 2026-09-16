@@ -18,6 +18,7 @@ import {
   createCommandFor,
   eligibleWorkflows,
   validatedWorkflowInput,
+  validatedWorkflowInputSchema,
 } from "@/presentation/new-agent-session.ts";
 import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { workflowIssue } from "@/presentation/workflows.ts";
@@ -213,6 +214,14 @@ export function NewAgentSessionPage({
   const [workflowId, setWorkflowId] = useState("");
   const [workflowInput, setWorkflowInput] = useState<Json>({});
   const workflow = availableWorkflows.find((definition) => definition.id === workflowId);
+  const workflowValidation = useMemo(() => {
+    if (!workflow) return {};
+    try {
+      return { schema: validatedWorkflowInputSchema(workflow) };
+    } catch (error) {
+      return { issue: workflowIssue(error) };
+    }
+  }, [workflow]);
 
   useEffect(() => {
     if (workflowId && !availableWorkflows.some((definition) => definition.id === workflowId)) {
@@ -223,9 +232,11 @@ export function NewAgentSessionPage({
 
   let validatedInput: Json | undefined;
   let inputIssue = "";
-  if (workflow) {
+  if (workflowValidation.issue) {
+    inputIssue = workflowValidation.issue;
+  } else if (workflowValidation.schema) {
     try {
-      validatedInput = validatedWorkflowInput(workflow, workflowInput);
+      validatedInput = validatedWorkflowInput(workflowValidation.schema, workflowInput);
     } catch (error) {
       inputIssue = workflowIssue(error);
     }

@@ -1,6 +1,6 @@
 import type { Command } from "../../../src/protocol/commands.ts";
 import type { EffortLevel } from "../../../src/protocol/events.ts";
-import type { Json, WorkflowDefinition } from "../../../src/protocol/workflows.ts";
+import type { Json, VisualSchema, WorkflowDefinition } from "../../../src/protocol/workflows.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
 
@@ -41,10 +41,14 @@ export function eligibleWorkflows(
   );
 }
 
-/** Validate both the saved graph and its inputs before creating an Agent Session. */
-export function validatedWorkflowInput(definition: WorkflowDefinition, input: unknown): Json {
-  const validated = validateDefinition(definition).definition;
-  return parseValue(validated.inputSchema, input);
+/** Validate a selected workflow once; callers can then parse each changing input cheaply. */
+export function validatedWorkflowInputSchema(definition: WorkflowDefinition): VisualSchema {
+  return validateDefinition(definition).definition.inputSchema;
+}
+
+/** Parse changing form input against an already-validated selected workflow. */
+export function validatedWorkflowInput(schema: VisualSchema, input: unknown): Json {
+  return parseValue(schema, input);
 }
 
 /**

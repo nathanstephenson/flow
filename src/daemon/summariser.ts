@@ -486,6 +486,12 @@ export function nameFrom(raw: string): string | undefined {
   return name;
 }
 
+function boundedNameInput(whole: string): string {
+  if (whole.length <= MAX_INPUT_LENGTH) return whole;
+  const half = Math.floor(MAX_INPUT_LENGTH / 2);
+  return `${whole.slice(0, half)}\n\n…\n\n${whole.slice(-half)}`;
+}
+
 /**
  * A Presentation Transcript as something to name — what a `rename` reads.
  *
@@ -496,12 +502,6 @@ export function nameFrom(raw: string): string | undefined {
  * What a human said and what the model said back, in order. Tool calls are left out: they are the
  * bulk of a transcript and the least of what it is about.
  */
-function boundedNameInput(whole: string): string {
-  if (whole.length <= MAX_INPUT_LENGTH) return whole;
-  const half = Math.floor(MAX_INPUT_LENGTH / 2);
-  return `${whole.slice(0, half)}\n\n…\n\n${whole.slice(-half)}`;
-}
-
 export function nameInput(entries: LoggedEvent[]): string {
   const lines: string[] = [];
   for (const entry of entries) {

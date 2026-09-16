@@ -6,6 +6,7 @@ import {
   createCommandFor,
   eligibleWorkflows,
   validatedWorkflowInput,
+  validatedWorkflowInputSchema,
   type NewAgentSessionForm,
 } from "./new-agent-session.ts";
 
@@ -71,9 +72,10 @@ describe("workflows offered on the New Agent Session page", () => {
   });
 
   it("validates inputs and applies schema defaults before creation", () => {
-    assert.deepEqual(validatedWorkflowInput(workflow(), { task: "ship" }), { task: "ship", tries: 2 });
-    assert.throws(() => validatedWorkflowInput(workflow(), { task: "ship", tries: 1.5 }), /int/i);
-    assert.throws(() => validatedWorkflowInput(workflow(), {}), /task/i);
+    const schema = validatedWorkflowInputSchema(workflow());
+    assert.deepEqual(validatedWorkflowInput(schema, { task: "ship" }), { task: "ship", tries: 2 });
+    assert.throws(() => validatedWorkflowInput(schema, { task: "ship", tries: 1.5 }), /int/i);
+    assert.throws(() => validatedWorkflowInput(schema, {}), /task/i);
   });
 });
 

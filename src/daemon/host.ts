@@ -1372,12 +1372,16 @@ export class SessionHost {
         ? 'Workflow requires recovery. The parent is inspecting it.'
         : 'Workflow completed. The parent is preparing the result.',
     });
-    try { await record.session.prompt(text); }
-    catch (error) {
+    try {
+      await record.session.prompt(text);
+      return true;
+    } catch (error) {
       record.turnInFlight = false;
       record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
+      // The notification was consumed but no turn began. Keep draining in case another workflow
+      // event is ready; returning false when there is not one lets drain() release the Steering Queue.
+      return this.drainWorkflowNotification(record);
     }
-    return true;
   }
 
   /** Confirmation belongs to this exact action, never a standing grant or model assertion. */
@@ -1615,67 +1619,31 @@ export class SessionHost {
    */
   async nameWorkflow(sessionId: string, workflowName: string, input: unknown): Promise<void> {
     const record = this.sessions.get(sessionId);
-    if (!record || record.titleSource !== "scope") return;
-    const summary = this.summaryModel?.(record.backendName);
-    if (!summary?.automatic) return;
-
-    const generation = (record.titleGeneration += 1);
-    let name: string | undefined;
-    try {
-      name = await this.summarySpare.name(
-        this.backendFor(summary.backend),
-        summary,
-        workflowNameInput(workflowName, input),
-      );
-    } catch {
-      return;
-    }
-    if (name === undefined) return;
-    const current = this.sessions.get(sessionId);
-    if (!current || current !== record || current.lifecycle === "ended" || current.lifecycle === "settled") return;
-    if (current.titleSource !== "scope" || current.titleGeneration !== generation) return;
-    current.title = name;
-    current.titleSource = "summary";
-    this.touch(current);
+    if (record) await this.nameAutomatically(record, workflowNameInput(workflowName, input), "scope");
   }
 
-  /**
-   * The automatic half: a name for the first message, applied if it is still wanted when it lands.
-   *
-   * Swallows everything. A name is a convenience and `firstLine` has already produced a usable one,
-   * so a Summary Model that is missing, slow or talking nonsense costs the better name and nothing
-   * else — least of all the turn the human is waiting on.
-   */
-  private async nameFromSummary(record: SessionRecord, text: string): Promise<void> {
+  /** Generate and apply a convenience title only while the placeholder which requested it remains. */
+  private async nameAutomatically(
+    record: SessionRecord,
+    input: string,
+    expectedSource: "scope" | "first-line",
+  ): Promise<void> {
+    if (record.titleSource !== expectedSource) return;
     const summary = this.summaryModel?.(record.backendName);
-    // `automatic` is the half of the Setting that governs *this* path only. A session whose owner
-    // turned it off keeps the first line of what they typed, and `rename` still works — which is
-    // the whole point of it being a switch rather than clearing the Summary Model.
     if (!summary?.automatic) return;
 
     const generation = (record.titleGeneration += 1);
     let name: string | undefined;
     try {
-      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, text);
+      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input);
     } catch {
-      // An unknown backend named in the Settings, most likely. Silent, as everything on this path is.
       return;
     }
     if (name === undefined) return;
 
-    /*
-     * Looked up again rather than trusted, because ten seconds is long enough for this Agent Session
-     * to have been Ended, Settled or reaped — and writing a title onto a record nobody holds any
-     * more would persist a meta.json for a session that no longer exists.
-     */
     const current = this.sessions.get(record.id);
-    if (!current || current !== record) return;
-    // `lifecycle`, not the derived activity: what disqualifies a session from being renamed is
-    // that it is over, not that it happens to be mid-turn.
-    if (current.lifecycle === "ended" || current.lifecycle === "settled") return;
-    // Only a first-line name yields to this, and only if nothing newer has been asked for since.
-    if (current.titleSource !== "first-line" || current.titleGeneration !== generation) return;
-
+    if (!current || current !== record || current.lifecycle === "ended" || current.lifecycle === "settled") return;
+    if (current.titleSource !== expectedSource || current.titleGeneration !== generation) return;
     current.title = name;
     current.titleSource = "summary";
     this.touch(current);
@@ -2067,7 +2035,7 @@ export class SessionHost {
        * flicker into and out of blank. It can only happen on a first dispatch, so no *established*
        * name ever changes under its reader.
        */
-      void this.nameFromSummary(record, text);
+      void this.nameAutomatically(record, text, "first-line");
     }
     this.touch(record);
     const workflowContext = this.workflowOwner?.context(record.id);
