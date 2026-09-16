@@ -6,7 +6,9 @@ import type { McpTool } from '../backend/mcp.ts';
 import { compileJsonSchema } from '../workflows/json-schema.ts';
 
 export function connectionIdentity(connection: McpConnection): string {
-  const config = connection.transport === 'stdio' ? [connection.id, connection.transport, connection.command, connection.args] : [connection.id, connection.transport, connection.url, connection.oauth];
+  // Headers join the hash only when there are some, so every identity recorded before headers
+  // existed still matches and no saved MCP step needs reconfiguring.
+  const config = connection.transport === 'stdio' ? [connection.id, connection.transport, connection.command, connection.args] : [connection.id, connection.transport, connection.url, connection.oauth, ...(Object.keys(connection.headers).length ? [connection.headers] : [])];
   return createHash('sha256').update(JSON.stringify(config)).digest('hex');
 }
 export function snapshotTool(connection: McpConnection, tool: McpTool): McpToolSnapshot {

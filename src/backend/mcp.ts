@@ -30,16 +30,19 @@ export class McpSession {
   private readonly auth:
     | ((connection: McpConnection) => OAuthClientProvider)
     | undefined;
+  private readonly resolveSecret: ((name: string) => string) | undefined;
   constructor(
     connections: readonly McpConnection[],
     scope: string,
     auth?: (connection: McpConnection) => OAuthClientProvider,
     direct = false,
+    resolveSecret?: (name: string) => string,
   ) {
     this.connections = structuredClone(connections);
     this.scope = scope;
     this.auth = auth;
     this.direct = direct;
+    this.resolveSecret = resolveSecret;
   }
   registrationFailed(): void {
     for (const [id] of this.states) this.states.set(id, { id, state: "failed", tools: 0 });
@@ -70,6 +73,18 @@ export class McpSession {
     this.pending.set(id, promise);
     return promise;
   }
+  private configuredHeaders(
+    headers: Extract<McpConnection, { transport: "http" }>["headers"],
+  ): Record<string, string> {
+    return Object.fromEntries(
+      Object.entries(headers).map(([name, source]) => {
+        if ("value" in source) return [name, source.value];
+        if (!this.resolveSecret)
+          throw new Error(`No secret resolver for header ${name}`);
+        return [name, this.resolveSecret(source.secret)];
+      }),
+    );
+  }
   private async connect(connection: McpConnection): Promise<void> {
     const { id } = connection;
     this.states.set(id, { id, state: "connecting", tools: 0 });
@@ -90,6 +105,15 @@ export class McpSession {
       this.states.set(id, { id, state: 'failed', tools: 0 });
       return;
     }
+    let configured: Record<string, string> = {};
+    if (connection.transport === "http") {
+      try {
+        configured = this.configuredHeaders(connection.headers);
+      } catch {
+        this.states.set(id, { id, state: "failed", tools: 0 });
+        return;
+      }
+    }
     const transport =
       connection.transport === "stdio"
         ? new StdioClientTransport({
@@ -102,14 +126,20 @@ export class McpSession {
             ...(connection.oauth && this.auth && !this.direct
               ? { authProvider: this.auth(connection) }
               : {}),
-            fetch: (input, init) =>
-              fetch(input, {
+            // A Headers object rather than a spread, because header names are case-insensitive: a
+            // configured `Authorization` must lose to the OAuth token, not travel beside it.
+            fetch: (input, init) => {
+              const headers = new Headers(configured);
+              new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+              if (tokens) headers.set("Authorization", `Bearer ${tokens.access_token}`);
+              return fetch(input, {
                 ...init,
-                ...(tokens ? { headers: { ...Object.fromEntries(new Headers(init?.headers).entries()), Authorization: `Bearer ${tokens.access_token}` } } : {}),
+                headers,
                 signal: this.direct ? init?.signal ?? null : init?.signal
                   ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)])
                   : AbortSignal.timeout(10_000),
-              }),
+              });
+            },
           });
     const signal = AbortSignal.timeout(10_000);
     try {

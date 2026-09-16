@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -57,7 +58,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
-  const connection: McpConnection = transport === 'http' ? { id: 'linear', name: 'Linear fixture', enabledByDefault: true, transport: 'http', url: `http://127.0.0.1:${address.port}/mcp`, oauth: true } : { id: 'local', name: 'Local fixture', enabledByDefault: true, transport: 'stdio', command: process.execPath, args: ['--experimental-strip-types', resolve('test/fixtures/mcp-server.ts')] };
+  const connection: McpConnection = transport === 'http' ? { id: 'linear', name: 'Linear fixture', enabledByDefault: true, transport: 'http', url: `http://127.0.0.1:${address.port}/mcp`, oauth: true, headers: {} } : { id: 'local', name: 'Local fixture', enabledByDefault: true, transport: 'stdio', command: process.execPath, args: ['--experimental-strip-types', resolve('test/fixtures/mcp-server.ts')] };
   const auth = new McpAuth(root);
   await auth.provider(connection).saveTokens({ access_token: secret, refresh_token: 'refresh-secret', token_type: 'Bearer' });
   const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
@@ -286,6 +287,11 @@ test('templates preserve literals and nested references, reject unavailable pred
     corrupted.steps.fetch!.output = { structuredContent: null, content: [{ type: 'text', text: 'x'.repeat(100_000) }] };
     assert.deepEqual(parseExecution(corrupted), corrupted);
     assert.notEqual(connectionIdentity(f.connection), connectionIdentity({ ...f.connection, id: 'another' }));
+    // Headers only join the hash once there are some, so identities recorded before headers existed
+    // keep matching; a header change is a reconfiguration and must not.
+    const http = { ...f.connection, transport: 'http' as const, url: 'https://example.test/mcp', oauth: false, headers: {} };
+    assert.equal(connectionIdentity(http), createHash('sha256').update(JSON.stringify([http.id, 'http', http.url, false])).digest('hex'));
+    assert.notEqual(connectionIdentity(http), connectionIdentity({ ...http, headers: { Authorization: { secret: 'token' } } }));
   } finally { await f.close(); }
 });
 

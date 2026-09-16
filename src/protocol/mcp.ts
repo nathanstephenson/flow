@@ -1,5 +1,17 @@
 import { z } from "zod";
+import { validSecretName } from "./secrets.ts";
 
+const headerName = z
+  .string()
+  .regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/);
+const headerValue = z.union([
+  z
+    .object({ value: z.string().min(1).max(8192).regex(/^[\t\x20-\x7e]+$/) })
+    .strict(),
+  z
+    .object({ secret: z.string().refine(validSecretName, "Invalid secret reference") })
+    .strict(),
+]);
 const common = {
   id: z
     .string()
@@ -32,6 +44,10 @@ export const mcpConnectionsSchema = z
             );
           }),
           oauth: z.boolean().default(false),
+          headers: z
+            .record(headerName, headerValue)
+            .refine((entries) => Object.keys(entries).length <= 32)
+            .default({}),
         })
         .strict(),
     ]),

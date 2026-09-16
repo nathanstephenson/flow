@@ -105,6 +105,7 @@ test("OAuth credentials are private, shared per connection, and separate from Se
       transport: "http" as const,
       url: "https://example.test/mcp",
       oauth: true,
+      headers: {},
       enabledByDefault: true,
     };
     config.update({ mcp: [connection] });

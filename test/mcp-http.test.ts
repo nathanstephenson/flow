@@ -103,6 +103,7 @@ test(
       transport: "http" as const,
       url: `${base}/mcp`,
       oauth: true,
+      headers: {},
       enabledByDefault: true,
     };
     const auth = new McpAuth(root);
@@ -146,6 +147,16 @@ test(
       accessToken = "refreshed-identity";
       assert.deepEqual((await runtime.tools()[0]!.call({})).content, [{ type: "text", text: "remote" }]);
       assert.equal((await auth.provider(connection).tokens())?.access_token, accessToken);
+      // OAuth outranks a configured Authorization header: the fixture answers 401 to anything but
+      // the issued token, so connecting at all proves the header did not win.
+      const overridden = new McpSession(
+        [{ ...connection, headers: { Authorization: { value: "Bearer wrong" } } }],
+        root,
+        (connection) => auth.provider(connection),
+      );
+      await overridden.open();
+      assert.equal(overridden.status()[0]?.state, "connected");
+      await overridden.dispose();
       const denied = new URL(await auth.login(connection, "https://flow.example/agent-sessions/example"));
       const deniedCallback = new URL(denied.searchParams.get("redirect_uri")!);
       deniedCallback.searchParams.set("state", denied.searchParams.get("state")!);

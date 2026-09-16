@@ -13,11 +13,20 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { signInMcp } from "./mcp-actions.ts";
+import { useWorkflowResource } from "./workflow-api.ts";
 import { toast } from "./ui/toaster.tsx";
+
+type HeaderRow = { name: string; kind: "value" | "secret"; value: string };
 
 export default function McpSettings() {
   const { config } = useHost();
   const { save, saving } = useSaveSettings();
+  const secrets = useWorkflowResource<{ names: string[] }>("/api/secrets");
+  const [headers, setHeaders] = useState<HeaderRow[]>([]);
+  const patchHeader = (index: number, patch: Partial<HeaderRow>) =>
+    setHeaders((rows) =>
+      rows.map((row, at) => (at === index ? { ...row, ...patch } : row)),
+    );
   const [editing, setEditing] = useState<string>();
   const [name, setName] = useState("");
   const [transport, setTransport] = useState<"stdio" | "http">("stdio");
@@ -31,6 +40,7 @@ export default function McpSettings() {
     setTarget("");
     setArgs("[]");
     setOauth(false);
+    setHeaders([]);
     setEnabled(true);
   };
   const connections = config.mcp ?? [];
@@ -73,6 +83,16 @@ export default function McpSettings() {
                     : "[]",
                 );
                 setOauth(connection.transport === "http" && connection.oauth);
+                setHeaders(
+                  connection.transport === "http"
+                    ? Object.entries(connection.headers).map(
+                        ([name, source]) =>
+                          "secret" in source
+                            ? { name, kind: "secret" as const, value: source.secret }
+                            : { name, kind: "value" as const, value: source.value },
+                      )
+                    : [],
+                );
                 setEnabled(connection.enabledByDefault);
               }}
             >
@@ -103,6 +123,19 @@ export default function McpSettings() {
         onSubmit={(event) => {
           event.preventDefault();
           let connection: McpConnection;
+          const rows = headers.filter((row) => row.name.trim() && row.value);
+          if (new Set(rows.map((row) => row.name.trim())).size !== rows.length) {
+            toast.error("Header names must be unique");
+            return;
+          }
+          const headerMap = Object.fromEntries(
+            rows.map((row) => [
+              row.name.trim(),
+              row.kind === "secret"
+                ? { secret: row.value }
+                : { value: row.value },
+            ]),
+          );
           const common = {
             id: editing ?? crypto.randomUUID(),
             name,
@@ -117,7 +150,7 @@ export default function McpSettings() {
               throw new Error();
             connection =
               transport === "http"
-                ? { ...common, transport, url: target, oauth }
+                ? { ...common, transport, url: target, oauth, headers: headerMap }
                 : {
                     ...common,
                     transport,
@@ -180,10 +213,116 @@ export default function McpSettings() {
             />
           </label>
         ) : (
-          <label className="flex items-center gap-2 text-sm">
-            <Switch checked={oauth} onCheckedChange={setOauth} />
-            Use OAuth
-          </label>
+          <>
+            <label className="flex items-center gap-2 text-sm">
+              <Switch checked={oauth} onCheckedChange={setOauth} />
+              Use OAuth
+            </label>
+            <div className="grid gap-2">
+              <span className="text-sm">Headers</span>
+              <p className="text-muted-foreground text-xs">
+                A secret keeps the value on this machine. A literal value is
+                stored in the Settings file and is readable by anything signed
+                in to Flow.
+                {oauth &&
+                  headers.some(
+                    (row) => row.name.trim().toLowerCase() === "authorization",
+                  ) &&
+                  " OAuth is on, so its token replaces the Authorization header."}
+              </p>
+              {headers.map((row, index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: rows have no stable identity while being typed
+                <div key={index} className="flex flex-wrap items-center gap-2">
+                  <Input
+                    aria-label="Header name"
+                    placeholder="Header name"
+                    className="min-w-32 flex-1"
+                    value={row.name}
+                    onChange={(event) =>
+                      patchHeader(index, { name: event.target.value })
+                    }
+                  />
+                  <Select
+                    value={row.kind}
+                    onValueChange={(value) => {
+                      if (value === "value" || value === "secret")
+                        patchHeader(index, { kind: value, value: "" });
+                    }}
+                  >
+                    <SelectTrigger aria-label="Header source" className="w-36">
+                      <SelectValue>
+                        {() => (row.kind === "secret" ? "Secret" : "Value")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="secret">Secret</SelectItem>
+                      <SelectItem value="value">Value</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {row.kind === "secret" ? (
+                    <Select
+                      value={row.value}
+                      onValueChange={(value) =>
+                        patchHeader(index, { value: value ?? "" })
+                      }
+                    >
+                      <SelectTrigger
+                        aria-label="Header secret"
+                        className="min-w-32 flex-1"
+                      >
+                        <SelectValue>
+                          {() => row.value || "Choose a secret"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {secrets.data?.names.map((name) => (
+                          <SelectItem key={name} value={name}>
+                            {name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      aria-label="Header value"
+                      placeholder="Value"
+                      className="min-w-32 flex-1"
+                      value={row.value}
+                      onChange={(event) =>
+                        patchHeader(index, { value: event.target.value })
+                      }
+                    />
+                  )}
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    type="button"
+                    onClick={() =>
+                      setHeaders((rows) =>
+                        rows.filter((_, at) => at !== index),
+                      )
+                    }
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))}
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                className="justify-self-start"
+                onClick={() =>
+                  setHeaders((rows) => [
+                    ...rows,
+                    { name: "", kind: "secret", value: "" },
+                  ])
+                }
+              >
+                Add header
+              </Button>
+            </div>
+          </>
         )}
         <label className="flex items-center gap-2 text-sm">
           <Switch checked={enabledByDefault} onCheckedChange={setEnabled} />
