@@ -8,7 +8,7 @@ import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
-import { nameFrom, nameInput, summariseToName } from "../src/daemon/summariser.ts";
+import { nameFrom, nameInput, summariseToName, workflowNameInput } from "../src/daemon/summariser.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
 
 /**
@@ -50,6 +50,20 @@ describe("the name inside a model's answer", () => {
     assert.equal(nameFrom(""), undefined);
     assert.equal(nameFrom("   \n  "), undefined);
     assert.equal(nameFrom("Add retry to uploader"), undefined);
+  });
+});
+
+describe("workflow naming context", () => {
+  it("includes the workflow and validated inputs but excludes credential-shaped fields recursively", () => {
+    const context = workflowNameInput("Ship release", {
+      project: "api",
+      apiKey: "private-key",
+      nested: { access_token: "private-token", count: 2 },
+    });
+    assert.match(context, /Ship release/);
+    assert.match(context, /api/);
+    assert.match(context, /count/);
+    assert.doesNotMatch(context, /private-key|private-token|apiKey|access_token/);
   });
 });
 
@@ -464,6 +478,33 @@ describe("naming an Agent Session", () => {
     assert.equal(backend.sessions.length, sessionsBefore);
     assert.equal(host.list().find((entry) => entry.id === id)?.status, "dormant");
     assert.equal(titleOf(id), "Rewrite the upload retry");
+  });
+
+  it("names a workflow launch without blocking it and never sends credential inputs", async () => {
+    const id = await host.create({ scope: work, backend: "fake" });
+    summary.autoReply = "Prepare production release safely";
+    await host.nameWorkflow(id, "Ship release", { project: "api", password: "private-password" });
+    assert.equal(titleOf(id), "Prepare production release safely");
+    const prompt = summary.sessions.find((session) => session.prompts.length)?.prompts[0] ?? "";
+    assert.match(prompt, /Ship release/);
+    assert.match(prompt, /project/);
+    assert.doesNotMatch(prompt, /private-password|password/);
+  });
+
+  it("honours disabled automatic naming for workflow launches", async () => {
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.nameWorkflow(id, "Ship release", { project: "api" });
+    assert.equal(titleOf(id), work);
+  });
+
+  it("does not overwrite a title established by a chat turn", async () => {
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "keep my chat title", "after_turn");
+    summaryModel = { backend: "summary", modelId: "fake-2", automatic: true };
+    await host.nameWorkflow(id, "Ship release", { project: "api" });
+    assert.equal(titleOf(id), "keep my chat title");
   });
 
   it("refuses, readably, when there is no Summary Model or nothing to name", async () => {

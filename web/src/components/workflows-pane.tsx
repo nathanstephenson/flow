@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { attemptDuration } from "../presentation/workflow-execution.ts";
+import { clearRetainedWorkflowLaunch, retainedWorkflowLaunch } from "../workflow-launch.ts";
 import { WorkflowTranscript } from "./workflow-transcript.tsx";
 import "./workflows.css";
 export default function WorkflowsPane({ sessionId, placement = "right" }: { sessionId: string; placement?: "right" | "bottom" }) {
@@ -39,14 +40,15 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   );
   const base = `/api/sessions/${encodeURIComponent(sessionId)}/workflows`;
   const history = useWorkflowResource<WorkflowExecutionList>(base);
-  const [workflowId, setWorkflowId] = useState("");
-  const [input, setInput] = useState<Json>({});
+  const retainedAtMount = retainedWorkflowLaunch(sessionId);
+  const [workflowId, setWorkflowId] = useState(retainedAtMount?.workflowId ?? "");
+  const [input, setInput] = useState<Json>(retainedAtMount?.input ?? {});
   const [executionId, setExecutionId] = useState("");
   const [stepId, selectStep] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(retainedAtMount?.error ?? "");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"Overview" | "Flow">("Overview");
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(retainedAtMount !== undefined);
   const [attempt, setAttempt] = useState<number>();
   const detail = useWorkflowResource<WorkflowExecutionView>(
     executionId ? `${base}/${executionId}` : undefined,
@@ -65,12 +67,13 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
     (a, b) => b.startedAt - a.startedAt,
   );
   useEffect(() => {
-    setWorkflowId("");
-    setInput({});
+    const retained = retainedWorkflowLaunch(sessionId);
+    setWorkflowId(retained?.workflowId ?? "");
+    setInput(retained?.input ?? {});
     setExecutionId("");
     selectStep("");
-    setMessage("");
-    setCreating(false);
+    setMessage(retained?.error ?? "");
+    setCreating(retained !== undefined);
     setTab("Overview");
     setAttempt(undefined);
   }, [sessionId]);
@@ -101,7 +104,11 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
         "POST",
         body,
       );
-      if (result.execution) { setExecutionId(result.execution.id); setCreating(false); }
+      if (result.execution) {
+        setExecutionId(result.execution.id);
+        setCreating(false);
+        if (path === base) clearRetainedWorkflowLaunch(sessionId);
+      }
       setMessage("Request accepted");
     } catch (e) {
       setMessage(workflowIssue(e));
@@ -122,6 +129,15 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
         <p className="text-xs text-muted-foreground" role="status">
           {definitions.error || history.error || detail.error || message}
         </p>
+      )}
+      {retainedWorkflowLaunch(sessionId) && (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
+          <p className="font-medium">Workflow did not start</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            This Agent Session was kept. Review the preserved inputs below and retry here; retrying
+            will not create another Agent Session.
+          </p>
+        </div>
       )}
       {creating && !history.data?.occupied && <section aria-label="New workflow">
         <div className="grid gap-3 pt-2">
@@ -186,7 +202,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
                 }
                 onClick={() => void mutate(base, { workflowId, input })}
               >
-                Start workflow
+                {retainedWorkflowLaunch(sessionId) ? "Retry workflow" : "Start workflow"}
               </Button>
             </>
           )}

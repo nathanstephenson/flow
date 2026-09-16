@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createCommandFor, type NewAgentSessionForm } from "./new-agent-session.ts";
+import type { WorkflowDefinition } from "../../../src/protocol/workflows.ts";
+import {
+  createCommandFor,
+  eligibleWorkflows,
+  validatedWorkflowInput,
+  type NewAgentSessionForm,
+} from "./new-agent-session.ts";
 
 /**
  * What the New Agent Session form sends, and — mostly — what it refuses to.
@@ -20,6 +26,56 @@ const form: NewAgentSessionForm = {
   repository: true,
   base: "main",
 };
+
+const workflow = (over: Partial<WorkflowDefinition> = {}): WorkflowDefinition => ({
+  version: 1,
+  id: "global",
+  name: "Global",
+  backend: "claude",
+  inputSchema: {
+    type: "object",
+    fields: {
+      task: { schema: { type: "string" }, required: true },
+      tries: { schema: { type: "number", integer: true }, default: 2 },
+    },
+  },
+  steps: [{ id: "done", name: "Done", kind: "join" }],
+  edges: [],
+  ...over,
+});
+
+describe("workflows offered on the New Agent Session page", () => {
+  const definitions = [
+    workflow(),
+    workflow({ id: "matching", name: "Matching", projectId: "/work/api" }),
+    workflow({ id: "other-project", name: "Other", projectId: "/work/web" }),
+    workflow({ id: "other-backend", name: "Pi", backend: "pi" }),
+  ];
+
+  it("includes global and matching-Project definitions for exactly the selected backend", () => {
+    assert.deepEqual(
+      eligibleWorkflows(definitions, "claude", "/work/api").map((item) => item.id),
+      ["global", "matching"],
+    );
+    assert.deepEqual(
+      eligibleWorkflows(definitions, "pi", "/work/api").map((item) => item.id),
+      ["other-backend"],
+    );
+  });
+
+  it("uses the selected source Project identity even when creation will cut a Worktree", () => {
+    assert.deepEqual(
+      eligibleWorkflows(definitions, "claude", "/work/api").map((item) => item.id),
+      ["global", "matching"],
+    );
+  });
+
+  it("validates inputs and applies schema defaults before creation", () => {
+    assert.deepEqual(validatedWorkflowInput(workflow(), { task: "ship" }), { task: "ship", tries: 2 });
+    assert.throws(() => validatedWorkflowInput(workflow(), { task: "ship", tries: 1.5 }), /int/i);
+    assert.throws(() => validatedWorkflowInput(workflow(), {}), /task/i);
+  });
+});
 
 describe("the create Command a New Agent Session form describes", () => {
   it("sends the trimmed Scope, the backend and the chosen model", () => {

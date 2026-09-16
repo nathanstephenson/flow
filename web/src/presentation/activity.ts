@@ -9,10 +9,16 @@ import { relativeTime } from "../../../src/client/relative-time.ts";
  * it is about work already in flight — and the rail needs the same sentence for its accessible text,
  * so a rail importing from the composer's module would be a lie about why the words exist.
  *
- * Typed on a structural shape rather than on `Chrome`, because `SessionSummary` carries the same two
- * counts and the rail is the other caller. Both satisfy this without an adapter.
+ * Typed on a structural shape rather than on `Chrome`, because the rail's `SessionSummary` adds
+ * Workflow Execution activity to the two transcript-derived counts. Chrome remains a valid caller
+ * without pretending workflows are part of the Presentation Transcript.
  */
-export type Activity = { activeSubagents: number; activeBackgroundCalls: number };
+export type Activity = {
+  activeSubagents: number;
+  activeBackgroundCalls: number;
+  /** Present on rail summaries; Chrome snapshots intentionally remain transcript-only. */
+  activeWorkflows?: number;
+};
 
 /**
  * The one sentence for both surfaces, or undefined when nothing is working.
@@ -21,19 +27,24 @@ export type Activity = { activeSubagents: number; activeBackgroundCalls: number 
  * "is the strip's text empty" — the shape `contextUsageDetail` uses for "nothing honest to say".
  *
  * Subagents lead because theirs is the half with a destination, and the strip is read left-to-right
- * into its own chevron. Each count is floored at zero **independently**: both are maintained by
- * transitions, so one that underflows must not be able to erase the other's clause.
+ * into its own chevron. Each count is floored at zero **independently**: they are maintained by
+ * transitions, so one that underflows must not be able to erase another clause.
  */
 export function activityLabel(of: Activity): string | undefined {
   const agents = Math.max(0, of.activeSubagents);
   const calls = Math.max(0, of.activeBackgroundCalls);
+  const workflows = Math.max(0, of.activeWorkflows ?? 0);
   const clauses = [
     agents > 0 ? `${agents} agent${agents === 1 ? "" : "s"}` : undefined,
     calls > 0 ? `${calls} background call${calls === 1 ? "" : "s"}` : undefined,
+    workflows > 0 ? `${workflows} workflow${workflows === 1 ? "" : "s"}` : undefined,
   ].filter((clause): clause is string => clause !== undefined);
   if (clauses.length === 0) return undefined;
-  // One verb for both clauses: two sentences would say "running" twice about one fact.
-  return `${clauses.join(" and ")} running`;
+  // One verb for every clause: several sentences would repeat "running" about one fact.
+  const joined = clauses.length < 3
+    ? clauses.join(" and ")
+    : `${clauses.slice(0, -1).join(", ")} and ${clauses.at(-1)}`;
+  return `${joined} running`;
 }
 
 /**

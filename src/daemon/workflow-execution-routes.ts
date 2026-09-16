@@ -34,8 +34,9 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
         keys('definition', 'sessionId', 'stepId', 'input');
         reply(200, await service.start(string('sessionId'), validateDefinition(body.definition).definition, input(), string('stepId')));
       } else if (!match![2]) {
-        keys('workflowId', 'input');
-        reply(200, await service.start(match![1]!, store.getDefinition(string('workflowId')), input()));
+        keys('workflowId', 'input', 'nameSession');
+        if (body.nameSession !== undefined && body.nameSession !== true) throw new Error();
+        reply(200, await service.start(match![1]!, store.getDefinition(string('workflowId')), input(), undefined, body.nameSession === true));
       } else {
         const sessionId = match![1]!, executionId = match![2]!;
         switch (match![3]) {

@@ -1,5 +1,8 @@
 import type { Command } from "../../../src/protocol/commands.ts";
 import type { EffortLevel } from "../../../src/protocol/events.ts";
+import type { Json, WorkflowDefinition } from "../../../src/protocol/workflows.ts";
+import { validateDefinition } from "../../../src/workflows/graph.ts";
+import { parseValue } from "../../../src/workflows/schema.ts";
 
 /**
  * What the New Agent Session form describes, as the Command it would send.
@@ -24,6 +27,25 @@ export type NewAgentSessionForm = {
   /** The branch to cut from: the chosen one, or wherever the repository is now. `""` when unknown. */
   base: string;
 };
+
+/** Global or selected-Project definitions compatible with the chosen Backend Adapter. */
+export function eligibleWorkflows(
+  definitions: readonly WorkflowDefinition[],
+  backend: string,
+  projectPath: string | undefined,
+): WorkflowDefinition[] {
+  return definitions.filter(
+    (definition) =>
+      definition.backend === backend &&
+      (definition.projectId === undefined || definition.projectId === projectPath),
+  );
+}
+
+/** Validate both the saved graph and its inputs before creating an Agent Session. */
+export function validatedWorkflowInput(definition: WorkflowDefinition, input: unknown): Json {
+  const validated = validateDefinition(definition).definition;
+  return parseValue(validated.inputSchema, input);
+}
 
 /**
  * The `create` Command this form describes, or `undefined` where it describes nothing sendable.

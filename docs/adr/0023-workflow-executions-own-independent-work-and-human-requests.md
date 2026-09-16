@@ -33,14 +33,21 @@ are resolved for explicit step aliases. Agent JSON is validated and literal secr
 redacted before persistence. Literal redaction is not a defence against deliberate encoding or
 transmission by a model or program.
 
-The final structured JSON result is a host notice with a deterministic execution identity. It does
-not create a parent prompt, model message, tool call or Conversation Context entry. Restart checks
-prevent duplicate notices. Dedicated per-execution Spend snapshots add workflow billing to the
-Agent Session without changing Conversation Context occupancy or entering backend prior Spend.
+A full execution's final structured JSON result is delivered through one host-driven parent turn.
+The Session Host waits for any current parent turn, then asks the parent to provide a readable
+summary and the exact structured output. A durable per-execution marker prevents repeated callbacks
+or restart reconciliation from producing duplicate announcements. Step-test results remain confined
+to the Workflows surface and never notify the parent. This monitoring turn does not make the
+Workflow Execution itself occupy the parent while it runs; ordinary chat remains usable throughout.
+
+Dedicated per-execution Spend snapshots add workflow billing to the Agent Session without changing
+Conversation Context occupancy or entering backend prior Spend.
 
 ## Consequences
 
 A parent turn can continue while workflow work awaits a human. Clients must read the execution
-view to display and answer these requests. A restarted host retains private activity and Spend,
-but no request callback survives. Failed tests and interrupted executions require an explicit
-Retry, Supply output, Continue or Cancel before the slot is free.
+view to display and answer these requests. Full running executions contribute independent working
+activity to the rail without changing Idle/Running/Awaiting. A restarted host retains private
+activity, Spend and notification markers, but no request callback survives. Failed tests and
+interrupted executions require an explicit Retry, Supply output, Continue or Cancel before the slot
+is free.

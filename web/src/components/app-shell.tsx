@@ -82,6 +82,16 @@ export function AppShell() {
    */
   const sessionIds = useMemo(() => sessions.map((session) => session.id), [sessions]);
   const docks = useDocks(focusedId, loaded ? sessionIds : undefined);
+  const workflowDockPending = useRef<string | undefined>(undefined);
+  const onCreated = useCallback((sessionId: string, openWorkflows = false) => {
+    if (openWorkflows) workflowDockPending.current = sessionId;
+    focus(sessionId);
+  }, [focus]);
+  useEffect(() => {
+    if (workflowDockPending.current !== focusedId) return;
+    workflowDockPending.current = undefined;
+    docks.dispatch({ type: "open-workflows" });
+  }, [docks, focusedId]);
 
   /*
    * The unsent messages, for the same reason the Docks are here: the pane remounts when the focus
@@ -309,7 +319,7 @@ export function AppShell() {
              * had its say, so a reader with work waiting is not shown a form on the way to it.
              */
             landed ? (
-              <NewAgentSessionPage drafts={drafts} onCreated={focus} initialBackend={route.view === 'session' ? route.backend : undefined} />
+              <NewAgentSessionPage drafts={drafts} onCreated={onCreated} initialBackend={route.view === 'session' ? route.backend : undefined} />
             ) : (
               <div className="min-h-0" />
             )

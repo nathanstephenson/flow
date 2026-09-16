@@ -62,11 +62,17 @@ export function railBand(of: WorkLoad): number {
 /**
  * What both the rail's banding and its status dot are asked about: work, whoever is doing it.
  *
- * Both counts are required rather than optional. `exactOptionalPropertyTypes` would let a call site
- * that forgot one compile and silently under-report work, in exactly the place the dot is drawn —
- * so the compiler is made to find every caller instead.
+ * The transcript-derived counts are required. Workflow activity is optional because a live Chrome
+ * snapshot deliberately knows only the Presentation Transcript, while a SessionSummary augments it
+ * from the workflow scheduler.
  */
-export type WorkLoad = { status: SessionStatus; activeSubagents: number; activeBackgroundCalls: number };
+export type WorkLoad = {
+  status: SessionStatus;
+  activeSubagents: number;
+  activeBackgroundCalls: number;
+  /** Optional so live Chrome snapshots from the Presentation Transcript remain a valid workload. */
+  activeWorkflows?: number;
+};
 
 /**
  * Working, but not occupancy. A backgrounded Subagent or an open Background Call leaves the status
@@ -74,14 +80,15 @@ export type WorkLoad = { status: SessionStatus; activeSubagents: number; activeB
  * something *is* running, and both the rail's banding and its status dot answer "is it working?"
  * rather than "is the model holding a turn?".
  *
- * The two counts are summed here and nowhere else: this is the only question that does not care
- * which of them is working.
+ * The independent-work counts are summed here and nowhere else: this is the only question that does
+ * not care which kind is working.
  *
  * Only `idle` is liftable. Neither a Subagent nor a Background Call can outlive its Backend Session,
- * so a count on anything else is a stale index rather than live work.
+ * and a running Workflow Execution owns a live one, so a count on anything else is stale rather than
+ * live work.
  */
 export function working(of: WorkLoad): boolean {
-  return of.status === "idle" && of.activeSubagents + of.activeBackgroundCalls > 0;
+  return of.status === "idle" && of.activeSubagents + of.activeBackgroundCalls + (of.activeWorkflows ?? 0) > 0;
 }
 
 /** Nothing to Settle once it is Settled, and an Ended Agent Session cannot be. */

@@ -84,6 +84,13 @@ export class WorkflowScheduler {
 
   occupied(sessionId: string): boolean { return this.slots.has(sessionId); }
 
+  /** Whether the slot contains a full execution doing work, excluding tests and recovery waits. */
+  activeFull(sessionId: string): boolean {
+    const executionId = this.slots.get(sessionId);
+    const record = executionId ? this.active.get(executionId)?.record : undefined;
+    return record?.status === 'running' && record.testStepId === undefined;
+  }
+
   forgetSession(sessionId: string): void {
     const executions = [...this.active.values()].filter(active => active.record.sessionId === sessionId);
     if (executions.some(active => active.running.size || active.record.status === 'running')) throw new Error('Workflow work must stop before forgetting an Agent Session');

@@ -35,6 +35,10 @@ function pane(status: string) {
     if (name === '../../../src/workflows/graph.ts') return { validateDefinition };
     if (name === '../../../src/workflows/schema.ts') return { parseValue };
     if (name === '../presentation/workflows.ts') return { workflowIssue: (error: Error) => error.message };
+    if (name === '../workflow-launch.ts') return {
+      retainedWorkflowLaunch: () => undefined,
+      clearRetainedWorkflowLaunch: () => {},
+    };
     if (name === './workflow-editors.tsx') return { initialValue: () => ({}), ValueEditor: 'ValueEditor' };
     return new Proxy({}, { get: (_target, key) => key });
   } });

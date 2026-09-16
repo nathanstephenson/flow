@@ -121,7 +121,10 @@ for (const permission of ['auto-accept', 'ask'] as const) {
         handle.requestPermission('Bash');
         const callId = f.service.view(f.id, started.execution.id).permissions[0]!.callId;
         assert.equal(f.host.statusOf(f.id), 'idle');
+        assert.equal(f.host.list().find(summary => summary.id === f.id)?.activeWorkflows, 1);
         assert.equal(f.service.view(f.id, started.execution.id).permissions.length, 1);
+        await f.host.send(f.id, 'Chat while workflow permission is pending', 'now');
+        assert.equal(f.backend.latest.prompts.at(-1), 'Chat while workflow permission is pending\n\n' + f.service.context(f.id));
         await f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, callId, decision: 'allow' });
         assert.equal(f.service.view(f.id, started.execution.id).permissions.length, 0);
       }
@@ -138,8 +141,8 @@ it('ignores unrelated secrets and unselected step references', async () => {
     const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'selected', name: 'Sample', kind: 'join' }, { ...definition.steps[0]!, secrets: { token: 'MISSING' } }], edges: [{ id: 'next', from: 'selected', to: 'agent', outcome: 'success' }] };
     const started = await f.service.start(f.id, graph, {}, 'selected');
     assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'completed');
-    const response = await f.request(f.base, 'POST', { workflowId: definition.id, input: {} });
-    assert.equal(response.status, 200);
+    const response = await f.request(f.base, 'POST', { workflowId: definition.id, input: {}, nameSession: true });
+    assert.equal(response.status, 200, 'automatic naming is non-blocking when no Summary Model is configured');
   } finally { await f.close(); }
 });
 
@@ -224,6 +227,7 @@ it('runs an owned Agent beside chat, keeps requests private, rejects stale decis
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     const handle = f.backend.latest.workflowSubagents[0]!;
     assert.equal(f.host.statusOf(f.id), 'running');
+    assert.equal(f.host.list().find(summary => summary.id === f.id)?.activeWorkflows, 1);
     assert.equal((await f.request(f.base, 'POST', { workflowId: 'sample', input: {} })).status, 409);
     assert.equal(f.backend.latest.prompts.length, 1);
     const questions = [{ header: 'Pick', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }];
@@ -246,16 +250,23 @@ it('runs an owned Agent beside chat, keeps requests private, rejects stale decis
     view = await (await f.request(path)).json() as WorkflowExecutionView;
     assert.equal(view.execution.result, 'result'); assert.equal(view.spend?.tokens, 12);
     assert.equal(view.enquiries.length, 0);
+    assert.equal(f.host.list().find(summary => summary.id === f.id)?.activeWorkflows, 0);
+    assert.equal(f.backend.latest.prompts.length, 1, 'completion waits for the current parent turn');
     f.backend.latest.completeTurn();
+    await until(() => f.backend.latest.prompts.length === 2);
+    const completion = f.backend.latest.prompts[1]!;
+    assert.ok(completion.includes(started.execution.id));
+    assert.ok(completion.includes('Exact structured final output:\n"result"'));
     f.service.reconcile(); f.service.reconcile();
-    assert.equal(f.host.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text.includes(started.execution.id)).length, 1);
+    assert.equal(f.backend.latest.prompts.length, 2, 'completion is announced once');
+    assert.equal(f.host.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text === 'Workflow completed. The parent is preparing the result.').length, 1);
     assert.equal(reduceAll(f.host.logFor(f.id).since(0)).spend?.tokens, 12);
     f.backend.latest.reportSpend({ tokens: 100, cached: 20, costUSD: 1, models: [] });
     f.backend.latest.reportSpend({ tokens: 100, cached: 20, costUSD: 1, models: [] });
     const state = reduceAll(f.host.logFor(f.id).since(0));
     assert.equal(state.contextUsage?.spend?.tokens, 112);
     assert.equal(state.contextUsage?.used, 10);
-    assert.equal(f.backend.latest.prompts.length, 1);
+    assert.equal(f.backend.latest.prompts.length, 2);
   } finally { await f.close(); }
 });
 
@@ -277,6 +288,7 @@ it('tests only the selected step, validates model/backend/Project, and keeps fix
     const view = await (await f.request(path)).json() as WorkflowExecutionView;
     assert.equal(view.execution.status, 'completed-with-recovery');
     assert.equal(view.execution.steps.later?.status, 'skipped');
+    assert.equal(f.backend.latest.prompts.length, 0, 'step tests never notify the parent');
     await f.host.settle(f.id); await f.host.reap(Date.now() + 10);
     assert.equal(existsSync(join(f.root, 'sessions', f.id)), false);
     assert.equal(f.service.scheduler.occupied(f.id), false);
@@ -303,12 +315,16 @@ it('interrupts on shutdown, recovers a deleted saved definition without replay, 
     await until(() => backend.latest.workflowSubagents.length === 1);
     assert.equal(backend.latest.prompts.length, 0);
     backend.latest.workflowSubagents[0]!.complete('after restart');
-    await service.scheduler.wait(f.id, started.execution.id); await pause();
+    await service.scheduler.wait(f.id, started.execution.id);
+    await until(() => backend.latest.prompts.length === 1);
+    assert.ok(backend.latest.prompts[0]!.includes('after restart'));
     await other.shutdown();
-    const finalHost = new SessionHost({ store: f.store }); finalHost.registerBackend(new FakeBackend());
+    const finalHost = new SessionHost({ store: f.store });
+    const finalBackend = new FakeBackend();
+    finalHost.registerBackend(finalBackend);
     const finalService = new WorkflowExecutionService(finalHost, f.workflows, f.secrets, f.config, runtimePath);
     await finalHost.load(); finalService.reconcile(); finalService.reconcile();
-    assert.equal(finalHost.logFor(f.id).since(0).filter(({ event }) => event.type === 'notice' && event.text.includes(started.execution.id)).length, 1);
+    assert.equal(finalBackend.sessions.length, 0, 'reconcile neither replays work nor duplicates completion');
     assert.equal(finalService.scheduler.occupied(f.id), false);
     await finalHost.shutdown();
   } finally { await other?.shutdown(); await f.close(); }

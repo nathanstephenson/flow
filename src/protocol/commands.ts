@@ -69,6 +69,14 @@ export type SessionSummary = {
    */
   activeBackgroundCalls: number;
   /**
+   * Full Workflow Executions currently doing work in this Agent Session.
+   *
+   * Independent from parent-turn occupancy, Subagents and Background Calls. A positive value keeps
+   * an otherwise Idle Agent Session in the rail's working band without changing Idle to Running.
+   * Step tests are excluded.
+   */
+  activeWorkflows: number;
+  /**
    * When this Agent Session was Settled, and so what the retention window is measured from
    * (ADR 0006). Absent unless `status` is `settled`.
    *

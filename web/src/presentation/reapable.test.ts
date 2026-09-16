@@ -24,6 +24,7 @@ function summary(id: string, status: SessionStatus, agoHours: number): SessionSu
     restingAt: new Date(NOW - agoHours * HOUR).toISOString(),
     activeSubagents: 0,
     activeBackgroundCalls: 0,
+    activeWorkflows: 0,
     settledAt: new Date(NOW - agoHours * HOUR).toISOString(),
     lastSeq: 0,
   };
