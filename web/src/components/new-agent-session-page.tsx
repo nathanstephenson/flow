@@ -205,8 +205,7 @@ export function NewAgentSessionPage({
     [branches, inWorktree, listSkills, run, scope, send],
   );
 
-  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>("/api/workflows", 10_000);
-  const runtime = useWorkflowResource<WorkflowRuntimeStatus>("/api/workflow-runtime", 5_000);
+  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(tab === "workflow" ? "/api/workflows" : undefined, 10_000);
   const availableWorkflows = useMemo(
     () => eligibleWorkflows(definitions.data?.workflows ?? [], backend, projectPath),
     [backend, definitions.data, projectPath],
@@ -232,6 +231,7 @@ export function NewAgentSessionPage({
     }
   }
   const needsCodeRuntime = workflow?.steps.some((step) => step.kind === "shell" || step.kind === "typescript") === true;
+  const runtime = useWorkflowResource<WorkflowRuntimeStatus>(tab === "workflow" && needsCodeRuntime ? "/api/workflow-runtime" : undefined, 5_000);
   const runtimeIssue = needsCodeRuntime
     ? runtime.error || (runtime.data === undefined ? "Checking workflow runtime…" : runtime.data.available ? "" : runtime.data.error ?? "Workflow runtime is unavailable")
     : "";
@@ -244,6 +244,7 @@ export function NewAgentSessionPage({
     setLaunching(true);
     setFailure(undefined);
     const input = validatedInput;
+    const launchId = crypto.randomUUID();
     try {
       const created = await create();
       if (!created) return;
@@ -251,10 +252,11 @@ export function NewAgentSessionPage({
         await workflowApi<WorkflowExecutionView>(
           `/api/sessions/${encodeURIComponent(created)}/workflows`,
           "POST",
-          { workflowId: workflow.id, input, nameSession: true },
+          { workflowId: workflow.id, input, launchId, nameSession: true },
         );
       } catch (error) {
         retainWorkflowLaunch(created, {
+          launchId,
           workflowId: workflow.id,
           input,
           error: workflowIssue(error),

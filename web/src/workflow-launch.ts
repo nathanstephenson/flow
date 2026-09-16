@@ -6,6 +6,7 @@ import type { Json } from "../../src/protocol/workflows.ts";
  * workflow drafts do not persist navigation, and a host restart must never replay this automatically.
  */
 export type RetainedWorkflowLaunch = {
+  launchId: string;
   workflowId: string;
   input: Json;
   error: string;

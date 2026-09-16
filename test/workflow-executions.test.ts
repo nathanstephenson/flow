@@ -42,6 +42,21 @@ async function fixture() {
   return { root, store, workflows, secrets, config, backend, host, service, id, request, base, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
+it('deduplicates an ambiguous retained launch by its durable launch id', async () => {
+  const f = await fixture();
+  try {
+    const body = { workflowId: definition.id, input: {}, launchId: 'retained-launch', nameSession: true };
+    const first = await f.request(f.base, 'POST', body);
+    const second = await f.request(f.base, 'POST', body);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    const a = await first.json() as WorkflowExecutionView;
+    const b = await second.json() as WorkflowExecutionView;
+    assert.equal(b.execution.id, a.execution.id);
+    assert.equal(f.service.list(f.id).executions.length, 1);
+  } finally { await f.close(); }
+});
+
 it('accepts bounded extra-try guidance through HTTP and sends it to each owned Agent without changing the definition', async () => {
   const f = await fixture();
   try {

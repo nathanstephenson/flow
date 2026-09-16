@@ -60,7 +60,7 @@ export interface WorkflowRuntimeStatus {
   dockerPath?: string;
 }
 
-export type StartWorkflow = { workflowId: string; input: Json; /** Name a just-created Agent Session from this launch. */ nameSession?: true };
+export type StartWorkflow = { workflowId: string; input: Json; /** Durable identity making an ambiguous launch safe to retry. */ launchId?: string; /** Name a just-created Agent Session from this launch. */ nameSession?: true };
 export type TestWorkflowStep = { definition: WorkflowDefinition; sessionId: string; stepId: string; input: Json };
 export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined };
 export type AnswerWorkflowEnquiry = { subagentId: string; askId: string; answers: string[][] };

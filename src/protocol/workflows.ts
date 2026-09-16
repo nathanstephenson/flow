@@ -119,6 +119,8 @@ export interface WorkflowExecution {
   scope: string;
   definition: WorkflowDefinition;
   input: Json;
+  /** Durable identity for an idempotent full-execution launch request. */
+  launchId?: string;
   testStepId?: string;
   status: ExecutionStatus;
   startedAt: number;

@@ -40,15 +40,17 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   );
   const base = `/api/sessions/${encodeURIComponent(sessionId)}/workflows`;
   const history = useWorkflowResource<WorkflowExecutionList>(base);
-  const retainedAtMount = retainedWorkflowLaunch(sessionId);
-  const [workflowId, setWorkflowId] = useState(retainedAtMount?.workflowId ?? "");
-  const [input, setInput] = useState<Json>(retainedAtMount?.input ?? {});
+  // Clone the retained launch once for this render; callers must not repeatedly clone the same
+  // potentially large input merely to decide labels and visibility.
+  const retainedLaunch = retainedWorkflowLaunch(sessionId);
+  const [workflowId, setWorkflowId] = useState(retainedLaunch?.workflowId ?? "");
+  const [input, setInput] = useState<Json>(retainedLaunch?.input ?? {});
   const [executionId, setExecutionId] = useState("");
   const [stepId, selectStep] = useState("");
-  const [message, setMessage] = useState(retainedAtMount?.error ?? "");
+  const [message, setMessage] = useState(retainedLaunch?.error ?? "");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"Overview" | "Flow">("Overview");
-  const [creating, setCreating] = useState(retainedAtMount !== undefined);
+  const [creating, setCreating] = useState(retainedLaunch !== undefined);
   const [attempt, setAttempt] = useState<number>();
   const detail = useWorkflowResource<WorkflowExecutionView>(
     executionId ? `${base}/${executionId}` : undefined,
@@ -130,7 +132,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
           {definitions.error || history.error || detail.error || message}
         </p>
       )}
-      {retainedWorkflowLaunch(sessionId) && (
+      {retainedLaunch && (
         <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3" role="alert">
           <p className="font-medium">Workflow did not start</p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -200,9 +202,9 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
                   !!invalid ||
                   !!mismatch
                 }
-                onClick={() => void mutate(base, { workflowId, input })}
+                onClick={() => void mutate(base, { workflowId, input, ...(retainedLaunch ? { launchId: retainedLaunch.launchId, nameSession: true } : {}) })}
               >
-                {retainedWorkflowLaunch(sessionId) ? "Retry workflow" : "Start workflow"}
+                {retainedLaunch ? "Retry workflow" : "Start workflow"}
               </Button>
             </>
           )}

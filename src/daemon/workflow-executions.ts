@@ -261,7 +261,11 @@ export class WorkflowExecutionService {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
 
-  async start(sessionId: string, definition: WorkflowDefinition, input: Json, stepId?: string, nameSession = false) {
+  async start(sessionId: string, definition: WorkflowDefinition, input: Json, stepId?: string, nameSession = false, launchId?: string) {
+    if (launchId && !stepId) {
+      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
+      if (existing) return this.view(sessionId, existing.id);
+    }
     const identity = this.host.workflowSession(sessionId);
     if (definition.backend !== identity.backend) throw new Error('Backend Adapter mismatch');
     if (definition.projectId && !sameProject(definition.projectId, identity.projectId)) throw new Error('Workflow is restricted to another Project');
@@ -286,7 +290,13 @@ export class WorkflowExecutionService {
     }
     for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools);
     this.host.assertWorkflowSession(sessionId, session.session);
-    const record = this.scheduler.start(definition, session, input, stepId);
+    // Check again after opening the workflow session: an overlapping retry may have completed the
+    // first request while this one awaited session setup.
+    if (launchId && !stepId) {
+      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
+      if (existing) return this.view(sessionId, existing.id);
+    }
+    const record = this.scheduler.start(definition, session, input, stepId, launchId);
     this.secretValues.set(record.id, values);
     this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));
     this.privateView(sessionId, record.id).historyComplete = true;

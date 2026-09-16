@@ -961,7 +961,8 @@ export class SessionHost {
     const record = this.record(sessionId);
     this.cancelWorkflowConfirmation(sessionId);
     this.workflowNotifications.delete(sessionId);
-    this.workflowCompletions.delete(sessionId);
+    // A parent abort only stops its current turn. Workflow completions are independent work and
+    // must remain queued for the now-idle parent to report.
     // Aborting means stop, not stop-then-continue: queued follow-ups go too.
     if (record.queue.length > 0) {
       record.queue.length = 0;
@@ -1314,7 +1315,9 @@ export class SessionHost {
     takeCompletion(sessionId: string, executionId: string): string | undefined;
   };
   private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
-  private readonly workflowCompletions = new Map<string, { executionId: string }>();
+  /** Ordered, per-execution completion queue. A session may finish another workflow while its
+   * parent is still reporting the previous one. */
+  private readonly workflowCompletions = new Map<string, string[]>();
   private readonly workflowConfirmations = new Map<string, { sessionId: string; finish: (allowed?: boolean) => void }>();
 
   cancelWorkflowConfirmation(sessionId: string): void {
@@ -1329,7 +1332,9 @@ export class SessionHost {
 
   workflowComplete(sessionId: string, executionId: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
-    this.workflowCompletions.set(sessionId, { executionId });
+    const pending = this.workflowCompletions.get(sessionId) ?? [];
+    if (!pending.includes(executionId)) pending.push(executionId);
+    this.workflowCompletions.set(sessionId, pending);
     this.queueWorkflowDrain(sessionId);
   }
 
@@ -1348,13 +1353,14 @@ export class SessionHost {
   private async drainWorkflowNotification(record: SessionRecord): Promise<boolean> {
     if (record.turnInFlight || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return false;
     const recovery = this.workflowNotifications.get(record.id);
-    const completion = recovery ? undefined : this.workflowCompletions.get(record.id);
+    const completions = recovery ? undefined : this.workflowCompletions.get(record.id);
+    const completion = completions?.shift();
     if (!recovery && !completion) return false;
     if (recovery) this.workflowNotifications.delete(record.id);
-    else this.workflowCompletions.delete(record.id);
+    else if (!completions!.length) this.workflowCompletions.delete(record.id);
     const text = recovery
       ? this.workflowOwner?.takeNotification(record.id, recovery.executionId, recovery.revision)
-      : this.workflowOwner?.takeCompletion(record.id, completion!.executionId);
+      : this.workflowOwner?.takeCompletion(record.id, completion!);
     // A recovery can become stale because the execution completed before the parent became free.
     // Continue to a queued completion in the same drain rather than leaving it with no future wake.
     if (!text) return this.drainWorkflowNotification(record);

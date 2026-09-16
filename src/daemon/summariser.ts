@@ -1,4 +1,5 @@
 import { tmpdir } from "node:os";
+import { credentialKey } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
@@ -135,7 +136,7 @@ export function workflowNameInput(workflowName: string, input: unknown): string 
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key]) => !/(?:secret|password|passphrase|credential|api[_-]?key|access[_-]?token|auth[_-]?token)/i.test(key))
+        .filter(([key]) => !credentialKey.test(key) && !/(?:passphrase|credential)/i.test(key))
         .map(([key, nested]) => [key, safe(nested)]),
     );
   };

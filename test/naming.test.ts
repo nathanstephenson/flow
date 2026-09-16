@@ -59,11 +59,15 @@ describe("workflow naming context", () => {
       project: "api",
       apiKey: "private-key",
       nested: { access_token: "private-token", count: 2 },
+      authorization: "private-auth",
+      cookie: "private-cookie",
+      refresh_token: "private-refresh",
+      bearer: "private-bearer",
     });
     assert.match(context, /Ship release/);
     assert.match(context, /api/);
     assert.match(context, /count/);
-    assert.doesNotMatch(context, /private-key|private-token|apiKey|access_token/);
+    assert.doesNotMatch(context, /private-key|private-token|private-auth|private-cookie|private-refresh|private-bearer|apiKey|access_token|authorization|cookie|refresh_token|bearer/);
   });
 });
 
