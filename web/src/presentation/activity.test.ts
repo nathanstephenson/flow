@@ -24,10 +24,17 @@ describe("what is working in an Agent Session", () => {
     assert.equal(activityLabel({ activeSubagents: 0, activeBackgroundCalls: 3 }), "3 background calls running");
   });
 
-  it("joins the two on one verb rather than saying `running` twice", () => {
+  it("joins independent work on one verb rather than saying `running` repeatedly", () => {
     assert.equal(
-      activityLabel({ activeSubagents: 2, activeBackgroundCalls: 1 }),
-      "2 agents and 1 background call running",
+      activityLabel({ activeSubagents: 2, activeBackgroundCalls: 1, activeWorkflows: 1 }),
+      "2 agents, 1 background call and 1 workflow running",
+    );
+  });
+
+  it("names full workflow activity even when parent chat is otherwise idle", () => {
+    assert.equal(
+      activityLabel({ activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 1 }),
+      "1 workflow running",
     );
   });
 

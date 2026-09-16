@@ -54,7 +54,7 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
-import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
+import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare, workflowNameInput } from "./summariser.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -559,7 +559,8 @@ export class SessionHost {
 
   /**
    * Three `Set.size` reads and a comparison, because this runs for every Agent Session on every
-   * `GET /api/sessions` — the same budget `branch` is held on the record to stay inside.
+   * `GET /api/sessions` — the same budget `branch` is held on the record to stay inside. Independent
+   * workflow activity is a separate scheduler-map lookup when summaries are assembled below.
    */
   private activityOf(record: SessionRecord): SessionStatus {
     return deriveStatus({
@@ -580,6 +581,7 @@ export class SessionHost {
         restingAt: record.restingAt,
         activeSubagents: record.openSubagentIds.size,
         activeBackgroundCalls: record.openBackgroundCallIds.size,
+        activeWorkflows: this.workflowOwner?.active(record.id) ?? 0,
         ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
         lastSeq: record.log.lastSeq,
         ...(record.capabilities ? { capabilities: record.capabilities } : {}),
@@ -959,6 +961,8 @@ export class SessionHost {
     const record = this.record(sessionId);
     this.cancelWorkflowConfirmation(sessionId);
     this.workflowNotifications.delete(sessionId);
+    // A parent abort only stops its current turn. Workflow completions are independent work and
+    // must remain queued for the now-idle parent to report.
     // Aborting means stop, not stop-then-continue: queued follow-ups go too.
     if (record.queue.length > 0) {
       record.queue.length = 0;
@@ -1304,11 +1308,16 @@ export class SessionHost {
   workflowOwner?: {
     stop(sessionId: string): Promise<void>;
     forget(sessionId: string): Promise<void>;
+    active(sessionId: string): number;
     context(sessionId: string): string;
     parent(sessionId: string): WorkflowParent;
     takeNotification(sessionId: string, executionId: string, revision: string): string | undefined;
+    takeCompletion(sessionId: string, executionId: string): string | undefined;
   };
   private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
+  /** Ordered, per-execution completion queue. A session may finish another workflow while its
+   * parent is still reporting the previous one. */
+  private readonly workflowCompletions = new Map<string, string[]>();
   private readonly workflowConfirmations = new Map<string, { sessionId: string; finish: (allowed?: boolean) => void }>();
 
   cancelWorkflowConfirmation(sessionId: string): void {
@@ -1318,25 +1327,60 @@ export class SessionHost {
   workflowWake(sessionId: string, executionId: string, revision: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowNotifications.set(sessionId, { executionId, revision });
+    this.queueWorkflowDrain(sessionId);
+  }
+
+  workflowComplete(sessionId: string, executionId: string): void {
+    if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
+    const pending = this.workflowCompletions.get(sessionId) ?? [];
+    if (!pending.includes(executionId)) pending.push(executionId);
+    this.workflowCompletions.set(sessionId, pending);
+    this.queueWorkflowDrain(sessionId);
+  }
+
+  private queueWorkflowDrain(sessionId: string): void {
     queueMicrotask(() => {
       const record = this.sessions.get(sessionId);
       if (record) void this.drainWorkflowNotification(record).catch(() => {});
     });
   }
 
-  private async drainWorkflowNotification(record: SessionRecord): Promise<void> {
-    if (record.turnInFlight || record.queue.length || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return;
-    const pending = this.workflowNotifications.get(record.id);
-    if (!pending) return;
-    this.workflowNotifications.delete(record.id);
-    const text = this.workflowOwner?.takeNotification(record.id, pending.executionId, pending.revision);
-    if (!text) return;
+  /**
+   * Start one host-driven parent turn for workflow monitoring, but never interrupt a turn already in
+   * flight. Completion is delivered before later Steering Queue entries: "after the current turn"
+   * must not become "after every message that happened to be queued while it ran".
+   */
+  private async drainWorkflowNotification(record: SessionRecord): Promise<boolean> {
+    if (record.turnInFlight || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return false;
+    const recovery = this.workflowNotifications.get(record.id);
+    const completions = recovery ? undefined : this.workflowCompletions.get(record.id);
+    const completion = completions?.shift();
+    if (!recovery && !completion) return false;
+    if (recovery) this.workflowNotifications.delete(record.id);
+    else if (!completions!.length) this.workflowCompletions.delete(record.id);
+    const text = recovery
+      ? this.workflowOwner?.takeNotification(record.id, recovery.executionId, recovery.revision)
+      : this.workflowOwner?.takeCompletion(record.id, completion!);
+    // A recovery can become stale because the execution completed before the parent became free.
+    // Continue to a queued completion in the same drain rather than leaving it with no future wake.
+    if (!text) return this.drainWorkflowNotification(record);
     record.turnInFlight = true;
-    record.log.append({ type: 'notice', level: 'info', text: 'Workflow requires recovery. The parent is inspecting it.' });
-    try { await record.session.prompt(text); }
-    catch (error) {
+    record.log.append({
+      type: 'notice',
+      level: 'info',
+      text: recovery
+        ? 'Workflow requires recovery. The parent is inspecting it.'
+        : 'Workflow completed. The parent is preparing the result.',
+    });
+    try {
+      await record.session.prompt(text);
+      return true;
+    } catch (error) {
       record.turnInFlight = false;
       record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
+      // The notification was consumed but no turn began. Keep draining in case another workflow
+      // event is ready; returning false when there is not one lets drain() release the Steering Queue.
+      return this.drainWorkflowNotification(record);
     }
   }
 
@@ -1379,13 +1423,6 @@ export class SessionHost {
     this.workflowSession(sessionId);
     if (!this.record(sessionId).session) await this.revive(sessionId);
     return this.workflowSession(sessionId);
-  }
-
-  workflowNotice(sessionId: string, text: string): void {
-    const record = this.record(sessionId);
-    if (!record.log.since(0).some(({ event }) => event.type === 'notice' && event.text === text)) {
-      record.log.append({ type: 'notice', level: 'info', text });
-    }
   }
 
   workflowSpend(sessionId: string, executionId: string, spend: Spend): void {
@@ -1431,6 +1468,7 @@ export class SessionHost {
     record.lifecycle = "settled";
     this.workflowStopping.add(sessionId);
     this.workflowNotifications.delete(sessionId);
+    this.workflowCompletions.delete(sessionId);
     for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
     // The retention window runs from here, not from the last thing that happened: settling
     // something untouched for a week still grants it a full window (ADR 0006).
@@ -1573,42 +1611,39 @@ export class SessionHost {
   }
 
   /**
-   * The automatic half: a name for the first message, applied if it is still wanted when it lands.
+   * Automatically name a newly-created Agent Session from a validated workflow launch.
    *
-   * Swallows everything. A name is a convenience and `firstLine` has already produced a usable one,
-   * so a Summary Model that is missing, slow or talking nonsense costs the better name and nothing
-   * else — least of all the turn the human is waiting on.
+   * Like first-message naming, this never blocks or fails the launch. Only the untouched Scope
+   * placeholder may yield: a manual/summary title, or even a first chat message that raced the
+   * workflow start, always wins.
    */
-  private async nameFromSummary(record: SessionRecord, text: string): Promise<void> {
+  async nameWorkflow(sessionId: string, workflowName: string, input: unknown): Promise<void> {
+    const record = this.sessions.get(sessionId);
+    if (record) await this.nameAutomatically(record, workflowNameInput(workflowName, input), "scope");
+  }
+
+  /** Generate and apply a convenience title only while the placeholder which requested it remains. */
+  private async nameAutomatically(
+    record: SessionRecord,
+    input: string,
+    expectedSource: "scope" | "first-line",
+  ): Promise<void> {
+    if (record.titleSource !== expectedSource) return;
     const summary = this.summaryModel?.(record.backendName);
-    // `automatic` is the half of the Setting that governs *this* path only. A session whose owner
-    // turned it off keeps the first line of what they typed, and `rename` still works — which is
-    // the whole point of it being a switch rather than clearing the Summary Model.
     if (!summary?.automatic) return;
 
     const generation = (record.titleGeneration += 1);
     let name: string | undefined;
     try {
-      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, text);
+      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input);
     } catch {
-      // An unknown backend named in the Settings, most likely. Silent, as everything on this path is.
       return;
     }
     if (name === undefined) return;
 
-    /*
-     * Looked up again rather than trusted, because ten seconds is long enough for this Agent Session
-     * to have been Ended, Settled or reaped — and writing a title onto a record nobody holds any
-     * more would persist a meta.json for a session that no longer exists.
-     */
     const current = this.sessions.get(record.id);
-    if (!current || current !== record) return;
-    // `lifecycle`, not the derived activity: what disqualifies a session from being renamed is
-    // that it is over, not that it happens to be mid-turn.
-    if (current.lifecycle === "ended" || current.lifecycle === "settled") return;
-    // Only a first-line name yields to this, and only if nothing newer has been asked for since.
-    if (current.titleSource !== "first-line" || current.titleGeneration !== generation) return;
-
+    if (!current || current !== record || current.lifecycle === "ended" || current.lifecycle === "settled") return;
+    if (current.titleSource !== expectedSource || current.titleGeneration !== generation) return;
     current.title = name;
     current.titleSource = "summary";
     this.touch(current);
@@ -2000,7 +2035,7 @@ export class SessionHost {
        * flicker into and out of blank. It can only happen on a first dispatch, so no *established*
        * name ever changes under its reader.
        */
-      void this.nameFromSummary(record, text);
+      void this.nameAutomatically(record, text, "first-line");
     }
     this.touch(record);
     const workflowContext = this.workflowOwner?.context(record.id);
@@ -2135,8 +2170,12 @@ export class SessionHost {
   }
 
   private async drain(record: SessionRecord): Promise<void> {
+    // Avoid an `await` at all when there is no workflow notification. Yielding here lets a backend
+    // mint a new turn between the check and the queue shift, which would dispatch into that turn.
+    if ((this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) &&
+        await this.drainWorkflowNotification(record)) return;
     const next = record.queue.shift();
-    if (next === undefined) { await this.drainWorkflowNotification(record); return; }
+    if (next === undefined) return;
     record.log.append(queueChanged(record.queue));
     try {
       await this.dispatch(record, next);

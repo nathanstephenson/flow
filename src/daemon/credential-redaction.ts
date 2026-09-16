@@ -6,4 +6,4 @@ export function redactCredentials<T>(value: T, credentials: readonly string[]): 
   const visit = (item: unknown): unknown => typeof item === 'string' ? text(item) : Array.isArray(item) ? item.map(visit) : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, value]) => [text(key), visit(value)])) : item;
   return visit(value) as T;
 }
-export const credentialKey = /(?:authorization|cookie|password|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;
+export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;

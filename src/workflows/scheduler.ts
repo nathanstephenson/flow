@@ -84,6 +84,13 @@ export class WorkflowScheduler {
 
   occupied(sessionId: string): boolean { return this.slots.has(sessionId); }
 
+  /** Whether the slot contains a full execution doing work, excluding tests and recovery waits. */
+  activeFull(sessionId: string): boolean {
+    const executionId = this.slots.get(sessionId);
+    const record = executionId ? this.active.get(executionId)?.record : undefined;
+    return record?.status === 'running' && record.testStepId === undefined;
+  }
+
   forgetSession(sessionId: string): void {
     const executions = [...this.active.values()].filter(active => active.record.sessionId === sessionId);
     if (executions.some(active => active.running.size || active.record.status === 'running')) throw new Error('Workflow work must stop before forgetting an Agent Session');
@@ -91,7 +98,7 @@ export class WorkflowScheduler {
     this.slots.delete(sessionId);
   }
 
-  start(definition: WorkflowDefinition, session: WorkflowSession, input: unknown, testStepId?: string): WorkflowExecution {
+  start(definition: WorkflowDefinition, session: WorkflowSession, input: unknown, testStepId?: string, launchId?: string): WorkflowExecution {
     if (this.occupied(session.sessionId)) throw new Error('Agent Session workflow slot is occupied');
     const graph = validateDefinition(definition);
     if (graph.definition.backend !== session.backend) throw new Error('Backend Adapter mismatch');
@@ -103,6 +110,7 @@ export class WorkflowScheduler {
     const record: WorkflowExecution = {
       version: 1, id: randomUUID(), sessionId: session.sessionId, scope: session.scope,
       definition: graph.definition, input: parsed, status: 'running', startedAt: Date.now(),
+      ...(launchId ? { launchId } : {}),
       steps: Object.fromEntries(graph.order.map(step => [step.id, { status: testStep && step.id !== testStep.id ? 'skipped' : 'pending', attempts: [] }])),
       ...(testStepId === undefined ? { loops: Object.fromEntries(graph.loops.map(loop => [loop.headerId, { activation: 0, try: 0, phase: 'inactive', grants: [] }])) } : { testStepId }),
     };

@@ -55,8 +55,8 @@ describe("what a status means", () => {
   });
 
   describe("banding the rail", () => {
-    const band = (status: SessionStatus, activeSubagents = 0, activeBackgroundCalls = 0) =>
-      railBand({ status, activeSubagents, activeBackgroundCalls });
+    const band = (status: SessionStatus, activeSubagents = 0, activeBackgroundCalls = 0, activeWorkflows = 0) =>
+      railBand({ status, activeSubagents, activeBackgroundCalls, activeWorkflows });
 
     it("orders the bands most alive first", () => {
       assert.deepEqual(
@@ -95,6 +95,11 @@ describe("what a status means", () => {
       assert.equal(band("dormant", 0, 3), band("dormant", 0, 0));
       assert.equal(band("settled", 0, 3), band("settled", 0, 0));
     });
+
+    it("keeps an Idle Agent Session with a full Workflow Execution in the working band", () => {
+      assert.equal(band("idle", 0, 0, 1), band("running"));
+      assert.equal(band("idle", 0, 0, 0), 2);
+    });
   });
 
   describe("working", () => {
@@ -116,6 +121,11 @@ describe("what a status means", () => {
       assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 1 }), true);
       assert.equal(working({ status: "idle", activeSubagents: 1, activeBackgroundCalls: 1 }), true);
       assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 0 }), false);
+    });
+
+    it("is true for a full workflow without fabricating parent occupancy", () => {
+      assert.equal(working({ status: "idle", activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 1 }), true);
+      assert.equal(working({ status: "running", activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 1 }), false);
     });
 
     it("is not a status a Background Call can give a non-live Agent Session", () => {

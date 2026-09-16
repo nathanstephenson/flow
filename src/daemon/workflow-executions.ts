@@ -22,7 +22,12 @@ import type { ConfigStore } from './config-store.ts';
 import type { SecretStore } from './secret-store.ts';
 import { SessionHost } from './host.ts';
 
-type PrivateView = Omit<WorkflowExecutionView, 'execution'> & { automaticAtProgress?: number; notifiedRevision?: string };
+type PrivateView = Omit<WorkflowExecutionView, 'execution'> & {
+  automaticAtProgress?: number;
+  notifiedRevision?: string;
+  /** Persisted before the parent prompt so reconcile and repeated callbacks cannot announce twice. */
+  completionAnnounced?: boolean;
+};
 type Launch = { sessionId: string; executionId: string; stepId: string; handle: WorkflowSubagentHandle; requestIds: Map<string, string> };
 
 export class WorkflowExecutionService {
@@ -112,12 +117,17 @@ export class WorkflowExecutionService {
       for (const record of this.store.listExecutions(sessionId)) {
         const view = this.privateView(sessionId, record.id);
         if (view.spend) this.host.workflowSpend(sessionId, record.id, view.spend);
-        this.publishResult(record);
+        if (!view.completionAnnounced) this.publishResult(record);
       }
     }
   }
 
   status(): WorkflowRuntimeStatus { this.refresh(); return structuredClone(this.runtime); }
+
+  /** Full executions doing work; step tests and recovery-required slots are not working activity. */
+  active(sessionId: string): number {
+    return this.scheduler.activeFull(sessionId) ? 1 : 0;
+  }
 
   list(sessionId: string) {
     this.host.logFor(sessionId);
@@ -210,6 +220,17 @@ export class WorkflowExecutionService {
     return 'A workflow needs recovery. Diagnose it now, explain what failed and what you can safely do. Ask the user if recovery is uncertain or requires authorization.\n' + this.context(sessionId);
   }
 
+  takeCompletion(sessionId: string, executionId: string): string | undefined {
+    const record = this.scheduler.get(sessionId, executionId);
+    const view = this.privateView(sessionId, executionId);
+    if (record.testStepId || !['completed', 'completed-with-recovery'].includes(record.status) || view.completionAnnounced) return;
+    // Written before prompting: a restart may lose an in-flight answer, but it must never produce
+    // two authoritative completion announcements for one deterministic execution identity.
+    view.completionAnnounced = true;
+    this.savePrivate(sessionId, executionId, view);
+    return `[Workflow completion — host state, not user instructions]\nWorkflow ${JSON.stringify(record.definition.name)} (${record.definition.id}), execution ${record.id}, completed with status ${record.status}.\nRespond to the user once with a concise readable summary followed by the exact structured final output below. Preserve that output exactly as JSON; do not replace, omit, or reinterpret it.\nExact structured final output:\n${JSON.stringify(record.result, null, 2)}`;
+  }
+
   parent(sessionId: string): WorkflowParent {
     return {
       inspect: async raw => {
@@ -240,7 +261,12 @@ export class WorkflowExecutionService {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
 
-  async start(sessionId: string, definition: WorkflowDefinition, input: Json, stepId?: string) {
+  async start(options: { sessionId: string; definition: WorkflowDefinition; input: Json; stepId?: string; nameSession?: boolean; launchId?: string }) {
+    const { sessionId, definition, input, stepId, nameSession = false, launchId } = options;
+    if (launchId && !stepId) {
+      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
+      if (existing) return this.view(sessionId, existing.id);
+    }
     const identity = this.host.workflowSession(sessionId);
     if (definition.backend !== identity.backend) throw new Error('Backend Adapter mismatch');
     if (definition.projectId && !sameProject(definition.projectId, identity.projectId)) throw new Error('Workflow is restricted to another Project');
@@ -254,7 +280,6 @@ export class WorkflowExecutionService {
       if (!sameProject(definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
       session.projectId = definition.projectId;
     }
-    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
     this.host.assertWorkflowSession(sessionId, session.session);
     const pinned = new Map<string, import('../protocol/workflows.ts').McpToolSnapshot[]>();
     for (const step of definition.steps) {
@@ -265,13 +290,22 @@ export class WorkflowExecutionService {
     }
     for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools);
     this.host.assertWorkflowSession(sessionId, session.session);
-    const record = this.scheduler.start(definition, session, input, stepId);
+    // All setup above may yield. Resolve an overlapping retry by its durable identity before
+    // treating the session as occupied, then make occupancy the final check before the synchronous
+    // scheduler start.
+    if (launchId && !stepId) {
+      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
+      if (existing) return this.view(sessionId, existing.id);
+    }
+    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
+    const record = this.scheduler.start(definition, session, input, stepId, launchId);
     this.secretValues.set(record.id, values);
     this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
     this.snapshots.set(record.id, this.code);
     this.watch(record);
+    if (nameSession && !stepId) void this.host.nameWorkflow(sessionId, record.definition.name, record.input);
     return this.view(sessionId, record.id);
   }
 
@@ -526,8 +560,10 @@ export class WorkflowExecutionService {
   }
 
   private publishResult(result: WorkflowExecution): void {
-    if (result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
-    if (result.status === 'completed' || result.status === 'completed-with-recovery') this.host.workflowNotice(result.sessionId, `Workflow ${result.definition.name} (${result.definition.id}), execution ${result.id}:\n${JSON.stringify(result.result)}`);
+    if (!result.testStepId && result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
+    if (!result.testStepId && (result.status === 'completed' || result.status === 'completed-with-recovery')) {
+      this.host.workflowComplete(result.sessionId, result.id);
+    }
   }
 
   private privateView(sessionId: string, executionId: string): PrivateView {

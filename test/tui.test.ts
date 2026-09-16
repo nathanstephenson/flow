@@ -61,7 +61,7 @@ const CAPABILITIES: Capabilities = {
 function baseUi(overrides: Partial<UiState> = {}): UiState {
   return {
     sessions: [
-      { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "First", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
+      { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "First", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 0, lastSeq: 0 },
     ],
     selected: "s1",
     view: { ...initialState(), capabilities: CAPABILITIES },
@@ -87,9 +87,9 @@ describe("TUI rendering", () => {
       overlay: { kind: "sessions", index: 0 },
       now,
       sessions: [
-        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "Live one", restingAt: at(30_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
-        { id: "s2", scope: "/tmp", backend: "fake", status: "dormant", title: "Older", restingAt: at(3 * 3_600_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
-        { id: "s3", scope: "/tmp", backend: "fake", status: "settled", title: "Filed away", restingAt: at(5 * 60_000), activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "Live one", restingAt: at(30_000), activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 0, lastSeq: 0 },
+        { id: "s2", scope: "/tmp", backend: "fake", status: "dormant", title: "Older", restingAt: at(3 * 3_600_000), activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 0, lastSeq: 0 },
+        { id: "s3", scope: "/tmp", backend: "fake", status: "settled", title: "Filed away", restingAt: at(5 * 60_000), activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 0, lastSeq: 0 },
       ],
     });
 
@@ -109,7 +109,7 @@ describe("TUI rendering", () => {
     const ui = baseUi({
       overlay: { kind: "sessions", index: 0 },
       sessions: [
-        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, lastSeq: 0 },
+        { id: "s1", scope: "/tmp", backend: "fake", status: "idle", title: "", restingAt: "", activeSubagents: 0, activeBackgroundCalls: 0, activeWorkflows: 0, lastSeq: 0 },
       ],
     });
     const frame = renderFrame(ui, { columns: 80, rows: 12 });

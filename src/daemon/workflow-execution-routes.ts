@@ -32,10 +32,12 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
       const input = () => { if (!Object.hasOwn(body, 'input')) throw new Error(); return body.input as Json; };
       if (test) {
         keys('definition', 'sessionId', 'stepId', 'input');
-        reply(200, await service.start(string('sessionId'), validateDefinition(body.definition).definition, input(), string('stepId')));
+        reply(200, await service.start({ sessionId: string('sessionId'), definition: validateDefinition(body.definition).definition, input: input(), stepId: string('stepId') }));
       } else if (!match![2]) {
-        keys('workflowId', 'input');
-        reply(200, await service.start(match![1]!, store.getDefinition(string('workflowId')), input()));
+        keys('workflowId', 'input', 'launchId', 'nameSession');
+        if (body.nameSession !== undefined && body.nameSession !== true) throw new Error();
+        const launchId = body.launchId === undefined ? undefined : string('launchId');
+        reply(200, await service.start({ sessionId: match![1]!, definition: store.getDefinition(string('workflowId')), input: input(), nameSession: body.nameSession === true, ...(launchId ? { launchId } : {}) }));
       } else {
         const sessionId = match![1]!, executionId = match![2]!;
         switch (match![3]) {

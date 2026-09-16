@@ -207,6 +207,54 @@ describe("SessionHost", () => {
     assert.deepEqual(backend.latest.prompts, ["first"]);
   });
 
+  it("releases a queued message when a workflow notification prompt rejects", async () => {
+    host.workflowOwner = {
+      active: () => 0,
+      stop: async () => {},
+      forget: async () => {},
+      context: () => "",
+      parent: () => { throw new Error("unused"); },
+      takeNotification: () => undefined,
+      takeCompletion: () => "workflow finished",
+    };
+    await host.send(sessionId, "parent turn", "now");
+    await host.send(sessionId, "queued human message", "after_turn");
+    host.workflowComplete(sessionId, "workflow");
+
+    const originalPrompt = backend.latest.prompt.bind(backend.latest);
+    backend.latest.prompt = async (text, attachments) => {
+      if (text === "workflow finished") throw new Error("notification rejected");
+      await originalPrompt(text, attachments);
+    };
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(backend.latest.prompts, ["parent turn", "queued human message"]);
+    assert.ok(events(host, sessionId).some((event) => event.type === "notice" && event.text.includes("notification rejected")));
+  });
+
+  it("preserves consecutive workflow completions across a parent abort", async () => {
+    host.workflowOwner = {
+      active: () => 0,
+      stop: async () => {},
+      forget: async () => {},
+      context: () => "",
+      parent: () => { throw new Error("unused"); },
+      takeNotification: () => undefined,
+      takeCompletion: (_id, executionId) => `completed ${executionId}`,
+    };
+    await host.send(sessionId, "parent turn", "now");
+    host.workflowComplete(sessionId, "first");
+    host.workflowComplete(sessionId, "first");
+    host.workflowComplete(sessionId, "second");
+    await host.abort(sessionId);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(backend.latest.prompts.filter(prompt => prompt.includes("completed first")).length, 1);
+    backend.latest.completeTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(backend.latest.prompts.filter(prompt => prompt.includes("completed second")).length, 1);
+  });
+
   it("drops queued messages when the turn is aborted", async () => {
     await host.send(sessionId, "first", "now");
     await host.send(sessionId, "second", "after_turn");
