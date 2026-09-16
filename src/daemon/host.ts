@@ -206,6 +206,13 @@ type SessionRecord = {
 export type SessionHostOptions = {
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
+  /**
+   * Read a Secret by name, for an MCP header that names one rather than carrying a literal.
+   *
+   * A bound function rather than the SecretStore itself, for the reason `allowTool` is one. Omitted
+   * means a connection with a secret-backed header fails to open.
+   */
+  resolveSecret?: (name: string) => string;
   store?: TranscriptStore;
   /**
    * How long a Settled Agent Session survives before it is reaped, in milliseconds. `"never"`
@@ -433,10 +440,12 @@ export class SessionHost {
 
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
+  private readonly resolveSecret: SessionHostOptions["resolveSecret"];
 
   constructor(options: SessionHostOptions = {}) {
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
+    this.resolveSecret = options.resolveSecret;
     this.store = options.store;
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
@@ -1752,6 +1761,13 @@ export class SessionHost {
     for (const connection of this.mcpConnections?.() ?? []) {
       if (connection.transport === 'http') {
         for (const [key, value] of new URL(connection.url).searchParams) if (credentialKey.test(key) && value) values.push(value);
+        // A literal header is only redacted when its name reads as a credential: redaction is
+        // substring replacement, so feeding it an innocuous `X-Tenant-Id: 1` would corrupt every
+        // transcript. A secret-backed header is always redacted — that is what naming a Secret means.
+        for (const [name, source] of Object.entries(connection.headers)) {
+          if (!('secret' in source)) { if (credentialKey.test(name)) values.push(source.value); }
+          else if (this.resolveSecret) try { values.push(this.resolveSecret(source.secret)); } catch {}
+        }
       } else {
         connection.args.forEach((arg, index) => {
           if (credentialKey.test(arg.split('=')[0]!)) { const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : connection.args[index + 1]; if (value) values.push(value); }
@@ -1772,7 +1788,7 @@ export class SessionHost {
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true);
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret);
   }
 
   mcpStatus(id: string) {
@@ -1807,7 +1823,7 @@ export class SessionHost {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
-      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined);
+      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret);
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const session = await backend.create({

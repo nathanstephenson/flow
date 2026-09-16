@@ -167,8 +167,10 @@ async function startHost(
   // One store, shared: the Session Host writes Attachments through it and the HTTP surface reads
   // them back through the same one, so there is no second opinion about where they live.
   const store = new TranscriptStore();
+  const secrets = new SecretStore(root);
   const host = new SessionHost({
     store,
+    resolveSecret: (name) => secrets.resolve(name),
     retention: config.retention,
     mcpConnections: config.mcpConnections,
     mcpAuth,
@@ -182,7 +184,6 @@ async function startHost(
   });
   registerBackends(host);
   const workflows = new WorkflowStore(root);
-  const secrets = new SecretStore(root);
   const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config,
     isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)));
   // load() sweeps once, so a daemon that was off for a week catches up on the way in.
