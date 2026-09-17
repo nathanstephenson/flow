@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { query, type Options, type Query, type SDKMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
+import type { ModelAutoCompaction } from "../../src/protocol/settings.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "../../src/backend/claude/workflow-subagent.ts";
 import { WorkflowProcesses } from "../../src/backend/claude/workflow-processes.ts";
@@ -22,7 +23,7 @@ const result = (text = "{}") => ({ type: "result", subtype: "success", result: t
   sonnet: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 4, cacheCreationInputTokens: 1, costUSD: 0.1 },
 } } as unknown as SDKMessage);
 
-function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true) {
+function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true, autoCompaction: ModelAutoCompaction = {}) {
   const messages = new AsyncQueue<SDKMessage>();
   const started = gate();
   const stopped = gate();
@@ -42,7 +43,7 @@ function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true) {
       return { [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), supportedModels: async () => [{ value: "sonnet", supportsEffort: effort,
         supportedEffortLevels: effort ? ["low", "high"] : [] }], close: () => { messages.close(); closed.resolve(); } } as unknown as Query;
     }) as typeof query,
-  });
+  }, autoCompaction);
   return { handle, events, messages, started, stopped, closed, launch: () => launch, prompt: () => prompt };
 }
 
@@ -72,6 +73,58 @@ it("isolates query options, preserves full JSON and Spend, and waits for SDK pro
   assert.deepEqual(f.events, [{ subagentId: "step", event: { type: "spend", spend: {
     tokens: 10, cached: 4, costUSD: 0.1, models: [{ id: "sonnet", tokens: 10, cached: 4, costUSD: 0.1 }],
   } } }]);
+});
+
+it("applies each workflow model's opening compaction policy without losing isolation flags", { timeout: 5000 }, async () => {
+  const enabled = fixture({}, true, { sonnet: { mode: "enabled", targetPercent: 82 } });
+  const disabled = fixture({}, true, { sonnet: { mode: "disabled" } });
+  const defaults = fixture();
+  await Promise.all([enabled.started.promise, disabled.started.promise, defaults.started.promise]);
+
+  assert.equal(enabled.launch().env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "82");
+  assert.equal(enabled.launch().env?.DISABLE_AUTO_COMPACT, "0");
+  assert.equal(disabled.launch().env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+  assert.equal(disabled.launch().env?.DISABLE_AUTO_COMPACT, "1");
+  assert.equal(defaults.launch().env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE);
+  assert.equal(defaults.launch().env?.DISABLE_AUTO_COMPACT, process.env.DISABLE_AUTO_COMPACT);
+  for (const launch of [enabled.launch(), disabled.launch(), defaults.launch()]) {
+    assert.equal(launch.env?.PATH, process.env.PATH, "the child preserves its startup environment");
+    assert.equal(launch.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
+    assert.equal(launch.env?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+    assert.equal(launch.env?.CLAUDE_CODE_DISABLE_BUNDLED_SKILLS, "1");
+    assert.equal(launch.persistSession, false);
+    assert.deepEqual(launch.settingSources, []);
+  }
+  enabled.launch().env!.DISABLE_AUTO_COMPACT = "changed";
+  assert.equal(disabled.launch().env?.DISABLE_AUTO_COMPACT, "1");
+
+  for (const f of [enabled, disabled, defaults]) { f.messages.push(result()); f.stopped.resolve(); }
+  assert.deepEqual(await Promise.all([enabled.handle.done, disabled.handle.done, defaults.handle.done]), ["{}", "{}", "{}"]);
+});
+
+it("records Claude compact boundaries and continues the same attempt to final JSON", { timeout: 5000 }, async () => {
+  const f = fixture();
+  await f.started.promise;
+  let done = false;
+  void f.handle.done.then(() => { done = true; });
+  f.messages.push({ type: "system", subtype: "compact_boundary", compact_metadata: {
+    trigger: "auto", pre_tokens: 84_000, post_tokens: 22_000,
+  } } as unknown as SDKMessage);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(done, false, "compaction does not complete the Workflow Step");
+  f.messages.push({ type: "assistant", uuid: "after-compaction", message: {
+    content: [{ type: "text", text: '{"draft":true}' }],
+  } } as unknown as SDKMessage);
+  f.messages.push(result('{"final":true}'));
+  f.stopped.resolve();
+  assert.equal(await f.handle.done, '{"final":true}');
+  assert.deepEqual(f.events.filter(({ event }) => event.type === "compacted"), [{
+    subagentId: "step",
+    event: { type: "compacted", trigger: "auto", before: 84_000, after: 22_000 },
+  }]);
+  assert.equal(f.events.some(({ event }) => event.type === "compacting"), false,
+    "Claude exposes no truthful automatic-compaction start signal");
+  assert.equal(f.events.filter(({ event }) => event.type === "message").length, 1);
 });
 
 it("routes independent permissions and never auto-answers Enquiries", { timeout: 5000 }, async () => {
@@ -115,6 +168,53 @@ it("cancels before startup and strictly validates model and Effort, including no
   assert.equal(off.launch().effort, undefined);
   off.messages.push(result()); off.stopped.resolve();
   assert.equal(await off.handle.done, "{}");
+});
+
+it("keeps the backend-open snapshot stable for child attempts and refreshes it on reopen", { timeout: 5000 }, async () => {
+  const runs: { launch: Options; messages: AsyncQueue<SDKMessage> }[] = [];
+  const backend = new ClaudeBackend({ query: ((args: Parameters<typeof query>[0]) => {
+    const messages = new AsyncQueue<SDKMessage>();
+    runs.push({ launch: args.options!, messages });
+    return {
+      [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+      supportedModels: async () => [
+        { value: "opus", supportedEffortLevels: ["high"] },
+        { value: "sonnet", supportedEffortLevels: ["high"] },
+      ],
+      getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+      interrupt: async () => {},
+      close: () => messages.close(),
+    } as unknown as Query;
+  }) as typeof query });
+  const snapshot: ModelAutoCompaction = {
+    opus: { mode: "disabled" }, sonnet: { mode: "enabled", targetPercent: 77 },
+  };
+  const parent = await backend.create({ scope: "/tmp", modelId: "opus", autoCompaction: snapshot, emit: () => {} });
+  snapshot.sonnet = { mode: "disabled" };
+  const first = parent.startWorkflowSubagent!(options());
+  while (runs.length < 2) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs[0]!.launch.env?.DISABLE_AUTO_COMPACT, "1", "parent model keeps its own policy");
+  assert.equal(runs[1]!.launch.env?.DISABLE_AUTO_COMPACT, "0");
+  assert.equal(runs[1]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "77");
+  runs[1]!.messages.push(result());
+  assert.equal(await first.done, "{}");
+
+  const retry = parent.startWorkflowSubagent!(options({ id: "retry" }));
+  while (runs.length < 3) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs[2]!.launch.env?.DISABLE_AUTO_COMPACT, "0");
+  assert.equal(runs[2]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "77");
+  runs[2]!.messages.push(result());
+  assert.equal(await retry.done, "{}");
+  await parent.dispose();
+
+  const reopened = await backend.create({ scope: "/tmp", modelId: "opus", autoCompaction: snapshot, emit: () => {} });
+  const refreshed = reopened.startWorkflowSubagent!(options());
+  while (runs.length < 5) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs[4]!.launch.env?.DISABLE_AUTO_COMPACT, "1");
+  assert.equal(runs[4]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+  runs[4]!.messages.push(result());
+  assert.equal(await refreshed.done, "{}");
+  await reopened.dispose();
 });
 
 it("registers handles before startup, leaves parent abort independent, and awaits starting handles on repeated disposal", { timeout: 5000 }, async () => {

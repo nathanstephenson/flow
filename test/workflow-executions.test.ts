@@ -756,6 +756,34 @@ it('relays Workflow permissions with exact scope and rejects Always for direct c
   } finally { await f.close(); }
 });
 
+it('keeps compaction progress and successful markers inside the Workflow attempt transcript', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    handle.emit({ type: 'compacting', active: true });
+    let page = await f.service.activity(f.id, started.execution.id, { stepId: 'agent', attempt: 1 });
+    assert.equal(reduceAll(page.activity.flatMap(item => item.event.type === 'spend' ? [] : [{
+      sessionId: f.id, seq: item.sequence, at: new Date(item.at).toISOString(), event: item.event,
+    }])).compacting, true);
+    assert.equal(f.host.logFor(f.id).since(0).some(({ event }) => event.type === 'compacting' || event.type === 'compacted'), false);
+
+    handle.emit({ type: 'compacting', active: false });
+    handle.emit({ type: 'compacted', trigger: 'auto', before: 84_000 });
+    handle.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    page = await f.service.activity(f.id, started.execution.id, { stepId: 'agent', attempt: 1 });
+    const reduced = reduceAll(page.activity.flatMap(item => item.event.type === 'spend' ? [] : [{
+      sessionId: f.id, seq: item.sequence, at: new Date(item.at).toISOString(), event: item.event,
+    }]));
+    assert.equal(reduced.compacting, undefined);
+    assert.ok(reduced.entries.some(entry => entry.kind === 'marker' && entry.marker === 'compacted' &&
+      entry.text === 'Compacted automatically, from 84k tokens'));
+    assert.equal(f.host.logFor(f.id).since(0).some(({ event }) => event.type === 'compacting' || event.type === 'compacted'), false);
+  } finally { await f.close(); }
+});
+
 it('opens activity from the retained tail and pages backward without changing forward pagination', async () => {
   const f = await fixture();
   try {

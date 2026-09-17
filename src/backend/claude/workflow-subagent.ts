@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { query, type Options, type Query, type SDKUserMessage, type SpawnedProcess, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts";
+import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { PendingEnquiries, ASK_TOOL, questionsOf } from "./enquiries.ts";
 import { PendingPermissions, type Settle } from "./permissions.ts";
-import { describeSpend } from "./index.ts";
+import { describeCompaction, describeSpend } from "./index.ts";
+import { claudeAutoCompactionEnv } from "./auto-compaction.ts";
 import { WorkflowProcesses } from "./workflow-processes.ts";
 
 export type WorkflowQueryDependencies = {
@@ -28,13 +30,15 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
 
   private readonly launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">;
   private readonly dependencies: WorkflowQueryDependencies;
+  private readonly autoCompaction: ModelAutoCompaction;
 
   constructor(launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">,
     options: WorkflowSubagentOptions, grants: Set<string>,
-    dependencies: WorkflowQueryDependencies = {}) {
+    dependencies: WorkflowQueryDependencies = {}, autoCompaction: ModelAutoCompaction = {}) {
     this.launch = launch;
     this.dependencies = dependencies;
     this.options = { ...options, input: structuredClone(options.input) };
+    this.autoCompaction = autoCompaction;
     this.grants = grants;
     this.work = new WorkflowProcesses(launch.cwd!, (event) => this.emit(event));
     this.done = Promise.resolve().then(() => this.run());
@@ -103,6 +107,7 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
       controller.signal.throwIfAborted();
       if (!["ask", "auto-accept"].includes(options.permissionMode)) throw new Error("Unsupported workflow permission mode");
       if (options.effort === "minimal") throw new Error(`Unsupported workflow Effort: ${options.effort}`);
+      const compactionEnv = claudeAutoCompactionEnv(this.autoCompaction[options.modelId]) ?? process.env;
       const stream = (this.dependencies.query ?? query)({ prompt: this.inbox, options: {
         ...this.launch, model: options.modelId,
         ...(options.effort === "off" ? {} : { effort: options.effort }),
@@ -112,7 +117,7 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
         disallowedTools: ["Agent", "Task", "Bash", "BashOutput", "KillShell", "TaskOutput", "TaskStop", "Monitor", "Skill", ...(this.launch.disallowedTools ?? [])],
         mcpServers: { ...this.launch.mcpServers, workflow: this.work.server }, permissionMode: "default", allowedTools: [],
         abortController: controller,
-        env: { ...process.env, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+        env: { ...compactionEnv, CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
           CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: "1", CLAUDE_CODE_EFFORT_LEVEL: undefined },
         hooks: { PreToolUse: [{ hooks: [async () => ({
           hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask" },
@@ -139,6 +144,11 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
         message: { role: "user", content: JSON.stringify(options.input) } });
       for await (const message of stream) {
         controller.signal.throwIfAborted();
+        // Claude exposes automatic compaction only after the boundary has landed. Record that
+        // truthful completion and continue consuming the same query until its schema-valid result.
+        if (message.type === "system" && message.subtype === "compact_boundary") {
+          this.emit(describeCompaction(message.compact_metadata));
+        }
         if (message.type === "assistant") {
           const text = message.message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
           if (text) this.emit({ type: "message", id: message.uuid, text, final: true });

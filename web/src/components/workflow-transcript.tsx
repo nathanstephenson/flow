@@ -190,12 +190,14 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
     };
   }, []);
 
-  const entries = useMemo(() => reduceAll(activity.flatMap(item => item.event.type === "spend" ? [] : [{
+  const transcript = useMemo(() => reduceAll(activity.flatMap(item => item.event.type === "spend" ? [] : [{
     sessionId,
     seq: item.sequence,
     at: new Date(item.at).toISOString(),
     event: item.event,
-  } as LoggedEvent])).entries, [activity, sessionId]);
+  } as LoggedEvent])), [activity, sessionId]);
+  const entries = transcript.entries;
+  const compacting = !completed && transcript.compacting === true;
 
   const toLatest = useCallback(() => {
     const element = scroller.current;
@@ -229,7 +231,12 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
           </div>
         ) : null}
         {entries.map(entry => <TranscriptEntry key={entryKey(entry)} entry={entry} query="" sessionId={sessionId} />)}
-        {!loading && !entries.length && !error ? <p className="p-2 text-xs text-muted-foreground">No activity recorded for this attempt.</p> : null}
+        {compacting ? (
+          <p className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground" role="status" data-testid="workflow-compacting">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />Compacting context…
+          </p>
+        ) : null}
+        {!loading && !entries.length && !compacting && !error ? <p className="p-2 text-xs text-muted-foreground">No activity recorded for this attempt.</p> : null}
       </div>
       {!atBottom && activity.length ? (
         <button type="button" onClick={toLatest} aria-label="Jump to latest Workflow activity" className="absolute right-3 bottom-3 rounded-full border bg-popover p-2 text-popover-foreground shadow-md hover:bg-muted">
