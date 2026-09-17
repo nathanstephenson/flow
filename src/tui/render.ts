@@ -7,7 +7,7 @@ import {
   rowsFor,
   type Answering,
 } from "../client/enquiry.ts";
-import { authorisationLabel, PERMISSION_CHOICES } from "../client/permission.ts";
+import { authorisationLabel, permissionChoices } from "../client/permission.ts";
 import type { Entry, ViewState } from "../client/reduce.ts";
 import { toolSummary } from "../client/tool-summary.ts";
 import { relativeTime } from "../client/relative-time.ts";
@@ -138,7 +138,7 @@ function enquiryLines(ui: UiState, width: number): string[] {
   const mode = question.multiSelect ? "  (choose any)" : "";
   const title = `${question.header}${progress ? `  (${progress})` : ""}${mode}`;
 
-  const lines = [rule(title, width), ...wrap(question.question, width)];
+  const lines = [rule(title, width), ...(asking.context ? wrap(asking.context, width) : []), ...wrap(question.question, width)];
   rows.forEach((row, index) => {
     const onCursor = index === state.cursor;
     const cursor = onCursor ? ">" : " ";
@@ -200,9 +200,11 @@ function permissionLines(ui: UiState, width: number): string[] {
   const summary = call ? toolSummary(call.input) : undefined;
 
   const lines = [rule(`Authorise ${authorising.tool}?`, width)];
+  if (authorising.context) lines.push(...wrap(authorising.context, width));
   if (summary) lines.push(...wrap(summary, width));
+  if (authorising.authorizationScope) lines.push(...wrap(`Scope: ${authorising.authorizationScope}`, width));
 
-  PERMISSION_CHOICES.forEach((choice, index) => {
+  permissionChoices(authorising.allowAlways).forEach((choice, index) => {
     const onCursor = index === cursor;
     const head = `${onCursor ? ">" : " "} ${index + 1} ${choice.label}`;
     // The description in full on the cursor row and clipped elsewhere, the rule `enquiryLines`
@@ -231,7 +233,7 @@ function promptLine(ui: UiState, width: number): string {
   // typed. `!` rather than `?`: the difference between being asked something and being asked to
   // allow something is the whole distinction between an Enquiry and this, and the sigil is the only
   // place a terminal has to say it.
-  if (ui.view.authorising) return clip("! [1-3 to decide]", width);
+  if (ui.view.authorising) return clip(`! [1-${permissionChoices(ui.view.authorising.allowAlways).length} to decide]`, width);
   if (!ui.view.asking) return clip(`> ${ui.input}`, width);
   return clip(ui.input === "" ? "? [type your own answer]" : `? ${ui.input}`, width);
 }
@@ -258,7 +260,7 @@ function status(ui: UiState, width: number): string {
    */
   parts.push(
     ui.view.authorising
-      ? "↑↓ choose  1-3 pick  enter decide  esc deny"
+      ? `↑↓ choose  1-${permissionChoices(ui.view.authorising.allowAlways).length} pick  enter decide  esc deny`
       : ui.view.asking
       ? "↑↓ choose  1-9 pick  enter answer  esc abort"
       : `^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`,

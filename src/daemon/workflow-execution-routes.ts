@@ -7,7 +7,7 @@ import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
 import { workflowRequestError } from './workflow-routes.ts';
 
 export async function workflowExecutionRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, service?: WorkflowExecutionService, store?: WorkflowStore): Promise<boolean> {
-  const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflows(?:\/([a-zA-Z0-9_-]+)(?:\/(cancel|recover|enquiry|permission|activity))?)?$/.exec(pathname);
+  const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflows(?:\/([a-zA-Z0-9_-]+)(?:\/(cancel|recover|activity))?)?$/.exec(pathname);
   const discovery = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/workflow-mcp(?:\/([a-zA-Z0-9_-]+))?$/.exec(pathname);
   const test = pathname === '/api/workflows/test' && request.method === 'POST';
   const runtime = pathname === '/api/workflow-runtime';
@@ -19,7 +19,14 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
     else if (request.method === 'GET' && runtime) reply(200, service.status());
     else if (request.method === 'GET' && match?.[3] === 'activity') {
       const query = new URL(request.url!, 'http://localhost').searchParams;
-      reply(200, await service.activity(match[1]!, match[2]!, { after: Number(query.get('after') ?? 0), limit: Number(query.get('limit') ?? 100), ...(query.has('stepId') ? { stepId: query.get('stepId')! } : {}), ...(query.has('attempt') ? { attempt: Number(query.get('attempt')) } : {}) }));
+      reply(200, await service.activity(match[1]!, match[2]!, {
+        ...(query.has('after') ? { after: Number(query.get('after')) } : {}),
+        ...(query.has('before') ? { before: Number(query.get('before')) } : {}),
+        ...(query.get('latest') === 'true' ? { latest: true } : {}),
+        limit: Number(query.get('limit') ?? 100),
+        ...(query.has('stepId') ? { stepId: query.get('stepId')! } : {}),
+        ...(query.has('attempt') ? { attempt: Number(query.get('attempt')) } : {}),
+      }));
     }
     else if (request.method === 'GET' && match && !match[3]) reply(200, match[2] ? service.view(match[1]!, match[2]) : service.list(match[1]!));
     else if (request.method === 'POST' && !runtime) {
@@ -54,14 +61,6 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
             else throw new Error();
             reply(200, await service.recover(sessionId, executionId, body as RecoverWorkflow)); break;
           }
-          case 'enquiry':
-            keys('subagentId', 'askId', 'answers'); string('subagentId'); string('askId');
-            if (!Array.isArray(body.answers) || !body.answers.every((answer: unknown) => Array.isArray(answer) && answer.every(value => typeof value === 'string'))) throw new Error();
-            reply(200, await service.answer(sessionId, executionId, body)); break;
-          case 'permission':
-            keys('subagentId', 'callId', 'decision'); string('subagentId'); string('callId');
-            if (!['allow', 'deny', 'always'].includes(body.decision)) throw new Error();
-            reply(200, await service.answer(sessionId, executionId, body)); break;
           default: reply(405, { error: 'Method not allowed' });
         }
       }

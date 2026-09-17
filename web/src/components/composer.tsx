@@ -12,7 +12,7 @@ import { AttachmentTray } from "@/components/attachment-tray.tsx";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
 import { ComposerEnquiry } from "@/components/composer-enquiry.tsx";
 import { ComposerPermission } from "@/components/composer-permission.tsx";
-import { PERMISSION_CHOICES } from "@client/permission.ts";
+import { permissionChoices } from "@client/permission.ts";
 import { occupied } from "@client/status.ts";
 import { ComposerMenu } from "@/components/composer-menu.tsx";
 import {
@@ -28,6 +28,7 @@ import {
   type Answering,
 } from "../../../src/client/enquiry.ts";
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
+import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
 import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -142,6 +143,11 @@ export function Composer({
   const seed = useRef(drafts.read(id)).current;
   const [text, setText] = useState(seed.text);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(seed.attachments);
+  /** A Workflow relay borrows the input for free text without consuming the ordinary Draft. */
+  const relayedDraft = useRef<Draft | undefined>(undefined);
+  const relayedFor = useRef<string | undefined>(undefined);
+  // Invalidates asynchronous attachment work whenever the relay borrows or releases the composer.
+  const attachmentEpoch = useRef(0);
   const [sending, setSending] = useState(false);
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
@@ -173,7 +179,31 @@ export function Composer({
   const [decidingFor, setDecidingFor] = useState<string | undefined>(undefined);
 
   const asking = chrome.asking;
+  const askingRef = useRef(asking);
+  askingRef.current = asking;
   const authorising = chrome.authorising;
+  // Existing parent Enquiries keep their established behaviour. A Workflow relay is different: it
+  // can wake an otherwise idle parent while the human is drafting a normal message, and that Draft
+  // must come back byte-for-byte after the relayed answer is submitted or canceled.
+  if (asking?.context && relayedFor.current !== asking.askId) {
+    // A coalesced terminal snapshot and next request can replace one relay with another in a single
+    // render. Keep the original message Draft, not the answer text from the relay that just closed.
+    relayedDraft.current ??= { text, attachments };
+    relayedFor.current = asking.askId;
+    attachmentEpoch.current++;
+    setText("");
+    setAttachments([]);
+  } else if (!asking?.context && relayedFor.current !== undefined) {
+    const saved = relayedDraft.current;
+    relayedDraft.current = undefined;
+    relayedFor.current = undefined;
+    attachmentEpoch.current++;
+    if (saved) {
+      setText(saved.text);
+      setAttachments(saved.attachments);
+    }
+  }
+  const permissionRows = useMemo(() => permissionChoices(authorising?.allowAlways), [authorising?.allowAlways]);
   /** Either callback the CLI is blocked on. Nothing may be sent while one is open. */
   const blocked = asking !== undefined || authorising !== undefined;
 
@@ -240,7 +270,7 @@ export function Composer({
    */
   const latest = useRef<Draft>(seed);
   useEffect(() => {
-    latest.current = { text, attachments };
+    latest.current = relayedDraft.current ?? { text, attachments };
   }, [text, attachments]);
   useEffect(
     () => () => {
@@ -261,16 +291,24 @@ export function Composer({
    */
   const paste = useCallback(
     (files: File[]): boolean => {
+      // A relayed Enquiry owns only temporary answer text. It must never acquire files that would
+      // either be silently discarded or race into the ordinary Draft when the relay closes.
+      if (relayedFor.current !== undefined) return true;
       if (!acceptsImages) {
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
         return true;
       }
+      const epoch = attachmentEpoch.current;
       void attachPasted(files, attachments.length).then((accepted) => {
+        if (epoch !== attachmentEpoch.current || relayedFor.current !== undefined) {
+          forget(accepted);
+          return;
+        }
         if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
       });
       return true;
     },
-    [acceptsImages, attachments.length, chrome.model],
+    [acceptsImages, attachments.length, chrome.model, forget],
   );
 
   const catalogue = useMemo(
@@ -344,19 +382,28 @@ export function Composer({
    * which is the same promise the rest of this file makes.
    */
   const commit = useCallback(
-    (answer: string[]): void => {
+    async (answer: string[]): Promise<void> => {
       if (!asking || !answering) return;
       const next: Answering = {
         index: answering.index + 1,
         cursor: 0,
         chosen: answering.chosen.map((was, index) => (index === answering.index ? answer : was)),
       };
+      setHint(undefined);
+      if (isFinished(next, asking.questions)) {
+        const answer = actions.answerEnquiry;
+        if (!answer) return;
+        const accepted = await answerCurrentEnquiry(
+          asking.askId,
+          answersOf(next, asking.questions),
+          answer,
+          () => askingRef.current?.askId,
+        );
+        if (!accepted) return;
+      }
       setText("");
       input.current?.replace("", 0);
-      setHint(undefined);
       setAnswering(next);
-      if (!isFinished(next, asking.questions)) return;
-      actions.answerEnquiry?.(asking.askId, answersOf(next, asking.questions));
     },
     [actions, answering, asking],
   );
@@ -377,7 +424,7 @@ export function Composer({
         });
         return;
       }
-      commit([row.label]);
+      void commit([row.label]);
     },
     [answering, commit, question, rows],
   );
@@ -401,10 +448,10 @@ export function Composer({
   /** Take the choice at `index`, which is what both a digit and a click mean. */
   const decideRow = useCallback(
     (index: number): void => {
-      const choice = PERMISSION_CHOICES[index];
+      const choice = permissionRows[index];
       if (choice) decide(choice.decision);
     },
-    [decide],
+    [decide, permissionRows],
   );
 
   /*
@@ -416,17 +463,17 @@ export function Composer({
       context: (composing: boolean) => ({
         open: authorising !== undefined,
         composing,
-        rows: PERMISSION_CHOICES.length,
+        rows: permissionRows.length,
       }),
       move: (delta: number) =>
-        setDeciding((current) => cursorAfter(current, delta, PERMISSION_CHOICES.length)),
+        setDeciding((current) => cursorAfter(current, delta, permissionRows.length)),
       pick: (row: number) => decideRow(row),
       commit: () => decideRow(deciding),
       // Escape refuses, where an Enquiry's Escape goes back a Question. A denial is a real answer
       // here — see `permissionAction`.
       deny: () => decide("deny"),
     }),
-    [authorising, decide, decideRow, deciding],
+    [authorising, decide, decideRow, deciding, permissionRows.length],
   );
 
   /*
@@ -753,12 +800,19 @@ export function Composer({
         <ComposerPermission
           authorising={authorising}
           summary={authorisingSummary}
+          choices={permissionRows}
           cursor={deciding}
           listboxId={`permission-${id}`}
           rowId={(index) => `permission-${id}-${index}`}
           onChoose={decideRow}
           onHighlight={setDeciding}
         />
+
+        {asking?.context ? (
+          <div className="border-b border-border/40 px-3 py-1.5 text-xs text-muted-foreground">
+            {asking.context}
+          </div>
+        ) : null}
 
         <ComposerEnquiry
           question={question}

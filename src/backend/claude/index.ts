@@ -287,7 +287,7 @@ class ClaudeSession implements BackendSession {
     // A one-shot text call pre-approves nothing and authorises nothing — see
     // `BackendCreateOptions.tools`. The deny in `canUseTool` below is the half that makes it hold.
     const toolless = options.tools === "none";
-    const preApproved = toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover"] : [])];
+    const preApproved = toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover", "mcp__flow_workflow__workflow_relay_enquiry", "mcp__flow_workflow__workflow_relay_permission"] : [])];
     this.allowed = new Set(toolless ? [] : [...preApproved, ...(options.standingAuthorisations ?? [])]);
     // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that

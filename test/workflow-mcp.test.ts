@@ -21,6 +21,7 @@ import { boundedMcpValue, validateMcpOutput } from '../src/workflows/mcp.ts';
 import { parseExecution } from '../src/workflows/records.ts';
 import type { Json, JsonSchema, McpToolSnapshot, WorkflowDefinition, WorkflowExecution } from '../src/protocol/workflows.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
+import { reduceAll } from '../src/client/reduce.ts';
 
 const pause = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check: () => boolean) { for (let i = 0; i < 400; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
@@ -133,14 +134,36 @@ for (const single of [false, true]) test(`ask permission is private and required
     assert.equal(prompt.direct, true);
     assert.equal(f.requests.length, 0);
     assert.equal(f.backend.latest.workflowSubagents.length, 0);
-    await f.service.answer(f.id, started.execution.id, { ...prompt, decision: 'deny' });
+    await until(() => f.backend.latest.prompts.some(text => text.includes('workflow_relay_permission')));
+    const firstRequestId = /requestId "([0-9a-f-]+)"/.exec(f.backend.latest.prompts.find(text => text.includes('workflow_relay_permission'))!)?.[1];
+    assert.ok(firstRequestId);
+    const firstRelay = f.backend.latest.workflow!.relayPermission({ requestId: firstRequestId });
+    const authorising = () => reduceAll(f.host.logFor(f.id).since(0)).authorising;
+    await until(() => authorising()?.tool === f.tool.toolName);
+    assert.equal(authorising()!.allowAlways, false);
+    assert.match(authorising()!.authorizationScope ?? '', /Standing authorization is unavailable/);
+    await assert.rejects(f.host.answerPermission(f.id, authorising()!.callId, 'always'), /only be allowed once or denied/);
+    await f.host.answerPermission(f.id, authorising()!.callId, 'deny');
+    await firstRelay;
+    f.backend.latest.completeTurn();
     const failed = await f.service.scheduler.wait(f.id, started.execution.id);
     assert.equal(failed.status, 'recovery-required');
+    if (!single) {
+      await until(() => f.backend.latest.prompts.some(text => text.includes('workflow_recover')));
+      f.backend.latest.completeTurn();
+    }
     await f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'fetch' });
     await until(() => f.service.view(f.id, started.execution.id).permissions.length === 1);
     const again = f.service.view(f.id, started.execution.id).permissions[0]!;
     assert.notEqual(again.callId, prompt.callId);
-    await f.service.answer(f.id, started.execution.id, { ...again, decision: 'allow' });
+    await until(() => f.backend.latest.prompts.filter(text => text.includes('workflow_relay_permission')).length === 2);
+    const secondPrompt = f.backend.latest.prompts.filter(text => text.includes('workflow_relay_permission'))[1]!;
+    const secondRequestId = /requestId "([0-9a-f-]+)"/.exec(secondPrompt)?.[1];
+    assert.ok(secondRequestId);
+    const secondRelay = f.backend.latest.workflow!.relayPermission({ requestId: secondRequestId });
+    await until(() => authorising()?.callId !== undefined);
+    await f.host.answerPermission(f.id, authorising()!.callId, 'allow');
+    await secondRelay;
     assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'completed-with-recovery');
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }

@@ -15,7 +15,7 @@ import {
   toggled,
   type Answering,
 } from "../client/enquiry.ts";
-import { PERMISSION_CHOICES } from "../client/permission.ts";
+import { permissionChoices } from "../client/permission.ts";
 import type { PermissionDecision } from "../protocol/events.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
 import { renderFrame, type Overlay, type UiState } from "./render.ts";
@@ -41,6 +41,8 @@ export async function runTui(options: TuiOptions): Promise<void> {
   let selected: string | undefined = sessions[0]?.id;
   let view: ViewState = initialState();
   let input = "";
+  // Enquiries borrow the composer without consuming the normal message draft.
+  let enquiryInput = "";
   let overlay: Overlay = { kind: "none" };
   /**
    * Where the human is up to in the Enquiry on screen, and which Enquiry that is.
@@ -62,7 +64,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       sessions,
       selected,
       view,
-      input,
+      input: view.asking ? enquiryInput : input,
       overlay,
       ...(answering === undefined ? {} : { answering }),
       ...(deciding === undefined ? {} : { deciding }),
@@ -81,7 +83,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
       sessionId,
       since: 0,
       onEntry: (entry) => {
+        const previousAsk = view.asking?.askId;
         view = reduce(view, entry);
+        if (view.asking?.askId !== previousAsk) enquiryInput = "";
         draw();
       },
       onError: (error) => {
@@ -268,7 +272,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
     const state: Answering = answering;
     const question = asking.questions[state.index];
     if (!question) return;
-    const rows = rowsFor(question, input);
+    const rows = rowsFor(question, enquiryInput);
     const chosen = state.chosen[state.index] ?? [];
 
     if (key === KEY.escape) {
@@ -281,7 +285,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       state.cursor = cursorClamped(state.cursor, key === KEY.up ? -1 : 1, rows.length);
       return;
     }
-    if (input === "" && /^[1-9]$/.test(key)) {
+    if (enquiryInput === "" && /^[1-9]$/.test(key)) {
       const row = rows[Number(key) - 1];
       if (!row) return;
       state.cursor = Number(key) - 1;
@@ -289,7 +293,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       else await commitAnswer(asking.questions, state, [row.label]);
       return;
     }
-    if (input === "" && key === " " && question.multiSelect) {
+    if (enquiryInput === "" && key === " " && question.multiSelect) {
       const row = rows[state.cursor];
       if (row) state.chosen[state.index] = toggled(chosen, row.label);
       return;
@@ -305,13 +309,11 @@ export async function runTui(options: TuiOptions): Promise<void> {
       return;
     }
 
-    const had = input.trim() !== "";
-    if (key === KEY.backspace || key === KEY.backspaceAlt) input = input.slice(0, -1);
-    else if (isPrintable(key)) input += key;
+    const had = enquiryInput.trim() !== "";
+    if (key === KEY.backspace || key === KEY.backspaceAlt) enquiryInput = enquiryInput.slice(0, -1);
+    else if (isPrintable(key)) enquiryInput += key;
     else return;
-    // The cursor follows the typing onto the Other row, so an answer someone typed is not thrown
-    // away by an Enter aimed at it. See `cursorAfterTyping` for the trap this closes.
-    state.cursor = cursorAfterTyping(state.cursor, had, input.trim() !== "", rowsFor(question, input).length);
+    state.cursor = cursorAfterTyping(state.cursor, had, enquiryInput.trim() !== "", rowsFor(question, enquiryInput).length);
   }
 
   /**
@@ -328,7 +330,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
     state.chosen[state.index] = answer;
     state.index += 1;
     state.cursor = 0;
-    input = "";
+    enquiryInput = "";
     if (!isFinished(state, questions)) return;
 
     const askId = answeringFor;
@@ -369,6 +371,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       deciding = 0;
       decidingFor = authorising.callId;
     }
+    const choices = permissionChoices(authorising.allowAlways);
 
     if (key === KEY.escape) {
       await commitDecision(authorising.callId, "deny");
@@ -376,18 +379,18 @@ export async function runTui(options: TuiOptions): Promise<void> {
     }
     if (key === KEY.up || key === KEY.down) {
       // Clamped, not wrapped: every list in this TUI clamps. See `handleEnquiryKey`.
-      deciding = cursorClamped(deciding, key === KEY.up ? -1 : 1, PERMISSION_CHOICES.length);
+      deciding = cursorClamped(deciding, key === KEY.up ? -1 : 1, choices.length);
       return;
     }
     if (/^[1-9]$/.test(key)) {
-      const choice = PERMISSION_CHOICES[Number(key) - 1];
+      const choice = choices[Number(key) - 1];
       if (!choice) return;
       deciding = Number(key) - 1;
       await commitDecision(authorising.callId, choice.decision);
       return;
     }
     if (key === KEY.enter || key === KEY.newline) {
-      const choice = PERMISSION_CHOICES[deciding];
+      const choice = choices[deciding];
       if (choice) await commitDecision(authorising.callId, choice.decision);
     }
   }

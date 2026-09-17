@@ -57,6 +57,8 @@ export class FakeSession implements BackendSession {
   readonly priorSpend: Spend | undefined;
   /** What this session was told the machine already authorises, for asserting the read-at-create. */
   readonly standingAuthorisations: readonly string[];
+  /** Parent Workflow tools, exposed so relay orchestration can be driven without a model in tests. */
+  readonly workflow: BackendCreateOptions['workflow'];
   /** Whether this session was created as a one-shot text call, for asserting the Summary Model's. */
   readonly toolless: boolean;
   /** Every Subagent begun in this session, in the style of `prompts`. */
@@ -140,6 +142,7 @@ export class FakeSession implements BackendSession {
   ) {
     this.capabilities = { ...FAKE_CAPABILITIES, ...overrides };
     this.standingAuthorisations = options.standingAuthorisations ?? [];
+    this.workflow = options.workflow;
     this.toolless = options.tools === "none";
     this.backendAutoReply = backendAutoReply;
     if (this.capabilities.enquiries) {

@@ -85,11 +85,12 @@ describe("choosing and committing", () => {
     assert.deepEqual(toggled(["Caching", "Retries"], "Caching"), ["Retries"]);
   });
 
-  it("refuses an empty multiSelect and allows everything else", () => {
+  it("refuses every empty answer, including a single-select with no options", () => {
     // An empty set would reach the model as an answer that says nothing while looking like consent.
     assert.equal(canCommit(FEATURES, []), false);
     assert.equal(canCommit(FEATURES, ["Caching"]), true);
-    assert.equal(canCommit(LIBRARY, []), true, "a single-select always has the cursor on something");
+    assert.equal(canCommit(LIBRARY, []), false);
+    assert.equal(canCommit(LIBRARY, ["zod"]), true);
   });
 
   it("produces one entry per Question, in order, whatever was answered", () => {

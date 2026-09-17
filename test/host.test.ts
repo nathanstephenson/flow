@@ -859,6 +859,22 @@ describe("an Enquiry the model asked", () => {
     assert.equal(backend.sessions.length, sessions, "no Backend Session was started to answer it");
   });
 
+  it("defers cancellation while forwarding and leaves one terminal event", async () => {
+    const controller = new AbortController();
+    let rejectForward!: (error: Error) => void;
+    const forwarding = new Promise<never>((_, reject) => { rejectForward = reject; });
+    const relay = host.relayWorkflowEnquiry(sessionId, "Workflow context", QUESTIONS, () => forwarding, controller.signal);
+    const asked = events(host, sessionId).findLast((event) => event.type === "enquiry");
+    assert.equal(asked?.type, "enquiry");
+    const answer = host.answerEnquiry(sessionId, asked!.type === "enquiry" ? asked!.askId : "", [["zod"]]);
+    controller.abort();
+    await assert.rejects(() => host.answerEnquiry(sessionId, asked!.type === "enquiry" ? asked!.askId : "", [["valibot"]]), /no longer open/);
+    rejectForward(new Error("forward refused"));
+    await assert.rejects(answer, /forward refused/);
+    await assert.rejects(relay, /canceled/);
+    assert.deepEqual(enquiryStates(), ["asked", "aborted"]);
+  });
+
   it("queues a message sent while one is open rather than steering into the blocked turn", async () => {
     backend.latest.ask(QUESTIONS);
 
@@ -1007,6 +1023,24 @@ describe("a Permission Prompt the model raised", () => {
     // back out of Settled, and a prompt left `asked` would lock the composer on a replayed
     // transcript.
     assert.ok(aborted < types.indexOf("session_settled"), "the prompt is closed first");
+    assert.deepEqual(permissionStates(), ["asked", "aborted"]);
+  });
+
+  it("defers cancellation while a permission decision is forwarding", async () => {
+    const controller = new AbortController();
+    let resolveForward!: () => void;
+    const forwarding = new Promise<void>((resolve) => { resolveForward = resolve; });
+    const relay = host.relayWorkflowPermission(sessionId, {
+      context: "Workflow context", tool: "Bash", allowAlways: false, authorizationScope: "this call",
+    }, () => forwarding, controller.signal);
+    const asked = events(host, sessionId).findLast((event) => event.type === "permission");
+    assert.equal(asked?.type, "permission");
+    const answer = host.answerPermission(sessionId, asked!.type === "permission" ? asked!.callId : "", "allow");
+    controller.abort();
+    await assert.rejects(() => host.answerPermission(sessionId, asked!.type === "permission" ? asked!.callId : "", "deny"), /no longer open/);
+    resolveForward();
+    await answer;
+    await assert.rejects(relay, /canceled/);
     assert.deepEqual(permissionStates(), ["asked", "aborted"]);
   });
 

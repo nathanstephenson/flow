@@ -1,6 +1,6 @@
 # Workflow core
 
-The Session Host owns execution through `src/daemon/workflow-executions.ts` and the frozen HTTP routes below. Definition and secret CRUD remain machine-wide. Private workflow requests do not enter the parent composer or Conversation Context.
+The Session Host owns execution through `src/daemon/workflow-executions.ts` and the frozen HTTP routes below. Definition and secret CRUD remain machine-wide. Private workflow requests are relayed by the parent model through the existing composer controls and correlated back to the owning attempt.
 
 ## Execution HTTP contract
 
@@ -11,12 +11,10 @@ The Session Host owns execution through `src/daemon/workflow-executions.ts` and 
 - `GET /api/sessions/:sessionId/workflows/:executionId` returns `WorkflowExecutionView`.
 - `POST /api/sessions/:sessionId/workflows/:executionId/cancel` returns `WorkflowExecutionView`.
 - `POST /api/sessions/:sessionId/workflows/:executionId/recover` accepts `RecoverWorkflow` and returns `WorkflowExecutionView`.
-- `POST /api/sessions/:sessionId/workflows/:executionId/enquiry` accepts `AnswerWorkflowEnquiry` and returns `{ accepted: true }`.
-- `POST /api/sessions/:sessionId/workflows/:executionId/permission` accepts `AnswerWorkflowPermission` and returns `{ accepted: true }`.
 - `POST /api/workflows/test` accepts `TestWorkflowStep` and returns `WorkflowExecutionView`. The submitted definition can be unsaved; only the selected step executes.
 - `GET /api/workflow-runtime` returns `WorkflowRuntimeStatus` for code steps. This does not claim that Agent steps run inside that external sandbox.
 
-Mutations validate their bodies before execution. Stale human answers or occupied slots return 409. Other error responses follow the existing resource API. Activity and human requests are separate from parent composer state. Model, Effort, instructions and schemas come from the execution's fixed definition. Missing Spend remains unknown, not zero.
+Mutations validate their bodies before execution. Occupied slots return 409. Other error responses follow the existing resource API. Human responses are accepted only through an active parent relay tool call; the public workflow routes do not expose direct answer endpoints. Model, Effort, instructions and schemas come from the execution's fixed definition. Missing Spend remains unknown, not zero.
 
 ## Definition and secret HTTP API
 
