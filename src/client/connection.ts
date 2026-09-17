@@ -78,29 +78,20 @@ export function connect(options: { url: string; token?: string | undefined }): C
         ...credentials,
         body: JSON.stringify(command),
       });
-      if (!response.ok) {
-        offerReauthentication(response, options.token);
-        throw new Error(await describe(response));
-      }
+      await requireOk(response, options.token);
       return ((await response.json()) as { result: T }).result;
     },
 
     async listSessions(): Promise<SessionSummary[]> {
       const response = await fetch(`${options.url}/api/sessions`, { headers, ...credentials });
-      if (!response.ok) {
-        offerReauthentication(response, options.token);
-        throw new Error(await describe(response));
-      }
+      await requireOk(response, options.token);
       return (await response.json()) as SessionSummary[];
     },
 
     async branches(scope: string): Promise<BranchList> {
       const url = `${options.url}/api/branches?scope=${encodeURIComponent(scope)}`;
       const response = await fetch(url, { headers, ...credentials });
-      if (!response.ok) {
-        offerReauthentication(response, options.token);
-        throw new Error(await describe(response));
-      }
+      await requireOk(response, options.token);
       return (await response.json()) as BranchList;
     },
 
@@ -147,8 +138,7 @@ export function connect(options: { url: string; token?: string | undefined }): C
               signal: controller.signal,
             });
             if (!response.ok || !response.body) {
-              offerReauthentication(response, options.token);
-              const error = new Error(await describe(response));
+              const error = await responseError(response, options.token);
               if (FATAL_STATUS.has(response.status)) {
                 onLink?.("gone");
                 onError?.(error);
@@ -229,6 +219,15 @@ async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerato
  * handled first, then a fresh top-level navigation starts authentication. Bearer clients and legacy
  * local mode never take this browser-only path.
  */
+async function requireOk(response: Response, token: string | undefined): Promise<void> {
+  if (!response.ok) throw await responseError(response, token);
+}
+
+async function responseError(response: Response, token: string | undefined): Promise<Error> {
+  offerReauthentication(response, token);
+  return new Error(await describe(response));
+}
+
 function offerReauthentication(response: Response, token: string | undefined): void {
   const login = response.headers.get("x-flow-login");
   const browser = globalThis as typeof globalThis & {

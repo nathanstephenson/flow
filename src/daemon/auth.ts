@@ -76,7 +76,9 @@ type BrowserSession = {
 };
 
 type StoredState = {
-  version: 1;
+  version: 2;
+  issuer: string;
+  clientId: string;
   sessions: BrowserSession[];
   /** Fingerprint -> expiry in milliseconds. Persisted so a restart does not reopen a replay window. */
   logoutTokens: Record<string, number>;
@@ -340,8 +342,11 @@ export class OidcGate {
     return matches.length;
   }
 
-  /** Associate an idle transport with the browser session that opened it. */
   registerConnection(sessionId: string, close: () => void): () => void {
+    if (!this.sessions.has(sessionId)) {
+      close();
+      return () => undefined;
+    }
     let active = true;
     const set = this.connections.get(sessionId) ?? new Set<() => void>();
     set.add(close);
@@ -463,26 +468,27 @@ export class OidcGate {
       throw new OidcAuthenticationError("Token signing algorithm is not advertised.");
     }
 
-    let result;
-    try {
-      result = await jwtVerify(token, createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet), {
+    const verify = async () => await jwtVerify(
+      token,
+      createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet),
+      {
         issuer: this.config.issuer,
         audience: this.config.clientId,
         algorithms: supported,
         clockTolerance: CLOCK_SKEW_SECONDS,
         requiredClaims: options.logout ? ["iat"] : ["iat", "exp"],
-      });
+      },
+    );
+    let result;
+    try {
+      result = await verify();
     } catch (error) {
       if (!(error instanceof joseErrors.JWKSNoMatchingKey)) {
         throw new OidcAuthenticationError("Token validation failed.");
       }
       this.jwks = await fetchJwks(this.fetcher, this.discovery.jwks_uri);
       try {
-        result = await jwtVerify(token, createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet), {
-          issuer: this.config.issuer, audience: this.config.clientId, algorithms: supported,
-          clockTolerance: CLOCK_SKEW_SECONDS,
-          requiredClaims: options.logout ? ["iat"] : ["iat", "exp"],
-        });
+        result = await verify();
       } catch {
         throw new OidcAuthenticationError("Token validation failed.");
       }
@@ -583,7 +589,8 @@ export class OidcGate {
     } catch {
       return;
     }
-    if (stored.version !== 1 || !Array.isArray(stored.sessions)) return;
+    if (stored.version !== 2 || stored.issuer !== this.config.issuer ||
+        stored.clientId !== this.config.clientId || !Array.isArray(stored.sessions)) return;
     for (const session of stored.sessions) {
       if (validStoredSession(session)) this.sessions.set(session.id, session);
     }
@@ -594,7 +601,9 @@ export class OidcGate {
 
   private persist(): void {
     const state: StoredState = {
-      version: 1,
+      version: 2,
+      issuer: this.config.issuer,
+      clientId: this.config.clientId,
       sessions: [...this.sessions.values()],
       logoutTokens: Object.fromEntries(this.logoutTokens),
     };
@@ -782,10 +791,6 @@ function validStoredSession(value: BrowserSession): boolean {
     typeof value.expiresAt === "number" &&
     typeof value.tokenExpiresAt === "number" &&
     (value.refreshToken === undefined || typeof value.refreshToken === "string");
-}
-
-function audienceIncludes(audience: Claims["aud"], expected: string): boolean {
-  return typeof audience === "string" ? audience === expected : Array.isArray(audience) && audience.includes(expected);
 }
 
 function oidcHash(value: string, alg: string): string {

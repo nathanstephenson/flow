@@ -108,12 +108,30 @@ describe("external OIDC browser gate", () => {
     context.server = restarted;
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
 
+    await restarted.close();
+    servers.splice(servers.indexOf(restarted), 1);
+    const changedGate = await OidcGate.create(
+      { ...context.config, clientId: "flow-new-trust-domain" },
+      context.root,
+    );
+    assert.equal(
+      await changedGate.authenticate(login.cookie),
+      undefined,
+      "persisted sessions are bound to the configured issuer and client ID",
+    );
+    changedGate.dispose();
+
+    const restoredGate = await OidcGate.create(context.config, context.root);
+    const restoredServer = await serve({ host: new SessionHost(), token: "bearer-secret", oidc: restoredGate, assets: {} });
+    servers.push(restoredServer);
+    context.server = restoredServer;
+
     // The seven-day absolute deadline is authoritative after restart, not extended by activity.
     const value = JSON.parse(readFileSync(statePath, "utf8")) as { sessions: Array<{ expiresAt: number }> };
     value.sessions[0]!.expiresAt = Date.now() - 1;
     writeFileSync(statePath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-    await restarted.close();
-    servers.splice(servers.indexOf(restarted), 1);
+    await restoredServer.close();
+    servers.splice(servers.indexOf(restoredServer), 1);
     const expiredGate = await OidcGate.create(context.config, context.root);
     const expiredServer = await serve({ host: new SessionHost(), token: "bearer-secret", oidc: expiredGate, assets: {} });
     servers.push(expiredServer);
@@ -199,6 +217,9 @@ describe("external OIDC browser gate", () => {
     const token = context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: "once" });
     assert.equal((await backchannel(context, token)).status, 200);
     assert.equal(closed, true);
+    let lateConnectionClosed = false;
+    context.gate.registerConnection(cookieToken(login.cookie), () => { lateConnectionClosed = true; });
+    assert.equal(lateConnectionClosed, true, "registration cannot revive a session revoked during setup");
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 401);
     assert.equal((await backchannel(context, token)).status, 400, "logout notifications cannot be replayed");
 

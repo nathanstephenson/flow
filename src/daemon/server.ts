@@ -714,12 +714,16 @@ async function handleUpgrade(
   const { WebSocketServer } = await import("ws");
   const wss = new WebSocketServer({ noServer: true });
   wss.handleUpgrade(request, socket, head, (ws) => {
-    const tell = (frame: ShellServerFrame): void => ws.send(JSON.stringify(frame));
-    tell({ type: "ready", shell: summary });
-
     const detachAuth = authentication.kind === "browser"
       ? options.oidc?.registerConnection(authentication.sessionId, () => ws.close(4001, "Authentication ended"))
       : undefined;
+    if (ws.readyState !== ws.OPEN) {
+      detachAuth?.();
+      return;
+    }
+
+    const tell = (frame: ShellServerFrame): void => ws.send(JSON.stringify(frame));
+    tell({ type: "ready", shell: summary });
     const detach = shells.attach(shellId, {
       output: (chunk) => ws.send(chunk, { binary: true }),
       exit: (code, signal) => {
@@ -944,12 +948,12 @@ function presentedToken(request: IncomingMessage): string | undefined {
   return match?.[1];
 }
 
-async function readBody(request: IncomingMessage, limit = 1024 * 1024): Promise<string> {
+async function readBody(request: IncomingMessage, limit?: number): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     size += (chunk as Buffer).length;
-    if (size > limit) throw new Error("Request body too large");
+    if (limit !== undefined && size > limit) throw new Error("Request body too large");
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8") || "{}";
