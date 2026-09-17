@@ -50,6 +50,7 @@ export type ComposerInputHandle = {
 
 export function ComposerInput({
   value,
+  ariaLabel,
   placeholder,
   disabled,
   catalogue,
@@ -60,8 +61,10 @@ export function ComposerInput({
   onChange,
   onSubmit,
   onPasteFiles,
+  className,
 }: {
   value: string;
+  ariaLabel?: string;
   placeholder: string;
   disabled: boolean;
   /** What a leading `/name` may resolve to, for the pill. */
@@ -74,9 +77,11 @@ export function ComposerInput({
   handle: React.RefObject<ComposerInputHandle | null>;
   /** The caret comes with the text, because whether the menu is open depends on where it is. */
   onChange: (text: string, caret: number) => void;
-  onSubmit: () => void;
+  /** Omit to keep Enter as a newline (for prompt editors outside chat). */
+  onSubmit?: () => void;
   /** Returns true when it took the files, which is what decides whether the paste is prevented. */
   onPasteFiles: (files: File[]) => boolean;
+  className?: string;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -103,6 +108,7 @@ export function ComposerInput({
       parent,
       state: EditorState.create({
         extensions: composerExtensions({
+          ariaLabel,
           placeholder,
           disabled,
           editable,
@@ -110,7 +116,7 @@ export function ComposerInput({
           menu: () => latest.current.menu,
           enquiry: () => latest.current.enquiry,
           permission: () => latest.current.permission,
-          onSubmit: () => latest.current.onSubmit(),
+          ...(onSubmit ? { onSubmit: () => latest.current.onSubmit?.() } : {}),
           onChange: (text, caret) => latest.current.onChange(text, caret),
           onPasteFiles: (files) => latest.current.onPasteFiles(files),
         }),
@@ -161,5 +167,5 @@ export function ComposerInput({
     view.current?.dispatch({ effects: hint.reconfigure(hintFor(placeholder)) });
   }, [placeholder, hint]);
 
-  return <div ref={host} className="min-w-0 flex-1" />;
+  return <div ref={host} className={`min-w-0 flex-1 ${className ?? ""}`} />;
 }

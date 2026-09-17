@@ -50,6 +50,19 @@ describe('workflow schemas and graphs', () => {
     assert.throws(() => validateSchema({ type: 'enum', values: [] }));
   });
 
+  it('requires a Project only for syntactic leading Skill invocations', () => {
+    const skill = { ...agent('skill'), instructions: '/review focus on errors' } as Extract<WorkflowStep, { kind: 'agent' }>;
+    assert.throws(() => validateDefinition(definition([skill])), /requires a Project binding/);
+    const qualified = { ...skill, instructions: '/plugin:review\nextra' };
+    assert.throws(() => validateDefinition(definition([qualified])), /requires a Project binding/);
+    validateDefinition({ ...definition([qualified]), projectId: '/project' });
+    validateDefinition(definition([{ ...skill, instructions: '/plugin:review/file.ts is a path' }]));
+    validateDefinition({ ...definition([skill]), projectId: '/project' });
+    validateDefinition(definition([{ ...skill, instructions: 'Review /etc/hosts' }]));
+    validateDefinition(definition([{ ...skill, instructions: '/etc/hosts is a path' }]));
+    validateDefinition(definition([{ ...skill, instructions: ' /review remains literal' }]));
+  });
+
   it('rejects rootless cycles, unknown endpoints, duplicate identities and names, and invalid outcomes', () => {
     assert.throws(() => validateDefinition(definition([agent('a'), agent('b')], [edge('a', 'b'), edge('b', 'a')])), /root|entry/);
     assert.throws(() => validateDefinition(definition([agent('a')], [edge('a', 'missing')])), /endpoint/);

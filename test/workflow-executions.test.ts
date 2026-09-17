@@ -59,12 +59,13 @@ it('deduplicates concurrent ambiguous launches by their durable launch id', asyn
   } finally { await f.close(); }
 });
 
-it('accepts bounded extra-try guidance through HTTP and sends it to each owned Agent without changing the definition', async () => {
+for (const skilled of [false, true]) it(`accepts bounded extra-try guidance without changing ${skilled ? 'Skill invocations' : 'instructions'}`, async () => {
   const f = await fixture();
   try {
-    const agent = { ...definition.steps[0]!, outputSchema: { type: 'number' as const } };
+    f.backend.latest.skillList = [{ name: 'review', description: 'Review' }];
+    const agent = { ...definition.steps[0]!, ...(skilled ? { instructions: '/review cancellation' } : {}), outputSchema: { type: 'number' as const } };
     const graph: WorkflowDefinition = {
-      ...definition, loopSettings: { head: { maxTries: 1 } },
+      ...definition, ...(skilled ? { projectId: f.root } : {}), loopSettings: { head: { maxTries: 1 } },
       steps: [{ id: 'root', name: 'Root', kind: 'join' }, { ...agent, id: 'head', name: 'Head' }, { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'greater-than', path: [], value: 0 } }, { ...agent, id: 'worker', name: 'Worker' }],
       edges: [{ id: 'entry', from: 'root', to: 'head', outcome: 'success' }, { id: 'check', from: 'head', to: 'check', outcome: 'success' }, { id: 'correct', from: 'check', to: 'worker', outcome: 'true' }, { id: 'back', from: 'worker', to: 'head', outcome: 'success' }],
     };
@@ -85,10 +86,12 @@ it('accepts bounded extra-try guidance through HTTP and sends it to each owned A
     await until(() => f.backend.latest.workflowSubagents.length === 2);
     const worker = f.backend.latest.workflowSubagents[1]!;
     assert.ok(worker.options.instructions.includes(grant.guidance));
+    if (skilled) assert.equal(worker.options.skill?.invocation, '/review cancellation');
     worker.emit(spend); worker.complete(1);
     await until(() => f.backend.latest.workflowSubagents.length === 3);
     const head = f.backend.latest.workflowSubagents[2]!;
     assert.ok(head.options.instructions.includes(grant.guidance));
+    if (skilled) assert.equal(head.options.skill?.invocation, '/review cancellation');
     head.emit(spend); head.complete(0);
     const result = await f.service.scheduler.wait(f.id, started.execution.id);
     assert.equal(result.status, 'completed-with-recovery');
@@ -366,6 +369,63 @@ it('checks actual Project identity and accepts its owned Worktree, not a path pr
       const aliased = await f.service.start({ sessionId: f.id, definition: { ...restricted, projectId: alias }, input: {} });
       assert.equal((await f.service.scheduler.wait(f.id, aliased.execution.id)).status, 'completed');
     } finally { rmSync(alias); }
+  } finally { await f.close(); }
+});
+
+it('routes plugin-qualified Skills to the workflow Backend Session', async () => {
+  const f = await fixture();
+  try {
+    const baseAgent = definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>;
+    const invocation = '/plugin:review\nextra';
+    f.backend.latest.skillList = [{ name: 'plugin:review', description: 'Review' }];
+    const started = await f.service.start({
+      sessionId: f.id,
+      definition: { ...definition, projectId: f.root, steps: [{ ...baseAgent, instructions: invocation }] },
+      input: {},
+    });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    assert.deepEqual(handle.options.skill, { name: 'plugin:review', invocation });
+    handle.complete('reviewed');
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).result, 'reviewed');
+  } finally { await f.close(); }
+});
+
+it('resolves Skills fresh for every full execution and step retry in the actual Scope', async () => {
+  const f = await fixture();
+  try {
+    const baseAgent = definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>;
+    const skilled: WorkflowDefinition = {
+      ...definition,
+      projectId: f.root,
+      steps: [{ ...baseAgent, instructions: '/review cancellation and mapped input' }],
+    };
+    f.backend.latest.skillList = [{ name: 'review', description: 'Review the diff', argumentHint: '[focus]' }];
+    const first = await f.service.start({ sessionId: f.id, definition: skilled, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const expanded = f.backend.latest.workflowSubagents[0]!;
+    assert.deepEqual(expanded.options.skill, {
+      name: 'review',
+      invocation: '/review cancellation and mapped input',
+    });
+    expanded.complete('first');
+    assert.equal((await f.service.scheduler.wait(f.id, first.execution.id)).result, 'first');
+    assert.equal(first.execution.definition.steps[0]!.kind === 'agent' && first.execution.definition.steps[0]!.instructions, '/review cancellation and mapped input');
+
+    f.backend.latest.skillList = [];
+    const missing = await f.service.start({ sessionId: f.id, definition: skilled, input: {} });
+    const failed = await f.service.scheduler.wait(f.id, missing.execution.id);
+    assert.equal(failed.status, 'recovery-required');
+    assert.match(failed.steps.agent!.attempts[0]!.error!.message, /Skill \/review is unavailable in the execution Scope/);
+    assert.equal(f.backend.latest.workflowSubagents.length, 1, 'missing Skills never execute as literal text');
+
+    f.backend.latest.skillList = [{ name: 'review', description: 'Changed since the failed attempt' }];
+    await f.service.recover(f.id, missing.execution.id, { kind: 'retry', stepId: 'agent' });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.complete('fresh');
+    const recovered = await f.service.scheduler.wait(f.id, missing.execution.id);
+    assert.equal(recovered.result, 'fresh');
+    assert.equal(recovered.steps.agent!.attempts.length, 2);
   } finally { await f.close(); }
 });
 

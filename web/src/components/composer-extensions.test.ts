@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Compartment, EditorState } from "@codemirror/state";
+import { defaultKeymap } from "@codemirror/commands";
 import { EditorView, keymap } from "@codemirror/view";
 
 import {
   composerExtensions,
   hintFor,
+  setCatalogue,
   type ComposerExtensionOptions,
   type MenuKeys,
 } from "./composer-extensions.ts";
@@ -86,6 +88,54 @@ const placeholdersIn = (state: EditorState): string[] =>
   state
     .facet(EditorView.contentAttributes)
     .flatMap((entry) => ("aria-placeholder" in entry ? [String(entry["aria-placeholder"])] : []));
+
+describe("Workflow Instructions extensions", () => {
+  it("names the editor for assistive technology", () => {
+    assert.ok(stateFrom({ ariaLabel: "Instructions" }).facet(EditorView.contentAttributes)
+      .some((attributes) => attributes["aria-label"] === "Instructions"));
+  });
+
+  it("uses the editor's newline binding when no submit callback is supplied", () => {
+    const groups = stateFrom({ onSubmit: undefined }).facet(keymap);
+    const enter = groups.slice(3).flat().find((binding) => binding.key === "Enter");
+    assert.equal(enter, defaultKeymap.find((binding) => binding.key === "Enter"));
+  });
+
+  it("completes through Enter and Tab before the newline binding", () => {
+    const chosen: string[] = [];
+    const groups = stateFrom({
+      onSubmit: undefined,
+      menu: () => menu({
+        complete: () => { chosen.push("Tab"); return true; },
+        submit: () => { chosen.push("Enter"); return true; },
+      }),
+    }).facet(keymap);
+    const target = { composing: false } as EditorView;
+    for (const key of ["Enter", "Tab"]) {
+      assert.equal(groups[2]!.find((binding) => binding.key === key)!.run!(target), true);
+    }
+    assert.deepEqual(chosen, ["Enter", "Tab"]);
+  });
+
+  it("derives a purple Skill mark from text and removes it when discovery changes", () => {
+    let state = stateFrom({ onSubmit: undefined });
+    state = state.update({
+      changes: { from: 0, insert: "/review keep these arguments" },
+      effects: setCatalogue.of([{ kind: "skill", name: "review", description: "Review changes" }]),
+    }).state;
+    const marks = (current: EditorState): string[] => current.facet(EditorView.decorations)
+      .flatMap((source) => {
+        if (typeof source === "function") return [];
+        const result: string[] = [];
+        source.between(0, current.doc.length, (_from, _to, value) => { result.push(value.spec.class); });
+        return result;
+      });
+    assert.deepEqual(marks(state), ["gh-pill-skill"]);
+    state = state.update({ effects: setCatalogue.of([]) }).state;
+    assert.deepEqual(marks(state), []);
+    assert.equal(state.doc.toString(), "/review keep these arguments");
+  });
+});
 
 describe("the Composer's extensions", () => {
   it("assembles without a browser, which is what makes any of this testable", () => {

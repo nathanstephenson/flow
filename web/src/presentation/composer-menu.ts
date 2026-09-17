@@ -1,4 +1,5 @@
 import type { Skill } from "../../../src/protocol/events.ts";
+import { leadingSkillInvocation, leadingSkillToken } from "../../../src/protocol/skills.ts";
 
 /**
  * What `/` offers, and what the composer does with what it finds.
@@ -51,10 +52,7 @@ export function triggerables(compaction: boolean | undefined, skills: Skill[]): 
  * Returns the name without its slash, and how far the token runs.
  */
 export function leadingToken(text: string): { name: string; to: number } | undefined {
-  if (!text.startsWith("/")) return undefined;
-  const match = /^\/([A-Za-z0-9][\w-]*)?/.exec(text);
-  const name = match?.[1] ?? "";
-  return { name, to: name.length + 1 };
+  return leadingSkillToken(text);
 }
 
 /**
@@ -65,11 +63,9 @@ export function leadingToken(text: string): { name: string; to: number } | undef
  * pill would appear under a word that does not exist yet.
  */
 export function triggeredBy(text: string, catalogue: Triggerable[]): Triggerable | undefined {
-  const token = leadingToken(text);
-  if (!token || token.name === "") return undefined;
-  const next = text[token.to];
-  if (next !== undefined && next !== " " && next !== "\n") return undefined;
-  return catalogue.find((candidate) => candidate.name === token.name);
+  const invocation = leadingSkillInvocation(text);
+  if (!invocation) return undefined;
+  return catalogue.find((candidate) => candidate.name === invocation.name);
 }
 
 /**

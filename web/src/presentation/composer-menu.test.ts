@@ -109,6 +109,40 @@ describe("completing a name", () => {
   });
 });
 
+describe("Workflow Instructions Skills", () => {
+  const skills = [{ name: "review", description: "Review changes", argumentHint: "[files]" }];
+
+  it("selects plugin-qualified Skills without losing arguments", () => {
+    const all = triggerables(false, [{ name: "plugin:review", description: "Review" }]);
+    assert.equal(menuQuery("/plugin:", 8), "plugin:");
+    assert.equal(menuQuery("/plugin:rev", 11), "plugin:rev");
+    assert.deepEqual(matching(all, "plugin:rev"), all);
+    const selected = completed("/plugin:rev src/main.ts", "plugin:review");
+    assert.equal(selected.text, "/plugin:review src/main.ts");
+    assert.deepEqual(triggeredBy(selected.text, all), all[0]);
+    assert.deepEqual(triggeredBy("/plugin:review\nextra", all), all[0]);
+    assert.equal(triggeredBy("/plugin:review/file.ts", all), undefined);
+  });
+
+  it("keeps descriptions and argument hints without offering Commands", () => {
+    const all = triggerables(false, skills);
+    assert.deepEqual(all, [{ kind: "skill", ...skills[0] }]);
+    assert.equal(triggeredBy("/compact", all), undefined);
+    assert.deepEqual(matching(all, "VIEW"), all);
+  });
+
+  it("produces the same invocation from selection and typing", () => {
+    const all = triggerables(false, skills);
+    const selected = completed("/rev src/main.ts", "review");
+    const typed = "/review src/main.ts";
+    assert.equal(selected.text, typed);
+    assert.deepEqual(triggeredBy(selected.text, all), triggeredBy(typed, all));
+    assert.equal(menuQuery(selected.text, selected.caret), undefined);
+    assert.equal(triggeredBy("Instructions: /review", all), undefined);
+    assert.equal(triggeredBy(" /review", all), undefined);
+  });
+});
+
 describe("the Commands on offer", () => {
   // The same rule every other control follows: hide what this Agent Session cannot serve.
   it("are none when the backend cannot compact", () => {
