@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 export async function workflowApi<T>(
   path: string,

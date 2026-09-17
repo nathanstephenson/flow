@@ -160,13 +160,13 @@ export class OidcGate {
     options: { fetch?: typeof fetch } = {},
   ): Promise<OidcGate> {
     const fetcher = options.fetch ?? fetch;
-    let client: oidc.Configuration;
+    let discovered: oidc.Configuration;
     try {
-      client = await oidc.discovery(
+      discovered = await oidc.discovery(
         new URL(config.issuer),
         config.clientId,
-        { client_secret: config.clientSecret, redirect_uris: [`${config.publicAppUrl}/oauth/callback`] },
-        oidc.ClientSecretBasic(config.clientSecret),
+        config.clientSecret,
+        undefined,
         {
           [oidc.customFetch]: fetcher as never,
           ...(new URL(config.issuer).protocol === "http:"
@@ -177,9 +177,21 @@ export class OidcGate {
     } catch (error) {
       throw new OidcConfigurationError(`OIDC discovery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    validateDiscovery(config, client.serverMetadata());
+    const discovery = discovered.serverMetadata();
+    validateDiscovery(config, discovery);
+    const clientAuthentication = selectClientAuthentication(config.clientSecret, discovery);
+    const client = new oidc.Configuration(
+      discovery,
+      config.clientId,
+      {
+        client_secret: config.clientSecret,
+        redirect_uris: [`${config.publicAppUrl}/oauth/callback`],
+        [oidc.clockTolerance]: CLOCK_SKEW_SECONDS,
+      },
+      clientAuthentication,
+    );
     client[oidc.customFetch] = fetcher as never;
-    (client as unknown as Record<symbol, number>)[oidc.clockTolerance] = CLOCK_SKEW_SECONDS;
+    if (new URL(config.issuer).protocol === "http:") oidc.allowInsecureRequests(client);
     return new OidcGate(config, client, stateRoot, fetcher);
   }
 
@@ -380,12 +392,12 @@ export class OidcGate {
     return new URL(this.config.publicAppUrl).protocol === "https:" ? "; Secure" : "";
   }
 
-  private async refresh(id: string): Promise<boolean> {
+  private refresh(id: string): Promise<boolean> {
     const inFlight = this.refreshing.get(id);
-    if (inFlight) return await inFlight;
+    if (inFlight) return inFlight;
     const work = this.performRefresh(id).finally(() => this.refreshing.delete(id));
     this.refreshing.set(id, work);
-    return await work;
+    return work;
   }
 
   private async performRefresh(id: string): Promise<boolean> {
@@ -459,7 +471,7 @@ export class OidcGate {
     const due = [...this.sessions.values()]
       .filter((session) => session.expiresAt > now && session.tokenExpiresAt - now <= REFRESH_EARLY_MS)
       .map((session) => session.id);
-    await Promise.all(due.map(async (id) => await this.refresh(id)));
+    await Promise.all(due.map((id) => this.refresh(id)));
     this.scheduleRefresh();
   }
 
@@ -527,13 +539,12 @@ export class OidcGate {
   }
 }
 
-/** Construct and discover only when OIDC is configured. */
 export async function createOidcGateFromEnv(
   stateRoot: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<OidcGate | undefined> {
   const config = oidcConfigFromEnv(env);
-  return config ? await OidcGate.create(config, stateRoot) : undefined;
+  return config ? OidcGate.create(config, stateRoot) : undefined;
 }
 
 /**
@@ -617,6 +628,13 @@ function validateDiscovery(config: OidcConfig, discovery: oidc.ServerMetadata): 
     if (typeof value !== "string") throw new OidcConfigurationError(`OIDC discovery has no ${name}`);
     checkedUrl(value, `OIDC ${name}`, false);
   }
+}
+
+function selectClientAuthentication(secret: string, discovery: oidc.ServerMetadata): oidc.ClientAuth {
+  const methods = discovery.token_endpoint_auth_methods_supported ?? ["client_secret_basic"];
+  if (methods.includes("client_secret_basic")) return oidc.ClientSecretBasic(secret);
+  if (methods.includes("client_secret_post")) return oidc.ClientSecretPost(secret);
+  throw new OidcConfigurationError("OIDC provider does not support client_secret_basic or client_secret_post");
 }
 
 function safeReturnTo(value: string | undefined, publicAppUrl: string): string {

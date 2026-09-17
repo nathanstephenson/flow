@@ -20,12 +20,14 @@ export async function startTestIssuer(options: {
   subject?: string;
   providerSid?: string;
   expiresIn?: number;
+  clientAuthentication?: "client_secret_basic" | "client_secret_post";
 } = {}): Promise<TestIssuer> {
   const clientId = options.clientId ?? "flow-test";
   const clientSecret = options.clientSecret ?? "flow-test-secret";
   const subject = options.subject ?? "trusted-person";
   const providerSid = options.providerSid ?? "provider-session";
   const expiresIn = options.expiresIn ?? 3600;
+  const clientAuthentication = options.clientAuthentication ?? "client_secret_basic";
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const publicJwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
   publicJwk.kid = "test-key";
@@ -50,7 +52,7 @@ export async function startTestIssuer(options: {
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
-        token_endpoint_auth_methods_supported: ["client_secret_basic"],
+        token_endpoint_auth_methods_supported: [clientAuthentication],
         code_challenge_methods_supported: ["S256"],
         backchannel_logout_supported: true,
         backchannel_logout_session_supported: true,
@@ -84,11 +86,12 @@ export async function startTestIssuer(options: {
     }
     if (request.method === "POST" && url.pathname === "/token") {
       tokenRequests += 1;
-      if (!validClient(request, clientId, clientSecret)) {
+      const rawBody = await bodyOf(request);
+      if (!validClient(request, rawBody, clientId, clientSecret, clientAuthentication)) {
         json(response, 401, { error: "invalid_client" });
         return;
       }
-      const body = new URLSearchParams(await bodyOf(request));
+      const body = new URLSearchParams(rawBody);
       const grant = body.get("grant_type");
       if (grant === "authorization_code") {
         const code = body.get("code") ?? "";
@@ -209,7 +212,17 @@ function jwt(key: KeyObject, claims: Record<string, unknown>): string {
   return `${signed}.${sign("RSA-SHA256", Buffer.from(signed), key).toString("base64url")}`;
 }
 
-function validClient(request: IncomingMessage, id: string, secret: string): boolean {
+function validClient(
+  request: IncomingMessage,
+  rawBody: string,
+  id: string,
+  secret: string,
+  method: "client_secret_basic" | "client_secret_post",
+): boolean {
+  if (method === "client_secret_post") {
+    const body = new URLSearchParams(rawBody);
+    return body.get("client_id") === id && body.get("client_secret") === secret;
+  }
   const encode = (value: string): string => encodeURIComponent(value).replace(/-/g, "%2D");
   const expected = `Basic ${Buffer.from(`${encode(id)}:${encode(secret)}`).toString("base64")}`;
   return request.headers.authorization === expected;

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { BranchList } from "../../src/protocol/git.ts";
-import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * Asking the Session Host what a Scope could be switched to.
@@ -44,10 +44,8 @@ export function useBranches(scope: string | undefined): Branches {
     setLoading(true);
     void (async () => {
       try {
-        const response = await authenticatedFetch(`/api/branches?scope=${encodeURIComponent(scope)}`, {
-          credentials: "same-origin",
-        });
-                const answer = response.ok ? ((await response.json()) as BranchList) : undefined;
+        const response = await authenticatedFetch(`/api/branches?scope=${encodeURIComponent(scope)}`);
+        const answer = response.ok ? ((await response.json()) as BranchList) : undefined;
         if (generation.current !== mine) return;
         setList(answer);
       } catch {

@@ -13,10 +13,15 @@ export async function authenticatedFetch(
   return response;
 }
 
+let navigatingToLogin = false;
+
 export function beginReauthentication(response: Response): boolean {
   const login = response.headers.get("x-flow-login");
   if (response.status !== 401 || !login) return false;
-  goToLogin(login);
+  if (!navigatingToLogin) {
+    navigatingToLogin = true;
+    goToLogin(login);
+  }
   return true;
 }
 

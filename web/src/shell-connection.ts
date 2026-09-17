@@ -32,7 +32,6 @@ export type ShellConnection = {
 export async function openShell(sessionId: string, cols: number, rows: number): Promise<ShellSummary> {
   const response = await authenticatedFetch("/api/shells", {
     method: "POST",
-    credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sessionId, cols, rows }),
   });
@@ -45,9 +44,7 @@ export async function openShell(sessionId: string, cols: number, rows: number): 
 
 /** `GET /api/shells?sessionId=` — the Shells already open beside an Agent Session. */
 export async function listShells(sessionId: string): Promise<ShellSummary[]> {
-  const response = await authenticatedFetch(`/api/shells?sessionId=${encodeURIComponent(sessionId)}`, {
-    credentials: "same-origin",
-  });
+  const response = await authenticatedFetch(`/api/shells?sessionId=${encodeURIComponent(sessionId)}`);
   if (!response.ok) {
     return [];
   }
@@ -63,7 +60,6 @@ export async function listShells(sessionId: string): Promise<ShellSummary[]> {
 export async function killShell(shellId: string): Promise<void> {
   await authenticatedFetch(`/api/shells/${encodeURIComponent(shellId)}`, {
     method: "DELETE",
-    credentials: "same-origin",
   }).catch(() => undefined);
 }
 

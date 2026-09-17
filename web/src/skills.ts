@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { ScopeSkills, Skill } from "../../src/protocol/events.ts";
-import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * Asking the Session Host which Skills a Scope offers, before it has an Agent Session.
@@ -57,7 +57,6 @@ async function fetchScopeSkills(scope: string, backend: string): Promise<Skill[]
   try {
     const response = await authenticatedFetch(
       `/api/skills?scope=${encodeURIComponent(scope)}&backend=${encodeURIComponent(backend)}`,
-      { credentials: "same-origin" },
     );
     if (!response.ok) {
       return [];

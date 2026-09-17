@@ -1,4 +1,3 @@
-import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
 import { connect } from "../../../src/client/connection.ts";
 
 /**
@@ -13,4 +12,10 @@ import { connect } from "../../../src/client/connection.ts";
  * own, and each `subscribe` call is an independent stream, so sharing it costs nothing and keeps the
  * URL and the credentials decision in one place.
  */
-export const host = connect({ url: "", authenticationRequired: beginReauthentication });
+let authenticationRequired: ((response: Response) => void) | undefined;
+
+export function setAuthenticationRequired(handler: (response: Response) => void): void {
+  authenticationRequired = handler;
+}
+
+export const host = connect({ url: "", authenticationRequired: (response) => authenticationRequired?.(response) });

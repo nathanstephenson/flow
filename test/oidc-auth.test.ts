@@ -88,6 +88,12 @@ describe("external OIDC browser gate", () => {
     assert.equal(unsafe.location, "/", "off-origin return targets must be discarded");
   });
 
+  it("supports client_secret_post token endpoint authentication", async () => {
+    const context = await setup({ clientAuthentication: "client_secret_post" });
+    const login = await browserLogin(context, "/");
+    assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
+  });
+
   it("persists opaque sessions across restart with private filesystem permissions", async () => {
     const context = await setup();
     const login = await browserLogin(context, "/");
@@ -255,7 +261,10 @@ type Context = {
   host: SessionHost;
 };
 
-async function setup(options: { expiresIn?: number } = {}): Promise<Context> {
+async function setup(options: {
+  expiresIn?: number;
+  clientAuthentication?: "client_secret_basic" | "client_secret_post";
+} = {}): Promise<Context> {
   const root = mkdtempSync(join(tmpdir(), "flow-oidc-"));
   roots.push(root);
   const issuer = await startTestIssuer(options);
