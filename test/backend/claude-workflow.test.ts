@@ -76,9 +76,7 @@ it("isolates query options, preserves full JSON and Spend, and waits for SDK pro
 });
 
 it("applies each workflow model's opening compaction policy without losing isolation flags", { timeout: 5000 }, async () => {
-  const snapshot: ModelAutoCompaction = { sonnet: { mode: "enabled", targetPercent: 82 } };
-  const enabled = fixture({}, true, snapshot);
-  snapshot.sonnet = { mode: "disabled" };
+  const enabled = fixture({}, true, { sonnet: { mode: "enabled", targetPercent: 82 } });
   const disabled = fixture({}, true, { sonnet: { mode: "disabled" } });
   const defaults = fixture();
   await Promise.all([enabled.started.promise, disabled.started.promise, defaults.started.promise]);
@@ -97,7 +95,6 @@ it("applies each workflow model's opening compaction policy without losing isola
     assert.equal(launch.persistSession, false);
     assert.deepEqual(launch.settingSources, []);
   }
-  // Each attempt receives a fresh environment object rather than one mutable shared child policy.
   enabled.launch().env!.DISABLE_AUTO_COMPACT = "changed";
   assert.equal(disabled.launch().env?.DISABLE_AUTO_COMPACT, "1");
 
@@ -202,7 +199,6 @@ it("keeps the backend-open snapshot stable for child attempts and refreshes it o
   runs[1]!.messages.push(result());
   assert.equal(await first.done, "{}");
 
-  // A retry opened by the same parent keeps the same snapshot, even after the Settings edit.
   const retry = parent.startWorkflowSubagent!(options({ id: "retry" }));
   while (runs.length < 3) await new Promise((resolve) => setImmediate(resolve));
   assert.equal(runs[2]!.launch.env?.DISABLE_AUTO_COMPACT, "0");

@@ -23,7 +23,6 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
     "flow-test/child": { mode: "enabled", targetPercent: 75 },
   };
   const session = await fixture.create({ autoCompaction: snapshot });
-  // Running Backend Sessions retain their opening snapshot even when the caller's object changes.
   snapshot["flow-test/child"] = { mode: "disabled" };
   const first = session.startWorkflowSubagent!(options("policy-a"));
   await until(() => fixture.requests.length === 1);
@@ -31,7 +30,6 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
   assert.equal(childSettings(first).getCompactionReserveTokens(), 4096);
   assert.equal(childSettings(first).getRetrySettings().enabled, false);
 
-  // An attempt's mutable SDK settings are not shared with its sibling.
   childSettings(first).applyOverrides({ compaction: { enabled: false } });
   const second = session.startWorkflowSubagent!(options("policy-b"));
   await until(() => fixture.requests.length === 2);
@@ -44,7 +42,6 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
   release.release();
   await Promise.all([first.done, second.done]);
 
-  // Reopening is the boundary where edited Settings take effect, including retried attempts.
   const reopened = await fixture.create({ autoCompaction: snapshot });
   const retry = reopened.startWorkflowSubagent!(options("policy-retry"));
   await until(() => fixture.requests.length === 3);

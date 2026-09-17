@@ -38,7 +38,7 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
     this.launch = launch;
     this.dependencies = dependencies;
     this.options = { ...options, input: structuredClone(options.input) };
-    this.autoCompaction = structuredClone(autoCompaction);
+    this.autoCompaction = autoCompaction;
     this.grants = grants;
     this.work = new WorkflowProcesses(launch.cwd!, (event) => this.emit(event));
     this.done = Promise.resolve().then(() => this.run());

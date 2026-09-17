@@ -6,7 +6,6 @@ import type { LoggedEvent } from "../../../src/protocol/events.ts";
 import type { WorkflowActivity, WorkflowActivityPage } from "../../../src/protocol/workflow-executions.ts";
 import { isPinned } from "../presentation/stick-to-bottom.ts";
 import { entryKey } from "../presentation/entry-key.ts";
-import { showWorkflowCompacting } from "../presentation/workflow-compaction.ts";
 import { pollAfterInitialLoad } from "../presentation/workflow-transcript-polling.ts";
 import { TranscriptEntry } from "./transcript-entry.tsx";
 import { workflowApi } from "./workflow-api.ts";
@@ -198,9 +197,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
     event: item.event,
   } as LoggedEvent])), [activity, sessionId]);
   const entries = transcript.entries;
-  // A terminal attempt cannot still be doing work. This also protects retained transcripts written
-  // by an older adapter that stopped without persisting the final compacting:false snapshot.
-  const compacting = showWorkflowCompacting(transcript.compacting, completed);
+  const compacting = !completed && transcript.compacting === true;
 
   const toLatest = useCallback(() => {
     const element = scroller.current;

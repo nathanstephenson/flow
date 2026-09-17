@@ -31,7 +31,7 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
     autoCompaction: ModelAutoCompaction = {}) {
     this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
-    this.autoCompaction = structuredClone(autoCompaction);
+    this.autoCompaction = autoCompaction;
     this.grants = new Set(grants);
     this.enquiries = new PiEnquiries((event) => this.emit(event));
     this.work = new PiWork((event) => this.emit(event), () => {});
@@ -96,9 +96,6 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       if (!model) throw new Error(`Unknown workflow model: ${options.modelId}`);
       if (!["ask", "auto-accept"].includes(options.permissionMode)) throw new Error("Unsupported workflow permission mode");
       const scope = parent.sessionManager.getCwd();
-      // Each attempt owns an in-memory SettingsManager. Apply the Backend Session's opening
-      // snapshot to this attempt's selected model without sharing mutable SDK settings with the
-      // parent or another attempt. Retry remains disabled independently of compaction policy.
       const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
       const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir: getAgentDir(), settingsManager,
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,

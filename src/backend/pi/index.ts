@@ -108,7 +108,7 @@ export class PiSession implements BackendSession {
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
-    this.workflowAutoCompaction = structuredClone(support.workflowAutoCompaction ?? {});
+    this.workflowAutoCompaction = support.workflowAutoCompaction ?? {};
     this.applyAutoCompaction?.(session.model);
     this.emit = emit;
     this.sessionDir = sessionDir;
