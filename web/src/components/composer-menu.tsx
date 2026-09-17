@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils.ts";
 import type { Triggerable } from "@/presentation/composer-menu.ts";
@@ -24,6 +24,8 @@ export function ComposerMenu({
   highlighted,
   onChoose,
   onHighlight,
+  label = "Commands and Skills",
+  emptyLabel = "No Commands or Skills for this Agent Session",
 }: {
   /**
    * Whether `/` was typed — not whether there is anything to show.
@@ -39,6 +41,10 @@ export function ComposerMenu({
   highlighted: number;
   onChoose: (item: Triggerable) => void;
   onHighlight: (index: number) => void;
+  /** Accessible name for a specialised Skill-only catalogue. */
+  label?: string;
+  /** The settled empty or failed state. Loading keeps its distinct copy. */
+  emptyLabel?: string;
 }) {
   /*
    * The list that was last worth showing, kept so the close has something to animate away.
@@ -52,6 +58,12 @@ export function ComposerMenu({
   if (open) remembered.current = items;
   const shown = open ? items : remembered.current;
   const empty = shown.length === 0;
+  const list = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (open) {
+      list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, highlighted]);
 
   return (
     /*
@@ -71,7 +83,7 @@ export function ComposerMenu({
       aria-hidden={!open}
     >
       <div className="overflow-hidden">
-        <div className="max-h-64 overflow-y-auto border-b p-1" role="listbox" aria-label="Commands and Skills">
+        <div ref={list} className="max-h-64 overflow-y-auto border-b p-1" role="listbox" aria-label={label}>
           {/*
             * A row rather than nothing, in both cases. "Still looking" and "nothing here" are
             * different answers and both are better than an empty box, which is the one thing that
@@ -79,7 +91,7 @@ export function ComposerMenu({
             */}
           {empty ? (
             <div className="px-2 py-1 text-sm text-muted-foreground">
-              {loading ? "Looking for Skills…" : "No Commands or Skills for this Agent Session"}
+              {loading ? "Looking for Skills…" : emptyLabel}
             </div>
           ) : null}
           {shown.map((item, index) => (

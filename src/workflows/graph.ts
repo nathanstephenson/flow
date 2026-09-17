@@ -1,4 +1,5 @@
 import { compileJsonSchema } from './json-schema.ts';
+import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { z } from 'zod';
 import { validSecretName } from '../protocol/secrets.ts';
 import { Decisions } from './decisions.ts';
@@ -59,6 +60,10 @@ export interface WorkflowGraph {
 
 export function validateDefinition(value: unknown): WorkflowGraph {
   const definition = workflowDefinitionValidator.parse(value) as WorkflowDefinition;
+  const skillStep = definition.steps.find(step => step.kind === 'agent' && leadingSkillInvocation(step.instructions));
+  if (skillStep && !definition.projectId) {
+    throw new Error(`Workflow Step ${JSON.stringify(skillStep.name)} invokes a Skill and requires a Project binding`);
+  }
   validateSchema(definition.inputSchema);
   const steps = new Map(definition.steps.map(step => [step.id, step]));
   if (steps.size !== definition.steps.length || new Set(definition.steps.map(step => step.name)).size !== steps.size) throw new Error('Step IDs and names must be unique');

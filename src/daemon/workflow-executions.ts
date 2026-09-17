@@ -13,6 +13,7 @@ import type { WorkflowSubagentHandle } from '../backend/types.ts';
 import type { BackendEvent, Spend } from '../protocol/events.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
 import type { Json, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
+import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { createCodeExecutors } from '../workflows/executors.ts';
 import { parseValue } from '../workflows/schema.ts';
 import { WorkflowStepError, WorkflowScheduler, WorkflowLoopConflict, type WorkflowExecutor, type WorkflowExecutors, type ExecutorContext } from '../workflows/scheduler.ts';
@@ -674,6 +675,21 @@ export class WorkflowExecutionService {
     const backend = this.host.workflowSession(context.sessionId).session;
     if (!backend?.startWorkflowSubagent) throw new Error('Workflow Backend Session is unavailable');
     context.signal.throwIfAborted();
+    const savedStep = this.scheduler.get(context.sessionId, context.executionId).definition.steps.find(step => step.id === context.step.id)!;
+    const instructions = savedStep.kind === 'agent' ? savedStep.instructions : context.step.instructions;
+    const invocation = leadingSkillInvocation(instructions);
+    if (invocation) {
+      if (!backend.skills) throw new Error(`Skill /${invocation.name} cannot be resolved by this Backend Adapter`);
+      let skills: import('../protocol/events.ts').Skill[];
+      try { skills = await backend.skills(); }
+      catch (error) {
+        throw new Error(`Could not resolve Skill /${invocation.name} in the execution Scope: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      context.signal.throwIfAborted();
+      if (!skills.some(skill => skill.name === invocation.name)) {
+        throw new Error(`Skill /${invocation.name} is unavailable in the execution Scope. Restore it or select another Skill before retrying.`);
+      }
+    }
     const aliases: Record<string, string> = Object.create(null);
     for (const [alias, reference] of Object.entries(context.step.secrets ?? {})) aliases[alias] = this.secrets.resolve(reference, context.signal);
     const values = [...(this.secretValues.get(context.executionId) ?? []), ...Object.values(aliases)];
@@ -687,7 +703,7 @@ export class WorkflowExecutionService {
       if (!opaque) { opaque = randomUUID(); publicIds.set(raw, opaque); requestIds.set(opaque, raw); }
       return opaque;
     };
-    const handle = backend.startWorkflowSubagent({ id, name: context.step.name, instructions: context.step.instructions + '\nReturn only JSON matching this schema: ' + JSON.stringify(context.step.outputSchema) + (Object.keys(aliases).length ? '\nPrivate named secrets: ' + JSON.stringify(aliases) : ''), input: context.input, modelId: context.step.model, effort: context.step.effort, permissionMode: context.permission,
+    const handle = backend.startWorkflowSubagent({ id, name: context.step.name, instructions: context.step.instructions + '\nReturn only JSON matching this schema: ' + JSON.stringify(context.step.outputSchema) + (Object.keys(aliases).length ? '\nPrivate named secrets: ' + JSON.stringify(aliases) : ''), ...(invocation ? { skill: { name: invocation.name, invocation: instructions } } : {}), input: context.input, modelId: context.step.model, effort: context.step.effort, permissionMode: context.permission,
       emit: ({ event: rawEvent }) => {
         const event = redactEvent(rawEvent, values, publicId);
         this.appendActivity(context, view, event, id);

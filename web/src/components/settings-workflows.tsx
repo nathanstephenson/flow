@@ -18,6 +18,7 @@ import { ConditionEditor } from "./workflow-condition.tsx";
 import { WorkflowCode } from "./workflow-code.tsx";
 import { MappingEditor } from "./workflow-mapping.tsx";
 import { McpStepEditor } from "./workflow-mcp.tsx";
+import { WorkflowInstructions } from "./workflow-instructions.tsx";
 import { StepTest } from "./workflow-test.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { ModelPicker } from "./model-picker.tsx";
@@ -487,17 +488,14 @@ export default function WorkflowsSettings() {
                           </SelectContent>
                         </Select>
                       </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-sm font-medium">
-                          Instructions
-                        </span>
-                        <Textarea
-                          value={step.instructions}
-                          onChange={(e) =>
-                            update({ ...step, instructions: e.target.value })
-                          }
-                        />
-                      </label>
+                      <WorkflowInstructions
+                        value={step.instructions}
+                        project={definition.projectId}
+                        backend={definition.backend}
+                        onChange={(instructions) =>
+                          update({ ...step, instructions })
+                        }
+                      />
                     </>
                   )}
                   {step.kind === "mcp" && <McpStepEditor definition={definition} step={step} onChange={update} />}

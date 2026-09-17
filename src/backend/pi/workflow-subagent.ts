@@ -1,7 +1,7 @@
 import { piMcpTools } from "./mcp.ts";
 import type { McpSession } from "../mcp.ts";
 import {
-  createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
+  createAgentSession, DefaultPackageManager, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
   createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition,
   createGrepToolDefinition, createFindToolDefinition, createLsToolDefinition, createPowerShellToolDefinition,
   type AgentSession, type ToolDefinition,
@@ -97,13 +97,40 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       if (!["ask", "auto-accept"].includes(options.permissionMode)) throw new Error("Unsupported workflow permission mode");
       const scope = parent.sessionManager.getCwd();
       const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
+      const skillContext = options.skill
+        ? `The leading Skill invocation is expanded as the user prompt. Follow it together with the mapped workflow input below.\n\nMapped workflow input (JSON):\n${JSON.stringify(options.input)}\n\nWorkflow constraints:${options.instructions.slice(options.skill.invocation.length)}`
+        : options.instructions;
+      const resources = options.skill ? await new DefaultPackageManager({ cwd: scope, agentDir: getAgentDir(),
+        settingsManager: SettingsManager.create(scope, getAgentDir()),
+      }).resolve(async () => "skip") : undefined;
       const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir: getAgentDir(), settingsManager,
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+        additionalSkillPaths: resources?.skills.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
+        additionalPromptTemplatePaths: resources?.prompts.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
+        ...(options.skill ? {
+          skillsOverride: (base) => ({ ...base, skills: base.skills.filter(skill => skill.name === options.skill!.name) }),
+          promptsOverride: (base) => ({ ...base, prompts: base.prompts.filter(prompt => prompt.name === options.skill!.name) }),
+        } : {}),
         agentsFilesOverride: () => ({ agentsFiles: [] }), appendSystemPromptOverride: () => [],
-        systemPromptOverride: () => `You are workflow Subagent ${options.name}. Return only JSON. You cannot create Subagents.\n\n${options.instructions}`,
+        systemPromptOverride: () => `You are workflow Subagent ${options.name}. Return only JSON. You cannot create Subagents.\n\n${skillContext}`,
       });
-      await resourceLoader.reload();
+      try { await resourceLoader.reload(); }
+      catch (error) {
+        if (options.skill) throw new Error(`Could not resolve Skill /${options.skill.name} in the execution Scope: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
       controller.signal.throwIfAborted();
+      let prompt = JSON.stringify(options.input);
+      if (options.skill) {
+        const promptTemplate = resourceLoader.getPrompts().prompts.some(candidate => candidate.name === options.skill!.name);
+        const skill = resourceLoader.getSkills().skills.some(candidate => candidate.name === options.skill!.name);
+        if (!promptTemplate && !skill) {
+          throw new Error(`Skill /${options.skill.name} is unavailable in the execution Scope. Restore it or select another Skill before retrying.`);
+        }
+        prompt = promptTemplate
+          ? options.skill.invocation
+          : `/skill:${options.skill.name} ${options.skill.invocation.slice(options.skill.name.length + 1)}`;
+      }
       const names = [...parent.getActiveToolNames(), ...piMcpTools(this.mcp).map((tool) => tool.name)].filter((name) => name !== "subagent");
       const definitions = [...piMcpTools(this.mcp), createReadToolDefinition(scope), createEditToolDefinition(scope), createWriteToolDefinition(scope),
         createGrepToolDefinition(scope), createFindToolDefinition(scope), createLsToolDefinition(scope), createPowerShellToolDefinition(scope),
@@ -137,7 +164,7 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         if (event.type === "compacted") compacting = false;
         this.emit(event);
       });
-      await adapter.prompt(JSON.stringify(options.input));
+      await adapter.prompt(prompt);
       controller.signal.throwIfAborted();
       if (failure) throw new Error(failure);
       await this.work.drain();

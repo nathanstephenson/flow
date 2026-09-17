@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
@@ -22,10 +22,16 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
     "flow-test/parent": { mode: "disabled" },
     "flow-test/child": { mode: "enabled", targetPercent: 75 },
   };
+  mkdirSync(join(fixture.scope, ".pi", "prompts"), { recursive: true });
+  writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), "Review: $ARGUMENTS");
   const session = await fixture.create({ autoCompaction: snapshot });
   snapshot["flow-test/child"] = { mode: "disabled" };
-  const first = session.startWorkflowSubagent!(options("policy-a"));
+  const first = session.startWorkflowSubagent!(options("policy-a", {
+    instructions: "/review changes",
+    skill: { name: "review", invocation: "/review changes" },
+  }));
   await until(() => fixture.requests.length === 1);
+  assert.equal(userText(fixture.requests[0]!), "Review: changes");
   assert.equal(childSettings(first).getCompactionEnabled(), true);
   assert.equal(childSettings(first).getCompactionReserveTokens(), 4096);
   assert.equal(childSettings(first).getRetrySettings().enabled, false);
@@ -120,6 +126,123 @@ it("isolates concurrent workflows, preserves full JSON, and leaves parent chat a
   assert.equal(spend.spend.tokens, 19);
   assert.equal(spend.spend.models[0]?.id, "flow-test/child");
   assert.ok(activity.every((a) => a.subagentId === "a" && !["turn_started", "turn_ended", "context_usage"].includes(a.event.type)));
+});
+
+it("expands pi prompt templates and Skills while preserving workflow input and isolation", { timeout: 15_000 }, async (t) => {
+  const fixture = await piFixture(t, () => ({ text: "{}" }));
+  mkdirSync(join(fixture.scope, ".pi", "prompts"), { recursive: true });
+  writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), [
+    "---", "description: Review carefully", "argument-hint: [focus]", "---", "REVIEW TEMPLATE: $ARGUMENTS",
+  ].join("\n"));
+  mkdirSync(join(fixture.scope, ".pi", "skills", "audit"), { recursive: true });
+  writeFileSync(join(fixture.scope, ".pi", "skills", "audit", "SKILL.md"), [
+    "---", "name: audit", "description: Audit the implementation", "---", "AUDIT SKILL BODY",
+  ].join("\n"));
+  const session = await fixture.create();
+
+  const templateInvocation = "/review cancellation";
+  const template = session.startWorkflowSubagent!(options("template", {
+    instructions: templateInvocation + "\nReturn only JSON matching the schema",
+    skill: { name: "review", invocation: templateInvocation },
+    input: { mapped: "template" },
+  }));
+  assert.equal(await template.done, "{}");
+  const templateRequest = fixture.requests.find((request) => request.model === "child")!;
+  assert.equal(userText(templateRequest), "REVIEW TEMPLATE: cancellation");
+  const templateSystem = templateRequest.messages.find((message) => message.role === "developer")?.content;
+  assert.ok(String(templateSystem).includes('"mapped":"template"'));
+  assert.ok(String(templateSystem).includes("Return only JSON matching the schema"));
+  assert.equal(templateRequest.tools?.some((tool) => tool.function.name === "subagent"), false);
+
+  const skillInvocation = "/audit changed files";
+  const skill = session.startWorkflowSubagent!(options("skill", {
+    instructions: skillInvocation + "\nReturn only JSON matching the schema",
+    skill: { name: "audit", invocation: skillInvocation },
+    input: { mapped: "skill" },
+  }));
+  assert.equal(await skill.done, "{}");
+  const skillRequest = fixture.requests.filter((request) => request.model === "child").at(-1)!;
+  assert.ok(userText(skillRequest).includes('<skill name="audit"'));
+  assert.ok(userText(skillRequest).includes("AUDIT SKILL BODY"));
+  assert.ok(userText(skillRequest).includes("changed files"));
+
+  writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), "UPDATED TEMPLATE: $ARGUMENTS");
+  const fresh = session.startWorkflowSubagent!(options("fresh", {
+    instructions: templateInvocation,
+    skill: { name: "review", invocation: templateInvocation },
+  }));
+  assert.equal(await fresh.done, "{}");
+  assert.equal(userText(fixture.requests.filter(request => request.model === "child").at(-1)!), "UPDATED TEMPLATE: cancellation");
+  unlinkSync(join(fixture.scope, ".pi", "prompts", "review.md"));
+  const removed = session.startWorkflowSubagent!(options("removed", {
+    instructions: templateInvocation,
+    skill: { name: "review", invocation: templateInvocation },
+  }));
+  await assert.rejects(removed.done, /Skill \/review is unavailable in the execution Scope/);
+
+  const missing = session.startWorkflowSubagent!(options("missing", {
+    instructions: "/deleted",
+    skill: { name: "deleted", invocation: "/deleted" },
+  }));
+  await assert.rejects(missing.done, /Skill \/deleted is unavailable in the execution Scope/);
+  assert.equal(fixture.requests.filter((request) => request.model === "child").length, 3);
+});
+
+for (const location of ["user", "project"]) it(`resolves configured ${location} Skills and installed package templates fresh without extensions`, { timeout: 15_000 }, async (t) => {
+  const fixture = await piFixture(t, () => ({ text: "{}" }));
+  const session = await fixture.create();
+  delete process.env.PI_OFFLINE;
+  const root = location === "user" ? fixture.scope : join(fixture.scope, ".pi");
+  const external = join(root, "external", "audit");
+  const pkg = join(root, "npm", "node_modules", "workflow-prompts");
+  mkdirSync(external, { recursive: true });
+  mkdirSync(join(pkg, "prompts"), { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "workflow-prompts", version: "1.0.0",
+    pi: { prompts: ["prompts"], extensions: ["extension.js"] } }));
+  const marker = join(fixture.scope, "extension-loaded");
+  writeFileSync(join(pkg, "extension.js"), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'loaded'); export default function () {}`);
+  const installMarker = join(fixture.scope, "package-install-started");
+  writeFileSync(join(root, "settings.json"), JSON.stringify({ skills: ["./external"],
+    packages: ["npm:workflow-prompts", "npm:workflow-not-installed"],
+    npmCommand: [process.execPath, "-e", `if (process.argv.includes('install')) require('node:fs').writeFileSync(${JSON.stringify(installMarker)}, 'started')`, "--"],
+  }));
+  writeFileSync(join(fixture.scope, "AGENTS.md"), "PRIVATE CONTEXT");
+  const files = { audit: join(external, "SKILL.md"), review: join(pkg, "prompts", "review.md") };
+  for (const revision of ["INITIAL", "UPDATED"]) {
+    writeFileSync(files.audit, `---\nname: audit\ndescription: Audit\n---\n${revision} AUDIT`);
+    writeFileSync(files.review, `${revision} REVIEW: $ARGUMENTS`);
+    for (const name of ["audit", "review"] as const) {
+      const invocation = `/${name} changes`;
+      const handle = session.startWorkflowSubagent!(options(`${revision}-${name}`, { instructions: invocation, skill: { name, invocation } }));
+      assert.equal(await handle.done, "{}");
+      const request = fixture.requests.filter(request => request.model === "child").at(-1)!;
+      assert.ok(userText(request).includes(`${revision} ${name.toUpperCase()}`));
+      assert.ok(!JSON.stringify(request.messages).includes("PRIVATE CONTEXT"));
+      assert.equal(request.tools?.some(tool => tool.function.name === "subagent"), false);
+      assert.equal(existsSync(marker), false);
+      assert.equal(existsSync(installMarker), false);
+    }
+  }
+});
+
+for (const name of ["audit", "review"]) it(`expands multiline pi ${name} invocations`, { timeout: 15_000 }, async (t) => {
+  const fixture = await piFixture(t, () => ({ text: "{}" }));
+  mkdirSync(join(fixture.scope, ".pi", "prompts"), { recursive: true });
+  writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), "REVIEW TEMPLATE: $ARGUMENTS");
+  mkdirSync(join(fixture.scope, ".pi", "skills", "audit"), { recursive: true });
+  writeFileSync(join(fixture.scope, ".pi", "skills", "audit", "SKILL.md"), [
+    "---", "name: audit", "description: Audit the implementation", "---", "AUDIT SKILL BODY",
+  ].join("\n"));
+  const session = await fixture.create();
+  const invocation = `/${name}\nextra\nretain this text`;
+  const handle = session.startWorkflowSubagent!(options("multiline", {
+    instructions: invocation,
+    skill: { name, invocation },
+  }));
+  assert.equal(await handle.done, "{}");
+  const text = userText(fixture.requests.find(request => request.model === "child")!);
+  assert.ok(text.includes(name === "audit" ? "AUDIT SKILL BODY" : "REVIEW TEMPLATE:"));
+  assert.ok(text.includes(name === "audit" ? "extra\nretain this text" : "extra retain this text"));
 });
 
 it("waits for Background Calls after final JSON without notifying the parent", { timeout: 15_000 }, async (t) => {

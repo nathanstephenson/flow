@@ -293,6 +293,7 @@ function stop(event: KeyboardEvent): void {
  * it. `Prec.highest` is what fixes that, and the test is what keeps it fixed.
  */
 export type ComposerExtensionOptions = {
+  ariaLabel?: string;
   placeholder: string;
   disabled: boolean;
   /** Compartments, so the two things that change do so without rebuilding the editor. */
@@ -304,7 +305,8 @@ export type ComposerExtensionOptions = {
   enquiry: () => EnquiryKeys;
   /** The same again: the cursor moves per keypress, and which prompt is in hand changes per turn. */
   permission: () => PermissionKeys;
-  onSubmit: () => void;
+  /** Omit for a multiline editor where Enter remains a newline. */
+  onSubmit?: () => void;
   onChange: (text: string, caret: number) => void;
   onPasteFiles: (files: File[]) => boolean;
 };
@@ -373,22 +375,24 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
       ]),
     ),
     history(),
-    keymap.of([
-      {
-        key: "Enter",
-        run: (target) => {
-          /*
-           * A composing IME owns Enter outright. Without this, committing a CJK candidate also
-           * sends the message — a real bug and not a theoretical one, which is why the textarea this
-           * replaces checked `nativeEvent.isComposing` and why the check had to be earned again here
-           * rather than assumed.
-           */
-          if (target.composing) return false;
-          options.onSubmit();
-          return true;
-        },
-      },
-    ]),
+    ...(options.onSubmit
+      ? [keymap.of([
+          {
+            key: "Enter",
+            run: (target) => {
+              /*
+               * A composing IME owns Enter outright. Without this, committing a CJK candidate also
+               * sends the message — a real bug and not a theoretical one, which is why the textarea this
+               * replaces checked `nativeEvent.isComposing` and why the check had to be earned again here
+               * rather than assumed.
+               */
+              if (target.composing) return false;
+              options.onSubmit?.();
+              return true;
+            },
+          },
+        ])]
+      : []),
     // Below the Enter binding, so a newline is what Enter does only when the above declines.
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.lineWrapping,
@@ -415,7 +419,10 @@ export function composerExtensions(options: ComposerExtensionOptions): Extension
       },
     }),
     // What `focusInPane` finds. The selector used to be `textarea`, which this element is not.
-    EditorView.contentAttributes.of({ "data-composer-input": "" }),
+    EditorView.contentAttributes.of({
+      "data-composer-input": "",
+      ...(options.ariaLabel ? { "aria-label": options.ariaLabel } : {}),
+    }),
     THEME,
     options.editable.of(editableFor(options.disabled)),
     // The placeholder lives in the compartment and nowhere else. It was also installed directly

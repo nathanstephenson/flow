@@ -16,9 +16,9 @@
 }
 .workflow-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) minmax(440px, 540px);
   gap: 12px;
-  height: clamp(360px, calc(100dvh - 330px), 760px);
+  height: clamp(440px, calc(100dvh - 300px), 820px);
 }
 .workflow-canvas {
   height: 480px;
@@ -32,6 +32,15 @@
   overflow: auto;
   min-width: 0;
   align-content: start;
+}
+.workflow-instructions .cm-content {
+  min-height: 11rem;
+}
+.workflow-instructions .cm-scroller {
+  max-height: 22rem;
+}
+.workflow-instructions .cm-editor {
+  width: 100%;
 }
 .workflow-input-schema[open] {
   max-height: 240px;

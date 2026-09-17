@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
+import { execFileSync } from "node:child_process";
 import { query, type Options, type Query, type SDKMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
 import type { ModelAutoCompaction } from "../../src/protocol/settings.ts";
@@ -41,7 +42,8 @@ function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true, au
       launch.spawnClaudeCodeProcess!({ command: "unused", args: [], env: {}, signal: new AbortController().signal });
       started.resolve();
       return { [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), supportedModels: async () => [{ value: "sonnet", supportsEffort: effort,
-        supportedEffortLevels: effort ? ["low", "high"] : [] }], close: () => { messages.close(); closed.resolve(); } } as unknown as Query;
+        supportedEffortLevels: effort ? ["low", "high"] : [] }], reloadSkills: async () => ({ skills: [{ name: "review" }] }),
+        close: () => { messages.close(); closed.resolve(); } } as unknown as Query;
     }) as typeof query,
   }, autoCompaction);
   return { handle, events, messages, started, stopped, closed, launch: () => launch, prompt: () => prompt };
@@ -73,6 +75,33 @@ it("isolates query options, preserves full JSON and Spend, and waits for SDK pro
   assert.deepEqual(f.events, [{ subagentId: "step", event: { type: "spend", spend: {
     tokens: 10, cached: 4, costUSD: 0.1, models: [{ id: "sonnet", tokens: 10, cached: 4, costUSD: 0.1 }],
   } } }]);
+});
+
+it("expands a selected Skill as the user prompt while retaining mapped input and isolation", { timeout: 5000 }, async () => {
+  const invocation = "/review focus on cancellation";
+  const f = fixture({
+    instructions: invocation + "\nReturn only JSON matching the schema",
+    skill: { name: "review", invocation },
+    input: { mapped: true },
+  }, true, { sonnet: { mode: "enabled", targetPercent: 82 } });
+  await f.started.promise;
+  assert.equal(f.launch().env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "82");
+  assert.equal(f.launch().env?.DISABLE_AUTO_COMPACT, "0");
+  assert.deepEqual(f.launch().skills, ["review"]);
+  assert.ok(f.launch().disallowedTools?.includes("Skill"));
+  assert.ok(String(f.launch().systemPrompt).includes('"mapped":true'));
+  assert.ok(String(f.launch().systemPrompt).includes("Return only JSON matching the schema"));
+  assert.ok(!String(f.launch().systemPrompt).includes(invocation));
+  const sent = (await f.prompt()[Symbol.asyncIterator]().next()).value as { message: { content: string } };
+  assert.equal(sent.message.content, invocation);
+  f.messages.push(result('{"ok":true}'));
+  f.stopped.resolve();
+  assert.equal(await f.handle.done, '{"ok":true}');
+
+  const missing = fixture({ skill: { name: "deleted", invocation: "/deleted" }, instructions: "/deleted" });
+  await missing.started.promise;
+  missing.stopped.resolve();
+  await assert.rejects(missing.handle.done, /Skill \/deleted is unavailable in the execution Scope/);
 });
 
 it("applies each workflow model's opening compaction policy without losing isolation flags", { timeout: 5000 }, async () => {
@@ -279,22 +308,40 @@ it("retains complete WorkflowProcesses output above 100k", { timeout: 5000 }, as
   assert.equal(output.output.length, 100_001);
 });
 
-for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed Claude CLI isolates input and owns human input and background work (${scenario})`, { timeout: 30_000 }, async (t) => {
-  const permissionMode = scenario === "ask" ? "ask" : "auto-accept";
+for (const scenario of ["ask", "auto-accept", "cancel", "skill", "fork-skill", "plugin-skill", "plugin-fork-skill"] as const) it(`installed Claude CLI isolates input and owns human input and background work (${scenario})`, { timeout: 30_000 }, async (t) => {
+  const selectedSkill = scenario.includes("skill");
+  const pluginSkill = scenario.startsWith("plugin-");
+  const forkSkill = scenario.includes("fork");
+  const skillName = pluginSkill ? "test-plugin:review" : "review";
+  const permissionMode = scenario === "ask" || selectedSkill ? "ask" : "auto-accept";
   let processesStopped = 0;
   const scope = await mkdtemp(join(tmpdir(), "flow-claude-workflow-"));
   t.after(() => rm(scope, { recursive: true, force: true }));
   await writeFile(join(scope, "CLAUDE.md"), "PRIVATE CONTEXT MUST NOT LOAD");
+  if (selectedSkill) {
+    execFileSync('git', ['init', '-q', scope]);
+    await mkdir(join(scope, ".claude", "skills", "review"), { recursive: true });
+    await writeFile(join(scope, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Read', 'mcp__workflow__bash'] }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `touch ${join(scope, 'unexpected-hook')}` }] }] } }));
+    const root = pluginSkill ? join(scope, "plugin") : join(scope, ".claude");
+    if (pluginSkill) {
+      await mkdir(join(root, ".claude-plugin"), { recursive: true });
+      await writeFile(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "test-plugin", version: "1.0.0" }));
+      await mkdir(join(root, "skills", "review"), { recursive: true });
+    }
+    await writeFile(join(root, "skills", "review", "SKILL.md"), `---\nname: review\ndescription: Review changes\n${forkSkill ? "context: fork\nagent: general-purpose\n" : ""}---\nEXPANDED REVIEW BODY: $ARGUMENTS`);
+  }
   const requests: Record<string, unknown>[] = [];
   const activity: Parameters<WorkflowSubagentOptions["emit"]>[0][] = [];
   const final = gate();
   let turn = 0;
+  let modelRequests = 0;
   const server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body || "{}");
     if (request.url?.includes("count_tokens")) { response.end('{"input_tokens":1}'); return; }
-    if (!JSON.stringify(parsed).includes("Explicit instructions")) { response.end("{}"); return; }
+    if (request.url?.includes("/messages")) modelRequests++;
+    if (!JSON.stringify(parsed).includes("Explicit instructions") && !JSON.stringify(parsed).includes("EXPANDED REVIEW BODY")) { response.end("{}"); return; }
     requests.push(parsed);
     const calls = [
       { name: "Read", input: { file_path: join(scope, "source") } },
@@ -321,7 +368,9 @@ for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed 
   t.after(() => { server.closeAllConnections(); server.close(); });
   const address = server.address() as { port: number };
   await writeFile(join(scope, "source"), "SOURCE FILE");
-  const handle = new ClaudeWorkflowSubagent({ cwd: scope }, options({ permissionMode, emit: (event) => {
+  const handle = new ClaudeWorkflowSubagent({ cwd: scope, ...(pluginSkill ? { plugins: [{ type: "local", path: join(scope, "plugin") }] } : {}) }, options({ permissionMode,
+    ...(selectedSkill ? { instructions: `/${skillName} cancellation\nExplicit instructions`, skill: { name: skillName, invocation: `/${skillName} cancellation` } } : {}),
+    emit: (event) => {
     activity.push(event);
     if (event.event.type === "permission" && event.event.state === "asked") void handle.answerPermission(event.event.callId, "always");
     if (event.event.type === "enquiry" && event.event.state === "asked") {
@@ -334,7 +383,7 @@ for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed 
     void owned.stopped.then(() => { processesStopped++; });
     return owned;
   }, query: (args) => query({ ...args,
-    options: { ...args.options, env: { ...args.options?.env, HOME: scope, CLAUDE_CONFIG_DIR: scope,
+    options: { ...args.options, env: { ...args.options?.env, HOME: join(scope, "home"), CLAUDE_CONFIG_DIR: join(scope, "user-config"),
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_API_KEY: "dummy-local-key",
       ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_USE_BEDROCK: undefined,
@@ -342,6 +391,13 @@ for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed 
     } },
   }) });
   t.after(() => handle.cancel());
+  if (forkSkill) {
+    await assert.rejects(handle.done, { name: "WorkflowDelegationError", message: /Subagent delegation, which is disabled/ });
+    assert.equal(modelRequests, 0);
+    assert.equal(requests.length, 0);
+    assert.equal(processesStopped, 1);
+    return;
+  }
   if (scenario === "cancel") {
     await assert.rejects(handle.done);
     assert.equal(processesStopped, 1);
@@ -363,6 +419,11 @@ for (const scenario of ["ask", "auto-accept", "cancel"] as const) it(`installed 
   assert.ok(JSON.stringify(requests).includes('\\"Which?\\"=\\"B\\"'));
   const request = requests.find((r) => JSON.stringify(r).includes("Explicit instructions"));
   assert.ok(request);
+  if (selectedSkill) {
+    assert.ok(JSON.stringify(request).includes('EXPANDED REVIEW BODY: cancellation'));
+    assert.ok(JSON.stringify(request).includes('Mapped workflow input'));
+    await assert.rejects(access(join(scope, 'unexpected-hook')));
+  }
   assert.ok(!JSON.stringify(request).includes("PRIVATE CONTEXT"));
   assert.equal((request.output_config as { effort: string }).effort, "high");
   const tools = request.tools as { name: string }[];

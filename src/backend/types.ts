@@ -80,6 +80,7 @@ export type WorkflowSubagentOptions = {
   id: string;
   name: string;
   instructions: string;
+  skill?: { name: string; invocation: string };
   input: import("../protocol/workflows.ts").Json;
   modelId: string;
   effort: EffortLevel;
