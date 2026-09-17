@@ -39,6 +39,7 @@ type RelayRequestBase = {
   subagentId: string;
   context: string;
   announced: boolean;
+  deliveryAttempts: number;
   relaying: boolean;
   abort: AbortController;
 };
@@ -47,8 +48,8 @@ type RelayRequest = RelayRequestBase & (
   | { kind: 'permission'; callId: string; tool: string; direct: boolean; details?: unknown; scope: string }
 );
 type NewRelayRequest =
-  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'announced' | 'relaying' | 'abort'>
-  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'announced' | 'relaying' | 'abort'>;
+  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>
+  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>;
 
 export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
@@ -277,6 +278,7 @@ export class WorkflowExecutionService {
     const request = this.oldestRelay(sessionId);
     if (!request || request.announced || request.relaying) return;
     request.announced = true;
+    request.deliveryAttempts += 1;
     const payload = request.kind === 'enquiry'
       ? { kind: request.kind, questions: request.questions }
       : { kind: request.kind, tool: request.tool, details: request.details, authorizationScope: request.scope };
@@ -287,9 +289,10 @@ export class WorkflowExecutionService {
   /** A parent notification did not reach its relay tool; make the oldest request eligible again. */
   rearmInput(sessionId: string): void {
     const request = this.oldestRelay(sessionId);
+    // One retry covers a transient delivery failure without an unbounded series of paid turns.
     if (!request || request.relaying) return;
     request.announced = false;
-    this.host.workflowInput(sessionId);
+    if (request.deliveryAttempts < 2) this.host.workflowInput(sessionId);
   }
 
   parent(sessionId: string): WorkflowParent {
@@ -326,8 +329,10 @@ export class WorkflowExecutionService {
           return { accepted: true, workflow: request.context };
         } catch (error) {
           if (this.relayRequests.has(request.id) && !request.abort.signal.aborted) {
-            if (signal?.aborted) { request.announced = false; request.relaying = false; this.wakeNextRelay(sessionId); }
-            else this.dropRelay(request.id);
+            // The originating callback is still live. Keep it eligible, but do not immediately
+            // launch another parent turn after an ignored relay or user abort.
+            request.announced = false;
+            request.relaying = false;
           }
           throw error;
         } finally {
@@ -354,8 +359,10 @@ export class WorkflowExecutionService {
           return { accepted: true, decision: accepted, workflow: request.context };
         } catch (error) {
           if (this.relayRequests.has(request.id) && !request.abort.signal.aborted) {
-            if (signal?.aborted) { request.announced = false; request.relaying = false; this.wakeNextRelay(sessionId); }
-            else this.dropRelay(request.id);
+            // The originating callback is still live. Keep it eligible, but do not immediately
+            // launch another parent turn after an ignored relay or user abort.
+            request.announced = false;
+            request.relaying = false;
           }
           throw error;
         } finally {
@@ -528,7 +535,7 @@ export class WorkflowExecutionService {
       item.sessionId === request.sessionId && item.executionId === request.executionId && item.subagentId === request.subagentId &&
       item.kind === request.kind && (item.kind === 'enquiry' && request.kind === 'enquiry' ? item.askId === request.askId : item.kind === 'permission' && request.kind === 'permission' && item.callId === request.callId));
     if (duplicate) return;
-    const item = { ...request, id: randomUUID(), order: ++this.relayOrder, announced: false, relaying: false, abort: new AbortController() } as RelayRequest;
+    const item = { ...request, id: randomUUID(), order: ++this.relayOrder, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
     this.relayRequests.set(item.id, item);
     this.host.workflowInput(item.sessionId);
   }

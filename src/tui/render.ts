@@ -260,7 +260,7 @@ function status(ui: UiState, width: number): string {
    */
   parts.push(
     ui.view.authorising
-      ? "↑↓ choose  1-3 pick  enter decide  esc deny"
+      ? `↑↓ choose  1-${permissionChoices(ui.view.authorising.allowAlways).length} pick  enter decide  esc deny`
       : ui.view.asking
       ? "↑↓ choose  1-9 pick  enter answer  esc abort"
       : `^S sessions  ^P models  ^E effort  ^G branches${compact}  esc abort  ^C quit`,

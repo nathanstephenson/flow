@@ -47,11 +47,11 @@ export function ComposerPermission({
 
   // The last prompt worth showing, kept so the close has something to animate away — the trick
   // `ComposerMenu` documents and `ComposerEnquiry` reuses.
-  const remembered = useRef<{ authorising: OpenPermission; summary: string | undefined } | undefined>(
-    undefined,
-  );
-  if (authorising) remembered.current = { authorising, summary };
-  const shown = open ? { authorising, summary } : remembered.current;
+  const remembered = useRef<
+    { authorising: OpenPermission; summary: string | undefined; choices: readonly PermissionChoice[] } | undefined
+  >(undefined);
+  if (authorising) remembered.current = { authorising, summary, choices };
+  const shown = open ? { authorising, summary, choices } : remembered.current;
 
   return (
     <div
@@ -104,7 +104,7 @@ export function ComposerPermission({
                 aria-label={`Authorise ${shown.authorising.tool}?`}
                 className="p-1"
               >
-                {choices.map((choice, index) => (
+                {shown.choices.map((choice, index) => (
                   <div
                     key={choice.decision}
                     id={rowId(index)}

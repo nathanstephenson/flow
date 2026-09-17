@@ -93,12 +93,12 @@ export function toggled(chosen: readonly string[], label: string): string[] {
 /**
  * Whether the current Question can be answered as it stands.
  *
- * False only for an empty multiSelect. A single-select always has the cursor on something, and
- * committing an empty set would send the model an answer that says nothing while looking like
- * consent — so it is refused, and the front-end says what is missing rather than doing nothing.
+ * False whenever nothing has been selected. Single-select questions normally have a row under the
+ * cursor, but an empty options list does not; it must not advance the UI with an answer the host
+ * will reject.
  */
-export function canCommit(question: Question, chosen: readonly string[]): boolean {
-  return question.multiSelect ? chosen.length > 0 : true;
+export function canCommit(_question: Question, chosen: readonly string[]): boolean {
+  return chosen.length > 0;
 }
 
 /**
