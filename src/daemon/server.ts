@@ -145,7 +145,7 @@ async function handle(
    */
   if (options.oidc && request.method === "POST" && url.pathname === "/oauth/backchannel") {
     try {
-      const body = new URLSearchParams(await readBody(request));
+      const body = new URLSearchParams(await readBody(request, 16 * 1024));
       const logoutToken = body.get("logout_token");
       if (!logoutToken) throw new Error("missing logout token");
       await options.oidc.backchannelLogout(logoutToken);
@@ -944,9 +944,14 @@ function presentedToken(request: IncomingMessage): string | undefined {
   return match?.[1];
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
+async function readBody(request: IncomingMessage, limit = 1024 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw new Error("Request body too large");
+    chunks.push(chunk as Buffer);
+  }
   return Buffer.concat(chunks).toString("utf8") || "{}";
 }
 

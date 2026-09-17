@@ -1,11 +1,7 @@
 import {
-  constants,
   createHash,
-  createHmac,
-  createPublicKey,
   randomBytes,
   timingSafeEqual,
-  verify as verifySignature,
   type JsonWebKey,
 } from "node:crypto";
 import {
@@ -17,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, errors as joseErrors, type JSONWebKeySet } from "jose";
 
 /** The name of the opaque browser-session cookie used by the OIDC gate. */
 export const OIDC_COOKIE = "flow_session";
@@ -43,6 +40,7 @@ type OidcDiscovery = {
   response_types_supported?: string[];
   id_token_signing_alg_values_supported?: string[];
   token_endpoint_auth_methods_supported?: string[];
+  code_challenge_methods_supported?: string[];
 };
 
 type TokenSet = {
@@ -72,12 +70,9 @@ type BrowserSession = {
   id: string;
   sub: string;
   providerSid?: string;
-  createdAt: number;
   expiresAt: number;
   tokenExpiresAt: number;
-  accessToken: string;
   refreshToken?: string;
-  idToken: string;
 };
 
 type StoredState = {
@@ -143,7 +138,6 @@ export class OidcGate {
   readonly config: OidcConfig;
   readonly discovery: OidcDiscovery;
 
-  private readonly directory: string;
   private readonly statePath: string;
   private readonly fetcher: typeof fetch;
   private jwks: JsonWebKey[];
@@ -152,7 +146,7 @@ export class OidcGate {
   private readonly transactions = new Map<string, LoginTransaction>();
   private readonly refreshing = new Map<string, Promise<boolean>>();
   private readonly connections = new Map<string, Set<() => void>>();
-  private readonly sweep: ReturnType<typeof setInterval>;
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(
     config: OidcConfig,
@@ -165,22 +159,18 @@ export class OidcGate {
     this.discovery = discovery;
     this.jwks = jwks;
     this.fetcher = fetcher;
-    this.directory = join(stateRoot, "oidc");
-    this.statePath = join(this.directory, "sessions.json");
+    const directory = join(stateRoot, "oidc");
+    this.statePath = join(directory, "sessions.json");
 
     // The containing directory is itself credential material. Correct an existing permissive mode,
     // not only a newly-created one (mkdir's mode is filtered by umask and ignored when it exists).
     mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
     chmodSync(stateRoot, 0o700);
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    chmodSync(this.directory, 0o700);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
     this.load();
     this.expire();
-    // Idle SSE/WebSocket connections do not produce requests that could trigger refresh. A small,
-    // unref'd sweep keeps those sessions refreshed too, and a failed refresh can therefore revoke
-    // and close an otherwise silent connection immediately rather than at its seven-day deadline.
-    this.sweep = setInterval(() => void this.sweepSessions(), 1_000);
-    this.sweep.unref();
+    this.scheduleRefresh();
   }
 
   static async create(
@@ -209,6 +199,7 @@ export class OidcGate {
   /** Start Authorization Code + PKCE without accepting an off-origin return target. */
   beginLogin(returnTo: string | undefined): string {
     this.pruneTransactions();
+    while (this.transactions.size >= 128) this.transactions.delete(this.transactions.keys().next().value!);
     const state = opaqueToken();
     const verifier = opaqueToken(48);
     const nonce = opaqueToken();
@@ -258,7 +249,6 @@ export class OidcGate {
     }
     const claims = await this.verifyToken(tokens.id_token, {
       nonce: transaction.nonce,
-      accessToken: tokens.access_token,
       code,
     });
     if (!claims.sub) throw new OidcAuthenticationError("The ID token has no subject.");
@@ -269,15 +259,13 @@ export class OidcGate {
       id,
       sub: claims.sub,
       ...(typeof claims.sid === "string" ? { providerSid: claims.sid } : {}),
-      createdAt: now,
       expiresAt: now + SESSION_LIFETIME_MS,
       tokenExpiresAt: tokenExpiry(tokens, claims, now),
-      accessToken: tokens.access_token,
       ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
-      idToken: tokens.id_token,
     };
     this.sessions.set(id, session);
     this.persist();
+    this.scheduleRefresh();
     return { cookie: this.sessionCookie(id), location: transaction.returnTo };
   }
 
@@ -315,14 +303,15 @@ export class OidcGate {
   /**
    * Validate and consume an OIDC Back-Channel Logout token.
    *
-   * The signed token itself is fingerprinted when `jti` is absent; either way the replay marker is
-   * durable. Matching `sid` sessions are preferred, while a subject-only notice revokes every Flow
+   * The signed token replay marker is durable. Matching `sid` sessions are preferred, while a
+   * subject-only notice revokes every Flow
    * browser session for that provider subject, as the specification requires.
    */
   async backchannelLogout(logoutToken: string): Promise<number> {
     const claims = await this.verifyToken(logoutToken, { logout: true });
     const event = claims.events?.["http://schemas.openid.net/event/backchannel-logout"];
-    if (!event || typeof event !== "object" || Array.isArray(event) || claims.nonce !== undefined) {
+    if (!event || typeof event !== "object" || Array.isArray(event) || Object.keys(event).length !== 0 ||
+        typeof claims.jti !== "string" || !claims.jti || claims.nonce !== undefined) {
       throw new OidcAuthenticationError("Invalid logout token.");
     }
     if (typeof claims.iat !== "number" || claims.iat < Date.now() / 1_000 - LOGOUT_TOKEN_MAX_AGE_SECONDS) {
@@ -333,7 +322,7 @@ export class OidcGate {
     if (!providerSid && !sub) throw new OidcAuthenticationError("Logout token has no session or subject.");
 
     const fingerprint = createHash("sha256")
-      .update(typeof claims.jti === "string" ? `${claims.iss}:${claims.jti}` : logoutToken)
+      .update(`${claims.iss}:${claims.jti}`)
       .digest("base64url");
     if (this.logoutTokens.has(fingerprint)) {
       throw new OidcAuthenticationError("Logout token was already used.");
@@ -366,7 +355,7 @@ export class OidcGate {
   }
 
   dispose(): void {
-    clearInterval(this.sweep);
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
   }
 
   private sessionCookie(id: string): string {
@@ -409,14 +398,13 @@ export class OidcGate {
       const now = Date.now();
       this.sessions.set(id, {
         ...current,
-        accessToken: tokens.access_token,
-        // A rotating provider returns a replacement. A non-rotating provider leaves it absent.
+          // A rotating provider returns a replacement. A non-rotating provider leaves it absent.
         refreshToken: tokens.refresh_token ?? session.refreshToken,
-        idToken: tokens.id_token ?? current.idToken,
         tokenExpiresAt: tokenExpiry(tokens, claims, now),
         ...(typeof claims?.sid === "string" ? { providerSid: claims.sid } : {}),
       });
       this.persist();
+      this.scheduleRefresh();
       return true;
     } catch {
       this.invalidate(id);
@@ -462,55 +450,60 @@ export class OidcGate {
 
   private async verifyToken(
     token: string,
-    options: {
-      nonce?: string;
-      accessToken?: string;
-      code?: string;
-      logout?: boolean;
-    },
+    options: { nonce?: string; accessToken?: string; code?: string; logout?: boolean },
   ): Promise<Claims> {
-    const decoded = decodeJwt(token);
-    const supported = this.discovery.id_token_signing_alg_values_supported;
-    if (supported && !supported.includes(decoded.header.alg)) {
+    let header: ReturnType<typeof decodeProtectedHeader>;
+    try {
+      header = decodeProtectedHeader(token);
+    } catch {
+      throw new OidcAuthenticationError("Token is malformed.");
+    }
+    const supported = this.discovery.id_token_signing_alg_values_supported!;
+    if (!header.alg || !supported.includes(header.alg)) {
       throw new OidcAuthenticationError("Token signing algorithm is not advertised.");
     }
-    let key = selectKey(this.jwks, decoded.header.kid, decoded.header.alg);
-    if (!key) {
-      // Key rotation is ordinary. Refresh once on an unknown kid rather than pinning discovery-time
-      // keys until restart.
-      this.jwks = await fetchJwks(this.fetcher, this.discovery.jwks_uri);
-      key = selectKey(this.jwks, decoded.header.kid, decoded.header.alg);
-    }
-    if (!key || !verifyJwtSignature(decoded, key)) {
-      throw new OidcAuthenticationError("Token signature is invalid.");
-    }
 
-    const claims = decoded.claims;
-    const now = Date.now() / 1_000;
-    if (claims.iss !== this.config.issuer || !audienceIncludes(claims.aud, this.config.clientId)) {
-      throw new OidcAuthenticationError("Token issuer or audience is invalid.");
+    let result;
+    try {
+      result = await jwtVerify(token, createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet), {
+        issuer: this.config.issuer,
+        audience: this.config.clientId,
+        algorithms: supported,
+        clockTolerance: CLOCK_SKEW_SECONDS,
+        requiredClaims: options.logout ? ["iat"] : ["iat", "exp"],
+      });
+    } catch (error) {
+      if (!(error instanceof joseErrors.JWKSNoMatchingKey)) {
+        throw new OidcAuthenticationError("Token validation failed.");
+      }
+      this.jwks = await fetchJwks(this.fetcher, this.discovery.jwks_uri);
+      try {
+        result = await jwtVerify(token, createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet), {
+          issuer: this.config.issuer, audience: this.config.clientId, algorithms: supported,
+          clockTolerance: CLOCK_SKEW_SECONDS,
+          requiredClaims: options.logout ? ["iat"] : ["iat", "exp"],
+        });
+      } catch {
+        throw new OidcAuthenticationError("Token validation failed.");
+      }
     }
+    const claims = result.payload as Claims;
+    const now = Date.now() / 1_000;
     if (Array.isArray(claims.aud) && claims.aud.length > 1 && claims.azp !== this.config.clientId) {
       throw new OidcAuthenticationError("Token authorised party is invalid.");
     }
     if (typeof claims.iat !== "number" || claims.iat > now + CLOCK_SKEW_SECONDS) {
       throw new OidcAuthenticationError("Token issue time is invalid.");
     }
-    if (typeof claims.exp === "number" && claims.exp < now - CLOCK_SKEW_SECONDS) {
-      throw new OidcAuthenticationError("Token has expired.");
-    }
-    if (!options.logout && typeof claims.exp !== "number") {
-      throw new OidcAuthenticationError("ID token has no expiry.");
-    }
     if (options.nonce !== undefined && claims.nonce !== options.nonce) {
       throw new OidcAuthenticationError("ID token nonce is invalid.");
     }
     if (options.accessToken && typeof claims.at_hash === "string" &&
-        claims.at_hash !== oidcHash(options.accessToken, decoded.header.alg)) {
+        claims.at_hash !== oidcHash(options.accessToken, header.alg)) {
       throw new OidcAuthenticationError("Access token hash is invalid.");
     }
     if (options.code && typeof claims.c_hash === "string" &&
-        claims.c_hash !== oidcHash(options.code, decoded.header.alg)) {
+        claims.c_hash !== oidcHash(options.code, header.alg)) {
       throw new OidcAuthenticationError("Authorization code hash is invalid.");
     }
     return claims;
@@ -531,13 +524,29 @@ export class OidcGate {
     if (persist) this.persist();
   }
 
-  private async sweepSessions(): Promise<void> {
+  private scheduleRefresh(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    const now = Date.now();
+    const next = Math.min(...[...this.sessions.values()].map((session) => {
+      const early = session.tokenExpiresAt - REFRESH_EARLY_MS;
+      return Math.min(session.expiresAt, early > now ? early : session.tokenExpiresAt);
+    }), Infinity);
+    if (!Number.isFinite(next)) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      void this.refreshDueSessions();
+    }, Math.max(0, next - now));
+    this.refreshTimer.unref();
+  }
+
+  private async refreshDueSessions(): Promise<void> {
     this.expire();
     const now = Date.now();
     const due = [...this.sessions.values()]
       .filter((session) => session.expiresAt > now && session.tokenExpiresAt - now <= REFRESH_EARLY_MS)
       .map((session) => session.id);
     await Promise.all(due.map(async (id) => await this.refresh(id)));
+    this.scheduleRefresh();
   }
 
   private expire(): void {
@@ -677,6 +686,12 @@ function validateDiscovery(config: OidcConfig, discovery: OidcDiscovery): void {
   if (discovery.response_types_supported && !discovery.response_types_supported.includes("code")) {
     throw new OidcConfigurationError("OIDC provider does not advertise the authorization-code flow");
   }
+  if (!discovery.code_challenge_methods_supported?.includes("S256")) {
+    throw new OidcConfigurationError("OIDC provider does not advertise S256 PKCE");
+  }
+  if (!discovery.id_token_signing_alg_values_supported?.some((alg) => alg !== "none")) {
+    throw new OidcConfigurationError("OIDC provider does not advertise a signing algorithm");
+  }
   for (const [name, value] of [
     ["authorization_endpoint", discovery.authorization_endpoint],
     ["token_endpoint", discovery.token_endpoint],
@@ -764,85 +779,13 @@ function tokenExpiry(tokens: TokenSet, claims: Claims | undefined, now: number):
 function validStoredSession(value: BrowserSession): boolean {
   return typeof value?.id === "string" &&
     typeof value.sub === "string" &&
-    typeof value.createdAt === "number" &&
     typeof value.expiresAt === "number" &&
     typeof value.tokenExpiresAt === "number" &&
-    typeof value.accessToken === "string" &&
-    typeof value.idToken === "string";
+    (value.refreshToken === undefined || typeof value.refreshToken === "string");
 }
 
 function audienceIncludes(audience: Claims["aud"], expected: string): boolean {
   return typeof audience === "string" ? audience === expected : Array.isArray(audience) && audience.includes(expected);
-}
-
-type DecodedJwt = {
-  header: { alg: string; kid?: string };
-  claims: Claims;
-  signed: Buffer;
-  signature: Buffer;
-};
-
-function decodeJwt(token: string): DecodedJwt {
-  const parts = token.split(".");
-  if (parts.length !== 3 || parts.some((part) => !part)) {
-    throw new OidcAuthenticationError("Token is not a signed JWT.");
-  }
-  try {
-    const header = JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8")) as {
-      alg?: string;
-      kid?: string;
-    };
-    const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as Claims;
-    if (!header.alg || header.alg === "none") throw new Error("unsigned");
-    return {
-      header: {
-        alg: header.alg,
-        ...(typeof header.kid === "string" ? { kid: header.kid } : {}),
-      },
-      claims,
-      signed: Buffer.from(`${parts[0]}.${parts[1]}`),
-      signature: Buffer.from(parts[2]!, "base64url"),
-    };
-  } catch {
-    throw new OidcAuthenticationError("Token is malformed.");
-  }
-}
-
-function selectKey(keys: JsonWebKey[], kid: string | undefined, alg: string): JsonWebKey | undefined {
-  const candidates = keys.filter((key) =>
-    (!kid || key.kid === kid) && (!key.alg || key.alg === alg) && (!key.use || key.use === "sig"),
-  );
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
-function verifyJwtSignature(jwt: DecodedJwt, jwk: JsonWebKey): boolean {
-  const hash = jwt.header.alg.slice(-3);
-  if (!new Set(["256", "384", "512"]).has(hash) && jwt.header.alg !== "EdDSA") return false;
-  if (jwt.header.alg.startsWith("HS")) {
-    if (jwk.kty !== "oct" || typeof jwk.k !== "string") return false;
-    const actual = createHmac(`sha${hash}`, Buffer.from(jwk.k, "base64url")).update(jwt.signed).digest();
-    return actual.length === jwt.signature.length && timingSafeEqual(actual, jwt.signature);
-  }
-  try {
-    const key = createPublicKey({ key: jwk, format: "jwk" });
-    if (jwt.header.alg === "EdDSA") return verifySignature(null, jwt.signed, key, jwt.signature);
-    if (jwt.header.alg.startsWith("PS")) {
-      return verifySignature(`RSA-SHA${hash}`, jwt.signed, {
-        key,
-        padding: constants.RSA_PKCS1_PSS_PADDING,
-        saltLength: Number(hash) / 8,
-      }, jwt.signature);
-    }
-    if (jwt.header.alg.startsWith("RS")) {
-      return verifySignature(`RSA-SHA${hash}`, jwt.signed, key, jwt.signature);
-    }
-    if (jwt.header.alg.startsWith("ES")) {
-      return verifySignature(`sha${hash}`, jwt.signed, { key, dsaEncoding: "ieee-p1363" }, jwt.signature);
-    }
-  } catch {
-    return false;
-  }
-  return false;
 }
 
 function oidcHash(value: string, alg: string): string {
