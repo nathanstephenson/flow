@@ -40,7 +40,7 @@ export type ComposerActions = {
   abort?: () => Promise<void>;
   steerQueued?: (messageId: string) => Promise<void>;
   cancelQueued?: (messageId: string) => Promise<void>;
-  answerEnquiry?: (askId: string, answers: string[][]) => void;
+  answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => void;
 };
 
@@ -82,8 +82,8 @@ export function useSessionActions(sessionId: string): ComposerActions {
       abort: async () => {
         await run({ type: "abort", sessionId });
       },
-      answerEnquiry: (askId: string, answers: string[][]) =>
-        void run({ type: "answer_enquiry", sessionId, askId, answers }),
+      answerEnquiry: async (askId: string, answers: string[][]) =>
+        (await run({ type: "answer_enquiry", sessionId, askId, answers })) !== undefined,
       answerPermission: (callId: string, decision: PermissionDecision) =>
         void run({ type: "answer_permission", sessionId, callId, decision }),
     }),

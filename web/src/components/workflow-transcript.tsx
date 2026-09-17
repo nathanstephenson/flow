@@ -54,6 +54,8 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     let initialLoading = true;
+    let polling = false;
+    let catchUpRequested = false;
     events.current = [];
     setActivity([]);
     setPrevious(undefined);
@@ -69,25 +71,31 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
 
     const read = async (path: string) => workflowApi<WorkflowActivityPage>(path, "GET", undefined, controller.signal);
     const poll = async (): Promise<void> => {
-      if (stopped) return;
+      if (stopped || polling) { catchUpRequested = true; return; }
+      polling = true;
+      let failed = false;
       try {
-        const after = events.current.at(-1)?.sequence ?? 0;
-        const page = await read(`${base}/activity?${query}&after=${after}&limit=${PAGE_SIZE}`);
-        merge(page.activity);
-        setHistoryComplete(page.historyComplete);
-        setError("");
-        // Drain a burst larger than one page immediately; wait only once caught up.
-        if (page.next !== undefined) return void poll();
+        do {
+          catchUpRequested = false;
+          const after = events.current.at(-1)?.sequence ?? 0;
+          const page = await read(`${base}/activity?${query}&after=${after}&limit=${PAGE_SIZE}`);
+          merge(page.activity);
+          setHistoryComplete(page.historyComplete);
+          setError("");
+          if (page.next !== undefined) catchUpRequested = true;
+        } while (!stopped && catchUpRequested);
       } catch (reason) {
+        failed = true;
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        polling = false;
       }
-      if (!stopped && !completedRef.current) timer = setTimeout(() => void poll(), POLL_MS);
+      if (!stopped && (!completedRef.current || failed)) timer = setTimeout(() => void poll(), POLL_MS);
     };
-    // Completion is not transcript identity. Preserve all loaded pages and the reader's position,
-    // but wake the poller immediately for one final catch-up instead of waiting for its next tick.
     finishPolling.current = () => {
       if (timer) clearTimeout(timer);
       timer = undefined;
+      catchUpRequested = true;
       if (!initialLoading) void poll();
     };
 

@@ -291,8 +291,9 @@ export class WorkflowExecutionService {
     const request = this.oldestRelay(sessionId);
     // One retry covers a transient delivery failure without an unbounded series of paid turns.
     if (!request || request.relaying) return;
+    if (request.deliveryAttempts >= 2) return;
     request.announced = false;
-    if (request.deliveryAttempts < 2) this.host.workflowInput(sessionId);
+    this.host.workflowInput(sessionId);
   }
 
   parent(sessionId: string): WorkflowParent {

@@ -707,6 +707,26 @@ it('queues exact Workflow questions behind a running parent, then relays and for
   } finally { await f.close(); }
 });
 
+it('retries an ignored relay once without buying a third parent turn', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.ask([
+      { header: 'Target', question: 'Which target?', multiSelect: false, options: [{ label: 'Web' }] },
+    ], 'ignored-ask');
+    await until(() => f.backend.latest.prompts.length === 1);
+
+    f.backend.latest.completeTurn();
+    await until(() => f.backend.latest.prompts.length === 2);
+    f.backend.latest.completeTurn();
+    await pause();
+
+    assert.equal(f.backend.latest.prompts.length, 2);
+    await f.service.cancel(f.id, started.execution.id);
+  } finally { await f.close(); }
+});
+
 it('relays Workflow permissions with exact scope and rejects Always for direct calls in the shared control', async () => {
   const f = await fixture();
   try {

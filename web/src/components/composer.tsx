@@ -379,19 +379,21 @@ export function Composer({
    * which is the same promise the rest of this file makes.
    */
   const commit = useCallback(
-    (answer: string[]): void => {
+    async (answer: string[]): Promise<void> => {
       if (!asking || !answering) return;
       const next: Answering = {
         index: answering.index + 1,
         cursor: 0,
         chosen: answering.chosen.map((was, index) => (index === answering.index ? answer : was)),
       };
+      setHint(undefined);
+      if (isFinished(next, asking.questions)) {
+        const accepted = await actions.answerEnquiry?.(asking.askId, answersOf(next, asking.questions));
+        if (!accepted) return;
+      }
       setText("");
       input.current?.replace("", 0);
-      setHint(undefined);
       setAnswering(next);
-      if (!isFinished(next, asking.questions)) return;
-      actions.answerEnquiry?.(asking.askId, answersOf(next, asking.questions));
     },
     [actions, answering, asking],
   );
@@ -412,7 +414,7 @@ export function Composer({
         });
         return;
       }
-      commit([row.label]);
+      void commit([row.label]);
     },
     [answering, commit, question, rows],
   );

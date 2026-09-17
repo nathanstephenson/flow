@@ -1454,24 +1454,31 @@ export class SessionHost {
     const askId = `workflow-input-${randomUUID()}`;
     await new Promise<void>((resolve, reject) => {
       let state: 'open' | 'submitting' | 'settled' = 'open';
+      let canceled = false;
       const clear = () => { state = 'settled'; signal?.removeEventListener('abort', cancel); this.workflowEnquiryRelays.delete(askId); };
-      const cancel = () => {
-        if (state !== 'open' || !this.workflowEnquiryRelays.has(askId)) return;
+      const abort = () => {
+        if (state === 'settled') return;
         clear();
         this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'aborted' });
         reject(new CommandRefused('The Workflow Enquiry was canceled before it was answered'));
+      };
+      const cancel = () => {
+        if (!this.workflowEnquiryRelays.has(askId)) return;
+        if (state === 'submitting') { canceled = true; return; }
+        abort();
       };
       const submit = async (answers: string[][]) => {
         if (state !== 'open' || !this.workflowEnquiryRelays.has(askId)) throw new CommandRefused('That Workflow Enquiry is no longer open');
         state = 'submitting';
         try {
           await forward(answers);
+          if (canceled) { abort(); return; }
           clear();
           this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'answered', answers });
           resolve();
         } catch (error) {
-          // Refusal is not settlement: the workflow callback is still live and the human may retry.
-          state = 'open';
+          if (canceled) abort();
+          else state = 'open';
           throw error;
         }
       };
@@ -1487,8 +1494,10 @@ export class SessionHost {
     const callId = `workflow-input-${randomUUID()}`;
     await new Promise<void>((resolve, reject) => {
       let state: 'open' | 'submitting' | 'settled' = 'open';
+      let canceled = false;
       const clear = () => { state = 'settled'; signal?.removeEventListener('abort', cancel); this.workflowPermissionRelays.delete(callId); };
       const finish = (decision: PermissionDecision | undefined, error?: unknown) => {
+        if (state === 'settled') return;
         clear();
         this.onBackendEvent(sessionId, decision === undefined
           ? { type: 'permission', callId, tool: prompt.tool, context: prompt.context, allowAlways: prompt.allowAlways, authorizationScope: prompt.authorizationScope, state: 'aborted' }
@@ -1497,7 +1506,8 @@ export class SessionHost {
         if (error !== undefined) reject(error); else resolve();
       };
       const cancel = () => {
-        if (state !== 'open' || !this.workflowPermissionRelays.has(callId)) return;
+        if (!this.workflowPermissionRelays.has(callId)) return;
+        if (state === 'submitting') { canceled = true; return; }
         finish(undefined, new CommandRefused('The Workflow Permission Prompt was canceled before it was decided'));
       };
       const submit = async (decision: PermissionDecision) => {
@@ -1505,9 +1515,11 @@ export class SessionHost {
         state = 'submitting';
         try {
           await forward(decision);
-          finish(decision);
+          if (canceled) finish(undefined, new CommandRefused('The Workflow Permission Prompt was canceled before it was decided'));
+          else finish(decision);
         } catch (error) {
-          state = 'open';
+          if (canceled) finish(undefined, new CommandRefused('The Workflow Permission Prompt was canceled before it was decided'));
+          else state = 'open';
           throw error;
         }
       };
@@ -2216,6 +2228,7 @@ export class SessionHost {
     }
 
     if (event.type === "turn_ended") {
+      this.workflowOwner?.rearmInput?.(sessionId);
       for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
       for (const pending of this.workflowEnquiryRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
       for (const pending of this.workflowPermissionRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
