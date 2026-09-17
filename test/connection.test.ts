@@ -133,6 +133,44 @@ describe("Connection", () => {
     );
   });
 
+  it("offers OIDC reauthentication without replaying a refused command", async (t) => {
+    let requests = 0;
+    let assigned: string | undefined;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(401, {
+        "content-type": "application/json",
+        "x-flow-login": "/oauth/login",
+      });
+      response.end(JSON.stringify({ error: "Unauthorized" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(async () => await new Promise<void>((resolve) => server.close(() => resolve())));
+    const { port } = server.address() as AddressInfo;
+    const browser = globalThis as typeof globalThis & {
+      location?: { pathname: string; search: string; hash: string; assign(url: string): void };
+    };
+    browser.location = {
+      pathname: "/",
+      search: "",
+      hash: "#/s/deep-link",
+      assign: (url) => { assigned = url; },
+    };
+    t.after(() => { delete browser.location; });
+
+    await assert.rejects(
+      connect({ url: `http://127.0.0.1:${port}` }).command({
+        type: "create",
+        scope: "/tmp/scope",
+        backend: "fake",
+      }),
+      /401/,
+    );
+
+    assert.equal(requests, 1, "the command is not replayed after authentication starts");
+    assert.equal(assigned, "/oauth/login?return_to=%2F%23%2Fs%2Fdeep-link");
+  });
+
   it("gives up on a status no retry can fix", async (t) => {
     const host = await fakeSessionHost(TRANSCRIPT, 404);
     const links: LinkState[] = [];

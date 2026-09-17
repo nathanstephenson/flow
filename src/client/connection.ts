@@ -78,20 +78,29 @@ export function connect(options: { url: string; token?: string | undefined }): C
         ...credentials,
         body: JSON.stringify(command),
       });
-      if (!response.ok) throw new Error(await describe(response));
+      if (!response.ok) {
+        offerReauthentication(response, options.token);
+        throw new Error(await describe(response));
+      }
       return ((await response.json()) as { result: T }).result;
     },
 
     async listSessions(): Promise<SessionSummary[]> {
       const response = await fetch(`${options.url}/api/sessions`, { headers, ...credentials });
-      if (!response.ok) throw new Error(await describe(response));
+      if (!response.ok) {
+        offerReauthentication(response, options.token);
+        throw new Error(await describe(response));
+      }
       return (await response.json()) as SessionSummary[];
     },
 
     async branches(scope: string): Promise<BranchList> {
       const url = `${options.url}/api/branches?scope=${encodeURIComponent(scope)}`;
       const response = await fetch(url, { headers, ...credentials });
-      if (!response.ok) throw new Error(await describe(response));
+      if (!response.ok) {
+        offerReauthentication(response, options.token);
+        throw new Error(await describe(response));
+      }
       return (await response.json()) as BranchList;
     },
 
@@ -138,6 +147,7 @@ export function connect(options: { url: string; token?: string | undefined }): C
               signal: controller.signal,
             });
             if (!response.ok || !response.body) {
+              offerReauthentication(response, options.token);
               const error = new Error(await describe(response));
               if (FATAL_STATUS.has(response.status)) {
                 onLink?.("gone");
@@ -212,6 +222,22 @@ async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerato
       split = buffer.indexOf("\n\n");
     }
   }
+}
+
+/**
+ * OIDC 401s carry an explicit login endpoint. A command is never replayed: its refused response is
+ * handled first, then a fresh top-level navigation starts authentication. Bearer clients and legacy
+ * local mode never take this browser-only path.
+ */
+function offerReauthentication(response: Response, token: string | undefined): void {
+  const login = response.headers.get("x-flow-login");
+  const browser = globalThis as typeof globalThis & {
+    location?: { pathname: string; search: string; hash: string; assign(url: string): void };
+  };
+  if (response.status !== 401 || token || !login || !browser.location) return;
+  const here = `${browser.location.pathname}${browser.location.search}${browser.location.hash}`;
+  const separator = login.includes("?") ? "&" : "?";
+  browser.location.assign(`${login}${separator}return_to=${encodeURIComponent(here)}`);
 }
 
 async function describe(response: Response): Promise<string> {

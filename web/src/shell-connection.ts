@@ -1,4 +1,5 @@
 import type { ShellClientFrame, ShellServerFrame, ShellSummary } from "../../src/protocol/shells.ts";
+import { beginReauthentication, reauthenticateClosedSocket } from "@/authentication.ts";
 
 /**
  * The browser's end of one Shell socket.
@@ -36,6 +37,7 @@ export async function openShell(sessionId: string, cols: number, rows: number): 
     body: JSON.stringify({ sessionId, cols, rows }),
   });
   if (!response.ok) {
+    beginReauthentication(response);
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Could not open a Shell (${response.status})`);
   }
@@ -47,7 +49,10 @@ export async function listShells(sessionId: string): Promise<ShellSummary[]> {
   const response = await fetch(`/api/shells?sessionId=${encodeURIComponent(sessionId)}`, {
     credentials: "same-origin",
   });
-  if (!response.ok) return [];
+  if (!response.ok) {
+    beginReauthentication(response);
+    return [];
+  }
   return (await response.json()) as ShellSummary[];
 }
 
@@ -61,6 +66,8 @@ export async function killShell(shellId: string): Promise<void> {
   await fetch(`/api/shells/${encodeURIComponent(shellId)}`, {
     method: "DELETE",
     credentials: "same-origin",
+  }).then((response) => {
+    if (!response.ok) beginReauthentication(response);
   }).catch(() => undefined);
 }
 
@@ -88,7 +95,8 @@ export function attachShell(shellId: string, handlers: ShellHandlers): ShellConn
 
   // `closed` fires only when the Shell did not tell us it was dying, so the caller can tell "you
   // navigated away" from "your shell exited" — they look identical at the socket.
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
+    reauthenticateClosedSocket(event.code);
     if (!shellDied) handlers.closed();
   });
 

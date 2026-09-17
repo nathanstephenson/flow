@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { beginReauthentication } from "@/authentication.ts";
+
 export async function workflowApi<T>(
   path: string,
   method = "GET",
@@ -13,8 +15,10 @@ export async function workflowApi<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await response.json();
-  if (!response.ok)
+  if (!response.ok) {
+    beginReauthentication(response);
     throw new Error(data.error ?? `Request failed (${response.status})`);
+  }
   return data as T;
 }
 export function useWorkflowResource<T>(

@@ -165,7 +165,73 @@ is refused rather than silently serving nothing.
 
 The `/auth` handoff exists because a browser cannot put an `Authorization` header on a navigation or
 an `EventSource`: the token goes into an HttpOnly cookie once, and the UI itself — not just the API
-— requires it.
+— requires it. An externally reachable personal deployment should use the OIDC gate below instead.
+
+### External OIDC gate
+
+Flow can delegate browser admission to any standards-compliant OpenID Provider while preserving the
+bearer header used by CLI/TUI clients. This is a **shared personal deployment**, not multi-user
+isolation: every person admitted by the issuer has full access to every Agent Session, Shell, file,
+secret and Setting the daemon can reach.
+
+Configure all four variables or none. Partial or invalid configuration fails before the daemon
+listens; unconfigured deployments keep the local `/auth?token=…` behaviour.
+
+```bash
+export FLOW_OIDC_ISSUER=https://id.example.com
+export FLOW_OIDC_CLIENT_ID=flow
+export FLOW_OIDC_CLIENT_SECRET='replace-me'
+export FLOW_OIDC_PUBLIC_APP_URL=https://flow.example.com
+flow serve --port 4318                       # keep loopback when the proxy is on this host
+# or --address 0.0.0.0 in an isolated container network
+```
+
+Register these URLs at the issuer:
+
+- redirect URI: `https://flow.example.com/oauth/callback`
+- back-channel logout URI: `https://flow.example.com/oauth/backchannel`
+
+The issuer must support OIDC discovery, Authorization Code, a confidential client authentication
+method (`client_secret_basic` or `client_secret_post`), signed ID tokens, S256 PKCE, refresh tokens,
+and the `openid` scope. Flow requests `offline_access`. Back-channel logout is optional but required
+for immediate revocation when the issuer disables a user; discovery alone cannot report an account
+change. Logout inside Flow does not perform global issuer logout.
+
+Terminate HTTPS at the reverse proxy and forward `/`, `/api`, `/assets` and `/oauth` to the daemon,
+including HTTP upgrade for Shell WebSockets and streaming responses for SSE. `FLOW_OIDC_PUBLIC_APP_URL`
+is the only browser origin Flow trusts in this mode. Do not rewrite it from request headers and do
+not expose the daemon directly; Flow intentionally ignores `Forwarded` and `X-Forwarded-*` for its
+security decisions. HTTP issuer/app URLs are accepted only for `localhost`, `127.0.0.1` or `::1`
+development.
+
+Provider tokens remain server-side. Flow persists them and opaque browser sessions under
+`$FLOW_STATE_DIR/oidc/` (0700 directory, 0600 file, with no additional application-level encryption),
+rotates refresh tokens, coordinates concurrent refreshes, and applies a seven-day absolute
+browser-session lifetime. Flow logout, expiry, failed
+refresh and valid back-channel notifications revoke the browser session and close its SSE/WebSocket
+connections without ending Agent Sessions.
+
+The daemon bearer token remains an explicit administrative bypass:
+
+```bash
+curl -H "Authorization: Bearer $(cat "$FLOW_STATE_DIR/token")" \
+  https://flow.example.com/api/sessions
+```
+
+A bearer client does not enter OIDC and works remotely when the reverse proxy forwards the header.
+Protect that token as full app access. In OIDC mode `/auth` is disabled and an old `flow=` cookie is
+ignored, so the bypass cannot be handed to a browser through Flow.
+
+A reproducible local Provider is included for integration testing:
+
+```bash
+npm run test:oidc-issuer -- http://127.0.0.1:5173
+# In another terminal, export the four variables it prints, start Flow on :4318, then `npm run dev`.
+```
+
+It performs discovery, S256 PKCE, confidential client authentication, signed ID/logout tokens and
+refresh-token rotation. It auto-admits one fixed test subject and is for localhost testing only.
+Nathan's separate OpenAuth-based issuer has not been compatibility-verified by this change.
 
 **M5 (single executable) complete.** `npm run build:binary` produces `build/flow`: an esbuild
 bundle injected into a copy of the `node` binary via Node SEA.
@@ -260,6 +326,7 @@ npm install
 npm run typecheck   # four programs: host, web presentation logic, web app, its Vite config
 npm test
 npm run spike:auth   # re-verify subscription auth
+npm run test:oidc-issuer -- http://127.0.0.1:5173  # local standards test Provider
 
 FLOW_ASSETS=1 npm test    # adds a Vite build, to prove the embedder handles everything it emits
 FLOW_E2E=1 npm test       # adds the live Claude contract (spends tokens)
@@ -427,7 +494,7 @@ npm run dev                      # terminal two: Vite on 127.0.0.1:5173
 
 The dev server finds the host through `daemon.json`, or `FLOW_URL` if you set it, and it
 resolves that target once at startup — which is why the host wants a fixed `--port` rather than the
-ephemeral one it picks by default. It proxies `/api` and `/auth` through, so the browser stays on
+ephemeral one it picks by default. It proxies `/api`, `/auth` and `/oauth` through, so the browser stays on
 one origin; that single origin is what lets the Session Host go on checking `Origin` strictly with
 no CORS.
 

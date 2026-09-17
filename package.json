@@ -16,6 +16,7 @@
     "dev": "vite --config web/vite.config.ts",
     "test": "node --test --experimental-strip-types \"test/**/*.test.ts\" \"web/**/*.test.ts\"",
     "spike:auth": "node --experimental-strip-types spikes/subscription-auth.ts",
+    "test:oidc-issuer": "node --experimental-strip-types scripts/test-oidc-issuer.ts",
     "prestart": "npm run build:web && npm run build:workflow-runtime",
     "start": "node --experimental-strip-types src/cli/main.ts",
     "spike:adapter": "node --experimental-strip-types spikes/adapter-smoke.ts",

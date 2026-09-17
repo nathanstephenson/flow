@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { ScopeSkills, Skill } from "../../src/protocol/events.ts";
+import { beginReauthentication } from "@/authentication.ts";
 
 /**
  * Asking the Session Host which Skills a Scope offers, before it has an Agent Session.
@@ -58,7 +59,10 @@ async function fetchScopeSkills(scope: string, backend: string): Promise<Skill[]
       `/api/skills?scope=${encodeURIComponent(scope)}&backend=${encodeURIComponent(backend)}`,
       { credentials: "same-origin" },
     );
-    if (!response.ok) return [];
+    if (!response.ok) {
+      beginReauthentication(response);
+      return [];
+    }
     const answer = (await response.json()) as ScopeSkills;
     // The host echoes the Scope back precisely so a client can check rather than trust.
     return answer.scope === scope ? answer.skills : [];

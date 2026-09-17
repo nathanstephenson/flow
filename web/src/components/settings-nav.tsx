@@ -1,4 +1,4 @@
-import { ArrowLeft, Cpu, FolderGit2, Keyboard, ShieldCheck, Sliders, Type } from "lucide-react";
+import { ArrowLeft, Cpu, FolderGit2, Keyboard, LogOut, ShieldCheck, Sliders, Type } from "lucide-react";
 import type { ComponentType } from "react";
 
 import { SETTINGS_SECTIONS, type SettingsSection } from "@/presentation/route.ts";
@@ -14,6 +14,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar.tsx";
 import { cn } from "@/lib/utils.ts";
+import { useHost } from "@/host.tsx";
 
 /**
  * The rail, while the Settings are on screen: the same frame, a different list.
@@ -23,8 +24,9 @@ import { cn } from "@/lib/utils.ts";
  * navigation. So they are links in the ARIA sense and say `aria-current="page"`, matching the rail's
  * `aria-current` next door rather than inventing a second vocabulary for "the one you are on".
  *
- * The footer is a way out and nothing else. It replaces the Agent Session rail's shortcut hints,
- * which name keys that do not resolve here — see `IN_SETTINGS` in web/src/presentation/bindings.ts.
+ * The footer is the way out of Settings and, under OIDC, the way out of Flow. It replaces the Agent
+ * Session rail's shortcut hints, which name keys that do not resolve here — see `IN_SETTINGS` in
+ * web/src/presentation/bindings.ts.
  */
 const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: ComponentType }> = {
   workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Sliders },
@@ -47,6 +49,7 @@ export function SettingsNav({
   onSelect: (section: SettingsSection) => void;
   onLeave: () => void;
 }) {
+  const { config } = useHost();
   return (
     <>
       <SidebarHeader className="flex-row items-center gap-1 border-b border-sidebar-border">
@@ -89,6 +92,14 @@ export function SettingsNav({
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border py-1.5">
+        {config.authentication === "oidc" ? (
+          <form action="/oauth/logout" method="post">
+            <Button type="submit" variant="ghost" size="sm" className="w-full justify-start gap-2">
+              <LogOut aria-hidden />
+              Sign out of Flow
+            </Button>
+          </form>
+        ) : null}
         {/*
          * Back, not a browser Back: the hash is written with replaceState, so there is no history
          * entry to pop. This returns to the Agent Session that was on screen before the Settings
