@@ -47,7 +47,7 @@ export type BackgroundCallStatus = "running" | "complete" | "aborted" | "error";
  * rebuilt per tick, which could never compare equal to the one before it; this is the opposite, and
  * it holds the same contract `model` and `capabilities` already do.
  */
-export type OpenEnquiry = { askId: string; questions: Question[] };
+export type OpenEnquiry = { askId: string; questions: Question[]; context?: string };
 
 /** Flattened from PermissionState, for the reason EnquiryStatus is flattened from EnquiryState. */
 export type Authorisation = "asked" | "allowed" | "always" | "denied";
@@ -63,7 +63,7 @@ export type Authorisation = "asked" | "allowed" | "always" | "denied";
  * first raised and then held by reference, so a repeated `asked` snapshot cannot republish a
  * shallow-compared chrome.
  */
-export type OpenPermission = { callId: string; tool: string };
+export type OpenPermission = { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string };
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
@@ -97,6 +97,10 @@ export type Entry =
        * failed says so too. Neither can be derived from the other.
        */
       authorisation?: Authorisation;
+      /** Relay-only prompt metadata, retained so oldest-first promotion preserves its choices. */
+      permissionContext?: string;
+      allowAlways?: boolean;
+      authorizationScope?: string;
       producer?: Producer;
     }
   /**
@@ -178,6 +182,7 @@ export type Entry =
       status: EnquiryStatus;
       /** Present only on `answered`, index-aligned with `questions`. */
       answers?: string[][];
+      context?: string;
       producer?: Producer;
     }
   | { kind: "notice"; id: string; level: NoticeLevel; text: string }
@@ -523,7 +528,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         open && state.asking?.askId === event.askId
           ? state.asking
           : open
-            ? { askId: event.askId, questions: event.questions }
+            ? { askId: event.askId, questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) }
             : state.asking?.askId === event.askId
               ? undefined
               : state.asking;
@@ -537,6 +542,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           questions: event.questions,
           status: event.state,
           ...(event.state === "answered" ? { answers: event.answers } : {}),
+          ...(event.context === undefined ? {} : { context: event.context }),
           ...(event.producer === undefined ? {} : { producer: event.producer }),
         }),
       };
@@ -555,7 +561,13 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
        * in hand changes nothing here — it is already in `entries`, and will be promoted in its turn.
        */
       const authorising = open
-        ? (state.authorising ?? { callId: event.callId, tool: event.tool })
+        ? (state.authorising ?? {
+            callId: event.callId,
+            tool: event.tool,
+            ...(event.context === undefined ? {} : { context: event.context }),
+            ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
+            ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
+          })
         : state.authorising?.callId === event.callId
           ? nextAwaiting(state.entries, event.callId)
           : state.authorising;
@@ -566,6 +578,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: patchTool(state.entries, event.callId, (tool) => ({
           ...tool,
           authorisation: authorisationOf(event),
+          ...(event.context === undefined ? {} : { permissionContext: event.context }),
+          ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
+          ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
         })),
       };
     }
@@ -757,7 +772,13 @@ function nextAwaiting(entries: Entry[], except: string): OpenPermission | undefi
   const next = entries.find(
     (entry) => entry.kind === "tool" && entry.id !== except && entry.authorisation === "asked",
   );
-  return next?.kind === "tool" ? { callId: next.id, tool: next.name } : undefined;
+  return next?.kind === "tool" ? {
+    callId: next.id,
+    tool: next.name,
+    ...(next.permissionContext === undefined ? {} : { context: next.permissionContext }),
+    ...(next.allowAlways === undefined ? {} : { allowAlways: next.allowAlways }),
+    ...(next.authorizationScope === undefined ? {} : { authorizationScope: next.authorizationScope }),
+  } : undefined;
 }
 
 /** Spread onto an Entry, so an unattributed event does not carry an explicit `producer: undefined`. */

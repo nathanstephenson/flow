@@ -13,7 +13,6 @@ import type {
 import type {
   WorkflowExecutionList,
   WorkflowExecutionView,
-  WorkflowEnquiry,
 } from "../../../src/protocol/workflow-executions.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
@@ -22,7 +21,6 @@ import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { initialValue, ValueEditor } from "./workflow-editors.tsx";
 import { WorkflowGraph } from "./workflow-graph.tsx";
 import { Button } from "./ui/button.tsx";
-import { Input } from "./ui/input.tsx";
 import {
   Select,
   SelectContent,
@@ -281,57 +279,35 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
             <p>Recovery required. Ask the parent in chat to diagnose and recover this execution.</p>
             {limitedLoops(execution).map(([id, loop]) => <p key={id}>{execution.definition.steps.find(step => step.id === id)?.name}: {loopProgress(loop, execution.definition.loopSettings?.[id]?.maxTries ?? 3)}</p>)}
           </div>}
-          {view.permissions.map((p) => (
-            <fieldset
-              key={`${p.subagentId}/${p.callId}`}
-              className="flex flex-wrap gap-2 rounded-lg border p-3"
-            >
-              <legend className="px-1 font-medium">
-                Permission ·{" "}
-                {execution.definition.steps.find((item) => item.id === p.stepId)
-                  ?.name ?? p.stepId}
-              </legend>
-              <p className="w-full font-mono text-xs">{p.tool}</p>
-              {((p.direct ? ["allow", "deny"] : ["allow", "always", "deny"]) as Array<"allow" | "deny" | "always">).map((decision) => (
-                <Button
-                  size="sm"
-                  variant={decision === "deny" ? "destructive" : "outline"}
-                  key={decision}
-                  disabled={busy}
-                  onClick={() =>
-                    void mutate(`${base}/${execution.id}/permission`, {
-                      subagentId: p.subagentId,
-                      callId: p.callId,
-                      decision,
-                    })
-                  }
-                >
-                  {decision === "always"
-                    ? "Always allow on this machine"
-                    : decision === "allow"
-                      ? "Allow"
-                      : "Deny"}
-                </Button>
+          {view.enquiries.length || view.permissions.length ? (
+            <section className="rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3" aria-label="Pending workflow input">
+              <h4 className="font-medium">Input requested in parent chat</h4>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The parent relays one request at a time using the normal composer controls. This pane stays on the execution so management actions remain available.
+              </p>
+              {[...view.enquiries.map(item => ({ key: `${item.subagentId}/${item.askId}`, stepId: item.stepId, label: "Question" })), ...view.permissions.map(item => ({ key: `${item.subagentId}/${item.callId}`, stepId: item.stepId, label: `Permission · ${item.tool}` }))].map(item => (
+                <p key={item.key} className="mt-2 text-xs">
+                  <span className="font-medium">{execution.definition.steps.find(step => step.id === item.stepId)?.name ?? item.stepId}</span>
+                  <span className="text-muted-foreground"> · {item.label} · pending</span>
+                </p>
               ))}
-            </fieldset>
-          ))}
-          {view.enquiries.map((q) => (
-            <EnquiryForm
-              key={`${q.subagentId}/${q.askId}`}
-              enquiry={q}
-              stepName={
-                execution.definition.steps.find((item) => item.id === q.stepId)
-                  ?.name ?? q.stepId
-              }
-              send={(answers) =>
-                mutate(`${base}/${execution.id}/enquiry`, {
-                  subagentId: q.subagentId,
-                  askId: q.askId,
-                  answers,
-                })
-              }
-            />
-          ))}
+              <p className="mt-2 text-xs text-muted-foreground">
+                {session?.status === "dormant" || session?.status === "settled"
+                  ? "Revive the parent manually to continue. The request will remain pending here."
+                  : session?.status === "running" || session?.status === "awaiting"
+                    ? "The request is queued behind the parent’s current turn."
+                    : "The parent is preparing the next request."}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-3"
+                onClick={() => document.querySelector<HTMLElement>("[data-pane] [data-composer-input]")?.focus()}
+              >
+                Go to parent chat
+              </Button>
+            </section>
+          ) : null}
           <div role="tablist" aria-label="Workflow execution view" className="flex gap-1 border-b pb-2">
             {(["Overview", "Flow"] as const).map(name => <Button key={name} role="tab" aria-selected={tab === name} variant={tab === name ? "secondary" : "ghost"} size="sm" onClick={() => setTab(name)}>{name}</Button>)}
           </div>
@@ -417,87 +393,5 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
         </>
       )}
     </section>
-  );
-}
-function EnquiryForm({
-  enquiry,
-  stepName,
-  send,
-}: {
-  enquiry: WorkflowEnquiry;
-  stepName: string;
-  send: (answers: string[][]) => Promise<void>;
-}) {
-  const [answers, setAnswers] = useState<string[][]>(
-    enquiry.questions.map(() => []),
-  );
-  const [busy, setBusy] = useState(false);
-  return (
-    <form
-      className="grid gap-3 rounded-lg border border-status-awaiting/50 bg-status-awaiting/5 p-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        setBusy(true);
-        void send(answers).finally(() => setBusy(false));
-      }}
-    >
-      <h3 className="font-semibold">Enquiry · {stepName}</h3>
-      {enquiry.questions.map((q, i) => (
-        <fieldset key={i}>
-          <legend className="mb-2">
-            {q.header}: {q.question}
-          </legend>
-          {q.options.map((o) => (
-            <label key={o.label} className="mb-2 flex items-start gap-2">
-              <input
-                className="mt-1 accent-primary"
-                type={q.multiSelect ? "checkbox" : "radio"}
-                name={`${enquiry.askId}-${i}`}
-                checked={answers[i]?.includes(o.label) ?? false}
-                onChange={(e) =>
-                  setAnswers((old) =>
-                    old.map((a, n) =>
-                      n !== i
-                        ? a
-                        : q.multiSelect
-                          ? e.target.checked
-                            ? [...a, o.label]
-                            : a.filter((v) => v !== o.label)
-                          : [o.label],
-                    ),
-                  )
-                }
-              />
-              <span>
-                {o.label} — {o.description}
-              </span>
-            </label>
-          ))}
-          <label className="flex flex-col gap-1">
-            <span className="text-sm font-medium">Your answer</span>
-            <Input
-              value={
-                answers[i]
-                  ?.filter((a) => !q.options.some((o) => o.label === a))
-                  .join("") ?? ""
-              }
-              onChange={(e) =>
-                setAnswers((old) =>
-                  old.map((a, n) => (n === i ? [e.target.value] : a)),
-                )
-              }
-            />
-          </label>
-        </fieldset>
-      ))}
-      <Button
-        type="submit"
-        size="sm"
-        className="justify-self-start"
-        disabled={busy || answers.some((a) => !a.some((v) => v.trim()))}
-      >
-        Submit answers
-      </Button>
-    </form>
   );
 }

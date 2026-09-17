@@ -15,7 +15,7 @@ import {
   toggled,
   type Answering,
 } from "../client/enquiry.ts";
-import { PERMISSION_CHOICES } from "../client/permission.ts";
+import { permissionChoices } from "../client/permission.ts";
 import type { PermissionDecision } from "../protocol/events.ts";
 import { isPrintable, KEY, splitKeys } from "./keys.ts";
 import { renderFrame, type Overlay, type UiState } from "./render.ts";
@@ -369,6 +369,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       deciding = 0;
       decidingFor = authorising.callId;
     }
+    const choices = permissionChoices(authorising.allowAlways);
 
     if (key === KEY.escape) {
       await commitDecision(authorising.callId, "deny");
@@ -376,18 +377,18 @@ export async function runTui(options: TuiOptions): Promise<void> {
     }
     if (key === KEY.up || key === KEY.down) {
       // Clamped, not wrapped: every list in this TUI clamps. See `handleEnquiryKey`.
-      deciding = cursorClamped(deciding, key === KEY.up ? -1 : 1, PERMISSION_CHOICES.length);
+      deciding = cursorClamped(deciding, key === KEY.up ? -1 : 1, choices.length);
       return;
     }
     if (/^[1-9]$/.test(key)) {
-      const choice = PERMISSION_CHOICES[Number(key) - 1];
+      const choice = choices[Number(key) - 1];
       if (!choice) return;
       deciding = Number(key) - 1;
       await commitDecision(authorising.callId, choice.decision);
       return;
     }
     if (key === KEY.enter || key === KEY.newline) {
-      const choice = PERMISSION_CHOICES[deciding];
+      const choice = choices[deciding];
       if (choice) await commitDecision(authorising.callId, choice.decision);
     }
   }

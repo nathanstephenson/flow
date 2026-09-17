@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { authorisationLabel, PERMISSION_CHOICES } from "../src/client/permission.ts";
+import { authorisationLabel, permissionChoices, PERMISSION_CHOICES } from "../src/client/permission.ts";
 import type { PermissionDecision } from "../src/protocol/events.ts";
 import type { Authorisation } from "../src/client/reduce.ts";
 
@@ -39,6 +39,11 @@ describe("the Permission Prompt's choices", () => {
     assert.match(always?.label ?? "", /this machine/i);
     // And that it is recoverable, which is the other half of shipping a coarse grant.
     assert.match(always?.description ?? "", /revocable|settings/i);
+  });
+
+  it("removes standing authorization for one-call Workflow tools", () => {
+    assert.deepEqual(permissionChoices(false).map((choice) => choice.decision), ["allow", "deny"]);
+    assert.deepEqual(permissionChoices(true), PERMISSION_CHOICES);
   });
 
   it("gives every choice something to read", () => {

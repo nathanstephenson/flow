@@ -872,6 +872,9 @@ export class SessionHost {
     this.flushBuffered(record);
     // A Dormant Agent Session may have sat for a week while its Scope was moved by hand.
     await this.refreshBranch(record);
+    // Workflow input never Revives a Dormant parent by itself. Once a human explicitly Revives it,
+    // resume the retained relay queue without requiring another Workflow event.
+    if (this.workflowInputs.has(record.id)) this.queueWorkflowDrain(record.id);
   }
 
   /**
@@ -1037,6 +1040,12 @@ export class SessionHost {
    * otherwise produce an `answers` map the model reads as consent nobody gave.
    */
   async answerEnquiry(sessionId: string, askId: string, answers: string[][]): Promise<void> {
+    const relay = this.workflowEnquiryRelays.get(askId);
+    if (relay?.sessionId === sessionId) {
+      if (answers.length !== relay.questions || answers.some(answer => !answer.length || answer.some(value => typeof value !== 'string' || !value.trim()))) throw new CommandRefused('Every Workflow question needs an explicit answer');
+      await relay.submit(answers);
+      return;
+    }
     const workflow = this.workflowConfirmations.get(askId);
     if (workflow?.sessionId === sessionId) {
       if (answers.length !== 1 || answers[0]?.length !== 1 || !['Recover', 'Cancel'].includes(answers[0][0]!)) throw new CommandRefused('Choose Recover or Cancel');
@@ -1090,6 +1099,12 @@ export class SessionHost {
    * something that did not happen.
    */
   async answerPermission(sessionId: string, callId: string, decision: PermissionDecision): Promise<void> {
+    const relay = this.workflowPermissionRelays.get(callId);
+    if (relay?.sessionId === sessionId) {
+      if (decision === 'always' && !relay.allowAlways) throw new CommandRefused('This Workflow tool can only be allowed once or denied');
+      await relay.submit(decision);
+      return;
+    }
     const record = this.record(sessionId);
     const session = record.session;
     if (!session) {
@@ -1313,15 +1328,27 @@ export class SessionHost {
     parent(sessionId: string): WorkflowParent;
     takeNotification(sessionId: string, executionId: string, revision: string): string | undefined;
     takeCompletion(sessionId: string, executionId: string): string | undefined;
+    takeInput?(sessionId: string): string | undefined;
   };
   private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
+  /** Sessions with an unannounced Workflow request. A Set is only a wake signal; ordering is owned
+   * by WorkflowExecutionService, where execution/step/attempt identity can be validated. */
+  private readonly workflowInputs = new Set<string>();
   /** Ordered, per-execution completion queue. A session may finish another workflow while its
    * parent is still reporting the previous one. */
   private readonly workflowCompletions = new Map<string, string[]>();
   private readonly workflowConfirmations = new Map<string, { sessionId: string; finish: (allowed?: boolean) => void }>();
+  private readonly workflowEnquiryRelays = new Map<string, { sessionId: string; questions: number; submit: (answers: string[][]) => Promise<void>; cancel: () => void }>();
+  private readonly workflowPermissionRelays = new Map<string, { sessionId: string; allowAlways: boolean; submit: (decision: PermissionDecision) => Promise<void>; cancel: () => void }>();
 
   cancelWorkflowConfirmation(sessionId: string): void {
     for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
+  }
+
+  workflowInput(sessionId: string): void {
+    if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
+    this.workflowInputs.add(sessionId);
+    this.queueWorkflowDrain(sessionId);
   }
 
   workflowWake(sessionId: string, executionId: string, revision: string): void {
@@ -1352,25 +1379,39 @@ export class SessionHost {
    */
   private async drainWorkflowNotification(record: SessionRecord): Promise<boolean> {
     if (record.turnInFlight || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return false;
-    const recovery = this.workflowNotifications.get(record.id);
-    const completions = recovery ? undefined : this.workflowCompletions.get(record.id);
+    let kind: 'input' | 'recovery' | 'completion' | undefined;
+    let text: string | undefined;
+    if (this.workflowInputs.delete(record.id)) {
+      text = this.workflowOwner?.takeInput?.(record.id);
+      if (text) kind = 'input';
+    }
+    const recovery = kind ? undefined : this.workflowNotifications.get(record.id);
+    const completions = recovery || kind ? undefined : this.workflowCompletions.get(record.id);
     const completion = completions?.shift();
-    if (!recovery && !completion) return false;
-    if (recovery) this.workflowNotifications.delete(record.id);
-    else if (!completions!.length) this.workflowCompletions.delete(record.id);
-    const text = recovery
-      ? this.workflowOwner?.takeNotification(record.id, recovery.executionId, recovery.revision)
-      : this.workflowOwner?.takeCompletion(record.id, completion!);
-    // A recovery can become stale because the execution completed before the parent became free.
-    // Continue to a queued completion in the same drain rather than leaving it with no future wake.
-    if (!text) return this.drainWorkflowNotification(record);
+    if (recovery) {
+      this.workflowNotifications.delete(record.id);
+      text = this.workflowOwner?.takeNotification(record.id, recovery.executionId, recovery.revision);
+      kind = text ? 'recovery' : undefined;
+    } else if (completion) {
+      if (!completions!.length) this.workflowCompletions.delete(record.id);
+      text = this.workflowOwner?.takeCompletion(record.id, completion);
+      kind = text ? 'completion' : undefined;
+    }
+    if (!kind || !text) {
+      // A request can be canceled, or a recovery can become stale, before the parent becomes free.
+      // Continue to the next host-driven item rather than waiting for an unrelated future wake.
+      if (this.workflowInputs.has(record.id) || this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) return this.drainWorkflowNotification(record);
+      return false;
+    }
     record.turnInFlight = true;
     record.log.append({
       type: 'notice',
       level: 'info',
-      text: recovery
-        ? 'Workflow requires recovery. The parent is inspecting it.'
-        : 'Workflow completed. The parent is preparing the result.',
+      text: kind === 'input'
+        ? 'Workflow input requested. The parent is relaying it.'
+        : kind === 'recovery'
+          ? 'Workflow requires recovery. The parent is inspecting it.'
+          : 'Workflow completed. The parent is preparing the result.',
     });
     try {
       await record.session.prompt(text);
@@ -1404,6 +1445,81 @@ export class SessionHost {
       this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, state: 'asked' });
     });
   }
+
+  async relayWorkflowEnquiry(sessionId: string, context: string, questions: Question[], forward: (answers: string[][]) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
+    const record = this.record(sessionId);
+    if (!record.session || record.lifecycle !== 'live' || !record.turnInFlight || signal?.aborted) throw new CommandRefused('The parent relay is no longer active');
+    const askId = `workflow-input-${randomUUID()}`;
+    await new Promise<void>((resolve, reject) => {
+      let submitting = false;
+      const clear = () => { signal?.removeEventListener('abort', cancel); this.workflowEnquiryRelays.delete(askId); };
+      const cancel = () => {
+        if (!this.workflowEnquiryRelays.has(askId)) return;
+        clear();
+        this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'aborted' });
+        reject(new CommandRefused('The Workflow Enquiry was canceled before it was answered'));
+      };
+      const submit = async (answers: string[][]) => {
+        if (submitting || !this.workflowEnquiryRelays.has(askId)) throw new CommandRefused('That Workflow Enquiry is no longer open');
+        submitting = true;
+        try {
+          await forward(answers);
+          clear();
+          this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'answered', answers });
+          resolve();
+        } catch (error) {
+          clear();
+          this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'aborted' });
+          reject(error);
+          throw error;
+        }
+      };
+      this.workflowEnquiryRelays.set(askId, { sessionId, questions: questions.length, submit, cancel });
+      signal?.addEventListener('abort', cancel, { once: true });
+      this.onBackendEvent(sessionId, { type: 'enquiry', askId, questions, context, state: 'asked' });
+    });
+  }
+
+  async relayWorkflowPermission(sessionId: string, prompt: { context: string; tool: string; details?: unknown; allowAlways: boolean; authorizationScope: string }, forward: (decision: PermissionDecision) => Promise<unknown>, signal?: AbortSignal): Promise<void> {
+    const record = this.record(sessionId);
+    if (!record.session || record.lifecycle !== 'live' || !record.turnInFlight || signal?.aborted) throw new CommandRefused('The parent relay is no longer active');
+    const callId = `workflow-input-${randomUUID()}`;
+    await new Promise<void>((resolve, reject) => {
+      let submitting = false;
+      const clear = () => { signal?.removeEventListener('abort', cancel); this.workflowPermissionRelays.delete(callId); };
+      const finish = (decision: PermissionDecision | undefined, error?: unknown) => {
+        clear();
+        this.onBackendEvent(sessionId, decision === undefined
+          ? { type: 'permission', callId, tool: prompt.tool, context: prompt.context, allowAlways: prompt.allowAlways, authorizationScope: prompt.authorizationScope, state: 'aborted' }
+          : { type: 'permission', callId, tool: prompt.tool, context: prompt.context, allowAlways: prompt.allowAlways, authorizationScope: prompt.authorizationScope, state: 'decided', decision });
+        this.onBackendEvent(sessionId, { type: 'tool_ended', callId, result: decision === undefined ? 'Workflow request canceled' : `Human decision: ${decision}`, isError: decision === undefined || decision === 'deny' });
+        if (error !== undefined) reject(error); else resolve();
+      };
+      const cancel = () => {
+        if (!this.workflowPermissionRelays.has(callId)) return;
+        finish(undefined, new CommandRefused('The Workflow Permission Prompt was canceled before it was decided'));
+      };
+      const submit = async (decision: PermissionDecision) => {
+        if (submitting || !this.workflowPermissionRelays.has(callId)) throw new CommandRefused('That Workflow Permission Prompt is no longer open');
+        submitting = true;
+        try {
+          await forward(decision);
+          finish(decision);
+        } catch (error) {
+          finish(undefined, error);
+          throw error;
+        }
+      };
+      this.workflowPermissionRelays.set(callId, { sessionId, allowAlways: prompt.allowAlways, submit, cancel });
+      signal?.addEventListener('abort', cancel, { once: true });
+      // The tool row keeps the original arguments so the shared composer derives the same précis it
+      // would for a parent call. Origin and scope stay on the prompt: they are decision metadata,
+      // not invented tool arguments.
+      this.onBackendEvent(sessionId, { type: 'tool_started', callId, name: prompt.tool, input: prompt.details ?? {} });
+      this.onBackendEvent(sessionId, { type: 'permission', callId, tool: prompt.tool, context: prompt.context, allowAlways: prompt.allowAlways, authorizationScope: prompt.authorizationScope, state: 'asked' });
+    });
+  }
+
   private workflowShutdown = false;
   private readonly workflowStopping = new Set<string>();
 
@@ -1815,6 +1931,8 @@ export class SessionHost {
       workflow: {
         inspect: input => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).inspect(input); },
         recover: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).recover(input, signal); },
+        relayEnquiry: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayEnquiry(input, signal); },
+        relayPermission: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayPermission(input, signal); },
       },
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
@@ -2098,6 +2216,8 @@ export class SessionHost {
 
     if (event.type === "turn_ended") {
       for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
+      for (const pending of this.workflowEnquiryRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
+      for (const pending of this.workflowPermissionRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
       record.turnInFlight = false;
       this.captureResumeToken(record);
       // Tools are pre-approved (ADR 0004), so the model can have run `git checkout` during the turn
@@ -2172,7 +2292,7 @@ export class SessionHost {
   private async drain(record: SessionRecord): Promise<void> {
     // Avoid an `await` at all when there is no workflow notification. Yielding here lets a backend
     // mint a new turn between the check and the queue shift, which would dispatch into that turn.
-    if ((this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) &&
+    if ((this.workflowInputs.has(record.id) || this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) &&
         await this.drainWorkflowNotification(record)) return;
     const next = record.queue.shift();
     if (next === undefined) return;
@@ -2294,15 +2414,15 @@ function lifecycleFrom(meta: SessionMeta): SessionLifecycle {
   return stored === "ended" || stored === "settled" || stored === "dormant" ? stored : "dormant";
 }
 
-function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[] }[] {
-  const open = new Map<string, Question[]>();
+function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[]; context?: string }[] {
+  const open = new Map<string, { questions: Question[]; context?: string }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "enquiry") continue;
-    if (event.state === "asked") open.set(event.askId, event.questions);
+    if (event.state === "asked") open.set(event.askId, { questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) });
     else open.delete(event.askId);
   }
-  return [...open].map(([askId, questions]) => ({ askId, questions }));
+  return [...open].map(([askId, value]) => ({ askId, ...value }));
 }
 
 /**
@@ -2315,15 +2435,20 @@ function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Ques
  * The tool name comes back with it, because a snapshot carries the whole state and the terminal one
  * the host is about to append needs it again.
  */
-function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string }[] {
-  const open = new Map<string, string>();
+function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }[] {
+  const open = new Map<string, { tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "permission") continue;
-    if (event.state === "asked") open.set(event.callId, event.tool);
+    if (event.state === "asked") open.set(event.callId, {
+      tool: event.tool,
+      ...(event.context === undefined ? {} : { context: event.context }),
+      ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
+      ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
+    });
     else open.delete(event.callId);
   }
-  return [...open].map(([callId, tool]) => ({ callId, tool }));
+  return [...open].map(([callId, value]) => ({ callId, ...value }));
 }
 
 /**

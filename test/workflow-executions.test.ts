@@ -255,11 +255,13 @@ it('runs an owned Agent beside chat, keeps requests private, rejects stale decis
     let view = await (await f.request(path)).json() as WorkflowExecutionView;
     assert.equal(view.enquiries[0]?.askId, askId); assert.equal(view.permissions[0]?.callId, callId);
     assert.ok(!JSON.stringify(f.host.logFor(f.id).since(0)).includes('raw-ask'));
-    assert.equal((await f.request(path + '/enquiry', 'POST', { subagentId: handle.options.id, askId, answers: [['A']] })).status, 200);
-    assert.equal((await f.request(path + '/enquiry', 'POST', { subagentId: handle.options.id, askId, answers: [['A']] })).status, 409);
-    assert.equal((await f.request(path + '/permission', 'POST', { subagentId: 'stale', callId, decision: 'always' })).status, 409);
+    assert.equal((await f.request(path + '/enquiry', 'POST', { subagentId: handle.options.id, askId, answers: [['A']] })).status, 404, 'workflow answers have no direct HTTP route');
+    assert.equal((await f.request(path + '/permission', 'POST', { subagentId: handle.options.id, callId, decision: 'always' })).status, 404, 'workflow decisions have no direct HTTP route');
+    await f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, askId, answers: [['A']] });
+    await assert.rejects(f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, askId, answers: [['A']] }), /no longer available/);
+    await assert.rejects(f.service.answer(f.id, started.execution.id, { subagentId: 'stale', callId, decision: 'always' }), /no longer available/);
     assert.deepEqual(f.config.standingAuthorisations(), []);
-    assert.equal((await f.request(path + '/permission', 'POST', { subagentId: handle.options.id, callId, decision: 'always' })).status, 200);
+    await f.service.answer(f.id, started.execution.id, { subagentId: handle.options.id, callId, decision: 'always' });
     assert.deepEqual(f.config.standingAuthorisations(), ['Bash']);
     handle.emit({ type: 'spend', spend: { tokens: 12, cached: 2, costUSD: 0.01, models: [] } });
     handle.complete('result');
@@ -665,6 +667,93 @@ it('allows only one safe automatic recovery before progress, including after res
     assert.equal(after.automaticRecoveryAvailable, false);
     await assert.rejects(restarted.parent(f.id).recover({ executionId: eid, revision: after.revision, action: { kind: 'retry', stepId: 'check' } }), /User direction required/);
     assert.equal(restarted.view(f.id, eid).execution.steps.check!.attempts.length, 2);
+  } finally { await f.close(); }
+});
+
+it('queues exact Workflow questions behind a running parent, then relays and forwards one response', async () => {
+  const f = await fixture();
+  try {
+    await f.host.send(f.id, 'Parent request already in progress', 'now');
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    const questions = [
+      { header: 'Targets', question: 'Which targets?', multiSelect: true, options: [{ label: 'Web', description: 'Browser client' }, { label: 'CLI', description: 'Terminal client' }] },
+      { header: 'Notes', question: 'Anything else?', multiSelect: false, options: [{ label: 'None' }, { label: 'Explain' }] },
+    ];
+    handle.ask(questions, 'private-relay-ask');
+    await pause();
+    assert.equal(f.backend.latest.prompts.length, 1, 'the Workflow request does not interrupt the running parent');
+    f.backend.latest.completeTurn();
+    await until(() => f.backend.latest.prompts.some(prompt => prompt.includes('workflow_relay_enquiry')));
+    const prompt = f.backend.latest.prompts.find(text => text.includes('workflow_relay_enquiry'))!;
+    assert.ok(prompt.includes('Workflow “Sample” · Step “Agent” · Attempt 1'));
+    assert.ok(prompt.includes('Which targets?'));
+    assert.ok(prompt.includes('Anything else?'));
+    const requestId = /requestId "([0-9a-f-]+)"/.exec(prompt)?.[1];
+    assert.ok(requestId);
+    const relay = f.backend.latest.workflow!.relayEnquiry({ requestId });
+    const asking = () => reduceAll(f.host.logFor(f.id).since(0)).asking;
+    await until(() => asking()?.context?.includes('Workflow “Sample”') === true);
+    assert.deepEqual(asking()!.questions, questions);
+    const answers = [['Web', 'CLI'], ['Free text from the human']];
+    await f.host.answerEnquiry(f.id, asking()!.askId, answers);
+    await relay;
+    assert.deepEqual(handle.answers, [{ askId: 'private-relay-ask', answers }]);
+    await assert.rejects(f.backend.latest.workflow!.relayEnquiry({ requestId }), /no longer available/);
+    f.backend.latest.completeTurn();
+    handle.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+  } finally { await f.close(); }
+});
+
+it('relays Workflow permissions with exact scope and rejects Always for direct calls in the shared control', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    handle.emit({ type: 'tool_started', callId: 'private-call', name: 'Bash', input: { command: 'printf ok' } });
+    handle.requestPermission('Bash', 'private-call');
+    await until(() => f.backend.latest.prompts.some(prompt => prompt.includes('workflow_relay_permission')));
+    const prompt = f.backend.latest.prompts.find(text => text.includes('workflow_relay_permission'))!;
+    assert.ok(prompt.includes('always allow'));
+    assert.ok(prompt.includes('printf ok'));
+    const requestId = /requestId "([0-9a-f-]+)"/.exec(prompt)?.[1];
+    assert.ok(requestId);
+    const relay = f.backend.latest.workflow!.relayPermission({ requestId });
+    const authorising = () => reduceAll(f.host.logFor(f.id).since(0)).authorising;
+    await until(() => authorising()?.tool === 'Bash');
+    assert.equal(authorising()!.allowAlways, true);
+    assert.match(authorising()!.authorizationScope ?? '', /always allow Bash on this machine/);
+    const relayTool = reduceAll(f.host.logFor(f.id).since(0)).entries.find(entry => entry.kind === 'tool' && entry.id === authorising()!.callId);
+    assert.deepEqual(relayTool?.kind === 'tool' ? relayTool.input : undefined, { command: 'printf ok' });
+    await f.host.answerPermission(f.id, authorising()!.callId, 'allow');
+    await relay;
+    assert.deepEqual(handle.decisions, [{ callId: 'private-call', decision: 'allow' }]);
+    handle.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+  } finally { await f.close(); }
+});
+
+it('opens activity from the retained tail and pages backward without changing forward pagination', async () => {
+  const f = await fixture();
+  try {
+    const started = await f.service.start({ sessionId: f.id, definition, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    for (let i = 1; i <= 125; i++) handle.emit({ type: 'notice', level: 'info', text: `event ${i}` });
+    const latest = await f.service.activity(f.id, started.execution.id, { latest: true, limit: 20, stepId: 'agent', attempt: 1 });
+    assert.deepEqual(latest.activity.map(item => item.sequence), Array.from({ length: 20 }, (_, index) => 106 + index));
+    assert.equal(latest.previous, 106);
+    const older = await f.service.activity(f.id, started.execution.id, { before: latest.previous, limit: 20, stepId: 'agent', attempt: 1 });
+    assert.deepEqual(older.activity.map(item => item.sequence), Array.from({ length: 20 }, (_, index) => 86 + index));
+    assert.equal(older.previous, 86);
+    const forward = await f.service.activity(f.id, started.execution.id, { after: 105, limit: 5, stepId: 'agent', attempt: 1 });
+    assert.deepEqual(forward.activity.map(item => item.sequence), [106, 107, 108, 109, 110]);
+    assert.equal(forward.next, 110);
+    handle.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
   } finally { await f.close(); }
 });
 

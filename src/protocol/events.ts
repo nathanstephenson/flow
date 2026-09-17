@@ -370,7 +370,14 @@ export type AgentEvent =
    * trade. Populated only where the SDK attributes the callback, which for a Subagent it has not yet
    * been observed to do.
    */
-  | ({ type: "enquiry"; askId: string; questions: Question[]; producer?: Producer } & EnquiryState)
+  | ({
+      type: "enquiry";
+      askId: string;
+      questions: Question[];
+      producer?: Producer;
+      /** Origin shown above a relayed Enquiry without changing the model's Questions. */
+      context?: string;
+    } & EnquiryState)
   /**
    * One Permission Prompt, wholly — a tool call held open on a human's authorisation.
    *
@@ -395,7 +402,18 @@ export type AgentEvent =
    * Subagent's Permission Prompt is not attributable and `SubagentWait`'s `"permission"` still has
    * nothing to report.
    */
-  | ({ type: "permission"; callId: string; tool: string; producer?: Producer } & PermissionState)
+  | ({
+      type: "permission";
+      callId: string;
+      tool: string;
+      producer?: Producer;
+      /** Origin shown in the shared Permission Prompt. */
+      context?: string;
+      /** False for a one-call authorization such as a direct Workflow tool. Defaults to true. */
+      allowAlways?: boolean;
+      /** Exact boundary of the decision, shown beside relayed Workflow Permission Prompts. */
+      authorizationScope?: string;
+    } & PermissionState)
   | { type: "turn_ended"; turnId: string; reason: TurnEndReason }
   | { type: "queue_changed"; pending: string[]; ids?: string[]; attachments?: string[][] }
   /**

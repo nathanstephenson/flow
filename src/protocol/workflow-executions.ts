@@ -23,6 +23,10 @@ export interface WorkflowPermissionPrompt {
   subagentId: string;
   callId: string;
   tool: string;
+  /** The original call arguments, when the Workflow Step exposed them. */
+  details?: unknown;
+  /** Human-readable authorization boundary carried into the parent relay. */
+  scope?: string;
 }
 
 export interface WorkflowExecutionView {
@@ -67,7 +71,11 @@ export type AnswerWorkflowEnquiry = { subagentId: string; askId: string; answers
 export type AnswerWorkflowPermission = { subagentId: string; callId: string; decision: PermissionDecision };
 
 export interface WorkflowActivityPage {
+  /** Always ascending by sequence, including pages fetched from the tail. */
   activity: WorkflowActivity[];
+  /** Forward cursor for activity newer than this page. */
   next?: number;
+  /** Backward cursor for retained activity older than this page. */
+  previous?: number;
   historyComplete: boolean;
 }

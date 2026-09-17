@@ -49,6 +49,13 @@ export const PERMISSION_CHOICES: readonly PermissionChoice[] = [
   },
 ];
 
+/** The same shared controls, narrowed for requests whose scope can never become standing. */
+export function permissionChoices(allowAlways: boolean | undefined): readonly PermissionChoice[] {
+  return allowAlways === false
+    ? PERMISSION_CHOICES.filter((choice) => choice.decision !== "always")
+    : PERMISSION_CHOICES;
+}
+
 /**
  * What a tool row says about a decision, or undefined where nobody was asked.
  *

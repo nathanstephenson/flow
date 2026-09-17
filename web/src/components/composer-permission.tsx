@@ -1,6 +1,6 @@
 import { useRef } from "react";
 
-import { PERMISSION_CHOICES } from "../../../src/client/permission.ts";
+import type { PermissionChoice } from "../../../src/client/permission.ts";
 import type { OpenPermission } from "../../../src/client/reduce.ts";
 import { cn } from "@/lib/utils.ts";
 
@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils.ts";
 export function ComposerPermission({
   authorising,
   summary,
+  choices,
   cursor,
   listboxId,
   rowId,
@@ -34,6 +35,8 @@ export function ComposerPermission({
   authorising: OpenPermission | undefined;
   /** The call's arguments, précised — or undefined where there was nothing worth saying. */
   summary: string | undefined;
+  /** Shared permission controls, narrowed to Allow / Deny for direct Workflow tools. */
+  choices: readonly PermissionChoice[];
   cursor: number;
   listboxId: string;
   rowId: (index: number) => string;
@@ -62,6 +65,11 @@ export function ComposerPermission({
         <div className="border-b">
           {shown ? (
             <>
+              {shown.authorising.context ? (
+                <div className="border-b border-border/40 px-3 py-1.5 text-xs text-muted-foreground">
+                  {shown.authorising.context}
+                </div>
+              ) : null}
               {/*
                 * `aria-live` on this row alone, as in `ComposerEnquiry`: a new prompt arriving is
                 * worth announcing, and a live region over the cursor would narrate every arrow key.
@@ -84,13 +92,19 @@ export function ComposerPermission({
                 <div className="truncate px-3 pb-1 font-mono text-sm">{shown.summary}</div>
               ) : null}
 
+              {shown.authorising.authorizationScope ? (
+                <div className="px-3 pb-1.5 text-xs text-muted-foreground">
+                  Scope: {shown.authorising.authorizationScope}
+                </div>
+              ) : null}
+
               <div
                 id={listboxId}
                 role="listbox"
                 aria-label={`Authorise ${shown.authorising.tool}?`}
                 className="p-1"
               >
-                {PERMISSION_CHOICES.map((choice, index) => (
+                {choices.map((choice, index) => (
                   <div
                     key={choice.decision}
                     id={rowId(index)}
