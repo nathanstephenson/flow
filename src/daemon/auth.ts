@@ -110,9 +110,14 @@ export function oidcConfigFromEnv(
     clientSecret: env["FLOW_OIDC_CLIENT_SECRET"]?.trim(),
     publicAppUrl: env["FLOW_OIDC_PUBLIC_APP_URL"]?.trim(),
   };
-  const configured = Object.values(values).filter((value) => value !== undefined && value !== "");
-  if (configured.length === 0) return undefined;
-  if (configured.length !== 4) {
+  const present = [
+    "FLOW_OIDC_ISSUER",
+    "FLOW_OIDC_CLIENT_ID",
+    "FLOW_OIDC_CLIENT_SECRET",
+    "FLOW_OIDC_PUBLIC_APP_URL",
+  ].filter((name) => env[name] !== undefined);
+  if (present.length === 0) return undefined;
+  if (present.length !== 4 || Object.values(values).some((value) => !value)) {
     throw new OidcConfigurationError(
       "FLOW_OIDC_ISSUER, FLOW_OIDC_CLIENT_ID, FLOW_OIDC_CLIENT_SECRET and " +
         "FLOW_OIDC_PUBLIC_APP_URL must be configured together",
@@ -122,7 +127,7 @@ export function oidcConfigFromEnv(
   const issuer = checkedUrl(values.issuer!, "FLOW_OIDC_ISSUER", false);
   const publicAppUrl = checkedUrl(values.publicAppUrl!, "FLOW_OIDC_PUBLIC_APP_URL", true);
   return {
-    issuer: withoutTrailingSlash(issuer.href),
+    issuer: values.issuer!,
     clientId: values.clientId!,
     clientSecret: values.clientSecret!,
     publicAppUrl: withoutTrailingSlash(publicAppUrl.href),
@@ -149,6 +154,7 @@ export class OidcGate {
   private readonly refreshing = new Map<string, Promise<boolean>>();
   private readonly connections = new Map<string, Set<() => void>>();
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private disposed = false;
 
   private constructor(
     config: OidcConfig,
@@ -181,7 +187,7 @@ export class OidcGate {
     options: { fetch?: typeof fetch } = {},
   ): Promise<OidcGate> {
     const fetcher = options.fetch ?? fetch;
-    const discoveryUrl = `${config.issuer}/.well-known/openid-configuration`;
+    const discoveryUrl = `${config.issuer}${config.issuer.endsWith("/") ? "" : "/"}.well-known/openid-configuration`;
     const discovery = await fetchJson<OidcDiscovery>(fetcher, discoveryUrl, "OIDC discovery");
     validateDiscovery(config, discovery);
     const jwks = await fetchJwks(fetcher, discovery.jwks_uri);
@@ -312,8 +318,7 @@ export class OidcGate {
   async backchannelLogout(logoutToken: string): Promise<number> {
     const claims = await this.verifyToken(logoutToken, { logout: true });
     const event = claims.events?.["http://schemas.openid.net/event/backchannel-logout"];
-    if (!event || typeof event !== "object" || Array.isArray(event) || Object.keys(event).length !== 0 ||
-        typeof claims.jti !== "string" || !claims.jti || claims.nonce !== undefined) {
+    if (!event || typeof event !== "object" || Array.isArray(event) || claims.nonce !== undefined) {
       throw new OidcAuthenticationError("Invalid logout token.");
     }
     if (typeof claims.iat !== "number" || claims.iat < Date.now() / 1_000 - LOGOUT_TOKEN_MAX_AGE_SECONDS) {
@@ -323,9 +328,7 @@ export class OidcGate {
     const sub = typeof claims.sub === "string" ? claims.sub : undefined;
     if (!providerSid && !sub) throw new OidcAuthenticationError("Logout token has no session or subject.");
 
-    const fingerprint = createHash("sha256")
-      .update(`${claims.iss}:${claims.jti}`)
-      .digest("base64url");
+    const fingerprint = createHash("sha256").update(logoutToken).digest("base64url");
     if (this.logoutTokens.has(fingerprint)) {
       throw new OidcAuthenticationError("Logout token was already used.");
     }
@@ -360,7 +363,9 @@ export class OidcGate {
   }
 
   dispose(): void {
+    this.disposed = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
   }
 
   private sessionCookie(id: string): string {
@@ -531,6 +536,7 @@ export class OidcGate {
   }
 
   private scheduleRefresh(): void {
+    if (this.disposed) return;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     const now = Date.now();
     const next = Math.min(...[...this.sessions.values()].map((session) => {
@@ -781,8 +787,8 @@ function tokenExpiry(tokens: TokenSet, claims: Claims | undefined, now: number):
     return now + tokens.expires_in * 1_000;
   }
   if (typeof claims?.exp === "number") return claims.exp * 1_000;
-  // No token lifetime is not treated as forever: make the first subsequent request refresh it.
-  return now;
+  // Some providers omit both values on refresh. Retry later rather than spinning immediately.
+  return now + 5 * 60 * 1_000;
 }
 
 function validStoredSession(value: BrowserSession): boolean {

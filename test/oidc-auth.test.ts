@@ -28,6 +28,9 @@ describe("external OIDC browser gate", () => {
   it("is all-or-nothing, HTTPS-only away from localhost, and otherwise optional", () => {
     assert.equal(oidcConfigFromEnv({}), undefined);
     assert.throws(() => oidcConfigFromEnv({ FLOW_OIDC_ISSUER: "https://id.example" }), /configured together/);
+    assert.throws(() => oidcConfigFromEnv({ FLOW_OIDC_ISSUER: "   " }), /configured together/);
+    assert.throws(() => oidcConfigFromEnv({ ...envOf("https://id.example", "https://flow.example"), FLOW_OIDC_CLIENT_ID: " " }), /configured together/);
+    assert.equal(oidcConfigFromEnv(envOf("https://id.example/", "https://flow.example"))?.issuer, "https://id.example/");
     assert.throws(() => oidcConfigFromEnv(envOf("http://id.example", "https://flow.example")), /HTTPS/);
     assert.throws(() => oidcConfigFromEnv(envOf("https://id.example", "http://flow.example")), /HTTPS/);
     assert.deepEqual(oidcConfigFromEnv(envOf("http://127.0.0.1:9000", "http://localhost:4318")), {
@@ -45,8 +48,10 @@ describe("external OIDC browser gate", () => {
       headers: { accept: "text/html" },
       redirect: "manual",
     });
-    assert.equal(document.status, 302);
-    assert.match(document.headers.get("location") ?? "", /^\/oauth\/login\?return_to=/);
+    assert.equal(document.status, 200);
+    const redirectPage = await document.text();
+    assert.match(redirectPage, /location\.pathname\+location\.search\+location\.hash/);
+    assert.match(redirectPage, /\/oauth\/login\?return_to=/);
 
     const unauthorized = await fetch(`${context.server.url}/api/sessions`);
     assert.equal(unauthorized.status, 401);

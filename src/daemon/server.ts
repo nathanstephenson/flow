@@ -233,12 +233,7 @@ async function handle(
   const authentication = await authenticateRequest(request, options);
   if (!authentication) {
     if (options.oidc && documentNavigation(request, url.pathname)) {
-      const returnTo = `${url.pathname}${url.search}`;
-      response.writeHead(302, {
-        location: `/oauth/login?return_to=${encodeURIComponent(returnTo)}`,
-        "cache-control": "no-store",
-      });
-      response.end();
+      sendLoginRedirectPage(response);
     } else {
       unauthorized(response, options.oidc ? "/oauth/login" : undefined);
     }
@@ -875,6 +870,20 @@ function documentNavigation(request: IncomingMessage, pathname: string): boolean
   const destination = request.headers["sec-fetch-dest"];
   const accept = request.headers.accept;
   return destination === "document" || accept?.includes("text/html") === true || pathname === "/";
+}
+
+function sendLoginRedirectPage(response: ServerResponse): void {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Signing in · Flow</title></head>
+<body><script>location.replace("/oauth/login?return_to="+encodeURIComponent(location.pathname+location.search+location.hash))</script>
+<noscript><a href="/oauth/login">Sign in</a></noscript></body></html>`;
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  });
+  response.end(html);
 }
 
 function unauthorized(response: ServerResponse, login?: string): void {
