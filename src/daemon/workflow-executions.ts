@@ -541,13 +541,6 @@ export class WorkflowExecutionService {
     this.host.workflowInput(item.sessionId);
   }
 
-  private dropRelay(id: string): void {
-    const request = this.relayRequests.get(id);
-    if (!request || !this.relayRequests.delete(id)) return;
-    request.abort.abort();
-    this.wakeNextRelay(request.sessionId);
-  }
-
   private dropRelays(match: (request: RelayRequest) => boolean, abort = true): void {
     const sessions = new Set<string>();
     for (const [id, request] of this.relayRequests) {

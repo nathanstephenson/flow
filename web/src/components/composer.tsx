@@ -28,6 +28,7 @@ import {
   type Answering,
 } from "../../../src/client/enquiry.ts";
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
+import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
 import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -178,6 +179,8 @@ export function Composer({
   const [decidingFor, setDecidingFor] = useState<string | undefined>(undefined);
 
   const asking = chrome.asking;
+  const askingRef = useRef(asking);
+  askingRef.current = asking;
   const authorising = chrome.authorising;
   // Existing parent Enquiries keep their established behaviour. A Workflow relay is different: it
   // can wake an otherwise idle parent while the human is drafting a normal message, and that Draft
@@ -388,7 +391,14 @@ export function Composer({
       };
       setHint(undefined);
       if (isFinished(next, asking.questions)) {
-        const accepted = await actions.answerEnquiry?.(asking.askId, answersOf(next, asking.questions));
+        const answer = actions.answerEnquiry;
+        if (!answer) return;
+        const accepted = await answerCurrentEnquiry(
+          asking.askId,
+          answersOf(next, asking.questions),
+          answer,
+          () => askingRef.current?.askId,
+        );
         if (!accepted) return;
       }
       setText("");

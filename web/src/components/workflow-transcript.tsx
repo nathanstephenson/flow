@@ -6,6 +6,7 @@ import type { LoggedEvent } from "../../../src/protocol/events.ts";
 import type { WorkflowActivity, WorkflowActivityPage } from "../../../src/protocol/workflow-executions.ts";
 import { isPinned } from "../presentation/stick-to-bottom.ts";
 import { entryKey } from "../presentation/entry-key.ts";
+import { pollAfterInitialLoad } from "../presentation/workflow-transcript-polling.ts";
 import { TranscriptEntry } from "./transcript-entry.tsx";
 import { workflowApi } from "./workflow-api.ts";
 import { Button } from "./ui/button.tsx";
@@ -111,7 +112,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
         const element = scroller.current;
         if (element) element.scrollTop = element.scrollHeight;
       });
-      if (!completedRef.current) void poll();
+      if (pollAfterInitialLoad(completedRef.current, catchUpRequested)) void poll();
     }).catch(reason => {
       initialLoading = false;
       if (!controller.signal.aborted) {
