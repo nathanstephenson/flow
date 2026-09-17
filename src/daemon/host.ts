@@ -1329,6 +1329,7 @@ export class SessionHost {
     takeNotification(sessionId: string, executionId: string, revision: string): string | undefined;
     takeCompletion(sessionId: string, executionId: string): string | undefined;
     takeInput?(sessionId: string): string | undefined;
+    rearmInput?(sessionId: string): void;
   };
   private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
   /** Sessions with an unannounced Workflow request. A Set is only a wake signal; ordering is owned
@@ -1418,6 +1419,7 @@ export class SessionHost {
       return true;
     } catch (error) {
       record.turnInFlight = false;
+      if (kind === 'input') this.workflowOwner?.rearmInput?.(record.id);
       record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
       // The notification was consumed but no turn began. Keep draining in case another workflow
       // event is ready; returning false when there is not one lets drain() release the Steering Queue.
@@ -2215,6 +2217,7 @@ export class SessionHost {
     }
 
     if (event.type === "turn_ended") {
+      this.workflowOwner?.rearmInput?.(sessionId);
       for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
       for (const pending of this.workflowEnquiryRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
       for (const pending of this.workflowPermissionRelays.values()) if (pending.sessionId === sessionId) pending.cancel();

@@ -21,7 +21,7 @@ const POLL_MS = 2_000;
  * merging makes reconnects and overlapping pages idempotent. The scroller uses the same pin rule as
  * the parent transcript: output follows only while the reader is already at the bottom.
  */
-export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy }: { base: string; sessionId: string; stepId: string; attempt: number; legacy: boolean }) {
+export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, completed }: { base: string; sessionId: string; stepId: string; attempt: number; legacy: boolean; completed: boolean }) {
   const query = `stepId=${encodeURIComponent(stepId)}${legacy ? "" : `&attempt=${attempt}`}`;
   const [activity, setActivity] = useState<WorkflowActivity[]>([]);
   const events = useRef<WorkflowActivity[]>([]);
@@ -91,7 +91,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy }:
         const element = scroller.current;
         if (element) element.scrollTop = element.scrollHeight;
       });
-      void poll();
+      if (!completed) void poll();
     }).catch(reason => {
       if (!controller.signal.aborted) {
         setLoading(false);
@@ -106,7 +106,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy }:
       olderRequest.current = undefined;
       if (timer) clearTimeout(timer);
     };
-  }, [base, query, legacy, generation, merge]);
+  }, [base, query, legacy, completed, generation, merge]);
 
   const loadOlder = useCallback(async () => {
     const before = events.current[0]?.sequence;

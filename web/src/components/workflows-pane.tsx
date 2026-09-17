@@ -372,7 +372,7 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
                   <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                     {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
                   </pre>
-                  <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} />
+                  <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} completed={a.finishedAt !== undefined} />
                   {a.error && (
                     <p role="alert">
                       {a.error.kind}: {a.error.message}
