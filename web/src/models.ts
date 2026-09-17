@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { BackendModels } from "../../src/protocol/events.ts";
-import { beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
 
 /**
  * What each Backend Adapter can reach, from `GET /api/models`.
@@ -27,11 +27,10 @@ export function useModelCatalogue(): {
   const load = async (refresh: boolean): Promise<void> => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/models${refresh ? "?refresh=1" : ""}`, {
+      const response = await authenticatedFetch(`/api/models${refresh ? "?refresh=1" : ""}`, {
         credentials: "same-origin",
       });
       if (!response.ok) {
-        beginReauthentication(response);
         setCatalogue([]);
         return;
       }

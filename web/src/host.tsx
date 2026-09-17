@@ -5,7 +5,7 @@ import type { Project } from "../../src/protocol/projects.ts";
 import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
-import { beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
 
 /**
  * The Session Host, as this app sees it: the shared transport, and the two facts `/api/config`
@@ -117,7 +117,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
     const abort = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/api/config", { credentials: "same-origin", signal: abort.signal });
+        const response = await authenticatedFetch("/api/config", { credentials: "same-origin", signal: abort.signal });
         // 401 is the one failure with a specific answer, and the answer is never a form (ADR 0004
         // and 0005): this app has no token field and never will.
         if (response.status === 401 || response.status === 403) {
@@ -136,9 +136,8 @@ export function HostProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async (): Promise<void> => {
-    const response = await fetch("/api/config", { credentials: "same-origin" });
+    const response = await authenticatedFetch("/api/config", { credentials: "same-origin" });
     if (!response.ok) {
-      beginReauthentication(response);
       return;
     }
     const config = (await response.json()) as HostConfig;
@@ -149,15 +148,14 @@ export function HostProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveSettings = useCallback(async (patch: SettingsPatch): Promise<Settings> => {
-    const response = await fetch("/api/config", {
+    const response = await authenticatedFetch("/api/config", {
       method: "PUT",
       credentials: "same-origin",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     });
     const body = (await response.json()) as Settings & { error?: string };
-    if (!response.ok) beginReauthentication(response);
-    // The daemon refuses a bad value rather than warning and keeping the old one, and its message
+        // The daemon refuses a bad value rather than warning and keeping the old one, and its message
     // names the offending field — so it is the message worth showing.
     if (!response.ok) throw new Error(body.error ?? `Could not save the Settings (${response.status})`);
 

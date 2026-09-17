@@ -219,6 +219,17 @@ describe("external OIDC browser gate", () => {
     assert.equal((await backchannel(context, tampered)).status, 400);
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
 
+    assert.equal(
+      (await backchannel(context, context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: null }))).status,
+      400,
+      "logout notifications require a jti",
+    );
+    assert.equal(
+      (await backchannel(context, context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: "" }))).status,
+      400,
+      "logout notification jti cannot be empty",
+    );
+
     const token = context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: "once" });
     assert.equal((await backchannel(context, token)).status, 200);
     assert.equal(closed, true);
@@ -227,6 +238,8 @@ describe("external OIDC browser gate", () => {
     assert.equal(lateConnectionClosed, true, "registration cannot revive a session revoked during setup");
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 401);
     assert.equal((await backchannel(context, token)).status, 400, "logout notifications cannot be replayed");
+    const reusedJti = context.issuer.logoutToken({ sub: context.issuer.subject, jti: "once" });
+    assert.equal((await backchannel(context, reusedJti)).status, 400, "a jti cannot be reused in a new token");
 
     const wrongIssuer = context.issuer.logoutToken({ sub: context.issuer.subject, issuer: "https://evil.example" });
     assert.equal((await backchannel(context, wrongIssuer)).status, 400);

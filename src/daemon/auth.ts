@@ -1,8 +1,6 @@
 import {
-  createHash,
   randomBytes,
   timingSafeEqual,
-  type JsonWebKey,
 } from "node:crypto";
 import {
   chmodSync,
@@ -13,7 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, errors as joseErrors, type JSONWebKeySet } from "jose";
+import { createRemoteJWKSet, jwtVerify, customFetch as joseCustomFetch, type JWSAlgorithm } from "jose";
+import * as oidc from "openid-client";
 
 /** The name of the opaque browser-session cookie used by the OIDC gate. */
 export const OIDC_COOKIE = "flow_session";
@@ -32,38 +31,11 @@ export type OidcConfig = {
   publicAppUrl: string;
 };
 
-type OidcDiscovery = {
-  issuer: string;
-  authorization_endpoint: string;
-  token_endpoint: string;
-  jwks_uri: string;
-  response_types_supported?: string[];
-  id_token_signing_alg_values_supported?: string[];
-  token_endpoint_auth_methods_supported?: string[];
-  code_challenge_methods_supported?: string[];
-};
-
-type TokenSet = {
-  access_token: string;
-  token_type?: string;
-  expires_in?: number;
-  refresh_token?: string;
-  id_token?: string;
-};
-
-type Claims = Record<string, unknown> & {
-  iss?: string;
-  sub?: string;
-  aud?: string | string[];
-  azp?: string;
-  exp?: number;
-  iat?: number;
-  nonce?: string;
+type TokenSet = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
+type Claims = ReturnType<TokenSet["claims"]> & {
   sid?: string;
   events?: Record<string, unknown>;
   jti?: string;
-  at_hash?: string;
-  c_hash?: string;
 };
 
 type BrowserSession = {
@@ -80,7 +52,6 @@ type StoredState = {
   issuer: string;
   clientId: string;
   sessions: BrowserSession[];
-  /** Fingerprint -> expiry in milliseconds. Persisted so a restart does not reopen a replay window. */
   logoutTokens: Record<string, number>;
 };
 
@@ -143,11 +114,12 @@ export function oidcConfigFromEnv(
  */
 export class OidcGate {
   readonly config: OidcConfig;
-  readonly discovery: OidcDiscovery;
+  readonly discovery: oidc.ServerMetadata;
+
+  private readonly client: oidc.Configuration;
+  private readonly logoutKeys: ReturnType<typeof createRemoteJWKSet>;
 
   private readonly statePath: string;
-  private readonly fetcher: typeof fetch;
-  private jwks: JsonWebKey[];
   private readonly sessions = new Map<string, BrowserSession>();
   private readonly logoutTokens = new Map<string, number>();
   private readonly transactions = new Map<string, LoginTransaction>();
@@ -158,15 +130,16 @@ export class OidcGate {
 
   private constructor(
     config: OidcConfig,
-    discovery: OidcDiscovery,
-    jwks: JsonWebKey[],
+    client: oidc.Configuration,
     stateRoot: string,
     fetcher: typeof fetch,
   ) {
     this.config = config;
-    this.discovery = discovery;
-    this.jwks = jwks;
-    this.fetcher = fetcher;
+    this.client = client;
+    this.discovery = client.serverMetadata();
+    this.logoutKeys = createRemoteJWKSet(new URL(this.discovery.jwks_uri!), {
+      [joseCustomFetch]: fetcher as never,
+    });
     const directory = join(stateRoot, "oidc");
     this.statePath = join(directory, "sessions.json");
 
@@ -187,11 +160,27 @@ export class OidcGate {
     options: { fetch?: typeof fetch } = {},
   ): Promise<OidcGate> {
     const fetcher = options.fetch ?? fetch;
-    const discoveryUrl = `${config.issuer}${config.issuer.endsWith("/") ? "" : "/"}.well-known/openid-configuration`;
-    const discovery = await fetchJson<OidcDiscovery>(fetcher, discoveryUrl, "OIDC discovery");
-    validateDiscovery(config, discovery);
-    const jwks = await fetchJwks(fetcher, discovery.jwks_uri);
-    return new OidcGate(config, discovery, jwks, stateRoot, fetcher);
+    let client: oidc.Configuration;
+    try {
+      client = await oidc.discovery(
+        new URL(config.issuer),
+        config.clientId,
+        { client_secret: config.clientSecret, redirect_uris: [`${config.publicAppUrl}/oauth/callback`] },
+        oidc.ClientSecretBasic(config.clientSecret),
+        {
+          [oidc.customFetch]: fetcher as never,
+          ...(new URL(config.issuer).protocol === "http:"
+            ? { execute: [oidc.allowInsecureRequests] }
+            : {}),
+        },
+      );
+    } catch (error) {
+      throw new OidcConfigurationError(`OIDC discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    validateDiscovery(config, client.serverMetadata());
+    client[oidc.customFetch] = fetcher as never;
+    (client as unknown as Record<symbol, number>)[oidc.clockTolerance] = CLOCK_SKEW_SECONDS;
+    return new OidcGate(config, client, stateRoot, fetcher);
   }
 
   /** The registered redirect URI, suitable for deployment diagnostics and issuer configuration. */
@@ -205,12 +194,12 @@ export class OidcGate {
   }
 
   /** Start Authorization Code + PKCE without accepting an off-origin return target. */
-  beginLogin(returnTo: string | undefined): string {
+  async beginLogin(returnTo: string | undefined): Promise<string> {
     this.pruneTransactions();
     while (this.transactions.size >= 128) this.transactions.delete(this.transactions.keys().next().value!);
-    const state = opaqueToken();
-    const verifier = opaqueToken(48);
-    const nonce = opaqueToken();
+    const state = oidc.randomState();
+    const verifier = oidc.randomPKCECodeVerifier();
+    const nonce = oidc.randomNonce();
     this.transactions.set(state, {
       verifier,
       nonce,
@@ -218,16 +207,15 @@ export class OidcGate {
       expiresAt: Date.now() + LOGIN_LIFETIME_MS,
     });
 
-    const authorization = new URL(this.discovery.authorization_endpoint);
-    authorization.searchParams.set("client_id", this.config.clientId);
-    authorization.searchParams.set("redirect_uri", this.callbackUrl());
-    authorization.searchParams.set("response_type", "code");
-    authorization.searchParams.set("scope", "openid offline_access");
-    authorization.searchParams.set("state", state);
-    authorization.searchParams.set("nonce", nonce);
-    authorization.searchParams.set("code_challenge", sha256(verifier));
-    authorization.searchParams.set("code_challenge_method", "S256");
-    return authorization.href;
+    return oidc.buildAuthorizationUrl(this.client, {
+      redirect_uri: this.callbackUrl(),
+      response_type: "code",
+      scope: "openid offline_access",
+      state,
+      nonce,
+      code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
+      code_challenge_method: "S256",
+    }).href;
   }
 
   /** Consume a callback once, validate the ID token, and mint an unrelated browser credential. */
@@ -246,20 +234,19 @@ export class OidcGate {
     const code = url.searchParams.get("code");
     if (!code) throw new OidcAuthenticationError("The identity provider returned no code.");
 
-    const tokens = await this.exchange({
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: this.callbackUrl(),
-      code_verifier: transaction.verifier,
-    });
-    if (!tokens.id_token) {
-      throw new OidcAuthenticationError("The identity provider returned no ID token.");
+    let tokens: TokenSet;
+    try {
+      tokens = await oidc.authorizationCodeGrant(this.client, new URL(`${this.callbackUrl()}${url.search}`), {
+        expectedState: state,
+        expectedNonce: transaction.nonce,
+        pkceCodeVerifier: transaction.verifier,
+        idTokenExpected: true,
+      }, { redirect_uri: this.callbackUrl() });
+    } catch {
+      throw new OidcAuthenticationError("The identity provider refused or returned an invalid sign-in response.");
     }
-    const claims = await this.verifyToken(tokens.id_token, {
-      nonce: transaction.nonce,
-      code,
-    });
-    if (!claims.sub) throw new OidcAuthenticationError("The ID token has no subject.");
+    const claims = tokens.claims();
+    if (!claims?.sub) throw new OidcAuthenticationError("The ID token has no subject.");
 
     const now = Date.now();
     const id = opaqueToken();
@@ -316,23 +303,40 @@ export class OidcGate {
    * browser session for that provider subject, as the specification requires.
    */
   async backchannelLogout(logoutToken: string): Promise<number> {
-    const claims = await this.verifyToken(logoutToken, { logout: true });
+    let claims: Claims;
+    try {
+      const verified = await jwtVerify(logoutToken, this.logoutKeys, {
+        issuer: this.config.issuer,
+        audience: this.config.clientId,
+        ...(this.discovery.id_token_signing_alg_values_supported
+          ? { algorithms: this.discovery.id_token_signing_alg_values_supported as JWSAlgorithm[] }
+          : {}),
+        clockTolerance: CLOCK_SKEW_SECONDS,
+        requiredClaims: ["iat", "jti"],
+      });
+      claims = verified.payload as Claims;
+    } catch {
+      throw new OidcAuthenticationError("Invalid logout token.");
+    }
     const event = claims.events?.["http://schemas.openid.net/event/backchannel-logout"];
-    if (!event || typeof event !== "object" || Array.isArray(event) || claims.nonce !== undefined) {
+    if (!event || typeof event !== "object" || Array.isArray(event) ||
+        Object.keys(event).length !== 0 || claims.nonce !== undefined) {
       throw new OidcAuthenticationError("Invalid logout token.");
     }
     if (typeof claims.iat !== "number" || claims.iat < Date.now() / 1_000 - LOGOUT_TOKEN_MAX_AGE_SECONDS) {
       throw new OidcAuthenticationError("Expired logout token.");
     }
+    if (typeof claims.jti !== "string" || claims.jti.length === 0) {
+      throw new OidcAuthenticationError("Logout token has no identifier.");
+    }
     const providerSid = typeof claims.sid === "string" ? claims.sid : undefined;
     const sub = typeof claims.sub === "string" ? claims.sub : undefined;
     if (!providerSid && !sub) throw new OidcAuthenticationError("Logout token has no session or subject.");
 
-    const fingerprint = createHash("sha256").update(logoutToken).digest("base64url");
-    if (this.logoutTokens.has(fingerprint)) {
+    if (this.logoutTokens.has(claims.jti)) {
       throw new OidcAuthenticationError("Logout token was already used.");
     }
-    this.logoutTokens.set(fingerprint, Math.min(
+    this.logoutTokens.set(claims.jti, Math.min(
       (typeof claims.exp === "number" ? claims.exp * 1_000 : Date.now() + SESSION_LIFETIME_MS),
       Date.now() + SESSION_LIFETIME_MS,
     ));
@@ -391,13 +395,9 @@ export class OidcGate {
       return false;
     }
     try {
-      const tokens = await this.exchange({
-        grant_type: "refresh_token",
-        refresh_token: session.refreshToken,
-      });
-      let claims: Claims | undefined;
-      if (tokens.id_token) {
-        claims = await this.verifyToken(tokens.id_token, { accessToken: tokens.access_token });
+      const tokens = await oidc.refreshTokenGrant(this.client, session.refreshToken);
+      const claims = tokens.claims();
+      if (claims) {
         if (claims.sub !== session.sub ||
             (session.providerSid && claims.sid && claims.sid !== session.providerSid)) {
           throw new OidcAuthenticationError("Refreshed identity changed.");
@@ -420,104 +420,6 @@ export class OidcGate {
       this.invalidate(id);
       return false;
     }
-  }
-
-  private async exchange(parameters: Record<string, string>): Promise<TokenSet> {
-    const body = new URLSearchParams(parameters);
-    const methods = this.discovery.token_endpoint_auth_methods_supported ?? ["client_secret_basic"];
-    const headers: Record<string, string> = {
-      accept: "application/json",
-      "content-type": "application/x-www-form-urlencoded",
-    };
-    if (methods.includes("client_secret_basic")) {
-      // RFC 6749 §2.3.1 form-encodes each credential before joining them with a colon.
-      const id = formEncode(this.config.clientId);
-      const secret = formEncode(this.config.clientSecret);
-      headers.authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
-    } else if (methods.includes("client_secret_post")) {
-      body.set("client_id", this.config.clientId);
-      body.set("client_secret", this.config.clientSecret);
-    } else {
-      throw new OidcAuthenticationError("The provider does not support confidential clients.");
-    }
-
-    const response = await timedFetch(this.fetcher, this.discovery.token_endpoint, {
-      method: "POST",
-      headers,
-      body,
-      redirect: "error",
-    });
-    if (!response.ok) throw new OidcAuthenticationError("The token endpoint refused the request.");
-    const value = (await response.json()) as Partial<TokenSet>;
-    if (typeof value.access_token !== "string" || !value.access_token) {
-      throw new OidcAuthenticationError("The token endpoint returned no access token.");
-    }
-    if (typeof value.token_type !== "string" || value.token_type.toLowerCase() !== "bearer") {
-      throw new OidcAuthenticationError("The token endpoint returned an unsupported token type.");
-    }
-    return value as TokenSet;
-  }
-
-  private async verifyToken(
-    token: string,
-    options: { nonce?: string; accessToken?: string; code?: string; logout?: boolean },
-  ): Promise<Claims> {
-    let header: ReturnType<typeof decodeProtectedHeader>;
-    try {
-      header = decodeProtectedHeader(token);
-    } catch {
-      throw new OidcAuthenticationError("Token is malformed.");
-    }
-    const supported = this.discovery.id_token_signing_alg_values_supported!;
-    if (!header.alg || !supported.includes(header.alg)) {
-      throw new OidcAuthenticationError("Token signing algorithm is not advertised.");
-    }
-
-    const verify = async () => await jwtVerify(
-      token,
-      createLocalJWKSet({ keys: this.jwks } as JSONWebKeySet),
-      {
-        issuer: this.config.issuer,
-        audience: this.config.clientId,
-        algorithms: supported,
-        clockTolerance: CLOCK_SKEW_SECONDS,
-        requiredClaims: options.logout ? ["iat"] : ["iat", "exp"],
-      },
-    );
-    let result;
-    try {
-      result = await verify();
-    } catch (error) {
-      if (!(error instanceof joseErrors.JWKSNoMatchingKey)) {
-        throw new OidcAuthenticationError("Token validation failed.");
-      }
-      this.jwks = await fetchJwks(this.fetcher, this.discovery.jwks_uri);
-      try {
-        result = await verify();
-      } catch {
-        throw new OidcAuthenticationError("Token validation failed.");
-      }
-    }
-    const claims = result.payload as Claims;
-    const now = Date.now() / 1_000;
-    if (Array.isArray(claims.aud) && claims.aud.length > 1 && claims.azp !== this.config.clientId) {
-      throw new OidcAuthenticationError("Token authorised party is invalid.");
-    }
-    if (typeof claims.iat !== "number" || claims.iat > now + CLOCK_SKEW_SECONDS) {
-      throw new OidcAuthenticationError("Token issue time is invalid.");
-    }
-    if (options.nonce !== undefined && claims.nonce !== options.nonce) {
-      throw new OidcAuthenticationError("ID token nonce is invalid.");
-    }
-    if (options.accessToken && typeof claims.at_hash === "string" &&
-        claims.at_hash !== oidcHash(options.accessToken, header.alg)) {
-      throw new OidcAuthenticationError("Access token hash is invalid.");
-    }
-    if (options.code && typeof claims.c_hash === "string" &&
-        claims.c_hash !== oidcHash(options.code, header.alg)) {
-      throw new OidcAuthenticationError("Authorization code hash is invalid.");
-    }
-    return claims;
   }
 
   private invalidate(id: string, persist = true): void {
@@ -570,9 +472,9 @@ export class OidcGate {
         dirty = true;
       }
     }
-    for (const [fingerprint, expiresAt] of this.logoutTokens) {
+    for (const [jti, expiresAt] of this.logoutTokens) {
       if (expiresAt <= now) {
-        this.logoutTokens.delete(fingerprint);
+        this.logoutTokens.delete(jti);
         dirty = true;
       }
     }
@@ -600,8 +502,8 @@ export class OidcGate {
     for (const session of stored.sessions) {
       if (validStoredSession(session)) this.sessions.set(session.id, session);
     }
-    for (const [fingerprint, expiresAt] of Object.entries(stored.logoutTokens ?? {})) {
-      if (typeof expiresAt === "number") this.logoutTokens.set(fingerprint, expiresAt);
+    for (const [jti, expiresAt] of Object.entries(stored.logoutTokens ?? {})) {
+      if (typeof expiresAt === "number") this.logoutTokens.set(jti, expiresAt);
     }
   }
 
@@ -694,7 +596,7 @@ function withoutTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
-function validateDiscovery(config: OidcConfig, discovery: OidcDiscovery): void {
+function validateDiscovery(config: OidcConfig, discovery: oidc.ServerMetadata): void {
   if (discovery.issuer !== config.issuer) {
     throw new OidcConfigurationError("OIDC discovery issuer does not exactly match FLOW_OIDC_ISSUER");
   }
@@ -717,37 +619,6 @@ function validateDiscovery(config: OidcConfig, discovery: OidcDiscovery): void {
   }
 }
 
-async function fetchJwks(fetcher: typeof fetch, url: string): Promise<JsonWebKey[]> {
-  const body = await fetchJson<{ keys?: JsonWebKey[] }>(fetcher, url, "OIDC signing keys");
-  if (!Array.isArray(body.keys) || body.keys.length === 0) {
-    throw new OidcConfigurationError("OIDC provider published no signing keys");
-  }
-  return body.keys;
-}
-
-async function fetchJson<T>(fetcher: typeof fetch, url: string, label: string): Promise<T> {
-  const response = await timedFetch(fetcher, url, {
-    headers: { accept: "application/json" },
-    redirect: "error",
-  });
-  if (!response.ok) throw new OidcConfigurationError(`${label} failed with HTTP ${response.status}`);
-  try {
-    return (await response.json()) as T;
-  } catch {
-    throw new OidcConfigurationError(`${label} did not return JSON`);
-  }
-}
-
-async function timedFetch(fetcher: typeof fetch, url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-  try {
-    return await fetcher(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function safeReturnTo(value: string | undefined, publicAppUrl: string): string {
   if (!value) return "/";
   try {
@@ -761,14 +632,6 @@ function safeReturnTo(value: string | undefined, publicAppUrl: string): string {
 
 function opaqueToken(bytes = 32): string {
   return randomBytes(bytes).toString("base64url");
-}
-
-function formEncode(value: string): string {
-  return new URLSearchParams({ value }).toString().slice("value=".length);
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("base64url");
 }
 
 function cookieValue(header: string | undefined, name: string): string | undefined {
@@ -797,11 +660,4 @@ function validStoredSession(value: BrowserSession): boolean {
     typeof value.expiresAt === "number" &&
     typeof value.tokenExpiresAt === "number" &&
     (value.refreshToken === undefined || typeof value.refreshToken === "string");
-}
-
-function oidcHash(value: string, alg: string): string {
-  const bits = Number(alg.slice(-3));
-  if (![256, 384, 512].includes(bits)) throw new OidcAuthenticationError("Unsupported token hash algorithm.");
-  const digest = createHash(`sha${bits}`).update(value).digest();
-  return digest.subarray(0, digest.length / 2).toString("base64url");
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { beginReauthentication } from "@/authentication.ts";
+import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
 
 export async function workflowApi<T>(
   path: string,
@@ -7,7 +7,7 @@ export async function workflowApi<T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const response = await fetch(path, {
+  const response = await authenticatedFetch(path, {
     method,
     signal,
     headers:
@@ -16,7 +16,6 @@ export async function workflowApi<T>(
   });
   const data = await response.json();
   if (!response.ok) {
-    beginReauthentication(response);
     throw new Error(data.error ?? `Request failed (${response.status})`);
   }
   return data as T;

@@ -148,14 +148,14 @@ export async function startTestIssuer(options: {
     get tokenRequests() { return tokenRequests; },
     get refreshRequests() { return refreshRequests; },
     setFailRefresh(value: boolean) { failRefresh = value; },
-    logoutToken(claims: { sid?: string; sub?: string; jti?: string; issuer?: string } = {}) {
+    logoutToken(claims: { sid?: string; sub?: string; jti?: string | null; issuer?: string } = {}) {
       const now = Math.floor(Date.now() / 1_000);
       return jwt(privateKey, {
         iss: claims.issuer ?? issuer,
         aud: clientId,
         iat: now,
         exp: now + 300,
-        jti: claims.jti ?? randomBytes(12).toString("base64url"),
+        ...(claims.jti === null ? {} : { jti: claims.jti ?? randomBytes(12).toString("base64url") }),
         events: { "http://schemas.openid.net/event/backchannel-logout": {} },
         ...(claims.sid === undefined ? {} : { sid: claims.sid }),
         ...(claims.sub === undefined ? {} : { sub: claims.sub }),
@@ -174,7 +174,7 @@ export type TestIssuer = {
   readonly tokenRequests: number;
   readonly refreshRequests: number;
   setFailRefresh(value: boolean): void;
-  logoutToken(claims?: { sid?: string; sub?: string; jti?: string; issuer?: string }): string;
+  logoutToken(claims?: { sid?: string; sub?: string; jti?: string | null; issuer?: string }): string;
   close(): Promise<void>;
 };
 
@@ -210,7 +210,8 @@ function jwt(key: KeyObject, claims: Record<string, unknown>): string {
 }
 
 function validClient(request: IncomingMessage, id: string, secret: string): boolean {
-  const expected = `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
+  const encode = (value: string): string => encodeURIComponent(value).replace(/-/g, "%2D");
+  const expected = `Basic ${Buffer.from(`${encode(id)}:${encode(secret)}`).toString("base64")}`;
   return request.headers.authorization === expected;
 }
 

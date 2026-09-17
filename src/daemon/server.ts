@@ -159,7 +159,7 @@ async function handle(
 
   if (options.oidc && request.method === "GET" && url.pathname === "/oauth/login") {
     response.writeHead(302, {
-      location: options.oidc.beginLogin(url.searchParams.get("return_to") ?? undefined),
+      location: await options.oidc.beginLogin(url.searchParams.get("return_to") ?? undefined),
       "cache-control": "no-store",
       "referrer-policy": "no-referrer",
     });

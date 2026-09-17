@@ -61,7 +61,7 @@ const SILENCE_MS = 45_000;
  */
 const FATAL_STATUS = new Set([401, 403, 404]);
 
-export function connect(options: { url: string; token?: string | undefined }): Connection {
+export function connect(options: { url: string; token?: string | undefined; authenticationRequired?: (response: Response) => void }): Connection {
   // In the browser there is no token to put in a header: it is the HttpOnly cookie the /auth handoff
   // set, which is the whole reason that handoff exists (ADR 0004). Both of these are spread
   // conditionally rather than assigned `undefined`, because exactOptionalPropertyTypes is on.
@@ -78,20 +78,20 @@ export function connect(options: { url: string; token?: string | undefined }): C
         ...credentials,
         body: JSON.stringify(command),
       });
-      await requireOk(response, options.token);
+      await requireOk(response, options.token, options.authenticationRequired);
       return ((await response.json()) as { result: T }).result;
     },
 
     async listSessions(): Promise<SessionSummary[]> {
       const response = await fetch(`${options.url}/api/sessions`, { headers, ...credentials });
-      await requireOk(response, options.token);
+      await requireOk(response, options.token, options.authenticationRequired);
       return (await response.json()) as SessionSummary[];
     },
 
     async branches(scope: string): Promise<BranchList> {
       const url = `${options.url}/api/branches?scope=${encodeURIComponent(scope)}`;
       const response = await fetch(url, { headers, ...credentials });
-      await requireOk(response, options.token);
+      await requireOk(response, options.token, options.authenticationRequired);
       return (await response.json()) as BranchList;
     },
 
@@ -138,7 +138,7 @@ export function connect(options: { url: string; token?: string | undefined }): C
               signal: controller.signal,
             });
             if (!response.ok || !response.body) {
-              const error = await responseError(response, options.token);
+              const error = await responseError(response, options.token, options.authenticationRequired);
               if (FATAL_STATUS.has(response.status)) {
                 onLink?.("gone");
                 onError?.(error);
@@ -219,24 +219,13 @@ async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerato
  * handled first, then a fresh top-level navigation starts authentication. Bearer clients and legacy
  * local mode never take this browser-only path.
  */
-async function requireOk(response: Response, token: string | undefined): Promise<void> {
-  if (!response.ok) throw await responseError(response, token);
+async function requireOk(response: Response, token: string | undefined, authenticationRequired?: (response: Response) => void): Promise<void> {
+  if (!response.ok) throw await responseError(response, token, authenticationRequired);
 }
 
-async function responseError(response: Response, token: string | undefined): Promise<Error> {
-  offerReauthentication(response, token);
+async function responseError(response: Response, token: string | undefined, authenticationRequired?: (response: Response) => void): Promise<Error> {
+  if (!token) authenticationRequired?.(response);
   return new Error(await describe(response));
-}
-
-function offerReauthentication(response: Response, token: string | undefined): void {
-  const login = response.headers.get("x-flow-login");
-  const browser = globalThis as typeof globalThis & {
-    location?: { pathname: string; search: string; hash: string; assign(url: string): void };
-  };
-  if (response.status !== 401 || token || !login || !browser.location) return;
-  const here = `${browser.location.pathname}${browser.location.search}${browser.location.hash}`;
-  const separator = login.includes("?") ? "&" : "?";
-  browser.location.assign(`${login}${separator}return_to=${encodeURIComponent(here)}`);
 }
 
 async function describe(response: Response): Promise<string> {

@@ -159,7 +159,13 @@ describe("Connection", () => {
     t.after(() => { delete browser.location; });
 
     await assert.rejects(
-      connect({ url: `http://127.0.0.1:${port}` }).command({
+      connect({
+        url: `http://127.0.0.1:${port}`,
+        authenticationRequired: (response) => {
+          const login = response.headers.get("x-flow-login");
+          if (response.status === 401 && login) browser.location?.assign(`${login}?return_to=%2F%23%2Fs%2Fdeep-link`);
+        },
+      }).command({
         type: "create",
         scope: "/tmp/scope",
         backend: "fake",
