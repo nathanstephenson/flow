@@ -7,8 +7,10 @@ import {
   type AgentSession, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts";
+import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { PiSession } from "./index.ts";
+import { piAutoCompaction } from "./auto-compaction.ts";
 import { PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { PiWork } from "./work.ts";
@@ -22,11 +24,14 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private readonly grants: Set<string>;
   private readonly permissions = new Map<string, (decision?: PermissionDecision) => void>();
   private readonly options: WorkflowSubagentOptions;
+  private readonly autoCompaction: ModelAutoCompaction;
 
   private readonly mcp: McpSession | undefined;
-  constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession) {
+  constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession,
+    autoCompaction: ModelAutoCompaction = {}) {
     this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
+    this.autoCompaction = autoCompaction;
     this.grants = new Set(grants);
     this.enquiries = new PiEnquiries((event) => this.emit(event));
     this.work = new PiWork((event) => this.emit(event), () => {});
@@ -84,13 +89,14 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private async run(parent: AgentSession): Promise<string> {
     const { options, controller } = this;
     let adapter: PiSession | undefined;
+    let compacting = false;
     try {
       controller.signal.throwIfAborted();
       const model = parent.modelRuntime.getAvailableSnapshot().find((model) => `${model.provider}/${model.id}` === options.modelId);
       if (!model) throw new Error(`Unknown workflow model: ${options.modelId}`);
       if (!["ask", "auto-accept"].includes(options.permissionMode)) throw new Error("Unsupported workflow permission mode");
       const scope = parent.sessionManager.getCwd();
-      const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+      const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
       const skillContext = options.skill
         ? `The leading Skill invocation is expanded as the user prompt. Follow it together with the mapped workflow input below.\n\nMapped workflow input (JSON):\n${JSON.stringify(options.input)}\n\nWorkflow constraints:${options.instructions.slice(options.skill.invocation.length)}`
         : options.instructions;
@@ -135,6 +141,9 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope),
         tools: customTools.map((tool) => tool.name), customTools,
       });
+      // Session creation initializes SDK settings after resource loading, so apply the immutable
+      // Flow policy at the same boundary PiSession uses for a parent model selection.
+      piAutoCompaction(settingsManager, this.autoCompaction)(model);
       this.child = session;
       controller.signal.throwIfAborted();
       if (!session.getAvailableThinkingLevels().includes(options.effort as AgentSession["thinkingLevel"])) {
@@ -151,6 +160,8 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         if (event.type === "turn_started" || event.type === "context_usage") return;
         if (event.type === "message" && event.final) output = event.text;
         if (event.type === "notice" && event.level === "error") failure = event.text;
+        if (event.type === "compacting") compacting = event.active;
+        if (event.type === "compacted") compacting = false;
         this.emit(event);
       });
       await adapter.prompt(prompt);
@@ -168,8 +179,14 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         options.emit({ subagentId: options.id, event: { type: "spend", spend: {
           tokens: model.tokens, cached: model.cached, costUSD: model.costUSD, models: [model],
         } } });
-        if (adapter) await adapter.dispose();
-        else { await this.child.abort(); this.child.dispose(); }
+        if (adapter) {
+          try { await adapter.dispose(); }
+          finally {
+            // Pi normally closes this lifecycle with compaction_end. If cancellation or adapter
+            // failure prevents that event, clear only the attempt's private progress indicator.
+            if (compacting) this.emit({ type: "compacting", active: false });
+          }
+        } else { await this.child.abort(); this.child.dispose(); }
       }
     }
   }
