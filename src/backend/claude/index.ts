@@ -17,6 +17,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
@@ -271,11 +272,13 @@ class ClaudeSession implements BackendSession {
 
   private readonly options: BackendCreateOptions;
   private readonly backendOptions: ClaudeBackendOptions;
+  private readonly workflowAutoCompaction: ModelAutoCompaction;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.parentWorkflow = workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.options = options;
     this.backendOptions = backendOptions;
+    this.workflowAutoCompaction = structuredClone(options.autoCompaction ?? {});
     this.emit = options.emit;
     this.workflowGrants = new Set(options.standingAuthorisations ?? []);
     this.modelId = options.modelId;
@@ -293,7 +296,7 @@ class ClaudeSession implements BackendSession {
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
     // `disallowedTools` — which an operator meant — still outranks a grant a human clicked.
     const startingEffort = sdkEffort(options.effort);
-    const env = claudeAutoCompactionEnv(options.modelId ? options.autoCompaction?.[options.modelId] : undefined);
+    const env = claudeAutoCompactionEnv(options.modelId ? this.workflowAutoCompaction[options.modelId] : undefined);
     const queryOptions: Options = {
       cwd: options.scope,
       ...(env ? { env } : {}),
@@ -668,7 +671,7 @@ class ClaudeSession implements BackendSession {
     }, options, this.workflowGrants, {
       ...(this.backendOptions.query ? { query: this.backendOptions.query } : {}),
       spawn: (options) => spawnWorkflowProcess(isSingleExecutable() ? { ...options, ...seaSpawnTarget(options) } : options),
-    });
+    }, this.workflowAutoCompaction);
     this.workflowSubagents.add(handle);
     void handle.done.finally(() => this.workflowSubagents.delete(handle)).catch(() => {});
     return handle;

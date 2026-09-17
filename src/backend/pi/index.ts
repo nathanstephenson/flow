@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
@@ -82,6 +83,7 @@ export class PiSession implements BackendSession {
   private turnReason: TurnEndReason = "complete";
   private readonly session: AgentSession;
   private readonly applyAutoCompaction: ((model: PiModel | undefined) => void) | undefined;
+  private readonly workflowAutoCompaction: ModelAutoCompaction;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
   private readonly sessionDir: string | undefined;
@@ -101,11 +103,12 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void } = {}) {
+    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: ModelAutoCompaction } = {}) {
     this.mcp = support.mcp;
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
+    this.workflowAutoCompaction = structuredClone(support.workflowAutoCompaction ?? {});
     this.applyAutoCompaction?.(session.model);
     this.emit = emit;
     this.sessionDir = sessionDir;
@@ -120,7 +123,8 @@ export class PiSession implements BackendSession {
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
     if (this.disposed) throw new Error("Backend Session stopped");
     if (this.workflows.has(options.id)) throw new Error(`Duplicate workflow Subagent: ${options.id}`);
-    const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations, this.mcp);
+    const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations, this.mcp,
+      this.workflowAutoCompaction);
     this.workflows.set(options.id, handle);
     void handle.done.finally(() => this.workflows.delete(options.id)).catch(() => {});
     return handle;
@@ -511,7 +515,8 @@ export class PiBackend implements AgentBackend {
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, options.autoCompaction ?? {}), ...(enquiries ? { enquiries } : {}) });
+    const autoCompaction = structuredClone(options.autoCompaction ?? {});
+    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), workflowAutoCompaction: autoCompaction, ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
