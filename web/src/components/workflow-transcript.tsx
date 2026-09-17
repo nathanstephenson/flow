@@ -36,6 +36,9 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
   const [atBottom, setAtBottom] = useState(true);
   const restore = useRef<{ height: number; top: number } | undefined>(undefined);
   const olderRequest = useRef<AbortController | undefined>(undefined);
+  const completedRef = useRef(completed);
+  completedRef.current = completed;
+  const finishPolling = useRef<(() => void) | undefined>(undefined);
 
   const merge = useCallback((incoming: WorkflowActivity[]) => {
     if (!incoming.length) return;
@@ -50,6 +53,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let initialLoading = true;
     events.current = [];
     setActivity([]);
     setPrevious(undefined);
@@ -77,7 +81,14 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
       } catch (reason) {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
       }
-      if (!stopped) timer = setTimeout(() => void poll(), POLL_MS);
+      if (!stopped && !completedRef.current) timer = setTimeout(() => void poll(), POLL_MS);
+    };
+    // Completion is not transcript identity. Preserve all loaded pages and the reader's position,
+    // but wake the poller immediately for one final catch-up instead of waiting for its next tick.
+    finishPolling.current = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      if (!initialLoading) void poll();
     };
 
     void read(`${base}/activity?${query}&latest=true&limit=${PAGE_SIZE}`).then(page => {
@@ -86,13 +97,15 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
       setPrevious(page.previous);
       setHistoryComplete(page.historyComplete);
       setLoading(false);
+      initialLoading = false;
       // The next paint starts at current activity rather than making the reader page forward to it.
       requestAnimationFrame(() => {
         const element = scroller.current;
         if (element) element.scrollTop = element.scrollHeight;
       });
-      if (!completed) void poll();
+      if (!completedRef.current) void poll();
     }).catch(reason => {
+      initialLoading = false;
       if (!controller.signal.aborted) {
         setLoading(false);
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -101,12 +114,17 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
 
     return () => {
       stopped = true;
+      finishPolling.current = undefined;
       controller.abort();
       olderRequest.current?.abort();
       olderRequest.current = undefined;
       if (timer) clearTimeout(timer);
     };
-  }, [base, query, legacy, completed, generation, merge]);
+  }, [base, query, legacy, generation, merge]);
+
+  useEffect(() => {
+    if (completed) finishPolling.current?.();
+  }, [completed]);
 
   const loadOlder = useCallback(async () => {
     const before = events.current[0]?.sequence;

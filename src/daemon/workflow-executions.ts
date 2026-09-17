@@ -274,9 +274,7 @@ export class WorkflowExecutionService {
 
   /** Oldest pending request for a host-driven parent relay turn. Existing parent turns outrank it. */
   takeInput(sessionId: string): string | undefined {
-    const request = [...this.relayRequests.values()]
-      .filter(item => item.sessionId === sessionId)
-      .sort((a, b) => a.order - b.order)[0];
+    const request = this.oldestRelay(sessionId);
     if (!request || request.announced || request.relaying) return;
     request.announced = true;
     const payload = request.kind === 'enquiry'
@@ -288,9 +286,7 @@ export class WorkflowExecutionService {
 
   /** A parent notification did not reach its relay tool; make the oldest request eligible again. */
   rearmInput(sessionId: string): void {
-    const request = [...this.relayRequests.values()]
-      .filter(item => item.sessionId === sessionId)
-      .sort((a, b) => a.order - b.order)[0];
+    const request = this.oldestRelay(sessionId);
     if (!request || request.relaying) return;
     request.announced = false;
     this.host.workflowInput(sessionId);
@@ -555,8 +551,16 @@ export class WorkflowExecutionService {
     for (const sessionId of sessions) this.wakeNextRelay(sessionId);
   }
 
+  private oldestRelay(sessionId: string): RelayRequest | undefined {
+    let oldest: RelayRequest | undefined;
+    for (const request of this.relayRequests.values()) {
+      if (request.sessionId === sessionId && (!oldest || request.order < oldest.order)) oldest = request;
+    }
+    return oldest;
+  }
+
   private wakeNextRelay(sessionId: string): void {
-    const oldest = [...this.relayRequests.values()].filter(item => item.sessionId === sessionId).sort((a, b) => a.order - b.order)[0];
+    const oldest = this.oldestRelay(sessionId);
     if (oldest && !oldest.announced && !oldest.relaying) this.host.workflowInput(sessionId);
   }
 

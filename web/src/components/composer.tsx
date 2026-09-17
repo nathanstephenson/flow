@@ -145,6 +145,8 @@ export function Composer({
   /** A Workflow relay borrows the input for free text without consuming the ordinary Draft. */
   const relayedDraft = useRef<Draft | undefined>(undefined);
   const relayedFor = useRef<string | undefined>(undefined);
+  // Invalidates asynchronous attachment work whenever the relay borrows or releases the composer.
+  const attachmentEpoch = useRef(0);
   const [sending, setSending] = useState(false);
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
@@ -185,12 +187,14 @@ export function Composer({
     // render. Keep the original message Draft, not the answer text from the relay that just closed.
     relayedDraft.current ??= { text, attachments };
     relayedFor.current = asking.askId;
+    attachmentEpoch.current++;
     setText("");
     setAttachments([]);
   } else if (!asking?.context && relayedFor.current !== undefined) {
     const saved = relayedDraft.current;
     relayedDraft.current = undefined;
     relayedFor.current = undefined;
+    attachmentEpoch.current++;
     if (saved) {
       setText(saved.text);
       setAttachments(saved.attachments);
@@ -284,16 +288,24 @@ export function Composer({
    */
   const paste = useCallback(
     (files: File[]): boolean => {
+      // A relayed Enquiry owns only temporary answer text. It must never acquire files that would
+      // either be silently discarded or race into the ordinary Draft when the relay closes.
+      if (relayedFor.current !== undefined) return true;
       if (!acceptsImages) {
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
         return true;
       }
+      const epoch = attachmentEpoch.current;
       void attachPasted(files, attachments.length).then((accepted) => {
+        if (epoch !== attachmentEpoch.current || relayedFor.current !== undefined) {
+          forget(accepted);
+          return;
+        }
         if (accepted.length > 0) setAttachments((current) => [...current, ...accepted]);
       });
       return true;
     },
-    [acceptsImages, attachments.length, chrome.model],
+    [acceptsImages, attachments.length, chrome.model, forget],
   );
 
   const catalogue = useMemo(
