@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import {
   Combobox,
   ComboboxCollection,
@@ -298,60 +299,65 @@ export function NewAgentSessionPage({
     <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
-        <div role="tablist" aria-label="New Agent Session mode" className="mx-auto flex rounded-2xl bg-muted p-1">
-          {(["chat", "workflow"] as const).map((mode) => (
-            <Button
-              key={mode}
-              role="tab"
-              size="sm"
-              variant={tab === mode ? "secondary" : "ghost"}
-              aria-selected={tab === mode}
-              onClick={() => setTab(mode)}
-              className="min-w-24 capitalize"
-            >
-              {mode}
-            </Button>
-          ))}
-        </div>
+        <Tabs
+          value={tab}
+          onValueChange={(value) => {
+            if (value === "chat" || value === "workflow") setTab(value);
+          }}
+          className="contents"
+        >
+          <TabsList aria-label="New Agent Session mode" className="mx-auto">
+            {(["chat", "workflow"] as const).map((mode) => (
+              <TabsTrigger key={mode} value={mode} className="min-w-24 capitalize">
+                {mode}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-        {projects.length === 0 ? (
-          <NoProjects uncurated={uncurated} />
-        ) : (
-          <>
-            <div className="flex items-center justify-center gap-2">
-              <Select
-                value={backend}
-                onValueChange={(value) => {
-                  if (typeof value !== "string") return;
-                  setBackend(value);
-                  setChosenModel(undefined);
-                  setEffort(undefined);
-                }}
-              >
-                <SelectTrigger aria-label="Backend" size="sm" className={cn(QUIET_TRIGGER, "w-auto")}>
-                  <SelectValue>{() => backend}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {config.backends.map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <ProjectPicker
-                fieldRef={projectField}
-                groups={groups}
-                projects={projects}
-                project={project}
-                onPick={(picked) => {
-                  setProjectPath(picked.path);
-                  setCutFrom(undefined);
-                  setInWorktree(false);
-                }}
-              />
-            </div>
+          {projects.length === 0 ? (
+            <>
+              <TabsContent value="chat">
+                <NoProjects uncurated={uncurated} />
+              </TabsContent>
+              <TabsContent value="workflow">
+                <NoProjects uncurated={uncurated} />
+              </TabsContent>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-2">
+                <Select
+                  value={backend}
+                  onValueChange={(value) => {
+                    if (typeof value !== "string") return;
+                    setBackend(value);
+                    setChosenModel(undefined);
+                    setEffort(undefined);
+                  }}
+                >
+                  <SelectTrigger aria-label="Backend" size="sm" className={cn(QUIET_TRIGGER, "w-auto")}>
+                    <SelectValue>{() => backend}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {config.backends.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <ProjectPicker
+                  fieldRef={projectField}
+                  groups={groups}
+                  projects={projects}
+                  project={project}
+                  onPick={(picked) => {
+                    setProjectPath(picked.path);
+                    setCutFrom(undefined);
+                    setInWorktree(false);
+                  }}
+                />
+              </div>
 
-            {tab === "chat" ? (
-              <div role="tabpanel" aria-label="Chat" className="grid gap-3">
+              <TabsContent value="chat" keepMounted className="grid gap-3">
                 <Composer
                   id={NEW_AGENT_SESSION_DRAFT}
                   chrome={chrome}
@@ -363,9 +369,8 @@ export function NewAgentSessionPage({
                   authorisingSummary={undefined}
                   onShowSubagents={() => {}}
                 />
-              </div>
-            ) : (
-              <section role="tabpanel" aria-label="Workflow" className="grid gap-4 rounded-xl border bg-card/30 p-4">
+              </TabsContent>
+              <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">
                 <div>
                   <h2 className="font-medium">Start with a workflow</h2>
                   <p className="text-xs text-muted-foreground">
@@ -429,54 +434,54 @@ export function NewAgentSessionPage({
                 <div className="overflow-hidden rounded-xl border bg-background">
                   <TurnStrip chrome={chrome} actions={actions} />
                 </div>
-              </section>
-            )}
+              </TabsContent>
 
-            {(config.mcp ?? []).length > 0 && (
-              <Accordion>
-                <AccordionItem value="mcp">
-                  <AccordionTrigger>
-                    MCP connections
-                    <Badge variant="secondary" aria-label={`${mcpConnectionIds.length} enabled`}>{mcpConnectionIds.length}</Badge>
-                  </AccordionTrigger>
-                  <AccordionContent className="flex flex-col gap-3">
-                    {config.mcp!.map((connection) => (
-                      <label key={connection.id} className="flex items-center justify-between gap-3 text-sm">
-                        {connection.name}
-                        <Switch
-                          checked={mcpChoices[connection.id] ?? connection.enabledByDefault}
-                          onCheckedChange={(checked) => setMcpChoices((choices) => ({ ...choices, [connection.id]: checked }))}
-                        />
-                      </label>
-                    ))}
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
-            )}
+              {(config.mcp ?? []).length > 0 && (
+                <Accordion>
+                  <AccordionItem value="mcp">
+                    <AccordionTrigger>
+                      MCP connections
+                      <Badge variant="secondary" aria-label={`${mcpConnectionIds.length} enabled`}>{mcpConnectionIds.length}</Badge>
+                    </AccordionTrigger>
+                    <AccordionContent className="flex flex-col gap-3">
+                      {config.mcp!.map((connection) => (
+                        <label key={connection.id} className="flex items-center justify-between gap-3 text-sm">
+                          {connection.name}
+                          <Switch
+                            checked={mcpChoices[connection.id] ?? connection.enabledByDefault}
+                            onCheckedChange={(checked) => setMcpChoices((choices) => ({ ...choices, [connection.id]: checked }))}
+                          />
+                        </label>
+                      ))}
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              )}
 
-            {repository && config.git !== false ? (
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    checked={inWorktree}
-                    onChange={(event) => setInWorktree(event.target.checked)}
-                  />
-                  <span className="text-sm font-medium">Start in a new worktree</span>
-                </label>
-                <span className="text-xs text-muted-foreground">
-                  {inWorktree ? (
-                    <>The branch above is what it will be cut from; a name is chosen for you. The worktree is kept by the Session Host and removed when this Agent Session is reaped, but only if nothing is uncommitted.</>
-                  ) : (
-                    <>This Agent Session shares {project?.name ?? "the Project"}&rsquo;s checkout, so choosing a branch above moves it — for anything else already working there too. A worktree gives this one its own.</>
-                  )}
-                </span>
-              </div>
-            ) : null}
-            {failure ? <p className="text-xs text-destructive">{failure}</p> : null}
-          </>
-        )}
+              {repository && config.git !== false ? (
+                <div className="flex flex-col gap-1">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary"
+                      checked={inWorktree}
+                      onChange={(event) => setInWorktree(event.target.checked)}
+                    />
+                    <span className="text-sm font-medium">Start in a new worktree</span>
+                  </label>
+                  <span className="text-xs text-muted-foreground">
+                    {inWorktree ? (
+                      <>The branch above is what it will be cut from; a name is chosen for you. The worktree is kept by the Session Host and removed when this Agent Session is reaped, but only if nothing is uncommitted.</>
+                    ) : (
+                      <>This Agent Session shares {project?.name ?? "the Project"}&rsquo;s checkout, so choosing a branch above moves it — for anything else already working there too. A worktree gives this one its own.</>
+                    )}
+                  </span>
+                </div>
+              ) : null}
+              {failure ? <p className="text-xs text-destructive">{failure}</p> : null}
+            </>
+          )}
+        </Tabs>
       </div>
     </div>
   );
