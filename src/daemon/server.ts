@@ -39,6 +39,7 @@ import type { TranscriptStore } from "./store.ts";
 
 export type ServeOptions = {
   host: SessionHost;
+  control?: { identity: import('./ownership.ts').HostIdentity; stop(): Promise<void> };
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
   secrets?: SecretStore;
@@ -85,31 +86,76 @@ export type RunningServer = {
   /** Present only when browser access is delegated to an external OpenID Provider. */
   oidc?: OidcGate;
   close(): Promise<void>;
+  stopAdmission(interrupt?: () => Promise<void>, timeoutMs?: number): Promise<void>;
 };
 
 export async function serve(options: ServeOptions): Promise<RunningServer> {
   const address = options.address ?? "127.0.0.1";
+  let stopping = false;
+  const pending = new Set<Promise<unknown>>();
+  const sockets = new Set<Duplex>();
+  const track = (work: Promise<unknown>) => { pending.add(work); void work.finally(() => pending.delete(work)); };
   const server = createServer((request, response) => {
-    void handle(request, response, options).catch((error: unknown) => {
+    let path: string;
+    try { path = new URL(request.url ?? '/', 'http://localhost').pathname; }
+    catch { send(response, 400, { error: 'Invalid request URL' }); return; }
+    if (options.control && (path === '/api/host' || path === '/api/host/stop')) {
+      if (!originAllowed(request, options.oidc?.config.publicAppUrl)) { send(response, 403, {}); return; }
+      if (!tokenMatches(options.token, presentedBearer(request))) { unauthorized(response); return; }
+      if (path === '/api/host' && request.method === 'GET') {
+        send(response, 200, { ...options.control.identity, token: undefined, stopping }); return;
+      }
+      if (path !== '/api/host/stop' || request.method !== 'POST') { send(response, 405, {}); return; }
+      void readBody(request, 4096).then(text => {
+        const body = JSON.parse(text);
+        if (body.instanceId !== options.control!.identity.instanceId) { send(response, 409, { error: 'Session Host instance changed' }); return; }
+        const busy = pending.size > 0 || options.host.hasActiveWork() || options.shells?.hasLiveShells() || options.host.list().some(session => options.workflowExecutions?.list(session.id).occupied);
+        if (!stopping && busy && body.force !== true) { send(response, 409, { error: 'Session Host has active work; use --force to interrupt it' }); return; }
+        stopping = true;
+        send(response, 202, { stopping: true });
+        setImmediate(() => { void options.control!.stop().catch(error => console.error(error)); });
+      }).catch(error => send(response, 400, { error: String(error) }));
+      return;
+    }
+    if (stopping) { send(response, 503, { error: 'Session Host is stopping' }); return; }
+    const work = handle(request, response, options).catch((error: unknown) => {
       send(response, 500, { error: error instanceof Error ? error.message : String(error) });
     });
+    track(work);
   });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
 
   const shells = options.shells;
   if (shells) {
     server.on("upgrade", (request, socket, head) => {
-      void handleUpgrade(request, socket, head, options, shells).catch(() => refuse(socket, 500));
+      if (stopping) { refuse(socket, 503); return; }
+      track(handleUpgrade(request, socket, head, options, shells).catch(() => refuse(socket, 500)));
     });
   }
 
-  await new Promise<void>((resolve) => server.listen(options.port ?? 0, address, resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(options.port ?? 0, address, () => { server.off('error', reject); resolve(); });
+  });
   const port = (server.address() as AddressInfo).port;
 
   return {
     server,
     url: `http://${address}:${port}`,
     ...(options.oidc === undefined ? {} : { oidc: options.oidc }),
+    stopAdmission: async (interrupt, timeoutMs = 10000) => {
+      stopping = true;
+      for (const socket of sockets) socket.destroy();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.all([...pending, interrupt?.()]),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Session Host drain timed out; ownership retained')), timeoutMs); }),
+        ]);
+      } finally { clearTimeout(timer); }
+    },
     close: () => {
+      for (const socket of sockets) socket.destroy();
       options.mcpAuth?.dispose();
       options.oidc?.dispose();
       return new Promise<void>((resolve, reject) =>

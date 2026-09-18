@@ -19,6 +19,20 @@ flow serve
 ```
 
 Open the web handoff URL printed by `flow serve`, or run `flow tui` in another terminal.
+
+`flow serve` stays in the foreground. Use `flow serve start` for a background Session Host,
+`flow serve status` to see installed and running versions, and `flow serve stop` to stop it.
+`flow serve restart` only restarts a background-owned host, with its saved address, port and working
+directory. A port of `0` stays dynamic. Restart requires the same OIDC configuration.
+
+Stop and restart refuse active work unless you pass `--force`. Force interrupts work gracefully;
+it does not kill the process. Agent Sessions become Dormant and their transcripts remain on disk.
+A TUI attaches to an existing host without stopping it on exit. If the TUI creates its own host,
+that host stops when the TUI exits. One-shot prompts refuse an occupied state root.
+Each `FLOW_STATE_DIR` permits one host. Background output is saved in its private `host.log`.
+If shutdown cannot finish within its deadline, Flow reports failure and retains ownership;
+do not start another host against that state directory. Inspect the log and resolve the stalled
+operation before attempting recovery. No update command is included.
 Configure credentials for the Backend Adapter you use.
 
 To check a release from source, run `npm ci` and `npm run test:package`.

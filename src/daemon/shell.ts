@@ -32,7 +32,7 @@ export type Pty = {
   onExit(listener: (event: { exitCode: number; signal?: number | undefined }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  kill(signal?: string): void;
 };
 
 export type PtyModule = {
@@ -58,6 +58,7 @@ type ShellRecord = {
   cols: number;
   rows: number;
   exited: boolean;
+  exit: Promise<void>;
 };
 
 export type CreateShellOptions = {
@@ -80,6 +81,7 @@ export class ShellRegistry {
   private readonly shells = new Map<string, ShellRecord>();
   private readonly loadPty: () => Promise<PtyModule>;
   private pty: PtyModule | undefined;
+  private stopping = false;
   private ptyLoad: Promise<PtyModule | undefined> | undefined;
 
   constructor(options: ShellRegistryOptions = {}) {
@@ -98,6 +100,7 @@ export class ShellRegistry {
 
   async create(options: CreateShellOptions): Promise<ShellSummary> {
     const pty = await this.load();
+    if (this.stopping) throw new Error('Session Host is stopping');
     if (!pty) throw new Error("This build cannot open a Shell: node-pty is unavailable");
 
     const cols = options.cols ?? DEFAULT_COLS;
@@ -113,6 +116,8 @@ export class ShellRegistry {
       env: { ...stringEnv(), TERM: "xterm-256color" },
     });
 
+    let resolveExit!: () => void;
+    const exit = new Promise<void>(resolve => { resolveExit = resolve; });
     const record: ShellRecord = {
       summary: {
         id,
@@ -127,6 +132,7 @@ export class ShellRegistry {
       cols,
       rows,
       exited: false,
+      exit,
     };
     this.shells.set(id, record);
 
@@ -138,6 +144,7 @@ export class ShellRegistry {
 
     child.onExit(({ exitCode, signal }) => {
       record.exited = true;
+      resolveExit();
       for (const sink of record.sinks) sink.exit(exitCode, signal);
       record.sinks.clear();
       this.shells.delete(id);
@@ -210,8 +217,23 @@ export class ShellRegistry {
     }
   }
 
-  killAll(): void {
-    for (const record of this.shells.values()) record.pty.kill();
+  hasLiveShells(): boolean {
+    return [...this.shells.values()].some(shell => !shell.exited);
+  }
+
+  async killAll(timeoutMs = 1000): Promise<void> {
+    this.stopping = true;
+    const records = [...this.shells.values()];
+    const exited = Promise.all(records.map(record => record.exit));
+    for (const signal of ['SIGHUP', 'SIGKILL']) {
+      for (const record of records) if (!record.exited) record.pty.kill(signal);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([exited, new Promise<void>(resolve => { timer = setTimeout(resolve, timeoutMs); })]);
+      } finally { clearTimeout(timer); }
+      if (records.every(record => record.exited)) return;
+    }
+    throw new Error('Shell shutdown timed out; ownership retained');
   }
 
   private async load(): Promise<PtyModule | undefined> {

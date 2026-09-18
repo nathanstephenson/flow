@@ -1787,6 +1787,10 @@ export class SessionHost {
     this.touch(current);
   }
 
+  hasActiveWork(): boolean {
+    return [...this.sessions.values()].some(record => record.turnInFlight || record.queue.length > 0 || record.openSubagentIds.size > 0 || record.openBackgroundCallIds.size > 0);
+  }
+
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
   async shutdown(): Promise<void> {
     this.workflowShutdown = true;
