@@ -911,12 +911,10 @@ function sendAuthPage(
 :root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#f6f6f4;color:#181817}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 0,#fff 0,#f6f6f4 52%)}
 main{width:min(100%,430px);border:1px solid #deded9;border-radius:18px;background:rgba(255,255,255,.9);padding:30px;box-shadow:0 18px 55px rgba(28,28,24,.08)}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:42px;font-size:14px;font-weight:650}.mark{width:26px;height:26px;display:grid;place-items:center;border-radius:8px;background:#1d1d1b;color:#fff;font-size:14px}
-.eyebrow{font-size:12px;color:#73736c;margin:0 0 10px;text-transform:uppercase;letter-spacing:.09em}h1{font-size:24px;line-height:1.2;margin:0 0 12px;letter-spacing:-.025em}p{font-size:14px;line-height:1.6;color:#65655e;margin:0 0 26px}
+h1{font-size:24px;line-height:1.2;margin:0 0 12px;letter-spacing:-.025em}p{font-size:14px;line-height:1.6;color:#65655e;margin:0 0 26px}
 a{display:inline-flex;align-items:center;justify-content:center;width:100%;height:42px;border-radius:10px;background:#1d1d1b;color:#fff;text-decoration:none;font-size:14px;font-weight:600}a:focus-visible{outline:3px solid #8bb9f5;outline-offset:2px}
-.note{margin:20px 0 0;padding-top:20px;border-top:1px solid #e8e8e3;font-size:12px;color:#85857d}
-@media(prefers-color-scheme:dark){:root{background:#171716;color:#f5f5f2}body{background:radial-gradient(circle at 50% 0,#292927 0,#171716 55%)}main{background:rgba(31,31,29,.95);border-color:#3b3b37;box-shadow:0 18px 55px rgba(0,0,0,.3)}.mark,a{background:#f0f0ec;color:#1b1b19}.eyebrow,p,.note{color:#aaa9a1}.note{border-color:#3b3b37}}
-</style></head><body><main><div class="brand"><span class="mark">F</span>Flow</div><p class="eyebrow">Secure access</p><h1>${title}</h1><p>${detail}</p><a href="${action.href}">${action.label}</a><div class="note">Flow never sends provider tokens to this browser.</div></main></body></html>`;
+@media(prefers-color-scheme:dark){:root{background:#171716;color:#f5f5f2}body{background:radial-gradient(circle at 50% 0,#292927 0,#171716 55%)}main{background:rgba(31,31,29,.95);border-color:#3b3b37;box-shadow:0 18px 55px rgba(0,0,0,.3)}a{background:#f0f0ec;color:#1b1b19}p{color:#aaa9a1}}
+</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${action.href}">${action.label}</a></main></body></html>`;
   response.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html),

@@ -88,6 +88,15 @@ describe("external OIDC browser gate", () => {
     assert.equal(unsafe.location, "/", "off-origin return targets must be discarded");
   });
 
+  it("requests consent on every new login", async () => {
+    const context = await setup();
+    for (let index = 0; index < 2; index += 1) {
+      const url = new URL(await context.gate.beginLogin("/"));
+      assert.equal(url.searchParams.get("prompt"), "consent");
+      assert.equal(url.searchParams.get("scope"), "openid offline_access");
+    }
+  });
+
   it("supports client_secret_post and query-bearing provider endpoints", async () => {
     const context = await setup({
       clientAuthentication: "client_secret_post",

@@ -217,6 +217,7 @@ export class OidcGate {
       redirect_uri: this.callbackUrl(),
       response_type: "code",
       scope: "openid offline_access",
+      prompt: "consent",
       state,
       nonce,
       code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
