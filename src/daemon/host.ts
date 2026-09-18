@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
-import { stackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
+import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
 import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
@@ -331,7 +331,7 @@ export class SessionHost {
     return this.withGitOperation(record.scope, async () => {
       this.stackReviews.delete(sessionId);
       await cleanStack(record.scope);
-      const status = await stackStatus(record.scope);
+      const status = await actionStackStatus(record.scope);
       if (!status.view) throw new Error(status.problem ?? "No stack found.");
       const review = { token: randomUUID(), action, view: status.view };
       this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
@@ -347,7 +347,7 @@ export class SessionHost {
         this.stackReviews.delete(sessionId);
         if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
         await cleanStack(record.scope);
-        const status = await stackStatus(record.scope);
+        const status = await actionStackStatus(record.scope);
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
       }
       try {
@@ -367,7 +367,7 @@ export class SessionHost {
   async assistStack(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
     await this.withGitOperation(record.scope, async () => {
-      const status = await stackStatus(record.scope);
+      const status = await actionStackStatus(record.scope);
       if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");

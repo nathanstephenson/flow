@@ -98,8 +98,11 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  const graphPullRequests = status?.graph?.branches.flatMap(branch => branch.pr ? [branch.pr] : []);
-  const pullRequests = (graphPullRequests?.length ? graphPullRequests : status?.view ? status.view.branches.flatMap(branch => branch.pr ? [branch.pr] : []) : status?.candidate?.pullRequests ?? []).filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).slice().reverse();
+  const pullRequests = [
+    ...(status?.graph?.branches.flatMap(branch => branch.pr ? [branch.pr] : []) ?? []),
+    ...(status?.view?.branches.flatMap(branch => branch.pr ? [branch.pr] : []) ?? []),
+    ...(status?.candidate?.pullRequests ?? []),
+  ].filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {
     setError("");
     setOutput("");
@@ -148,16 +151,6 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
           </li>;
         })}
       </ul>
-    </> : managedVisible && status?.view ? <>
-      <p>Trunk: {status.view.trunk}</p>
-      <ul className="space-y-2">{status.view.branches.map(branch => <li key={branch.name} className="flex flex-wrap items-center gap-2">
-        <span>{branch.name}{branch.isCurrent ? " (current)" : ""}{branch.pr ? ` · #${branch.pr.number} ${branch.isMerged ? "MERGED" : branch.pr.state}` : branch.isMerged ? " · MERGED" : " · no PR"}{branch.needsRebase ? " · needs rebase" : ""}</span>
-        {branch.pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${branch.pr.number} link`} title={`Copy PR #${branch.pr.number} link`} disabled={busy || !branch.pr.title || !branch.pr.url} onClick={() => void copyLinks([branch.pr!], `PR #${branch.pr!.number}`)}><Copy aria-hidden="true" /></Button> : null}
-        <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || branch.isCurrent} onClick={() => void run("checkout", [branch.name])}>Switch</Button>
-      </li>)}</ul>
-    </> : status?.candidate ? <>
-      <p>PR-linked branches above {status.candidate.trunk} (bottom to top):</p>
-      <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch} className="flex flex-wrap items-center gap-2">{pr.branch} · #{pr.number} {pr.state}<Button size="icon-sm" variant="outline" aria-label={`Copy PR #${pr.number} link`} title={`Copy PR #${pr.number} link`} disabled={busy || !pr.title || !pr.url} onClick={() => void copyLinks([pr], `PR #${pr.number}`)}><Copy aria-hidden="true" /></Button></li>)}</ol>
     </> : null}
 
     {status?.graph && status.candidate ? <div aria-label="Branches to create" className="space-y-1">
