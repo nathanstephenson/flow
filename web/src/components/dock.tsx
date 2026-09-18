@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef, useState } from "react";
+import { Activity, lazy, Suspense, useCallback, useRef, useState } from "react";
 import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide, type DockTab } from "@/presentation/docks.ts";
@@ -219,11 +219,12 @@ function DockTabPanel({
 }) {
   const content = tab.content;
   return (
-    <div
-      role="tabpanel"
-      aria-hidden={!visible}
-      className={cn("absolute inset-0 min-h-0 min-w-0 overflow-hidden", visible ? "flex flex-col" : "hidden")}
-    >
+    <Activity mode={visible ? "visible" : "hidden"}>
+      <div
+        role="tabpanel"
+        aria-hidden={!visible}
+        className="absolute inset-0 flex min-h-0 min-w-0 flex-col overflow-hidden"
+      >
       {content?.kind === "workflows" ? (
         <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Loading workflows…</p>}>
           <WorkflowsPane
@@ -274,7 +275,8 @@ function DockTabPanel({
           {...(shells ? { onChooseShell: () => dispatch({ type: "open-shell", side, tabId: tab.id }) } : {})}
         />
       )}
-    </div>
+      </div>
+    </Activity>
   );
 }
 

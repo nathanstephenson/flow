@@ -352,7 +352,15 @@
   .mobile-safe-frame {
     padding-top: env(safe-area-inset-top);
     padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
     padding-left: env(safe-area-inset-left);
+  }
+
+  /* iOS Safari does not implement interactive-widget=resizes-content. The pane tracks its visual
+   * viewport so every selected surface—not only the Composer—stays above the keyboard. */
+  .mobile-view-height {
+    height: var(--mobile-viewport-height, 100dvh);
+    max-height: 100%;
   }
 
   .mobile-rail-trigger {

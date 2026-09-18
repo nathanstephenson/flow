@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   addTab,
@@ -81,6 +81,9 @@ export type Docks = {
 export function useDocks(sessionId: string | undefined, knownSessionIds: readonly string[] | undefined): Docks {
   const [layouts, setLayouts] = useState<Record<string, DockLayout>>(() => parseLayouts(read()));
   const [reveal, setReveal] = useState<DockReveal>();
+  // Acknowledging removes the event, so deriving this from `reveal` would restart at one and make
+  // consumers mistake every second open for the event they just handled.
+  const revealNonce = useRef(0);
 
   const update = useCallback(
     (id: string, change: (layout: DockLayout) => DockLayout) => {
@@ -97,11 +100,11 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
     (action: DockAction) => {
       if (sessionId === undefined) return;
       if (action.type === "open-workflows" || action.type === "open-subagents") {
-        setReveal((current) => ({
+        setReveal({
           sessionId,
           kind: action.type === "open-workflows" ? "workflows" : "subagents",
-          nonce: (current?.nonce ?? 0) + 1,
-        }));
+          nonce: ++revealNonce.current,
+        });
       }
       update(sessionId, (layout) => {
         // Resolved from the layout rather than named by the caller, so it runs before the shared

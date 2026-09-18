@@ -123,6 +123,22 @@ function AttachedPane({
   const rememberedDetails = useRef<Record<string, MobileDetail | undefined>>({});
   const handledReveal = useRef(0);
 
+  useEffect(() => {
+    if (!mobile || window.visualViewport === null) return;
+    const viewport = window.visualViewport;
+    const update = (): void => {
+      document.documentElement.style.setProperty("--mobile-viewport-height", `${viewport.height}px`);
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+      document.documentElement.style.removeProperty("--mobile-viewport-height");
+    };
+  }, [mobile]);
+
   const writeMobileView = useCallback((next: MobileView, replace = false) => {
     if (sameMobileView(mobileViewRef.current, next) && !replace) return;
     mobileViewRef.current = next;
@@ -156,12 +172,14 @@ function AttachedPane({
     const tab = dock.tabs.find((candidate) => candidate.id === shownMobileView.tabId);
     if (tab?.content?.kind !== "subagents") return;
     const selected = shownMobileView.detail?.kind === "subagent" ? shownMobileView.detail.id : undefined;
-    if (tab.content.subagentId !== selected) {
+    // A base history entry means "show the list", not "erase the persisted selection". In
+    // particular, it is the entry restored on remount and when crossing the mobile breakpoint.
+    if (selected !== undefined && tab.content.subagentId !== selected) {
       docks.dispatch({
         type: "select-subagent",
         side: shownMobileView.side,
         tabId: shownMobileView.tabId,
-        ...(selected ? { subagentId: selected } : {}),
+        subagentId: selected,
       });
     }
   }, [docks, shownMobileView]);
@@ -191,8 +209,19 @@ function AttachedPane({
   const selectMobileTab = useCallback((side: DockSide, tabId: string) => {
     docks.dispatch({ type: "activate", side, tabId });
     const key = `${side}:${tabId}`;
-    const detail = rememberedDetails.current[key];
-    writeMobileView({ kind: "dock", side, tabId, ...(detail ? { detail } : {}) });
+    const tab = docks.layout[side].tabs.find((candidate) => candidate.id === tabId);
+    const persisted = tab?.content?.kind === "subagents" && tab.content.subagentId
+      ? { kind: "subagent" as const, id: tab.content.subagentId }
+      : undefined;
+    const detail = rememberedDetails.current[key] ?? persisted;
+    const base: MobileView = { kind: "dock", side, tabId };
+    // Never put a detail immediately after another tab: Back from it must return to this tab's list.
+    if (detail) {
+      writeMobileView(base);
+      writeMobileView({ ...base, detail });
+    } else {
+      writeMobileView(base);
+    }
   }, [docks, writeMobileView]);
 
   const navigateDetail = useCallback((detail: MobileDetail) => {
@@ -287,7 +316,7 @@ function AttachedPane({
   const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
   return (
-    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
+    <div className={cn("grid min-h-0 min-w-0", mobile ? "mobile-view-height grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
       <div>
         <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
         <McpConnectionStatus sessionId={sessionId} />
