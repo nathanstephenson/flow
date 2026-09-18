@@ -91,10 +91,27 @@ async function checkGit(viewport, screenshotSuffix) {
   await assertSelected(page, list, selected);
   await assertFits(page, list);
 
-  if (selected !== "Diff") await list.getByRole("tab", { name: "Diff" }).click();
+  if (labels.length > 1) {
+    await list.getByRole("tab", { name: selected }).focus();
+    await page.keyboard.press("Home");
+    await assertSelected(page, list, "Diff");
+    await page.keyboard.press("End");
+    await assertSelected(page, list, labels.at(-1));
+    await page.keyboard.press("ArrowLeft");
+    await assertSelected(page, list, labels.at(-2));
+    await page.keyboard.press("ArrowRight");
+    await assertSelected(page, list, labels.at(-1));
+  }
+  if (labels.at(-1) !== "Diff") await list.getByRole("tab", { name: "Diff" }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByRole("tab", { name: "Diff", exact: true }).waitFor();
-  assert.equal(await page.getByRole("tab", { name: "Diff", exact: true }).isDisabled(), true, "Publish should lock Git tabs");
+  for (const tab of await list.getByRole("tab").all()) {
+    assert.equal(await tab.isDisabled(), true, "Publish should lock every Git tab");
+  }
+  if (labels.length > 1) {
+    await list.getByRole("tab", { name: labels.at(-1) }).click({ force: true });
+    assert.equal(await list.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected"), "true", "a disabled Git tab must not activate");
+  }
   await page.reload({ waitUntil: "domcontentloaded" });
   await list.waitFor();
   await page.getByText("Reading Git status…").waitFor({ state: "hidden" });
