@@ -1,4 +1,5 @@
 import type { ShellClientFrame, ShellServerFrame, ShellSummary } from "../../src/protocol/shells.ts";
+import { authenticatedFetch, reauthenticateClosedSocket } from "@/authentication.ts";
 
 /**
  * The browser's end of one Shell socket.
@@ -29,9 +30,8 @@ export type ShellConnection = {
 
 /** `POST /api/shells` — open a new Shell beside an Agent Session, started in its Scope. */
 export async function openShell(sessionId: string, cols: number, rows: number): Promise<ShellSummary> {
-  const response = await fetch("/api/shells", {
+  const response = await authenticatedFetch("/api/shells", {
     method: "POST",
-    credentials: "same-origin",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sessionId, cols, rows }),
   });
@@ -44,10 +44,10 @@ export async function openShell(sessionId: string, cols: number, rows: number): 
 
 /** `GET /api/shells?sessionId=` — the Shells already open beside an Agent Session. */
 export async function listShells(sessionId: string): Promise<ShellSummary[]> {
-  const response = await fetch(`/api/shells?sessionId=${encodeURIComponent(sessionId)}`, {
-    credentials: "same-origin",
-  });
-  if (!response.ok) return [];
+  const response = await authenticatedFetch(`/api/shells?sessionId=${encodeURIComponent(sessionId)}`);
+  if (!response.ok) {
+    return [];
+  }
   return (await response.json()) as ShellSummary[];
 }
 
@@ -58,9 +58,8 @@ export async function listShells(sessionId: string): Promise<ShellSummary[]> {
  * daemon that is no longer there, and in both cases the tab is right to be gone (ADR 0008).
  */
 export async function killShell(shellId: string): Promise<void> {
-  await fetch(`/api/shells/${encodeURIComponent(shellId)}`, {
+  await authenticatedFetch(`/api/shells/${encodeURIComponent(shellId)}`, {
     method: "DELETE",
-    credentials: "same-origin",
   }).catch(() => undefined);
 }
 
@@ -88,7 +87,8 @@ export function attachShell(shellId: string, handlers: ShellHandlers): ShellConn
 
   // `closed` fires only when the Shell did not tell us it was dying, so the caller can tell "you
   // navigated away" from "your shell exited" — they look identical at the socket.
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
+    reauthenticateClosedSocket(event.code);
     if (!shellDied) handlers.closed();
   });
 

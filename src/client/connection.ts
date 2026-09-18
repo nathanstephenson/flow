@@ -61,7 +61,7 @@ const SILENCE_MS = 45_000;
  */
 const FATAL_STATUS = new Set([401, 403, 404]);
 
-export function connect(options: { url: string; token?: string | undefined }): Connection {
+export function connect(options: { url: string; token?: string | undefined; authenticationRequired?: (response: Response) => void }): Connection {
   // In the browser there is no token to put in a header: it is the HttpOnly cookie the /auth handoff
   // set, which is the whole reason that handoff exists (ADR 0004). Both of these are spread
   // conditionally rather than assigned `undefined`, because exactOptionalPropertyTypes is on.
@@ -78,20 +78,20 @@ export function connect(options: { url: string; token?: string | undefined }): C
         ...credentials,
         body: JSON.stringify(command),
       });
-      if (!response.ok) throw new Error(await describe(response));
+      await requireOk(response, options.token, options.authenticationRequired);
       return ((await response.json()) as { result: T }).result;
     },
 
     async listSessions(): Promise<SessionSummary[]> {
       const response = await fetch(`${options.url}/api/sessions`, { headers, ...credentials });
-      if (!response.ok) throw new Error(await describe(response));
+      await requireOk(response, options.token, options.authenticationRequired);
       return (await response.json()) as SessionSummary[];
     },
 
     async branches(scope: string): Promise<BranchList> {
       const url = `${options.url}/api/branches?scope=${encodeURIComponent(scope)}`;
       const response = await fetch(url, { headers, ...credentials });
-      if (!response.ok) throw new Error(await describe(response));
+      await requireOk(response, options.token, options.authenticationRequired);
       return (await response.json()) as BranchList;
     },
 
@@ -138,7 +138,7 @@ export function connect(options: { url: string; token?: string | undefined }): C
               signal: controller.signal,
             });
             if (!response.ok || !response.body) {
-              const error = new Error(await describe(response));
+              const error = await responseError(response, options.token, options.authenticationRequired);
               if (FATAL_STATUS.has(response.status)) {
                 onLink?.("gone");
                 onError?.(error);
@@ -212,6 +212,20 @@ async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerato
       split = buffer.indexOf("\n\n");
     }
   }
+}
+
+/**
+ * OIDC 401s carry an explicit login endpoint. A command is never replayed: its refused response is
+ * handled first, then a fresh top-level navigation starts authentication. Bearer clients and legacy
+ * local mode never take this browser-only path.
+ */
+async function requireOk(response: Response, token: string | undefined, authenticationRequired?: (response: Response) => void): Promise<void> {
+  if (!response.ok) throw await responseError(response, token, authenticationRequired);
+}
+
+async function responseError(response: Response, token: string | undefined, authenticationRequired?: (response: Response) => void): Promise<Error> {
+  if (!token) authenticationRequired?.(response);
+  return new Error(await describe(response));
 }
 
 async function describe(response: Response): Promise<string> {

@@ -19,7 +19,7 @@ import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
 import type { AssetManifest, EmbeddedAsset } from "../web/assets.ts";
 import type { BranchList } from "../protocol/git.ts";
 import { gitAvailable, head, isRepository, localBranches, MAX_BRANCHES } from "./git.ts";
-import { tokenMatches } from "./auth.ts";
+import { tokenMatches, type OidcGate } from "./auth.ts";
 import { CommandRefused, type SessionHost } from "./host.ts";
 import type { ShellRegistry } from "./shell.ts";
 import type { TranscriptStore } from "./store.ts";
@@ -58,6 +58,11 @@ export type ServeOptions = {
   config?: ConfigStore;
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
+   * Optional external browser gate. The daemon bearer token remains valid for explicit CLI/TUI
+   * clients, but browser cookies and navigation are owned exclusively by this gate when present.
+   */
+  oidc?: OidcGate;
+  /**
    * Where Attachment bytes are read from. Omitted means this deployment keeps no state, so it has
    * no Attachments to serve and the route 404s — the same shape of omission `shells` and `config`
    * already have, and it agrees with the Session Host, which refuses a send carrying one for the
@@ -77,6 +82,8 @@ export type ServeOptions = {
 export type RunningServer = {
   server: Server;
   url: string;
+  /** Present only when browser access is delegated to an external OpenID Provider. */
+  oidc?: OidcGate;
   close(): Promise<void>;
 };
 
@@ -91,7 +98,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   const shells = options.shells;
   if (shells) {
     server.on("upgrade", (request, socket, head) => {
-      void handleUpgrade(request, socket, head, options.token, shells).catch(() => refuse(socket, 500));
+      void handleUpgrade(request, socket, head, options, shells).catch(() => refuse(socket, 500));
     });
   }
 
@@ -101,8 +108,10 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
   return {
     server,
     url: `http://${address}:${port}`,
+    ...(options.oidc === undefined ? {} : { oidc: options.oidc }),
     close: () => {
       options.mcpAuth?.dispose();
+      options.oidc?.dispose();
       return new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
@@ -129,17 +138,85 @@ async function handle(
     return;
   }
 
-  // A page on any origin can reach loopback; only same-origin requests may command us.
-  if (!originAllowed(request)) {
+  /*
+   * OIDC protocol endpoints are outside the app-session gate by definition. The back-channel route
+   * is issuer-to-daemon and has neither a browser Origin nor a Flow credential; its signed logout
+   * token is the credential. The MCP callback remains above all of these and independently secured.
+   */
+  if (options.oidc && request.method === "POST" && url.pathname === "/oauth/backchannel") {
+    try {
+      const body = new URLSearchParams(await readBody(request, 16 * 1024));
+      const logoutToken = body.get("logout_token");
+      if (!logoutToken) throw new Error("missing logout token");
+      await options.oidc.backchannelLogout(logoutToken);
+      response.writeHead(200, { "cache-control": "no-store" });
+      response.end();
+    } catch {
+      send(response, 400, { error: "Invalid logout notification" });
+    }
+    return;
+  }
+
+  if (options.oidc && request.method === "GET" && url.pathname === "/oauth/login") {
+    response.writeHead(302, {
+      location: await options.oidc.beginLogin(url.searchParams.get("return_to") ?? undefined),
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    response.end();
+    return;
+  }
+
+  if (options.oidc && request.method === "GET" && url.pathname === "/oauth/callback") {
+    try {
+      const completed = await options.oidc.completeLogin(url);
+      response.writeHead(302, {
+        location: completed.location,
+        "set-cookie": completed.cookie,
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+      });
+      response.end();
+    } catch {
+      sendAuthPage(
+        response,
+        400,
+        "Sign-in could not be completed",
+        "The response was invalid or the sign-in request expired. No credentials were saved.",
+        { href: "/oauth/login", label: "Try signing in again" },
+      );
+    }
+    return;
+  }
+
+  if (options.oidc && request.method === "GET" && url.pathname === "/oauth/signed-out") {
+    sendAuthPage(
+      response,
+      200,
+      "You’re signed out",
+      "This browser no longer has access to Flow. Agent Sessions keep running in the background.",
+      { href: "/oauth/login", label: "Sign in again" },
+    );
+    return;
+  }
+
+  // A page on any origin can reach loopback; only the configured public origin may command an OIDC
+  // deployment. No Forwarded/X-Forwarded header participates in this decision.
+  if (!originAllowed(request, options.oidc?.config.publicAppUrl)) {
     send(response, 403, { error: "Origin not allowed" });
     return;
   }
 
-  // The one-time handoff that moves a token out of a URL and into an HttpOnly cookie (ADR 0004).
+  // The local-mode handoff is disabled, not merely unused, when OIDC owns browser authentication.
+  // This also ensures an old `flow=` cookie cannot bypass the external issuer.
   if (url.pathname === "/auth") {
+    if (options.oidc) {
+      send(response, 404, { error: "Not found" });
+      return;
+    }
     const presented = url.searchParams.get("token") ?? undefined;
     if (!tokenMatches(options.token, presented)) {
-      send(response, 401, { error: "Unauthorized" });
+      unauthorized(response);
       return;
     }
     response.writeHead(302, {
@@ -153,8 +230,24 @@ async function handle(
     return;
   }
 
-  if (!tokenMatches(options.token, presentedToken(request))) {
-    send(response, 401, { error: "Unauthorized" });
+  const authentication = await authenticateRequest(request, options);
+  if (!authentication) {
+    if (options.oidc && documentNavigation(request, url.pathname)) {
+      sendLoginRedirectPage(response);
+    } else {
+      unauthorized(response, options.oidc ? "/oauth/login" : undefined);
+    }
+    return;
+  }
+
+  if (options.oidc && request.method === "POST" && url.pathname === "/oauth/logout") {
+    options.oidc.logout(request.headers.cookie);
+    response.writeHead(303, {
+      location: "/oauth/signed-out",
+      "set-cookie": options.oidc.clearCookie(),
+      "cache-control": "no-store",
+    });
+    response.end();
     return;
   }
 
@@ -210,6 +303,8 @@ async function handle(
       // container has none, and without this a Scope's `.git` would promise a control that then
       // fails with ENOENT.
       git: await gitAvailable(),
+      // Lets the browser offer reauthentication and logout without exposing provider details.
+      authentication: options.oidc ? "oidc" : "token",
       // The two Project lists, disjoint, both derived and both asked fresh on each request.
       //
       // `projectList` is what a client offers: the opted-in Projects, resolved from
@@ -370,7 +465,14 @@ async function handle(
   const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
-    streamEvents(response, options.host, sessionId, Number(url.searchParams.get("since") ?? 0));
+    streamEvents(
+      response,
+      options.host,
+      sessionId,
+      Number(url.searchParams.get("since") ?? 0),
+      authentication.kind === "browser" ? options.oidc : undefined,
+      authentication.kind === "browser" ? authentication.sessionId : undefined,
+    );
     return;
   }
 
@@ -589,11 +691,12 @@ async function handleUpgrade(
   request: IncomingMessage,
   socket: Duplex,
   head: Buffer,
-  token: string,
+  options: ServeOptions,
   shells: ShellRegistry,
 ): Promise<void> {
-  if (!originAllowed(request)) return refuse(socket, 403);
-  if (!tokenMatches(token, presentedToken(request))) return refuse(socket, 401);
+  if (!originAllowed(request, options.oidc?.config.publicAppUrl)) return refuse(socket, 403);
+  const authentication = await authenticateRequest(request, options);
+  if (!authentication) return refuse(socket, 401);
 
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const shellId = /^\/api\/shells\/([^/]+)\/stream$/.exec(url.pathname)?.[1];
@@ -606,9 +709,16 @@ async function handleUpgrade(
   const { WebSocketServer } = await import("ws");
   const wss = new WebSocketServer({ noServer: true });
   wss.handleUpgrade(request, socket, head, (ws) => {
+    const detachAuth = authentication.kind === "browser"
+      ? options.oidc?.registerConnection(authentication.sessionId, () => ws.close(4001, "Authentication ended"))
+      : undefined;
+    if (ws.readyState !== ws.OPEN) {
+      detachAuth?.();
+      return;
+    }
+
     const tell = (frame: ShellServerFrame): void => ws.send(JSON.stringify(frame));
     tell({ type: "ready", shell: summary });
-
     const detach = shells.attach(shellId, {
       output: (chunk) => ws.send(chunk, { binary: true }),
       exit: (code, signal) => {
@@ -634,8 +744,12 @@ async function handleUpgrade(
 
     // Detach only. Closing the pane, closing the tab and losing the network all arrive here
     // identically, and none of them is a reason to kill a Shell someone left `npm run dev` in.
-    ws.on("close", detach);
-    ws.on("error", detach);
+    const detachAll = (): void => {
+      detach();
+      detachAuth?.();
+    };
+    ws.on("close", detachAll);
+    ws.on("error", detachAll);
   });
 }
 
@@ -693,7 +807,14 @@ function sendAttachment(
   response.end(bytes);
 }
 
-function streamEvents(response: ServerResponse, host: SessionHost, sessionId: string, since: number): void {
+function streamEvents(
+  response: ServerResponse,
+  host: SessionHost,
+  sessionId: string,
+  since: number,
+  oidc?: OidcGate,
+  browserSessionId?: string,
+): void {
   let log;
   try {
     log = host.logFor(sessionId);
@@ -718,17 +839,101 @@ function streamEvents(response: ServerResponse, host: SessionHost, sessionId: st
 
   for (const entry of log.since(since)) write(entry);
   const unsubscribe = log.subscribe(write);
-  response.on("close", unsubscribe);
+  const detachAuth = oidc && browserSessionId
+    ? oidc.registerConnection(browserSessionId, () => response.end())
+    : undefined;
+  response.on("close", () => {
+    unsubscribe();
+    detachAuth?.();
+  });
+}
+
+type RequestAuthentication =
+  | { kind: "bearer" }
+  | { kind: "browser"; sessionId: string };
+
+/** Bearer access is deliberately independent of OIDC so remote CLI/TUI clients keep working. */
+async function authenticateRequest(
+  request: IncomingMessage,
+  options: ServeOptions,
+): Promise<RequestAuthentication | undefined> {
+  if (tokenMatches(options.token, presentedBearer(request))) return { kind: "bearer" };
+  if (options.oidc) {
+    const sessionId = await options.oidc.authenticate(request.headers.cookie);
+    return sessionId ? { kind: "browser", sessionId } : undefined;
+  }
+  return tokenMatches(options.token, presentedToken(request)) ? { kind: "browser", sessionId: "local" } : undefined;
+}
+
+function documentNavigation(request: IncomingMessage, pathname: string): boolean {
+  if (request.method !== "GET" || pathname.startsWith("/api/") || pathname.startsWith("/assets/")) return false;
+  const destination = request.headers["sec-fetch-dest"];
+  const accept = request.headers.accept;
+  return destination === "document" || accept?.includes("text/html") === true || pathname === "/";
+}
+
+function sendLoginRedirectPage(response: ServerResponse): void {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Signing in · Flow</title></head>
+<body><script>location.replace("/oauth/login?return_to="+encodeURIComponent(location.pathname+location.search+location.hash))</script>
+<noscript><a href="/oauth/login">Sign in</a></noscript></body></html>`;
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  });
+  response.end(html);
+}
+
+function unauthorized(response: ServerResponse, login?: string): void {
+  const body = JSON.stringify({ error: "Unauthorized" });
+  response.writeHead(401, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store",
+    ...(login ? { "x-flow-login": login } : {}),
+  });
+  response.end(body);
+}
+
+/** A self-contained page: auth failures must not request protected CSS or leak callback parameters. */
+function sendAuthPage(
+  response: ServerResponse,
+  status: number,
+  title: string,
+  detail: string,
+  action: { href: string; label: string },
+): void {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title} · Flow</title><style>
+:root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#f6f6f4;color:#181817}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 0,#fff 0,#f6f6f4 52%)}
+main{width:min(100%,430px);border:1px solid #deded9;border-radius:18px;background:rgba(255,255,255,.9);padding:30px;box-shadow:0 18px 55px rgba(28,28,24,.08)}
+h1{font-size:24px;line-height:1.2;margin:0 0 12px;letter-spacing:-.025em}p{font-size:14px;line-height:1.6;color:#65655e;margin:0 0 26px}
+a{display:inline-flex;align-items:center;justify-content:center;width:100%;height:42px;border-radius:10px;background:#1d1d1b;color:#fff;text-decoration:none;font-size:14px;font-weight:600}a:focus-visible{outline:3px solid #8bb9f5;outline-offset:2px}
+@media(prefers-color-scheme:dark){:root{background:#171716;color:#f5f5f2}body{background:radial-gradient(circle at 50% 0,#292927 0,#171716 55%)}main{background:rgba(31,31,29,.95);border-color:#3b3b37;box-shadow:0 18px 55px rgba(0,0,0,.3)}a{background:#f0f0ec;color:#1b1b19}p{color:#aaa9a1}}
+</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${action.href}">${action.label}</a></main></body></html>`;
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  });
+  response.end(html);
 }
 
 /**
  * Same-origin only. A request with no Origin header is a non-browser client (the TUI, curl), which
  * a hostile page cannot forge on the user's behalf, so it is not what this check defends against.
  */
-function originAllowed(request: IncomingMessage): boolean {
+function originAllowed(request: IncomingMessage, publicAppUrl?: string): boolean {
   const origin = request.headers.origin;
   if (!origin) return true;
   try {
+    if (publicAppUrl) return new URL(origin).origin === new URL(publicAppUrl).origin;
     const { hostname, host } = new URL(origin);
     return host === request.headers.host || hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
   } catch {
@@ -736,18 +941,28 @@ function originAllowed(request: IncomingMessage): boolean {
   }
 }
 
-function presentedToken(request: IncomingMessage): string | undefined {
+function presentedBearer(request: IncomingMessage): string | undefined {
   const header = request.headers.authorization;
-  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
+  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length).trim() : undefined;
+}
+
+function presentedToken(request: IncomingMessage): string | undefined {
+  const bearer = presentedBearer(request);
+  if (bearer) return bearer;
 
   const cookie = request.headers.cookie;
   const match = cookie ? /(?:^|;\s*)flow=([^;]+)/.exec(cookie) : null;
   return match?.[1];
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
+async function readBody(request: IncomingMessage, limit?: number): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (limit !== undefined && size > limit) throw new Error("Request body too large");
+    chunks.push(chunk as Buffer);
+  }
   return Buffer.concat(chunks).toString("utf8") || "{}";
 }
 

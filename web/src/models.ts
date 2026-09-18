@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { BackendModels } from "../../src/protocol/events.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * What each Backend Adapter can reach, from `GET /api/models`.
@@ -26,9 +27,11 @@ export function useModelCatalogue(): {
   const load = async (refresh: boolean): Promise<void> => {
     setLoading(true);
     try {
-      const response = await fetch(`/api/models${refresh ? "?refresh=1" : ""}`, {
-        credentials: "same-origin",
-      });
+      const response = await authenticatedFetch(`/api/models${refresh ? "?refresh=1" : ""}`);
+      if (!response.ok) {
+        setCatalogue([]);
+        return;
+      }
       setCatalogue((await response.json()) as BackendModels[]);
     } catch {
       // Every field falls back to a text input, which is a usable page. A toast here would be one
