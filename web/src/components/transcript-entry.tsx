@@ -190,7 +190,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
       >
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <ToolStatusDot status={entry.status} />
-          <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+          <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.name}</span>
           {precis === undefined ? null : (
             <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
@@ -259,11 +259,11 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
     <div className="py-0.5">
-      <div className="w-full rounded-lg border px-3 py-2 text-foreground">
+      <div className="w-full rounded-lg border px-3 py-2 text-foreground [overflow-wrap:anywhere]">
         <div className="flex items-center gap-2">
           <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
           <span className="shrink-0 text-xs text-muted-foreground">?</span>
-          <span className="shrink-0 font-mono text-sm">
+          <span className="min-w-0 font-mono text-sm">
             {entry.questions.length === 1 ? "Asked a question" : `Asked ${entry.questions.length} questions`}
           </span>
           <span className="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -303,7 +303,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     <>
       <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
       <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-      <span className="shrink-0 font-mono text-sm text-foreground">{entry.name}</span>
+      <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.name}</span>
       {entry.description === undefined ? null : (
         <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
           <Highlighted text={entry.description} query={query} />
@@ -364,7 +364,7 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
       <div className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground">
         <ToolStatusDot status={backgroundDot(entry.status)} />
         <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
-        <span className="shrink-0 font-mono text-sm text-foreground">{entry.tool}</span>
+        <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {when.label} {when.at}
         </span>
