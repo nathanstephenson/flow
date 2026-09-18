@@ -22,6 +22,7 @@ import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { initialValue, ValueEditor } from "./workflow-editors.tsx";
 import { WorkflowGraph } from "./workflow-graph.tsx";
 import { Button } from "./ui/button.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import {
   Select,
   SelectContent,
@@ -333,93 +334,109 @@ export default function WorkflowsPane({
               </Button>
             </section>
           ) : null}
-          <div role="tablist" aria-label="Workflow execution view" className="flex gap-1 border-b pb-2">
-            {(["Overview", "Flow"] as const).map(name => <Button key={name} role="tab" aria-selected={tab === name} variant={tab === name ? "secondary" : "ghost"} size="sm" onClick={() => setTab(name)}>{name}</Button>)}
-          </div>
-          {tab === "Overview" && <section role="tabpanel" aria-label="Overview" className="grid min-w-0 gap-3">
-            <p className="text-xs text-muted-foreground">Original launch snapshot · read-only. Later workflow edits do not change this execution.</p>
-            <p>{execution.definition.steps.length} steps · {execution.definition.backend} · {new Date(execution.startedAt).toLocaleString()}</p>
-            <h3 className="font-semibold">Original inputs</h3>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.input, null, 2)}</pre>
-            <details><summary className="cursor-pointer font-medium">Original workflow</summary><pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.definition, null, 2)}</pre></details>
-            {Object.entries(execution.steps).filter(([, record]) => record.attempts.at(-1)?.error).map(([id, record]) => <p key={id} className="text-destructive">{execution.definition.steps.find(step => step.id === id)?.name}: {record.attempts.at(-1)?.error?.message}</p>)}
-          </section>}
-          {tab === "Flow" && !step && <WorkflowGraph
-            key={`${execution.id}/${placement}`}
-            definition={execution.definition}
-            execution={execution}
-            orientation={placement === "bottom" ? "horizontal" : "vertical"}
-            awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
-            selectedStepId={shownStepId}
-            onSelect={id => { showStep(id); setAttempt(undefined); }}
-          />}
-          {tab === "Flow" && step && (
-            <Button size="sm" variant="ghost" className="min-h-10 justify-self-start" onClick={showFlow}>
-              <ChevronLeft aria-hidden data-icon="inline-start" />
-              Back to flow
-            </Button>
-          )}
-          {tab === "Flow" && step && record && (
-            <div className="grid gap-2">
-              <h3 className="font-semibold">
-                {step.name} · {record.status}
-              </h3>
-              {step.kind === "agent" && (
-                <p>
-                  Model: {step.model} · Effort: {step.effort}
-                </p>
+          <Tabs
+            value={tab}
+            onValueChange={(value) => {
+              if (value === "Overview" || value === "Flow") setTab(value);
+            }}
+            className="contents"
+          >
+            <div className="min-w-0 border-b pb-2">
+              <TabsList aria-label="Workflow execution view" className="flex w-fit min-w-0 max-w-full">
+                {(["Overview", "Flow"] as const).map(name => (
+                  <TabsTrigger key={name} value={name} className="w-24 min-w-0 shrink px-2">
+                    {name}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
+            <TabsContent value="Overview" className="grid min-w-0 gap-3">
+              <p className="text-xs text-muted-foreground">Original launch snapshot · read-only. Later workflow edits do not change this execution.</p>
+              <p>{execution.definition.steps.length} steps · {execution.definition.backend} · {new Date(execution.startedAt).toLocaleString()}</p>
+              <h3 className="font-semibold">Original inputs</h3>
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.input, null, 2)}</pre>
+              <details><summary className="cursor-pointer font-medium">Original workflow</summary><pre className="whitespace-pre-wrap break-words font-mono text-xs">{JSON.stringify(execution.definition, null, 2)}</pre></details>
+              {Object.entries(execution.steps).filter(([, record]) => record.attempts.at(-1)?.error).map(([id, record]) => <p key={id} className="text-destructive">{execution.definition.steps.find(step => step.id === id)?.name}: {record.attempts.at(-1)?.error?.message}</p>)}
+              {execution.result !== undefined && (
+                <>
+                  <h3 className="font-semibold">Result</h3>
+                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                    {JSON.stringify(execution.result, null, 2)}
+                  </pre>
+                </>
               )}
-              <p>
-                Spend:{" "}
-                {view.stepSpend[step.id]
-                  ? `$${view.stepSpend[step.id]!.costUSD.toFixed(4)} · ${view.stepSpend[step.id]!.tokens.toLocaleString()} tokens`
-                  : "Unknown"}
-              </p>
-              <label className="grid gap-1"><span className="font-medium">Attempt</span><Select value={attempt ?? record.attempts.at(-1)?.number ?? 1} onValueChange={value => value !== null && setAttempt(value)}><SelectTrigger aria-label="Attempt"><SelectValue /></SelectTrigger><SelectContent>{record.attempts.map(a => <SelectItem key={a.number} value={a.number}>Attempt {a.number} · {a.action}{a.error ? " · failed" : ""}</SelectItem>)}</SelectContent></Select></label>
-              {record.attempts.filter(a => a.number === (attempt ?? record.attempts.at(-1)?.number)).map((a) => (
-                <details key={a.number} open>
-                  <summary className="cursor-pointer font-medium">
-                    Attempt {a.number} · {a.action} ·{" "}
-                    {attemptDuration(a.startedAt, a.finishedAt)}
-                  </summary>
-                  {a.loops?.map((loop) => (
-                    <p
-                      key={loop.headerId}
-                      className="text-xs text-muted-foreground"
-                    >
-                      Loop ·{" "}
-                      {execution.definition.steps.find(
-                        (step) => step.id === loop.headerId,
-                      )?.name ?? loop.headerId}{" "}
-                      · Try {loop.try} · Activation {loop.activation}
-                    </p>
-                  ))}
-                  <h4 className="mt-2 text-xs font-medium">Input</h4>
-                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                    {JSON.stringify(a.input, null, 2)}
-                  </pre>
-                  <h4 className="mt-2 text-xs font-medium">Output</h4>
-                  <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                    {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
-                  </pre>
-                  <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} completed={a.finishedAt !== undefined} />
-                  {a.error && (
-                    <p role="alert">
-                      {a.error.kind}: {a.error.message}
+            </TabsContent>
+            <TabsContent value="Flow" className="grid min-w-0 gap-3">
+              {!step && <WorkflowGraph
+                key={`${execution.id}/${placement}`}
+                definition={execution.definition}
+                execution={execution}
+                orientation={placement === "bottom" ? "horizontal" : "vertical"}
+                awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
+                selectedStepId={shownStepId}
+                onSelect={id => { showStep(id); setAttempt(undefined); }}
+              />}
+              {step && (
+                <Button size="sm" variant="ghost" className="min-h-10 justify-self-start" onClick={showFlow}>
+                  <ChevronLeft aria-hidden data-icon="inline-start" />
+                  Back to flow
+                </Button>
+              )}
+              {step && record && (
+                <div className="grid gap-2">
+                  <h3 className="font-semibold">
+                    {step.name} · {record.status}
+                  </h3>
+                  {step.kind === "agent" && (
+                    <p>
+                      Model: {step.model} · Effort: {step.effort}
                     </p>
                   )}
-                </details>
-              ))}
-            </div>
-          )}
-          {tab === "Overview" && execution.result !== undefined && (
-            <>
-              <h3 className="font-semibold">Result</h3>
-              <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-                {JSON.stringify(execution.result, null, 2)}
-              </pre>
-            </>
-          )}
+                  <p>
+                    Spend:{" "}
+                    {view.stepSpend[step.id]
+                      ? `$${view.stepSpend[step.id]!.costUSD.toFixed(4)} · ${view.stepSpend[step.id]!.tokens.toLocaleString()} tokens`
+                      : "Unknown"}
+                  </p>
+                  <label className="grid gap-1"><span className="font-medium">Attempt</span><Select value={attempt ?? record.attempts.at(-1)?.number ?? 1} onValueChange={value => value !== null && setAttempt(value)}><SelectTrigger aria-label="Attempt"><SelectValue /></SelectTrigger><SelectContent>{record.attempts.map(a => <SelectItem key={a.number} value={a.number}>Attempt {a.number} · {a.action}{a.error ? " · failed" : ""}</SelectItem>)}</SelectContent></Select></label>
+                  {record.attempts.filter(a => a.number === (attempt ?? record.attempts.at(-1)?.number)).map((a) => (
+                    <details key={a.number} open>
+                      <summary className="cursor-pointer font-medium">
+                        Attempt {a.number} · {a.action} ·{" "}
+                        {attemptDuration(a.startedAt, a.finishedAt)}
+                      </summary>
+                      {a.loops?.map((loop) => (
+                        <p
+                          key={loop.headerId}
+                          className="text-xs text-muted-foreground"
+                        >
+                          Loop ·{" "}
+                          {execution.definition.steps.find(
+                            (step) => step.id === loop.headerId,
+                          )?.name ?? loop.headerId}{" "}
+                          · Try {loop.try} · Activation {loop.activation}
+                        </p>
+                      ))}
+                      <h4 className="mt-2 text-xs font-medium">Input</h4>
+                      <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                        {JSON.stringify(a.input, null, 2)}
+                      </pre>
+                      <h4 className="mt-2 text-xs font-medium">Output</h4>
+                      <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                        {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
+                      </pre>
+                      <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} completed={a.finishedAt !== undefined} />
+                      {a.error && (
+                        <p role="alert">
+                          {a.error.kind}: {a.error.message}
+                        </p>
+                      )}
+                    </details>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         </>
       )}
     </section>
