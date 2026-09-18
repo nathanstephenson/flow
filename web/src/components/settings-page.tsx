@@ -23,7 +23,7 @@ import { KeyboardSettings } from "@/components/settings-keyboard.tsx";
 export function SettingsPage({ section }: { section: SettingsSection }) {
   return (
     <div className="transcript-scroller min-h-0 overflow-y-auto">
-      <div className={`mx-auto flex ${section === 'workflows' ? 'w-full' : 'max-w-2xl'} flex-col gap-6 px-6 py-8`}>
+      <div className={`mx-auto flex ${section === 'workflows' ? 'w-full' : 'max-w-2xl'} flex-col gap-6 px-4 py-8 max-lg:pt-14 sm:px-6`}>
         {/*
          * Said once, at the top, rather than on each field. Settings live in the Session Host's
          * state root, so one value governs every Agent Session on the machine — which is exactly

@@ -24,6 +24,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarSeparator,
+  useSidebar,
 } from "@/components/ui/sidebar.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -75,6 +76,25 @@ export type AgentSessionNavProps = {
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
   const now = useNow();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const closeMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  const navigationProps: AgentSessionNavProps = {
+    ...props,
+    onFocus: (sessionId) => {
+      props.onFocus(sessionId);
+      closeMobile();
+    },
+    onNew: () => {
+      props.onNew();
+      closeMobile();
+    },
+    onOpenSettings: () => {
+      props.onOpenSettings();
+      closeMobile();
+    },
+  };
   // Settled is the Session Host's bottom band, so this partition costs nothing and cannot reorder.
   const active = props.sessions.filter((session) => session.status !== "settled");
   const settled = props.sessions.filter((session) => session.status === "settled");
@@ -101,7 +121,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
 
   return (
     <>
-      <RailHeader onNew={props.onNew} />
+      <RailHeader onNew={navigationProps.onNew} />
 
       {/*
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
@@ -111,7 +131,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
       <SidebarContent ref={list} className="transcript-scroller gap-0" onKeyDown={moveWithinRow}>
         <SidebarGroup className="p-0">
           <SidebarGroupContent>
-            <AgentSessionMenu {...props} label="Active Agent Sessions" sessions={active} now={now} />
+            <AgentSessionMenu {...navigationProps} label="Active Agent Sessions" sessions={active} now={now} />
           </SidebarGroupContent>
         </SidebarGroup>
 
@@ -125,7 +145,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
               open={settledOpen || cursorInSettled}
               onOpenChange={setSettledOpen}
             >
-              <AgentSessionMenu {...props} label="Settled Agent Sessions" sessions={settled} now={now} />
+              <AgentSessionMenu {...navigationProps} label="Settled Agent Sessions" sessions={settled} now={now} />
             </SettledGroup>
           </>
         ) : null}
@@ -135,7 +155,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter link={props.link} onOpenSettings={props.onOpenSettings} />
+      <RailFooter link={props.link} onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }

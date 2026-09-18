@@ -296,7 +296,7 @@ export function NewAgentSessionPage({
 
   return (
     <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-6 py-12">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <div role="tablist" aria-label="New Agent Session mode" className="mx-auto flex rounded-2xl bg-muted p-1">
           {(["chat", "workflow"] as const).map((mode) => (

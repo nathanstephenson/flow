@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   addTab,
@@ -41,7 +41,7 @@ const KEY = "flow.docks";
 
 export type DockAction =
   | { type: "toggle"; side: DockSide }
-  | { type: "add-tab"; side: DockSide }
+  | { type: "add-tab"; side: DockSide; tabId?: string }
   /** Chosen from the picker. Fills the unchosen tab it was shown for, or adds one if there was none. */
   | { type: "open-shell"; side: DockSide; tabId?: string }
   | { type: "open-git"; side: DockSide; tabId?: string }
@@ -64,10 +64,26 @@ export type DockAction =
   | { type: "activate"; side: DockSide; tabId: string }
   | { type: "resize"; side: DockSide; px: number; available?: number };
 
-export type Docks = { layout: DockLayout; dispatch: (action: DockAction) => void };
+export type DockReveal = {
+  sessionId: string;
+  kind: "workflows" | "subagents";
+  nonce: number;
+};
+
+export type Docks = {
+  layout: DockLayout;
+  dispatch: (action: DockAction) => void;
+  /** An action outside a Dock asked for content that mobile must bring on screen. */
+  reveal: DockReveal | undefined;
+  acknowledgeReveal: (nonce: number) => void;
+};
 
 export function useDocks(sessionId: string | undefined, knownSessionIds: readonly string[] | undefined): Docks {
   const [layouts, setLayouts] = useState<Record<string, DockLayout>>(() => parseLayouts(read()));
+  const [reveal, setReveal] = useState<DockReveal>();
+  // Acknowledging removes the event, so deriving this from `reveal` would restart at one and make
+  // consumers mistake every second open for the event they just handled.
+  const revealNonce = useRef(0);
 
   const update = useCallback(
     (id: string, change: (layout: DockLayout) => DockLayout) => {
@@ -83,6 +99,13 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
   const dispatch = useCallback(
     (action: DockAction) => {
       if (sessionId === undefined) return;
+      if (action.type === "open-workflows" || action.type === "open-subagents") {
+        setReveal({
+          sessionId,
+          kind: action.type === "open-workflows" ? "workflows" : "subagents",
+          nonce: ++revealNonce.current,
+        });
+      }
       update(sessionId, (layout) => {
         // Resolved from the layout rather than named by the caller, so it runs before the shared
         // derivation below — which assumes every other action says which Dock it means.
@@ -115,7 +138,7 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
           case "toggle":
             return { ...layout, [action.side]: toggleMinimised(dock) };
           case "add-tab":
-            return { ...layout, [action.side]: addTab(dock, newTabId()) };
+            return { ...layout, [action.side]: addTab(dock, action.tabId ?? newTabId()) };
           case "open-git":
             return { ...layout, [action.side]: fillWithGit(dock, action.tabId ?? newTabId()) };
           case "open-shell":
@@ -179,8 +202,15 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
     });
   }, [knownSessionIds]);
 
+  const acknowledgeReveal = useCallback((nonce: number) => {
+    setReveal((current) => current?.nonce === nonce ? undefined : current);
+  }, []);
+
   const layout = layouts[sessionId ?? ""] ?? EMPTY;
-  return useMemo(() => ({ layout, dispatch }), [layout, dispatch]);
+  return useMemo(
+    () => ({ layout, dispatch, reveal, acknowledgeReveal }),
+    [layout, dispatch, reveal, acknowledgeReveal],
+  );
 }
 
 /** One layout, shared by every Agent Session that has never had a Dock open. */

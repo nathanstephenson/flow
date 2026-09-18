@@ -1,3 +1,4 @@
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   limitedLoops,
@@ -32,7 +33,21 @@ import { attemptDuration } from "../presentation/workflow-execution.ts";
 import { clearRetainedWorkflowLaunch, retainedWorkflowLaunch } from "../workflow-launch.ts";
 import { WorkflowTranscript } from "./workflow-transcript.tsx";
 import "./workflows.css";
-export default function WorkflowsPane({ sessionId, placement = "right" }: { sessionId: string; placement?: "right" | "bottom" }) {
+export type WorkflowMobileNavigation = {
+  stepId: string;
+  onSelect: (stepId: string) => void;
+  onBack: () => void;
+};
+
+export default function WorkflowsPane({
+  sessionId,
+  placement = "right",
+  mobileNavigation,
+}: {
+  sessionId: string;
+  placement?: "right" | "bottom";
+  mobileNavigation?: WorkflowMobileNavigation;
+}) {
   const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(
     "/api/workflows",
   );
@@ -45,6 +60,15 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   const [input, setInput] = useState<Json>(retainedLaunch?.input ?? {});
   const [executionId, setExecutionId] = useState("");
   const [stepId, selectStep] = useState("");
+  const shownStepId = mobileNavigation?.stepId ?? stepId;
+  const showStep = (id: string) => {
+    selectStep(id);
+    mobileNavigation?.onSelect(id);
+  };
+  const showFlow = () => {
+    selectStep("");
+    mobileNavigation?.onBack();
+  };
   const [message, setMessage] = useState(retainedLaunch?.error ?? "");
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"Overview" | "Flow">("Overview");
@@ -61,8 +85,8 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
   );
   const view = detail.data;
   const execution = view?.execution;
-  const step = execution?.definition.steps.find((s) => s.id === stepId);
-  const record = execution?.steps[stepId];
+  const step = execution?.definition.steps.find((s) => s.id === shownStepId);
+  const record = execution?.steps[shownStepId];
   const executions = [...(history.data?.executions ?? [])].sort(
     (a, b) => b.startedAt - a.startedAt,
   );
@@ -232,7 +256,8 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
           onValueChange={(value) => {
             if (value === null) return;
             setExecutionId(value);
-            selectStep("");
+            if (mobileNavigation?.stepId) showFlow();
+            else selectStep("");
             setAttempt(undefined);
           }}
         >
@@ -325,10 +350,15 @@ export default function WorkflowsPane({ sessionId, placement = "right" }: { sess
             execution={execution}
             orientation={placement === "bottom" ? "horizontal" : "vertical"}
             awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
-            selectedStepId={stepId}
-            onSelect={id => { selectStep(id); setAttempt(undefined); }}
+            selectedStepId={shownStepId}
+            onSelect={id => { showStep(id); setAttempt(undefined); }}
           />}
-          {tab === "Flow" && step && <Button size="sm" variant="ghost" className="justify-self-start" onClick={() => selectStep("")}>← Back to flow</Button>}
+          {tab === "Flow" && step && (
+            <Button size="sm" variant="ghost" className="min-h-10 justify-self-start" onClick={showFlow}>
+              <ChevronLeft aria-hidden data-icon="inline-start" />
+              Back to flow
+            </Button>
+          )}
           {tab === "Flow" && step && record && (
             <div className="grid gap-2">
               <h3 className="font-semibold">

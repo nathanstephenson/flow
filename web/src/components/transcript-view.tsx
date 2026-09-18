@@ -129,7 +129,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   }, []);
 
   return (
-    <div className="relative min-h-0">
+    <div className="relative min-h-0 min-w-0">
       {/*
        * The scroller stays full width so its scrollbar sits at the pane's edge; `pane-measure` is the
        * column inside it, shared with the Composer floating below so the two line up.

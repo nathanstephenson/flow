@@ -70,7 +70,7 @@ export type AgentSessionPaneHeaderProps = {
 export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: AgentSessionPaneHeaderProps) {
   return (
     <div className="bg-card text-card-foreground">
-      <div className="flex min-h-9 items-center gap-2 border-b px-3 py-2">
+      <div className="flex min-h-9 items-center gap-2 border-b px-3 py-2 max-lg:min-h-12 max-lg:pl-12">
         <span className="shrink-0 font-mono text-xs">{projectName(chrome.scope ?? "", chrome.worktree)}</span>
         <span className="-my-2 w-px shrink-0 self-stretch bg-border" aria-hidden />
         <span className="truncate text-sm font-medium">{title}</span>
@@ -153,7 +153,7 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
-            <Button variant="ghost" size="icon" aria-label="More actions">
+            <Button variant="ghost" size="icon" className="max-lg:size-10" aria-label="More actions">
               <MoreHorizontal aria-hidden />
             </Button>
           }
