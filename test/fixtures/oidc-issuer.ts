@@ -152,6 +152,7 @@ export async function startTestIssuer(options: {
       sid?: string;
       sub?: string;
       jti?: string | null;
+      exp?: number | null;
       issuer?: string;
       issuedAt?: number;
       event?: Record<string, unknown>;
@@ -161,7 +162,7 @@ export async function startTestIssuer(options: {
         iss: claims.issuer ?? issuer,
         aud: clientId,
         iat: claims.issuedAt ?? now,
-        exp: now + 300,
+        ...(claims.exp === null ? {} : { exp: claims.exp ?? now + 300 }),
         ...(claims.jti === null ? {} : { jti: claims.jti ?? randomBytes(12).toString("base64url") }),
         events: { "http://schemas.openid.net/event/backchannel-logout": claims.event ?? {} },
         ...(claims.sid === undefined ? {} : { sid: claims.sid }),
@@ -185,6 +186,7 @@ export type TestIssuer = {
     sid?: string;
     sub?: string;
     jti?: string | null;
+    exp?: number | null;
     issuer?: string;
     issuedAt?: number;
     event?: Record<string, unknown>;

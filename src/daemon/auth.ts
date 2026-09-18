@@ -1,5 +1,4 @@
 import {
-  createHash,
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
@@ -271,7 +270,7 @@ export class OidcGate {
   }
 
   /**
-   * Authenticate a browser cookie and refresh provider tokens before they expire.
+   * Authenticate a browser cookie and refresh provider tokens when they expire.
    *
    * Concurrent requests for one browser session share one refresh promise. Rotation is persisted
    * before the requests proceed, so a crash cannot resurrect the old refresh token.
@@ -318,7 +317,7 @@ export class OidcGate {
           : {}),
         clockTolerance: CLOCK_SKEW_SECONDS,
         maxTokenAge: LOGOUT_TOKEN_MAX_AGE_SECONDS,
-        requiredClaims: ["iat"],
+        requiredClaims: ["iat", "exp", "jti"],
       });
       claims = verified.payload as Claims;
     } catch {
@@ -331,15 +330,16 @@ export class OidcGate {
     const providerSid = typeof claims.sid === "string" ? claims.sid : undefined;
     const sub = typeof claims.sub === "string" ? claims.sub : undefined;
     if (!providerSid && !sub) throw new OidcAuthenticationError("Logout token has no session or subject.");
+    if (typeof claims.jti !== "string" || claims.jti.length === 0) {
+      throw new OidcAuthenticationError("Logout token has no valid identifier.");
+    }
 
-    const replayKey = typeof claims.jti === "string" && claims.jti.length > 0
-      ? `jti:${claims.jti}`
-      : `sha256:${createHash("sha256").update(logoutToken).digest("base64url")}`;
+    const replayKey = claims.jti;
     if (this.logoutTokens.has(replayKey)) {
       throw new OidcAuthenticationError("Logout token was already used.");
     }
     this.logoutTokens.set(replayKey, Math.min(
-      (typeof claims.exp === "number" ? claims.exp * 1_000 : Date.now() + SESSION_LIFETIME_MS),
+      claims.exp! * 1_000,
       Date.now() + SESSION_LIFETIME_MS,
     ));
 

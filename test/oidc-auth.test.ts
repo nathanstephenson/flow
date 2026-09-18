@@ -237,9 +237,18 @@ describe("external OIDC browser gate", () => {
     assert.equal((await backchannel(context, tampered)).status, 400);
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
 
-    const withoutJti = context.issuer.logoutToken({ sub: "someone-else", jti: null });
-    assert.equal((await backchannel(context, withoutJti)).status, 200);
-    assert.equal((await backchannel(context, withoutJti)).status, 400, "token digests prevent replay without jti");
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      jti: null,
+    }))).status, 400, "logout tokens require jti");
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      jti: "",
+    }))).status, 400, "logout token jti must be a non-empty string");
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      exp: null,
+    }))).status, 400, "logout tokens require exp");
 
     assert.equal((await backchannel(context, context.issuer.logoutToken({
       sub: "someone-else",
