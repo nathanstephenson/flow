@@ -160,9 +160,13 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
       <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch} className="flex flex-wrap items-center gap-2">{pr.branch} · #{pr.number} {pr.state}<Button size="icon-sm" variant="outline" aria-label={`Copy PR #${pr.number} link`} title={`Copy PR #${pr.number} link`} disabled={busy || !pr.title || !pr.url} onClick={() => void copyLinks([pr], `PR #${pr.number}`)}><Copy aria-hidden="true" /></Button></li>)}</ol>
     </> : null}
 
+    {status?.graph && status.candidate ? <div aria-label="Branches to create" className="space-y-1">
+      <p>Branches Create stack will register (bottom to top):</p>
+      <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch}>{pr.branch} · #{pr.number} {pr.state}</li>)}</ol>
+    </div> : null}
     {status?.graph && !status.view && !status.candidate ? <p className="text-muted-foreground">This is a read-only stack graph. Branching or remote-only graphs cannot be registered or changed from Flow.</p> : null}
     {!status?.rebasing && !status?.view && status?.candidate ? <>
-      <p>Create stack registers these existing local branches. It does not create or fetch branches.</p>
+      <p>Create stack registers only the branches listed above. It does not create or fetch branches.</p>
       {!status.available ? <p className="text-muted-foreground">Create stack is unavailable until gh-stack is installed on the Session Host.</p> : null}
       <Button size="sm" variant="outline" disabled={blocked || !!review || !status.available} onClick={() => void run("init", status.candidate!.branches)}>Create stack</Button>
     </> : null}

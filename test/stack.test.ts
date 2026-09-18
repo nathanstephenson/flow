@@ -420,6 +420,17 @@ it("discovers a native stack without gh-stack, local trunk, or every local membe
   assert.ok(fixture.calls.some(args => args.at(-1)?.includes("/stacks?")));
 });
 
+it("loads each remote discovery resource once for status", async () => {
+  chain();
+  const fixture = discoveryGithub([pr(1, "feature", "main"), pr(2, "second", "feature")]);
+  const status = await stackStatus(repo, fixture.github);
+  assert.ok(status.graph);
+  assert.ok(status.candidate);
+  assert.equal(fixture.calls.filter(args => args[0] === "repo").length, 1);
+  assert.equal(fixture.calls.filter(args => args.at(-1)?.includes("/pulls?")).length, 1);
+  assert.equal(fixture.calls.filter(args => args.at(-1)?.includes("/stacks?")).length, 1);
+});
+
 it("builds a PR branching graph, keeps merged ancestors, and ignores history and unrelated roots", async () => {
   chain();
   const pulls = [

@@ -54,7 +54,8 @@ type RefState = {
 };
 
 type Edge = { parent: string; relation: NonNullable<StackGraphBranch["relation"]> };
-type Discovery = { graph?: StackGraph; warnings: string[] };
+type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Awaited<ReturnType<typeof repositoryTarget>>; prs: PullRequest[] };
+type Discovery = { graph?: StackGraph; warnings: string[]; snapshot?: DiscoverySnapshot };
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -119,9 +120,29 @@ function addWarning(warnings: string[], value: string): void {
   if (value && !warnings.includes(value)) warnings.push(value);
 }
 
-async function isAncestor(scope: string, ancestor: string, descendant: string): Promise<boolean> {
-  const result = await run(scope, ["merge-base", "--is-ancestor", ancestor, descendant], GIT_READ_TIMEOUT_MS);
-  return result.ok;
+async function ancestry(scope: string): Promise<(ancestor: string, descendant: string) => boolean> {
+  const parents = new Map<string, string[]>();
+  const raw = await git(scope, ["rev-list", "--parents", "--all"]);
+  for (const line of raw.trim().split("\n").filter(Boolean)) {
+    const [commit, ...commitParents] = line.split(" ");
+    parents.set(commit!, commitParents);
+  }
+  const cache = new Map<string, Set<string>>();
+  const ancestors = (commit: string): Set<string> => {
+    const known = cache.get(commit);
+    if (known) return known;
+    const result = new Set<string>();
+    const pending = [...(parents.get(commit) ?? [])];
+    while (pending.length) {
+      const parent = pending.pop()!;
+      if (result.has(parent)) continue;
+      result.add(parent);
+      pending.push(...(parents.get(parent) ?? []));
+    }
+    cache.set(commit, result);
+    return result;
+  };
+  return (ancestor, descendant) => ancestor === descendant || ancestors(descendant).has(ancestor);
 }
 
 /**
@@ -151,28 +172,30 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     try { destination = await repositoryTarget(scope, github); }
     catch (error) { addWarning(warnings, `GitHub stack discovery failed: ${message(error)}`); }
     if (destination) {
-      try {
-        nativeStacks = pages<NativeStack>(await github(scope, ["api", "--paginate", "--slurp", `repos/${destination.repo}/stacks?per_page=100`]), "native stack");
+      const [nativeResult, pullsResult] = await Promise.allSettled([
+        github(scope, ["api", "--paginate", "--slurp", `repos/${destination.repo}/stacks?per_page=100`]),
+        github(scope, ["api", "--paginate", "--slurp", `repos/${destination.repo}/pulls?state=all&per_page=100`]),
+      ]);
+      if (nativeResult.status === "fulfilled") {
+        nativeStacks = pages<NativeStack>(nativeResult.value, "native stack");
         if (nativeStacks.some(stack => !Number.isInteger(stack?.id) || typeof stack?.base?.ref !== "string" || !Array.isArray(stack.pull_requests) || stack.pull_requests.some(pr =>
           !Number.isInteger(pr?.number) || typeof pr?.head?.ref !== "string" || !["open", "closed"].includes(pr.state) || !(pr.merged_at === null || typeof pr.merged_at === "string")))) {
           nativeStacks = [];
           addWarning(warnings, "GitHub returned invalid native stack data.");
         }
-      } catch (error) {
-        if (!expectedNativeUnavailable(error)) addWarning(warnings, `Native GitHub stacks could not be read: ${message(error)}`);
-      }
-      try {
-        const raw = await github(scope, ["api", "--paginate", "--slurp", `repos/${destination.repo}/pulls?state=all&per_page=100`]);
-        const loaded = pages<PullRequest>(raw, "pull request");
+      } else if (!expectedNativeUnavailable(nativeResult.reason)) addWarning(warnings, `Native GitHub stacks could not be read: ${message(nativeResult.reason)}`);
+      if (pullsResult.status === "fulfilled") {
+        const loaded = pages<PullRequest>(pullsResult.value, "pull request");
         if (loaded.some(pr => !validPull(pr))) addWarning(warnings, "Some invalid pull request relationships were ignored.");
         prs = loaded.filter(validPull);
-      } catch (error) { addWarning(warnings, `Pull request relationships could not be read: ${message(error)}`); }
+      } else addWarning(warnings, `Pull request relationships could not be read: ${message(pullsResult.reason)}`);
     }
   }
 
   const repositoryId = destination?.id ? String(destination.id) : undefined;
   if (repositoryId) prs = prs.filter(pr => sameRepository(pr, repositoryId));
   else prs = [];
+  const snapshot: DiscoverySnapshot = { current, reference, stacks, ...(destination ? { destination } : {}), prs };
 
   const nodes = new Set<string>();
   const prsByBranch = new Map<string, StackPullRequest>();
@@ -288,13 +311,13 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     if (!edges.has(child) && !blocked.has(child)) edges.set(child, { parent: pr.base.ref, relation: "pull-request" });
   }
 
-  // Fill only genuinely unknown local relationships, and only above a known trunk.
-  const trunkRef = trunk ? reference.local.get(trunk)?.ref ?? reference.remote.get(trunk)?.ref : undefined;
-  if (trunk && trunkRef) {
+  const trunkValue = trunk ? reference.local.get(trunk) ?? reference.remote.get(trunk) : undefined;
+  if (trunk && trunkValue) {
+    const isAncestor = await ancestry(scope);
     const usable: string[] = [];
     for (const [branch, value] of reference.local) {
-      if (branch === trunk || await isAncestor(scope, value.ref, trunkRef)) continue;
-      if (await isAncestor(scope, trunkRef, value.ref)) usable.push(branch);
+      if (branch === trunk || isAncestor(value.oid, trunkValue.oid)) continue;
+      if (isAncestor(trunkValue.oid, value.oid)) usable.push(branch);
     }
     for (const child of usable) {
       if (claimed.has(child) || blocked.has(child) || edges.has(child)) continue;
@@ -304,7 +327,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
         if (parent === child) continue;
         const parentRef = reference.local.get(parent)!;
         if (parentRef.oid === childRef.oid) continue;
-        if (await isAncestor(scope, parentRef.ref, childRef.ref)) ancestors.push(parent);
+        if (isAncestor(parentRef.oid, childRef.oid)) ancestors.push(parent);
       }
       const nearest: string[] = [];
       for (const candidate of ancestors) {
@@ -313,7 +336,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
           if (other === candidate) continue;
           const candidateRef = reference.local.get(candidate)!;
           const otherRef = reference.local.get(other)!;
-          if (candidateRef.oid !== otherRef.oid && await isAncestor(scope, candidateRef.ref, otherRef.ref)) { shadowed = true; break; }
+          if (candidateRef.oid !== otherRef.oid && isAncestor(candidateRef.oid, otherRef.oid)) { shadowed = true; break; }
         }
         if (!shadowed) nearest.push(candidate);
       }
@@ -332,7 +355,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     }
   } else if (!trunk && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
     addWarning(warnings, "The trunk branch is unknown, so local branch relationships could not be inferred.");
-  } else if (trunk && !trunkRef && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
+  } else if (trunk && !trunkValue && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
     addWarning(warnings, `The trunk ${trunk} is not available in local refs, so local branch relationships could not be inferred.`);
   }
 
@@ -359,7 +382,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     for (const member of path) checked.add(member);
   }
 
-  if (current === trunk || !nodes.has(current)) return { warnings };
+  if (current === trunk || !nodes.has(current)) return { warnings, snapshot };
 
   // Scope through non-trunk edges only. Trunk is a boundary, not a hub joining unrelated stacks.
   const adjacent = new Map<string, Set<string>>();
@@ -377,7 +400,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     const parent = edges.get(branch)?.parent;
     return parent !== undefined && parent !== trunk && component.has(parent);
   });
-  if (!explicit && (component.size < 2 || !related)) return { warnings };
+  if (!explicit && (component.size < 2 || !related)) return { warnings, snapshot };
 
   const children = new Map<string, string[]>();
   for (const branch of component) {
@@ -403,13 +426,57 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
       ...(prsByBranch.has(name) ? { pr: prsByBranch.get(name)! } : {}),
     };
   });
-  return { graph: { ...(trunk ? { trunk } : {}), currentBranch: current, branches, explicit }, warnings };
+  return { graph: { ...(trunk ? { trunk } : {}), currentBranch: current, branches, explicit }, warnings, snapshot };
 }
 
-/**
- * Finds the deliberately narrow, local, linear PR chain that gh stack init may register.
- * This is separate from discoverStackGraph so a broad display graph never authorizes mutation.
- */
+function candidateFromSnapshot(snapshot: DiscoverySnapshot): StackCandidate | undefined {
+  const { current, reference, stacks, destination, prs: pullRequests } = snapshot;
+  if (!destination?.id || current === destination.defaultBranch) return;
+  const tracked = new Set(stacks.flatMap(stack => [stack.trunk.branch, ...stack.branches.map(branch => branch.branch)]));
+  if (stacks.some(stack => stack.branches.some(branch => branch.branch === current))) return;
+  const localRefs = [...reference.local].map(([name, value]) => [name, value.oid] as [string, string]);
+  const trunk = destination.defaultBranch;
+  const base = localRefs.find(([name]) => name === trunk);
+  if (!base) return;
+  const choose = (branch: string, merged: boolean): PullRequest | undefined => {
+    const matching = pullRequests.filter(pr => pr.head.ref === branch);
+    const open = matching.filter(pr => pr.state === "open");
+    if (open.length === 1) return open[0];
+    if (open.length > 1 || !merged) return;
+    const history = matching.filter(pr => Boolean(pr.merged_at));
+    return new Set(history.map(pr => pr.base.ref)).size === 1 ? history[0] : undefined;
+  };
+  const chain: PullRequest[] = [];
+  const seen = new Set<string>();
+  let branch = current;
+  while (branch !== trunk) {
+    if (seen.has(branch)) return;
+    seen.add(branch);
+    const parent = choose(branch, true);
+    if (!parent) return;
+    chain.unshift(parent);
+    branch = parent.base.ref;
+  }
+  branch = current;
+  while (true) {
+    const children = pullRequests.filter(pr => pr.state === "open" && pr.base.ref === branch);
+    if (!children.length) break;
+    if (children.length !== 1 || seen.has(children[0]!.head.ref)) return;
+    chain.push(children[0]!);
+    branch = children[0]!.head.ref;
+    seen.add(branch);
+  }
+  if (chain.length < 2 || !chain.some(pr => pr.state === "open")) return;
+  for (const pr of chain) if (pr.head.ref === trunk || tracked.has(pr.head.ref) || !reference.local.has(pr.head.ref)) return;
+  for (const pr of chain) if (pullRequests.filter(other => other.state === "open" && other.base.ref === pr.head.ref).length > (pr === chain.at(-1) ? 0 : 1)) return;
+  return {
+    trunk,
+    branches: chain.map(pr => pr.head.ref),
+    pullRequests: chain.map(pr => ({ branch: pr.head.ref, ...pullRequest(pr) })),
+    fingerprint: createHash("sha256").update(JSON.stringify({ destination, base, chain, localRefs, current })).digest("hex"),
+  };
+}
+
 export async function discoverStack(scope: string, github: Gh = gh): Promise<StackCandidate | undefined> {
   const current = await head(scope);
   if (!current.ok || current.value.detached) return;
@@ -522,8 +589,9 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
     }
   }
 
+  let discovery: Discovery | undefined;
   try {
-    const discovery = await discoverStackGraph(scope, github);
+    discovery = await discoverStackGraph(scope, github);
     if (discovery.graph) status.graph = discovery.graph;
     for (const warning of discovery.warnings) addWarning(warnings, warning);
   } catch (error) { addWarning(warnings, `Stack discovery failed: ${message(error)}`); }
@@ -541,7 +609,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
 
   if (!status.view && !status.rebasing) {
     try {
-      const candidate = await discoverStack(scope, github);
+      const candidate = discovery?.snapshot ? candidateFromSnapshot(discovery.snapshot) : undefined;
       if (candidate) status.candidate = candidate;
     }
     catch (error) {

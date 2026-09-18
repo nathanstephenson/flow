@@ -322,6 +322,25 @@ for (const eligible of [false, true]) it(`shows Create stack only for an eligibl
   }
 });
 
+it("shows the exact Create stack subset separately from a broader graph", async () => {
+  const candidate = { trunk: "main", branches: ["first", "second"], pullRequests: [{ branch: "first", number: 1, state: "OPEN" }, { branch: "second", number: 2, state: "OPEN" }], fingerprint: "reviewed" };
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, candidate, graph: {
+    trunk: "main", currentBranch: "second", explicit: false, branches: [
+      { name: "first", parent: "main", relation: "ancestry", availability: "local" },
+      { name: "second", parent: "first", relation: "ancestry", availability: "local", isCurrent: true },
+      { name: "sibling", parent: "first", relation: "ancestry", availability: "local" },
+    ],
+  } }));
+  const props = { sessionId: "session", onChange() {} };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tree = pane.render("StackPane", props);
+  assert.match(JSON.stringify(find(tree, "div", node => node.props["aria-label"] === "Branches to create")), /first.*second/);
+  assert.doesNotMatch(JSON.stringify(find(tree, "div", node => node.props["aria-label"] === "Branches to create")), /sibling/);
+  assert.equal(find(tree, "Button", node => node.props.children === "Create stack").props.disabled, false);
+});
+
 for (const candidate of [false, true]) it(`copies linked titles top to bottom from ${candidate ? "a candidate" : "a tracked stack"}`, async () => {
   const prs = [
     { number: 1, title: 'Base <fix> & "test"', url: "https://github.com/test/repo/pull/1", state: "MERGED" },
