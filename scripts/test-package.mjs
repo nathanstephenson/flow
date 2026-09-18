@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const root = resolve(import.meta.dirname, '..');
 const metadata = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-const temp = mkdtempSync(join(tmpdir(), 'flow-package-'));
+const temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-package-')));
 const cwd = join(temp, 'unrelated');
 const state = join(temp, 'state');
 const prefix = join(temp, 'prefix');
