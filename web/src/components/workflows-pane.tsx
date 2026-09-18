@@ -342,7 +342,7 @@ export default function WorkflowsPane({
             className="contents"
           >
             <div className="min-w-0 border-b pb-2">
-              <TabsList aria-label="Workflow execution view" className="flex w-fit min-w-0 max-w-full">
+              <TabsList aria-label="Workflow execution view" className="mx-auto flex w-fit min-w-0 max-w-full">
                 {(["Overview", "Flow"] as const).map(name => (
                   <TabsTrigger key={name} value={name} className="w-24 min-w-0 shrink px-2">
                     {name}

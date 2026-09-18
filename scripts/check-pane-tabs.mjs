@@ -149,6 +149,13 @@ async function checkWorkflow(viewport, screenshotSuffix) {
   await page.keyboard.press("ArrowLeft");
   await assertSelected(page, list, "Overview");
   await assertFits(page, list);
+  const centerOffset = await list.evaluate((node) => {
+    const tabs = node.getBoundingClientRect();
+    const container = node.parentElement.getBoundingClientRect();
+    if (container.x < 0 || container.right > window.innerWidth) return Infinity;
+    return Math.abs(tabs.x + tabs.width / 2 - container.x - container.width / 2);
+  });
+  assert.ok(centerOffset <= 1, "Workflow tabs should be centered in their container");
 
   if (process.env.SCREENSHOT_DIR) {
     for (const theme of ["light", "dark"]) {
