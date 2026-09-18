@@ -31,7 +31,7 @@ function readHandoff(): Handoff | undefined {
 }
 
 /**
- * Where /api and /auth go. Resolved once, at config load — a known limitation rather than an
+ * Where /api, /auth and /oauth go. Resolved once, at config load — a known limitation rather than an
  * oversight: a Session Host restarted on a fresh ephemeral port leaves this proxying into the void.
  * The fix is to give the host a fixed port, `npm start -- serve --port 4318`, not to re-read
  * daemon.json on every request.
@@ -79,7 +79,14 @@ function devHandoff(): Plugin {
         // token on every start, and the one in daemon.json now is the one the gate will accept.
         const handoff = readHandoff();
         const origin = server.resolvedUrls?.local[0]?.replace(/\/$/, "");
-        if (!handoff || !origin) {
+        if (!origin) return;
+        if (process.env["FLOW_OIDC_ISSUER"]) {
+          // OIDC mode deliberately never prints or proxies the legacy token handoff. The public app
+          // URL should name this dev origin, so the same callback URI can be registered verbatim.
+          server.config.logger.info(`  browser sign-in: ${origin}/oauth/login`);
+          return;
+        }
+        if (!handoff) {
           server.config.logger.warn(`  dev handoff: no daemon.json under ${stateRoot()} — start a Session Host`);
           return;
         }
@@ -105,12 +112,14 @@ export default defineConfig(({ command }) => ({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
-    // /api carries commands and the event stream; /auth is the one-time cookie handoff. Both go to
-    // the running host so the browser stays on one origin and SameSite=Strict holds.
+    // /api carries commands and the event stream; /auth is the local cookie handoff; /oauth carries
+    // the external browser flow. They all go to the running host so the browser stays on one origin.
     //
     // Only for `vite`: scripts/build-web.mjs loads this same config, and a build must not need a
     // running Session Host — that would put `npm run build:binary` and CI behind a daemon.
-    ...(command === "serve" ? { proxy: { "/api": daemonProxy(), "/auth": daemonProxy() } } : {}),
+    ...(command === "serve"
+      ? { proxy: { "/api": daemonProxy(), "/auth": daemonProxy(), "/oauth": daemonProxy() } }
+      : {}),
   },
   build: { outDir: "dist", emptyOutDir: true, sourcemap: false, assetsDir: "assets" },
 }));

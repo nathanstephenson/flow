@@ -8,6 +8,7 @@ import { groupProjects, includeEntryFor } from "@/presentation/projects.ts";
 import { SaveRow, SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * Projects: where to look for them, which ones you have opted into, and how to add another.
@@ -204,11 +205,12 @@ function DirectorySearch({ onAdd }: { onAdd: (path: string) => void }) {
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const response = await fetch(`/api/directories?q=${encodeURIComponent(query)}`, {
-            credentials: "same-origin",
+          const response = await authenticatedFetch(`/api/directories?q=${encodeURIComponent(query)}`, {
             signal: abort.signal,
           });
-          if (!response.ok) return;
+          if (!response.ok) {
+            return;
+          }
           const answer = (await response.json()) as DirectoryMatches;
           // The host echoes the query back precisely so this check can be exact rather than
           // a guess about ordering.

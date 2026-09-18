@@ -29,9 +29,10 @@ describe("Session Host transport", () => {
     root = mkdtempSync(join(tmpdir(), "flow-http-"));
     token = readOrCreateToken(root);
     backend = new FakeBackend();
-    host = new SessionHost();
+    const store = new TranscriptStore(root);
+    host = new SessionHost({ store });
     host.registerBackend(backend);
-    running = await serve({ host, token, assets: {} });
+    running = await serve({ host, token, store, assets: {} });
     client = connect({ url: running.url, token });
   });
 
@@ -55,6 +56,21 @@ describe("Session Host transport", () => {
       { name: "tdd", description: "Red, green, refactor" },
       { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
     ]);
+  });
+
+  it("accepts attachment commands larger than one MiB over the wire", async () => {
+    const id = await client.command<string>({ type: "create", scope: root, backend: "fake" });
+    const data = "A".repeat(1_100_000);
+
+    await client.command({
+      type: "send",
+      sessionId: id,
+      text: "large image",
+      when: "now",
+      attachments: [{ mediaType: "image/png", data }],
+    });
+
+    assert.equal(backend.latest.promptedAttachments[0]?.[0]?.data.length, data.length);
   });
 
   describe("git over the wire", () => {

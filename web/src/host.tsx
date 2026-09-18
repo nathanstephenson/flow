@@ -5,6 +5,7 @@ import type { Project } from "../../src/protocol/projects.ts";
 import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * The Session Host, as this app sees it: the shared transport, and the two facts `/api/config`
@@ -19,6 +20,8 @@ const connection: Connection = host;
 /** What the host offers a new Agent Session: a default Scope, and every backend it has registered. */
 export type HostConfig = {
   mcp?: Settings["mcp"];
+  /** Browser gate in use. Provider details and tokens are intentionally never exposed. */
+  authentication?: "token" | "oidc";
   scope: string;
   backends: string[];
   /**
@@ -114,7 +117,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
     const abort = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/api/config", { credentials: "same-origin", signal: abort.signal });
+        const response = await authenticatedFetch("/api/config", { signal: abort.signal });
         // 401 is the one failure with a specific answer, and the answer is never a form (ADR 0004
         // and 0005): this app has no token field and never will.
         if (response.status === 401 || response.status === 403) {
@@ -133,8 +136,10 @@ export function HostProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh = useCallback(async (): Promise<void> => {
-    const response = await fetch("/api/config", { credentials: "same-origin" });
-    if (!response.ok) return;
+    const response = await authenticatedFetch("/api/config");
+    if (!response.ok) {
+      return;
+    }
     const config = (await response.json()) as HostConfig;
     applyFonts(config.fonts);
     // Replaced wholesale rather than merged: this *is* the host's answer, and keeping any part of
@@ -143,9 +148,8 @@ export function HostProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveSettings = useCallback(async (patch: SettingsPatch): Promise<Settings> => {
-    const response = await fetch("/api/config", {
+    const response = await authenticatedFetch("/api/config", {
       method: "PUT",
-      credentials: "same-origin",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     });
@@ -194,8 +198,9 @@ export function HostProvider({ children }: { children: ReactNode }) {
 /**
  * The only correct UI for a 401.
  *
- * There is no login here and there are no credentials to collect: the Session Host prints a one-time
- * handoff URL when it starts, and opening it is the whole ceremony. A token field on this page would
+ * OIDC 401s navigate away before reaching this component. In local mode there is no login here and
+ * there are no credentials to collect: the Session Host prints a one-time handoff URL when it
+ * starts, and opening it is the whole ceremony. A token field on this page would
  * be a credential input in an app whose security model is that there is nowhere to type one.
  */
 function Unauthorized() {

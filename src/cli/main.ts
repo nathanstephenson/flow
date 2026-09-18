@@ -3,7 +3,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { registerBackends } from "../backend/registry.ts";
-import { readOrCreateToken } from "../daemon/auth.ts";
+import { createOidcGateFromEnv, readOrCreateToken } from "../daemon/auth.ts";
 import { ConfigStore } from "../daemon/config-store.ts";
 import { SecretStore } from '../daemon/secret-store.ts';
 import { WorkflowStore } from '../workflows/store.ts';
@@ -91,7 +91,13 @@ async function main(): Promise<number> {
       console.log(`  WARNING: bound to ${values.address}, not loopback. Anything that can route`);
       console.log("           here can run commands as you if it has the token.");
     }
-    console.log(`  web handoff: ${daemon.url}/auth?token=${daemon.token}`);
+    if (running.oidc) {
+      console.log(`  browser sign-in: ${running.oidc.config.publicAppUrl}/oauth/login`);
+      console.log(`  OIDC callback:   ${running.oidc.callbackUrl()}`);
+      console.log(`  back-channel:    ${running.oidc.backchannelLogoutUrl()}`);
+    } else {
+      console.log(`  web handoff: ${daemon.url}/auth?token=${daemon.token}`);
+    }
     await new Promise<void>((resolve) => running.server.on("close", resolve));
     return 0;
   }
@@ -200,6 +206,9 @@ async function startHost(
   host.onSessionClosed((sessionId) => shells.killFor(sessionId));
 
   const token = readOrCreateToken(root);
+  // Discovery happens before listen(): partial configuration, an issuer mismatch, or an unreachable
+  // provider fails closed without briefly exposing a host under local-mode browser semantics.
+  const oidc = await createOidcGateFromEnv(root);
   const running = await serve({
     host,
     token,
@@ -212,6 +221,7 @@ async function startHost(
     workflowExecutions,
     assets: webClient(),
     scope: process.cwd(),
+    ...(oidc === undefined ? {} : { oidc }),
     ...(port === undefined ? {} : { port }),
     ...(address === undefined ? {} : { address }),
   });
