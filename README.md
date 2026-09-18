@@ -11,6 +11,7 @@ See [CONTEXT.md](./CONTEXT.md) for the domain language and [docs/adr](./docs/adr
 ## Install
 
 Requires Node.js 22 or later and npm. Linux and macOS installs are checked in CI.
+Use a user-owned npm prefix (for example, from a Node version manager), not sudo or a shared system prefix.
 
 ```bash
 npm install --global @nathanstephenson/flow
@@ -32,7 +33,7 @@ that host stops when the TUI exits. One-shot prompts refuse an occupied state ro
 Each `FLOW_STATE_DIR` permits one host. Background output is saved in its private `host.log`.
 If shutdown cannot finish within its deadline, Flow reports failure and retains ownership;
 do not start another host against that state directory. Inspect the log and resolve the stalled
-operation before attempting recovery. No update command is included.
+operation before attempting recovery.
 Configure credentials for the Backend Adapter you use.
 
 To check a release from source, run `npm ci` and `npm run test:package`.
@@ -55,6 +56,40 @@ rejects tags outside `main`, prerelease tags, and mismatched versions. It builds
 archive without publishing credentials, then publishes that exact archive with OIDC and provenance.
 Protect `main` and release-tag creation in GitHub. Tag creation is the release approval;
 do not tag a version until its license and release contents are approved.
+
+## Updating Flow
+
+Run `flow update` to install `@nathanstephenson/flow@latest` with the npm selected by PATH.
+Its global prefix must match this exact installation. Only user-owned prefixes without group or
+other write access are supported. Source, npm-link, root/sudo, shared prefixes, and SEA self-update
+are not supported. Ordinary commands still work for these installations. Update shared or system
+installations manually with npm after stopping all Flow processes.
+
+Close all CLI/TUI clients and stop other Session Hosts that use this installation, including those
+under other `FLOW_STATE_DIR` roots. The selected root's background Session Host can stay running:
+Flow stops it, updates, and restores its saved address, port, working directory and OIDC settings
+with a new process. Use `--force` to interrupt active work. Foreground and embedded hosts are refused.
+The same OIDC configuration must be present when you update. No version argument is accepted.
+
+Before first adopting this release, stop **all** older Flow processes. Old processes have no
+installation lease and cannot be reliably detected. External `npm install` commands do not honor
+Flow's guard: never run them while Flow is active or an update is in progress.
+
+For eligible private installations, the guard registers every CLI process before loading application
+code. Registry errors prevent startup; they do not disable the guard. It blocks new
+starts across state roots until update and restoration finish. Use `flow`, not `dist/cli/main.js`.
+On failure, Flow attempts to reinstall the previous exact version and restore the host. This is
+best-effort recovery, not preservation of the old package files. A failed update exits nonzero,
+even if recovery succeeds. An unchanged version is reported as unchanged. Restored Session Host
+output is kept in the selected state root's private `host.log`.
+
+If the updater dies or recovery fails, startup stays blocked. The error names
+`<prefix>/.flow-installations/<slot>/update.json`. Do not remove it while an updater, npm child,
+or Flow process might still run. Stop them all; use the matching npm to run
+`npm install --global --prefix <prefix> @nathanstephenson/flow@<previous>` (the record stores
+`previous`). Check the package name/version, `dist/build-id`, and bundled `dist/cli/bootstrap.js`
+against a trusted package archive. Only after repair is complete, remove that `update.json`,
+run `flow --version`, and start the Session Host again. Do not delete a live registry mutex.
 
 ## Publish branch names
 

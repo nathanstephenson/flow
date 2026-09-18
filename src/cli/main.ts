@@ -24,6 +24,7 @@ import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
   flow --version                                        print the installed version
+  flow update [--force]                                 update a private global npm installation
   flow tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow serve start|status|stop|restart [--force]          control a background Session Host
@@ -59,6 +60,7 @@ function webClient(): AssetManifest {
 }
 
 async function main(): Promise<number> {
+  if (!isSea() && import.meta.url.endsWith('.js') && !Reflect.get(globalThis, Symbol.for('flow.installation.entry'))) throw new Error('Use the flow executable, not the internal CLI entry');
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -84,6 +86,7 @@ async function main(): Promise<number> {
   }
 
   const command = positionals[0];
+  if (command === 'update') throw new Error('Use flow update [--force]; self-update requires the npm flow executable, not source or SEA');
   if (values.help) {
     console.log(USAGE);
     return 0;
