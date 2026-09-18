@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea.tsx";
 import { StackPane } from "@/components/stack-pane.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
 export function GitPane({ sessionId }: { sessionId: string }) {
   const { connection } = useHost();
@@ -106,20 +107,29 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   }
 
   return (
-    <div className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm">
+    <Tabs
+      value={selected}
+      onValueChange={(value) => {
+        if (!busy && review === undefined && (value === "Diff" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
+      }}
+      className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm"
+    >
       <div className="border-b pb-4">
-      <div role="tablist" aria-label="Git views" className="mx-auto flex w-fit gap-1 rounded-lg border border-border/60 bg-muted p-1" onKeyDown={event => {
-        if (busy || review !== undefined || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-        event.preventDefault();
-        const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (tabs.indexOf(selected) + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-        setTab(tabs[index]);
-        event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[index]?.focus();
-      }}>
-        {tabs.map(value => <Button key={value} role="tab" aria-selected={selected === value} aria-controls={`git-${sessionId}-${value}`} id={`git-${sessionId}-${value}-tab`} tabIndex={selected === value ? 0 : -1} size="sm" variant="ghost" className="h-7 min-w-14 rounded-md px-3 text-xs font-medium text-muted-foreground hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm" disabled={busy || review !== undefined} onClick={() => setTab(value)}>{value}</Button>)}
-      </div>
+        <TabsList aria-label="Git views" className="mx-auto flex w-fit min-w-0 max-w-full">
+          {tabs.map(value => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="w-24 min-w-0 shrink px-2"
+              disabled={busy || review !== undefined}
+            >
+              {value}
+            </TabsTrigger>
+          ))}
+        </TabsList>
       </div>
       {error ? <p role="alert">{error}</p> : null}
-      <div role="tabpanel" id={`git-${sessionId}-Diff`} aria-labelledby={`git-${sessionId}-Diff-tab`} hidden={selected !== "Diff"} className="space-y-4">
+      <TabsContent value="Diff" keepMounted className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <strong>{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
         <Button size="sm" variant="outline" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
@@ -161,14 +171,14 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           </form> : null}
         </section>
       ) : null}
-      </div>
-      <div role="tabpanel" id={`git-${sessionId}-Stack`} aria-labelledby={`git-${sessionId}-Stack-tab`} hidden={selected !== "Stack"}>
+      </TabsContent>
+      <TabsContent value="Stack" keepMounted>
         {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} revision={stackRevision} disabled={busy || review !== undefined} onAvailable={setHasStack} onChange={changed} /> : null}
-      </div>
-      <div role="tabpanel" id={`git-${sessionId}-PR`} aria-labelledby={`git-${sessionId}-PR-tab`} hidden={selected !== "PR"}>
+      </TabsContent>
+      <TabsContent value="PR" keepMounted>
         <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} revision={prRefreshRevision} disabled={busy || review !== undefined} onAvailable={setHasPr} onChange={() => { setStackRevision(value => value + 1); void refresh(); }} />
-      </div>
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }
 

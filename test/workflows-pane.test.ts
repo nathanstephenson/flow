@@ -13,8 +13,9 @@ const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample
 
 function pane(status: string) {
   const session = { id: 'session', backend: 'fake', status };
-  const history = { data: { occupied: false, executions: [] } };
+  const history: { data: { occupied: boolean; executions: any[] } } = { data: { occupied: false, executions: [] } };
   const workflow = structuredClone(definition);
+  const detail: { data?: any } = {};
   const calls: unknown[] = [];
   const states: any[] = [];
   let index = 0;
@@ -29,12 +30,13 @@ function pane(status: string) {
     if (name === 'react/jsx-runtime') return require(name);
     if (name === '../agent-sessions.tsx') return { useAgentSessions: () => ({ sessions: [session] }) };
     if (name === './workflow-api.ts') return {
-      useWorkflowResource: (path: string) => path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : {},
+      useWorkflowResource: (path: string) => path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : path?.endsWith('/execution') ? detail : {},
       workflowApi: async (...args: unknown[]) => { calls.push(args); return {}; },
     };
     if (name === '../../../src/workflows/graph.ts') return { validateDefinition };
     if (name === '../../../src/workflows/schema.ts') return { parseValue };
     if (name === '../presentation/workflows.ts') return { workflowIssue: (error: Error) => error.message };
+    if (name === '../presentation/workflow-execution.ts') return { attemptDuration: () => '1s' };
     if (name === '../workflow-launch.ts') return {
       retainedWorkflowLaunch: () => undefined,
       clearRetainedWorkflowLaunch: () => {},
@@ -45,7 +47,7 @@ function pane(status: string) {
   const render = () => { index = 0; return module.exports.default({ sessionId: 'session' }); };
   const button = (label: string) => find(render(), 'Button', node => node.props.children === label);
   const select = () => find(render(), 'Select', node => !!node.props.onValueChange).props.onValueChange('sample');
-  return { session, history, workflow, calls, render, button, select };
+  return { session, history, workflow, detail, calls, render, button, select };
 }
 
 function find(element: any, type: string, matches: (element: Element) => boolean = () => true): Element {
@@ -91,4 +93,46 @@ it('keeps occupied-slot, Ended, input and Backend Adapter guards', () => {
   assert.equal(p.button('Close').props.disabled, true);
   assert.throws(() => p.button('Start workflow'), /Missing Button/);
   assert.equal(p.calls.length, 0);
+});
+
+it('uses shared lifecycle-preserving tabs for execution overview, graph and step navigation', () => {
+  const p = pane('idle');
+  const execution = {
+    id: 'execution',
+    definition: structuredClone(definition),
+    input: {},
+    startedAt: 1,
+    status: 'completed',
+    steps: {
+      join: {
+        status: 'completed',
+        attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }],
+      },
+    },
+    result: { ok: true },
+  };
+  p.history.data.executions = [{ id: 'execution', name: 'Sample', status: 'completed', startedAt: 1 }];
+  p.detail.data = { execution, enquiries: [], permissions: [], stepSpend: {}, historyComplete: true };
+  find(p.render(), 'Select', node => Array.isArray(node.props.items)).props.onValueChange('execution');
+
+  const overview = p.render();
+  const tabs = find(overview, 'Tabs');
+  assert.equal(tabs.props.value, 'Overview');
+  assert.equal(find(overview, 'TabsList').props['aria-label'], 'Workflow execution view');
+  assert.equal(find(overview, 'TabsTrigger', node => node.props.value === 'Overview').props.children, 'Overview');
+  assert.equal(find(overview, 'TabsTrigger', node => node.props.value === 'Flow').props.children, 'Flow');
+  assert.equal(find(overview, 'TabsContent', node => node.props.value === 'Overview').props.keepMounted, undefined);
+  assert.equal(find(overview, 'TabsContent', node => node.props.value === 'Flow').props.keepMounted, undefined);
+  assert.match(JSON.stringify(find(overview, 'TabsContent', node => node.props.value === 'Overview')), /Original launch snapshot/);
+  assert.match(JSON.stringify(find(overview, 'TabsContent', node => node.props.value === 'Overview')), /Result/);
+
+  tabs.props.onValueChange('Flow');
+  const flow = p.render();
+  assert.equal(find(flow, 'Tabs').props.value, 'Flow');
+  find(flow, 'WorkflowGraph').props.onSelect('join');
+  const step = p.render();
+  assert.equal(find(step, 'Tabs').props.value, 'Flow');
+  assert.ok(find(step, 'Select', node => node.props.value === 1));
+  find(step, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
+  assert.ok(find(p.render(), 'WorkflowGraph'));
 });

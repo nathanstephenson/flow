@@ -34,34 +34,38 @@ function find(element: any, type: string, matches: (element: Element) => boolean
   throw new Error(`Missing ${type}`);
 }
 
-it("Git tabs default to PR, keep an explicit Diff choice and fall back when unavailable", async () => {
+it("uses shared mounted Git tabs, defaults to PR, preserves explicit choices and falls back", async () => {
   const pane = component("git-pane", async () => ({ repository: true, files: [] }));
   const props = { sessionId: "session" };
   const render = () => pane.render("GitPane", props);
   render();
   pane.effects[0]!();
   await Promise.resolve();
-  const tab = (label: string) => find(render(), "Button", node => node.props.role === "tab" && node.props.children === label);
-  assert.equal(tab("Diff").props["aria-selected"], true);
+  const tabs = () => find(render(), "Tabs");
+  const tab = (label: string) => find(render(), "TabsTrigger", node => node.props.value === label);
+  const panel = (label: string) => find(render(), "TabsContent", node => node.props.value === label);
+  assert.equal(tabs().props.value, "Diff");
+  assert.equal(find(render(), "TabsList").props["aria-label"], "Git views");
   assert.throws(() => tab("PR"));
   assert.throws(() => tab("Stack"));
+  for (const label of ["Diff", "Stack", "PR"]) assert.equal(panel(label).props.keepMounted, true);
   find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.equal(tab("PR").props["aria-selected"], true);
-  assert.equal(find(render(), "div", node => node.props.id === "git-session-Diff").props.hidden, true);
+  assert.equal(tabs().props.value, "PR");
   find(render(), "StackPane").props.onAvailable(true);
-  tab("Stack").props.onClick();
-  assert.equal(tab("Stack").props["aria-selected"], true);
+  tabs().props.onValueChange("Stack");
+  assert.equal(tabs().props.value, "Stack");
   find(render(), "StackPane").props.onAvailable(false);
-  assert.equal(tab("Diff").props["aria-selected"], true);
-  tab("Diff").props.onClick();
+  assert.equal(tabs().props.value, "Diff");
+  tabs().props.onValueChange("Diff");
   find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.equal(tab("Diff").props["aria-selected"], true);
-  tab("PR").props.onClick();
+  assert.equal(tabs().props.value, "Diff");
+  tabs().props.onValueChange("PR");
+  assert.equal(tabs().props.value, "PR");
   find(render(), "PullRequestPane").props.onAvailable(false);
-  assert.equal(tab("Diff").props["aria-selected"], true);
+  assert.equal(tabs().props.value, "Diff");
 });
 
-it("keeps Publish visible when the PR is discovered after it opens", async () => {
+it("locks shared Git tabs and keeps Publish visible when PR discovery finishes", async () => {
   const pane = component("git-pane", async input => input.type === "prepare_publish"
     ? { files: [], commits: [], branch: "feature", defaultBranch: "main" }
     : { repository: true, files: [] });
@@ -71,9 +75,13 @@ it("keeps Publish visible when the PR is discovered after it opens", async () =>
   await Promise.resolve();
   find(render(), "Button", node => node.props.children === "Publish").props.onClick();
   find(render(), "PullRequestPane").props.onAvailable(true);
+  assert.equal(find(render(), "Tabs").props.value, "Diff");
+  assert.equal(find(render(), "TabsTrigger", node => node.props.value === "PR").props.disabled, true);
+  find(render(), "Tabs").props.onValueChange("PR");
+  assert.equal(find(render(), "Tabs").props.value, "Diff");
   for (let i = 0; i < 5; i++) await Promise.resolve();
-  assert.equal(find(render(), "div", node => node.props.id === "git-session-Diff").props.hidden, false);
-  assert.equal(find(render(), "Button", node => node.props.role === "tab" && node.props.children === "Diff").props["aria-selected"], true);
+  assert.equal(find(render(), "Tabs").props.value, "Diff");
+  assert.equal(find(render(), "TabsTrigger", node => node.props.value === "PR").props.disabled, true);
   find(render(), "form");
 });
 
