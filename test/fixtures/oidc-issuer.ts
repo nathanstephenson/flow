@@ -9,17 +9,13 @@ import {
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-/**
- * Tiny standards-compliant OpenID Provider used by the transport tests and manual deployment demo.
- * It implements discovery, Authorization Code + S256 PKCE, confidential client authentication,
- * signed ID/logout tokens, refresh-token rotation, and deterministic trusted-user claims.
- */
 export async function startTestIssuer(options: {
   clientId?: string;
   clientSecret?: string;
   subject?: string;
   providerSid?: string;
   expiresIn?: number;
+  endpointQuery?: string;
   clientAuthentication?: "client_secret_basic" | "client_secret_post";
 } = {}): Promise<TestIssuer> {
   const clientId = options.clientId ?? "flow-test";
@@ -28,6 +24,7 @@ export async function startTestIssuer(options: {
   const providerSid = options.providerSid ?? "provider-session";
   const expiresIn = options.expiresIn ?? 3600;
   const clientAuthentication = options.clientAuthentication ?? "client_secret_basic";
+  const endpointQuery = options.endpointQuery ? `?${options.endpointQuery}` : "";
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const publicJwk = publicKey.export({ format: "jwk" }) as JsonWebKey;
   publicJwk.kid = "test-key";
@@ -46,9 +43,9 @@ export async function startTestIssuer(options: {
     if (request.method === "GET" && url.pathname === "/.well-known/openid-configuration") {
       json(response, 200, {
         issuer,
-        authorization_endpoint: `${issuer}/authorize`,
-        token_endpoint: `${issuer}/token`,
-        jwks_uri: `${issuer}/jwks`,
+        authorization_endpoint: `${issuer}/authorize${endpointQuery}`,
+        token_endpoint: `${issuer}/token${endpointQuery}`,
+        jwks_uri: `${issuer}/jwks${endpointQuery}`,
         response_types_supported: ["code"],
         subject_types_supported: ["public"],
         id_token_signing_alg_values_supported: ["RS256"],
@@ -151,15 +148,22 @@ export async function startTestIssuer(options: {
     get tokenRequests() { return tokenRequests; },
     get refreshRequests() { return refreshRequests; },
     setFailRefresh(value: boolean) { failRefresh = value; },
-    logoutToken(claims: { sid?: string; sub?: string; jti?: string | null; issuer?: string } = {}) {
+    logoutToken(claims: {
+      sid?: string;
+      sub?: string;
+      jti?: string | null;
+      issuer?: string;
+      issuedAt?: number;
+      event?: Record<string, unknown>;
+    } = {}) {
       const now = Math.floor(Date.now() / 1_000);
       return jwt(privateKey, {
         iss: claims.issuer ?? issuer,
         aud: clientId,
-        iat: now,
+        iat: claims.issuedAt ?? now,
         exp: now + 300,
         ...(claims.jti === null ? {} : { jti: claims.jti ?? randomBytes(12).toString("base64url") }),
-        events: { "http://schemas.openid.net/event/backchannel-logout": {} },
+        events: { "http://schemas.openid.net/event/backchannel-logout": claims.event ?? {} },
         ...(claims.sid === undefined ? {} : { sid: claims.sid }),
         ...(claims.sub === undefined ? {} : { sub: claims.sub }),
       });
@@ -177,7 +181,14 @@ export type TestIssuer = {
   readonly tokenRequests: number;
   readonly refreshRequests: number;
   setFailRefresh(value: boolean): void;
-  logoutToken(claims?: { sid?: string; sub?: string; jti?: string | null; issuer?: string }): string;
+  logoutToken(claims?: {
+    sid?: string;
+    sub?: string;
+    jti?: string | null;
+    issuer?: string;
+    issuedAt?: number;
+    event?: Record<string, unknown>;
+  }): string;
   close(): Promise<void>;
 };
 

@@ -1,4 +1,5 @@
 import {
+  createHash,
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
@@ -14,16 +15,13 @@ import { join } from "node:path";
 import { createRemoteJWKSet, jwtVerify, customFetch as joseCustomFetch, type JWSAlgorithm } from "jose";
 import * as oidc from "openid-client";
 
-/** The name of the opaque browser-session cookie used by the OIDC gate. */
 export const OIDC_COOKIE = "flow_session";
 
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1_000;
 const LOGIN_LIFETIME_MS = 10 * 60 * 1_000;
-const REFRESH_EARLY_MS = 60 * 1_000;
 const CLOCK_SKEW_SECONDS = 60;
 const LOGOUT_TOKEN_MAX_AGE_SECONDS = 10 * 60;
 
-/** Environment configuration for an external OpenID Provider. */
 export type OidcConfig = {
   issuer: string;
   clientId: string;
@@ -195,17 +193,14 @@ export class OidcGate {
     return new OidcGate(config, client, stateRoot, fetcher);
   }
 
-  /** The registered redirect URI, suitable for deployment diagnostics and issuer configuration. */
   callbackUrl(): string {
     return `${this.config.publicAppUrl}/oauth/callback`;
   }
 
-  /** The registered back-channel logout URI. */
   backchannelLogoutUrl(): string {
     return `${this.config.publicAppUrl}/oauth/backchannel`;
   }
 
-  /** Start Authorization Code + PKCE without accepting an off-origin return target. */
   async beginLogin(returnTo: string | undefined): Promise<string> {
     this.pruneTransactions();
     while (this.transactions.size >= 128) this.transactions.delete(this.transactions.keys().next().value!);
@@ -230,7 +225,6 @@ export class OidcGate {
     }).href;
   }
 
-  /** Consume a callback once, validate the ID token, and mint an unrelated browser credential. */
   async completeLogin(url: URL): Promise<{ cookie: string; location: string }> {
     const state = url.searchParams.get("state") ?? "";
     const transaction = this.transactions.get(state);
@@ -291,13 +285,12 @@ export class OidcGate {
       this.invalidate(id);
       return undefined;
     }
-    if (session.tokenExpiresAt - Date.now() <= REFRESH_EARLY_MS) {
+    if (session.tokenExpiresAt <= Date.now()) {
       if (!(await this.refresh(id))) return undefined;
     }
     return id;
   }
 
-  /** End only Flow's browser session. There is deliberately no global issuer logout. */
   logout(cookieHeader: string | undefined): void {
     const id = cookieValue(cookieHeader, OIDC_COOKIE);
     if (id) this.invalidate(id);
@@ -324,31 +317,28 @@ export class OidcGate {
           ? { algorithms: this.discovery.id_token_signing_alg_values_supported as JWSAlgorithm[] }
           : {}),
         clockTolerance: CLOCK_SKEW_SECONDS,
-        requiredClaims: ["iat", "jti"],
+        maxTokenAge: LOGOUT_TOKEN_MAX_AGE_SECONDS,
+        requiredClaims: ["iat"],
       });
       claims = verified.payload as Claims;
     } catch {
       throw new OidcAuthenticationError("Invalid logout token.");
     }
     const event = claims.events?.["http://schemas.openid.net/event/backchannel-logout"];
-    if (!event || typeof event !== "object" || Array.isArray(event) ||
-        Object.keys(event).length !== 0 || claims.nonce !== undefined) {
+    if (!event || typeof event !== "object" || Array.isArray(event) || claims.nonce !== undefined) {
       throw new OidcAuthenticationError("Invalid logout token.");
-    }
-    if (typeof claims.iat !== "number" || claims.iat < Date.now() / 1_000 - LOGOUT_TOKEN_MAX_AGE_SECONDS) {
-      throw new OidcAuthenticationError("Expired logout token.");
-    }
-    if (typeof claims.jti !== "string" || claims.jti.length === 0) {
-      throw new OidcAuthenticationError("Logout token has no identifier.");
     }
     const providerSid = typeof claims.sid === "string" ? claims.sid : undefined;
     const sub = typeof claims.sub === "string" ? claims.sub : undefined;
     if (!providerSid && !sub) throw new OidcAuthenticationError("Logout token has no session or subject.");
 
-    if (this.logoutTokens.has(claims.jti)) {
+    const replayKey = typeof claims.jti === "string" && claims.jti.length > 0
+      ? `jti:${claims.jti}`
+      : `sha256:${createHash("sha256").update(logoutToken).digest("base64url")}`;
+    if (this.logoutTokens.has(replayKey)) {
       throw new OidcAuthenticationError("Logout token was already used.");
     }
-    this.logoutTokens.set(claims.jti, Math.min(
+    this.logoutTokens.set(replayKey, Math.min(
       (typeof claims.exp === "number" ? claims.exp * 1_000 : Date.now() + SESSION_LIFETIME_MS),
       Date.now() + SESSION_LIFETIME_MS,
     ));
@@ -420,7 +410,6 @@ export class OidcGate {
       const now = Date.now();
       this.sessions.set(id, {
         ...current,
-          // A rotating provider returns a replacement. A non-rotating provider leaves it absent.
         refreshToken: tokens.refresh_token ?? session.refreshToken,
         tokenExpiresAt: tokenExpiry(tokens, claims, now),
         ...(typeof claims?.sid === "string" ? { providerSid: claims.sid } : {}),
@@ -453,10 +442,9 @@ export class OidcGate {
     if (this.disposed) return;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     const now = Date.now();
-    const next = Math.min(...[...this.sessions.values()].map((session) => {
-      const early = session.tokenExpiresAt - REFRESH_EARLY_MS;
-      return Math.min(session.expiresAt, early > now ? early : session.tokenExpiresAt);
-    }), Infinity);
+    const next = Math.min(...[...this.sessions.values()].map((session) =>
+      Math.min(session.expiresAt, session.tokenExpiresAt)
+    ), Infinity);
     if (!Number.isFinite(next)) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
@@ -469,7 +457,7 @@ export class OidcGate {
     this.expire();
     const now = Date.now();
     const due = [...this.sessions.values()]
-      .filter((session) => session.expiresAt > now && session.tokenExpiresAt - now <= REFRESH_EARLY_MS)
+      .filter((session) => session.expiresAt > now && session.tokenExpiresAt <= now)
       .map((session) => session.id);
     await Promise.all(due.map((id) => this.refresh(id)));
     this.scheduleRefresh();
@@ -580,15 +568,15 @@ export function tokenMatches(expected: string, presented: string | undefined): b
   return timingSafeEqual(a, b);
 }
 
-function checkedUrl(raw: string, name: string, requireOrigin: boolean): URL {
+function checkedUrl(raw: string, name: string, requireOrigin: boolean, allowQuery = false): URL {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
     throw new OidcConfigurationError(`${name} must be an absolute URL`);
   }
-  if (url.username || url.password || url.search || url.hash) {
-    throw new OidcConfigurationError(`${name} must not contain credentials, a query or a fragment`);
+  if (url.username || url.password || (!allowQuery && url.search) || url.hash) {
+    throw new OidcConfigurationError(`${name} must not contain credentials${allowQuery ? " or a fragment" : ", a query or a fragment"}`);
   }
   if (url.protocol !== "https:" && !(url.protocol === "http:" && localHostname(url.hostname))) {
     throw new OidcConfigurationError(`${name} must use HTTPS (HTTP is allowed only on localhost)`);
@@ -626,8 +614,12 @@ function validateDiscovery(config: OidcConfig, discovery: oidc.ServerMetadata): 
     ["jwks_uri", discovery.jwks_uri],
   ] as const) {
     if (typeof value !== "string") throw new OidcConfigurationError(`OIDC discovery has no ${name}`);
-    checkedUrl(value, `OIDC ${name}`, false);
+    checkedEndpointUrl(value, `OIDC ${name}`);
   }
+}
+
+function checkedEndpointUrl(raw: string, name: string): URL {
+  return checkedUrl(raw, name, false, true);
 }
 
 function selectClientAuthentication(secret: string, discovery: oidc.ServerMetadata): oidc.ClientAuth {

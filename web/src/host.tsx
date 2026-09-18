@@ -4,10 +4,8 @@ import type { Connection } from "@client/connection.ts";
 import type { Project } from "../../src/protocol/projects.ts";
 import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
-import { host, setAuthenticationRequired } from "@/store/host.ts";
-import { authenticatedFetch, beginReauthentication } from "@/authentication.ts";
-
-setAuthenticationRequired(beginReauthentication);
+import { host } from "@/store/host.ts";
+import { authenticatedFetch } from "@/authentication.ts";
 
 /**
  * The Session Host, as this app sees it: the shared transport, and the two facts `/api/config`

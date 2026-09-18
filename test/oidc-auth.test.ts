@@ -88,8 +88,11 @@ describe("external OIDC browser gate", () => {
     assert.equal(unsafe.location, "/", "off-origin return targets must be discarded");
   });
 
-  it("supports client_secret_post token endpoint authentication", async () => {
-    const context = await setup({ clientAuthentication: "client_secret_post" });
+  it("supports client_secret_post and query-bearing provider endpoints", async () => {
+    const context = await setup({
+      clientAuthentication: "client_secret_post",
+      endpointQuery: "tenant=flow",
+    });
     const login = await browserLogin(context, "/");
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
   });
@@ -150,16 +153,25 @@ describe("external OIDC browser gate", () => {
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 401);
   });
 
-  it("coordinates rotating refresh tokens and invalidates the session after a failed refresh", async () => {
-    const context = await setup({ expiresIn: 61 });
+  it("does not refresh every serial request when provider tokens are short-lived", async () => {
+    const context = await setup({ expiresIn: 1 });
     const login = await browserLogin(context, "/");
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
 
-    const responses = await Promise.all(
-      Array.from({ length: 12 }, async () => await authed(context, login.cookie, "/api/sessions")),
-    );
+    const responses = [];
+    for (let index = 0; index < 6; index += 1) {
+      responses.push(await authed(context, login.cookie, "/api/sessions"));
+    }
     assert.ok(responses.every((response) => response.status === 200));
-    assert.equal(context.issuer.refreshRequests, 1, "concurrent requests share one refresh");
+    assert.equal(context.issuer.refreshRequests, 0);
+
+    await waitFor(() => context.issuer.refreshRequests === 1);
+    for (let index = 0; index < 6; index += 1) {
+      assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
+    }
+    assert.equal(context.issuer.refreshRequests, 1);
+  });
+
+  it("invalidates the session after a failed refresh", async () => {
 
     const failed = await setup({ expiresIn: 1 });
     const failedLogin = await browserLogin(failed, "/");
@@ -225,16 +237,24 @@ describe("external OIDC browser gate", () => {
     assert.equal((await backchannel(context, tampered)).status, 400);
     assert.equal((await authed(context, login.cookie, "/api/sessions")).status, 200);
 
-    assert.equal(
-      (await backchannel(context, context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: null }))).status,
-      400,
-      "logout notifications require a jti",
-    );
-    assert.equal(
-      (await backchannel(context, context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: "" }))).status,
-      400,
-      "logout notification jti cannot be empty",
-    );
+    const withoutJti = context.issuer.logoutToken({ sub: "someone-else", jti: null });
+    assert.equal((await backchannel(context, withoutJti)).status, 200);
+    assert.equal((await backchannel(context, withoutJti)).status, 400, "token digests prevent replay without jti");
+
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      event: { provider_extension: true },
+    }))).status, 200, "event objects may contain extension members");
+
+    const now = Math.floor(Date.now() / 1_000);
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      issuedAt: now - 700,
+    }))).status, 400, "stale logout tokens are rejected");
+    assert.equal((await backchannel(context, context.issuer.logoutToken({
+      sub: "someone-else",
+      issuedAt: now + 120,
+    }))).status, 400, "future-issued logout tokens are rejected");
 
     const token = context.issuer.logoutToken({ sid: context.issuer.providerSid, jti: "once" });
     assert.equal((await backchannel(context, token)).status, 200);
@@ -263,6 +283,7 @@ type Context = {
 
 async function setup(options: {
   expiresIn?: number;
+  endpointQuery?: string;
   clientAuthentication?: "client_secret_basic" | "client_secret_post";
 } = {}): Promise<Context> {
   const root = mkdtempSync(join(tmpdir(), "flow-oidc-"));
