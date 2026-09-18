@@ -146,7 +146,7 @@ export default function WorkflowsPane({
     }
   };
   return (
-    <section className="workflow-panel grid content-start gap-3 overflow-auto p-3 text-sm">
+    <section className="workflow-panel grid grid-cols-[minmax(0,1fr)] content-start gap-3 overflow-auto p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">Workflows</h2>
         <Button size="sm" variant="outline" disabled={busy || !history.data || history.data.occupied || session?.status === "ended"} onClick={() => setCreating(value => !value)}>{creating ? "Close" : "New workflow"}</Button>
