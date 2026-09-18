@@ -98,11 +98,30 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  const pullRequests = [
-    ...(status?.graph?.branches.flatMap(branch => branch.pr ? [branch.pr] : []) ?? []),
-    ...(status?.view?.branches.flatMap(branch => branch.pr ? [branch.pr] : []) ?? []),
-    ...(status?.candidate?.pullRequests ?? []),
-  ].filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
+  // Normalize every status shape into one display graph. Managed and candidate status can
+  // legitimately exist without broad discovery (for example when GitHub is unavailable).
+  const displayBranches = status?.graph?.branches.map(branch => ({ ...branch })) ?? [];
+  const displayByName = new Map(displayBranches.map(branch => [branch.name, branch]));
+  let displayParent = status?.view?.trunk ?? status?.candidate?.trunk;
+  for (const member of status?.view?.branches ?? []) {
+    const existing = displayByName.get(member.name);
+    const branch: StackGraphBranch = existing ?? { name: member.name, parent: displayParent, relation: "local", isCurrent: member.isCurrent, availability: "local" };
+    branch.pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : branch.pr;
+    branch.isCurrent = member.isCurrent;
+    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
+    displayParent = member.name;
+  }
+  displayParent = status?.candidate?.trunk;
+  for (const [index, member] of (status?.candidate?.pullRequests ?? []).entries()) {
+    const name = member.branch ?? status?.candidate?.branches?.[index] ?? `pr-${member.number}`;
+    const existing = displayByName.get(name);
+    const branch: StackGraphBranch = existing ?? { name, parent: displayParent, relation: "pull-request", isCurrent: name === status?.graph?.currentBranch, availability: "local" };
+    branch.pr = member;
+    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
+    displayParent = name;
+  }
+  const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
+    .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {
     setError("");
     setOutput("");
@@ -119,7 +138,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
 
   const blocked = busy || disabled;
   if (!visible) return null;
-  const rows = graphRows(status?.graph?.branches ?? []);
+  const rows = graphRows(displayBranches);
   const managedByName = new Map(status?.view?.branches.map(branch => [branch.name, branch]) ?? []);
   return <section aria-label="Stack" className="space-y-3">
     <div className="flex items-center gap-2">
@@ -132,8 +151,8 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     {error ? <p role="alert">{error}</p> : null}
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
 
-    {status?.graph ? <>
-      <p>{status.graph.trunk ? <>Trunk: <span className="font-mono">{status.graph.trunk}</span></> : "Trunk unknown"}</p>
+    {displayBranches.length ? <>
+      <p>{status?.graph?.trunk ?? status?.view?.trunk ?? status?.candidate?.trunk ? <>Trunk: <span className="font-mono">{status?.graph?.trunk ?? status?.view?.trunk ?? status?.candidate?.trunk}</span></> : "Trunk unknown"}</p>
       <ul role="tree" aria-label="Stack branches" className="space-y-1 border-l border-border/70 py-1">
         {rows.map(({ branch, depth }) => {
           const managed = managedByName.get(branch.name);
@@ -147,7 +166,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
               {branch.relation === "ancestry" ? " · inferred" : ""}
             </span>
             {pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${pr.number} link`} title={`Copy PR #${pr.number} link`} disabled={busy || !pr.title || !pr.url} onClick={() => void copyLinks([pr], `PR #${pr.number}`)}><Copy aria-hidden="true" /></Button> : null}
-            {managed ? <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || managed.isCurrent || branch.availability !== "local"} onClick={() => void run("checkout", [branch.name])}>Switch</Button> : null}
+            {managed ? <Button size="sm" variant="outline" disabled={blocked || !!review || status?.rebasing || managed.isCurrent || branch.availability !== "local"} onClick={() => void run("checkout", [branch.name])}>Switch</Button> : null}
           </li>;
         })}
       </ul>

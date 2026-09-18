@@ -50,10 +50,10 @@ it("probes the actual command and provides installation instructions when unavai
   assert.equal(unavailable.available, false);
   assert.match(unavailable.problem!, /gh extension install github\/gh-stack/);
   assert.deepEqual(calls, [["stack", "--help"]]);
-  const available = await stackStatus(repo, async (_scope, args) => { calls.push(args); return args[0] === "pr" ? JSON.stringify({ title: "Feature title", url: view.branches[0]!.pr!.url }) : args[1] === "view" ? JSON.stringify(view) : "help"; });
+  const available = await stackStatus(repo, async (_scope, args) => { calls.push(args); return args[1] === "view" ? JSON.stringify(view) : "help"; });
   assert.equal(available.problem, undefined);
-  assert.deepEqual(available.view, { ...view, branches: [{ ...view.branches[0], pr: { ...view.branches[0]!.pr, title: "Feature title" } }] });
-  assert.deepEqual(calls.at(-1), ["pr", "view", view.branches[0]!.pr!.url, "--json", "title,url"]);
+  assert.deepEqual(available.view, view);
+  assert.equal(calls.some(args => args[0] === "pr" && args[1] === "view"), false);
 });
 
 it("keeps Stack diagnostics and disables editors for non-interactive continuation", async () => {
@@ -74,7 +74,7 @@ it("uses exact local and remote CLI arguments without --open or stash", async ()
   await changeStack(repo, { action: "rebase" }, gh);
   await changeStack(repo, { action: "submit" }, gh);
   await changeStack(repo, { action: "sync" }, gh);
-  assert.deepEqual(calls, [["stack", "add", "third"], ["stack", "--help"], ["stack", "view", "--json"], ["pr", "view", view.branches[0]!.pr!.url, "--json", "title,url"], ["stack", "rebase"], ["stack", "submit", "--auto"], ["stack", "sync"]]);
+  assert.deepEqual(calls, [["stack", "add", "third"], ["stack", "--help"], ["stack", "view", "--json"], ["stack", "rebase"], ["stack", "submit", "--auto"], ["stack", "sync"]]);
   await assert.rejects(changeStack(repo, { action: "checkout", branches: ["--force"] }, gh), /Invalid/);
 });
 
@@ -200,12 +200,12 @@ it("refuses Sync when remote membership changes after the review", async () => {
   try {
     writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ id: "42", trunk: { branch: "main" }, branches: [{ branch: "feature", pullRequest: { number: 12 } }] }] }));
     const remote = { id: 42, pull_requests: [{ number: 12, head: { ref: "feature" } }] };
-    writeFileSync(join(root, "remote.json"), JSON.stringify([[remote]]));
+    writeFileSync(join(root, "remote.json"), JSON.stringify(remote));
     const executable = join(root, "bin/gh");
     writeFileSync(executable, readFileSync(executable, "utf8").replace("*) echo done;;", `api*) cat '${root}/remote.json';;\n*) echo done;;`));
     const review = await host.prepareStack(id, "sync");
     remote.pull_requests.push({ number: 13, head: { ref: "unreviewed" } });
-    writeFileSync(join(root, "remote.json"), JSON.stringify([[remote]]));
+    writeFileSync(join(root, "remote.json"), JSON.stringify(remote));
     await assert.rejects(host.changeStack(id, { action: "sync", token: review.token }), /membership differs/);
     await assert.rejects(host.prepareStack(id, "sync"), /membership differs/);
     assert.doesNotMatch(readFileSync(join(root, "calls"), "utf8"), /stack sync/);
@@ -224,7 +224,7 @@ it("refuses Sync from trunk before remote membership can be skipped", async () =
 it("checks remote membership at review and confirmation, refusing additions and errors", async () => {
   writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ id: "42", trunk: { branch: "main" }, branches: [{ branch: "feature", pullRequest: { number: 12 } }] }] }));
   const remote = { id: 42, pull_requests: [{ number: 12, head: { ref: "feature" } }] };
-  const mock = async () => JSON.stringify([[remote]]);
+  const mock = async () => JSON.stringify(remote);
   const reviewed = await stackFingerprint(repo, view, true, mock);
   assert.equal(await stackFingerprint(repo, view, true, mock), reviewed);
   remote.pull_requests.push({ number: 13, head: { ref: "unreviewed" } });
@@ -232,7 +232,7 @@ it("checks remote membership at review and confirmation, refusing additions and 
   remote.pull_requests = [];
   await assert.rejects(stackFingerprint(repo, view, true, mock), /Remote stack membership differs/);
   await assert.rejects(stackFingerprint(repo, view, true, async () => { throw new Error("API unavailable"); }), /API unavailable/);
-  assert.notEqual(await stackFingerprint(repo, view, true, async () => "[[]]"), reviewed);
+  await assert.rejects(stackFingerprint(repo, view, true, async () => JSON.stringify({ id: 42, pull_requests: [] })), /membership differs/);
 });
 
 function chain() {
@@ -254,7 +254,9 @@ function githubFixture(prs = [pr(23, "feature", "main", true), pr(22, "second", 
     if (args[0] === "auth") return "";
     if (args[0] === "repo") return JSON.stringify({ id: "repo-id", defaultBranchRef: { name: "main" }, isFork: false });
     if (args[0] === "api") {
-      assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/test/repo/pulls?state=all&per_page=100"]);
+      assert.equal(args[0], "api");
+      assert.ok(args.includes("--jq"));
+      assert.equal(args.at(-1), "repos/test/repo/pulls?state=all&per_page=100");
       return JSON.stringify([prs]);
     }
     calls.push(args);
@@ -276,7 +278,7 @@ it("keeps the stack visible when PR title loading fails", async () => {
     return args[1] === "view" ? JSON.stringify(view) : "";
   });
   assert.deepEqual(state.view, view);
-  assert.match(state.warnings?.join("\n") ?? "", /GitHub unavailable/);
+  assert.equal(state.warnings?.some(warning => warning.includes("PR #")) ?? false, false);
 });
 
 it("registers a PR-linked chain and retains merged status without commit ancestry", async () => {
@@ -365,15 +367,12 @@ it("uses GitHub's default branch, not stale remote HEAD, and ignores unrelated P
 it("loads titles for tracked merged members without rediscovering the chain", async () => {
   const tracked = { ...view, branches: [{ ...view.branches[0]!, isMerged: true, pr: { number: 23, state: "MERGED" } }] };
   const state = await stackStatus(repo, async (_scope, args) => {
-    if (args[0] === "pr") {
-      assert.deepEqual(args, ["pr", "view", "23", "--json", "title,url"]);
-      return JSON.stringify({ title: "Merged title", url: "https://github.com/test/repo/pull/23" });
-    }
+    assert.notEqual(args[0], "pr");
     assert.equal(args[0], "stack");
     return args[1] === "view" ? JSON.stringify(tracked) : "";
   });
   assert.equal(state.problem, undefined);
-  assert.deepEqual(state.view, { ...tracked, branches: [{ ...tracked.branches[0], pr: { number: 23, state: "MERGED", title: "Merged title", url: "https://github.com/test/repo/pull/23" } }] });
+  assert.deepEqual(state.view, tracked);
   assert.equal(state.candidate, undefined);
 });
 
