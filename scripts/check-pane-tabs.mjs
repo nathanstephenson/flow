@@ -30,22 +30,38 @@ async function assertSelected(page, list, label) {
     const selected = await tab.getAttribute("aria-selected") === "true";
     assert.equal(selected, await tab.textContent() === label, `only ${label} should be selected`);
     assert.equal(await tab.getAttribute("tabindex"), selected ? "0" : "-1", "tabs should use roving focus");
+    const handle = await tab.elementHandle();
     if (selected) {
-      const handle = await tab.elementHandle();
       await page.waitForFunction((node) => {
         const id = node?.getAttribute("aria-controls");
-        return id ? document.getElementById(id) : null;
+        const panel = id ? document.getElementById(id) : null;
+        return panel && !panel.hidden && panel.getAttribute("aria-labelledby") === node.id;
+      }, handle);
+    } else {
+      await page.waitForFunction((node) => {
+        const id = node?.getAttribute("aria-controls");
+        const panel = id ? document.getElementById(id) : null;
+        return !panel || panel.hidden;
       }, handle);
     }
-    const panelId = await tab.getAttribute("aria-controls");
-    if (!panelId) continue;
-    const panel = page.locator(`[id=${JSON.stringify(panelId)}]`);
-    if (!selected && await panel.count() === 0) continue;
-    assert.equal(await panel.count(), 1, `${await tab.textContent()} should control one panel`);
-    assert.equal(await panel.getAttribute("aria-labelledby"), await tab.getAttribute("id"));
-    assert.equal(await panel.getAttribute("role"), "tabpanel");
-    assert.equal(await panel.evaluate((node) => node.hidden), !selected);
-    if (!selected) assert.equal(await panel.evaluate((node) => node.inert), true);
+    const association = await tab.evaluate((node) => {
+      const panelId = node.getAttribute("aria-controls");
+      const panel = panelId ? document.getElementById(panelId) : null;
+      return panel ? {
+        labelledBy: panel.getAttribute("aria-labelledby"),
+        role: panel.getAttribute("role"),
+        hidden: panel.hidden,
+        inert: panel.inert,
+      } : null;
+    });
+    if (!association) {
+      assert.equal(selected, false, `${await tab.textContent()} should control its visible panel`);
+      continue;
+    }
+    assert.equal(association.labelledBy, await tab.getAttribute("id"));
+    assert.equal(association.role, "tabpanel");
+    assert.equal(association.hidden, !selected);
+    if (!selected) assert.equal(association.inert, true);
   }
 }
 
@@ -65,7 +81,8 @@ async function checkGit(viewport, screenshotSuffix) {
   const list = page.getByRole("tablist", { name: "Git views" });
   await list.waitFor();
   await page.getByText("Reading Git status…").waitFor({ state: "hidden" });
-  await page.waitForTimeout(500);
+  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
+  else await page.waitForTimeout(500);
   const labels = await list.getByRole("tab").allTextContents();
   assert.equal(labels[0], "Diff");
   assert.deepEqual(labels, labels.filter((label) => ["Diff", "Stack", "PR"].includes(label)));
@@ -81,7 +98,8 @@ async function checkGit(viewport, screenshotSuffix) {
   await page.reload({ waitUntil: "domcontentloaded" });
   await list.waitFor();
   await page.getByText("Reading Git status…").waitFor({ state: "hidden" });
-  await page.waitForTimeout(500);
+  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
+  else await page.waitForTimeout(500);
 
   if (process.env.SCREENSHOT_DIR) {
     for (const theme of ["light", "dark"]) {
