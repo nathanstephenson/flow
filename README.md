@@ -8,6 +8,27 @@ Run and watch coding-agent sessions from a terminal or a browser, over more than
 
 See [CONTEXT.md](./CONTEXT.md) for the domain language and [docs/adr](./docs/adr) for decisions.
 
+## Install
+
+Requires Node.js 22 or later and npm. Linux and macOS installs are checked in CI.
+
+```bash
+npm install --global @nathanstephenson/flow
+flow --version
+flow serve
+```
+
+Open the web handoff URL printed by `flow serve`, or run `flow tui` in another terminal.
+Configure credentials for the Backend Adapter you use.
+
+To check a release from source, run `npm ci` and `npm run test:package`.
+This builds, packs, and installs the archive into a temporary prefix, then checks it
+from an unrelated directory. Build outputs are not tracked in Git.
+
+Maintainers can publish manually with `npm publish --access public` after release
+approval and a license decision. The `prepack` script builds the CLI, web client,
+and Workflow runtime; users do not need to build them.
+
 ## Publish branch names
 
 Publish offers an editable branch name before the first push. It uses the Summary Model
