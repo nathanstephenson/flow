@@ -402,3 +402,96 @@ it("keeps merged members from the tracked stack visible", async () => {
   assert.match(JSON.stringify(tree), /#23 MERGED/);
   assert.throws(() => find(tree, "Button", node => node.props.children === "Create stack"));
 });
+
+it("shows a nested read-only graph without gh-stack and labels remote and inferred branches", async () => {
+  let available = false;
+  const status = {
+    available: false,
+    problem: "Install gh-stack to manage this stack.",
+    problemKind: "action",
+    warnings: ["Native GitHub stacks could not be read; PR relationships were used."],
+    conflicts: [],
+    rebasing: false,
+    graph: {
+      trunk: "main",
+      currentBranch: "child",
+      explicit: false,
+      branches: [
+        { name: "root", parent: "main", relation: "pull-request", isCurrent: false, availability: "local", pr: { number: 1, state: "MERGED" } },
+        { name: "child", parent: "root", relation: "pull-request", isCurrent: true, availability: "local", pr: { number: 2, state: "OPEN" } },
+        { name: "remote-sibling", parent: "root", relation: "ancestry", isCurrent: false, availability: "remote" },
+      ],
+    },
+  };
+  const pane = component("stack-pane", async () => status);
+  const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tree = pane.render("StackPane", props);
+  pane.effects.at(-1)!();
+  assert.equal(available, true);
+  assert.match(JSON.stringify(tree), /remote-sibling/);
+  assert.match(JSON.stringify(tree), /remote-only/);
+  assert.match(JSON.stringify(tree), /inferred/);
+  assert.match(JSON.stringify(tree), /read-only stack graph/);
+  assert.equal(find(tree, "ul", node => node.props.role === "tree").props.children.length, 3);
+  assert.throws(() => find(tree, "Button", node => node.props.children === "Create stack"));
+  assert.throws(() => find(tree, "Button", node => node.props.children === "Switch"));
+});
+
+it("keeps discovery errors visible with retry but hides an action-only notice", async () => {
+  for (const discovery of [false, true]) {
+    let available = false;
+    const pane = component("stack-pane", async () => ({ available: false, conflicts: [], rebasing: false, problem: discovery ? "GitHub is offline" : "Install gh-stack", problemKind: discovery ? "discovery" : "action" }));
+    const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
+    pane.render("StackPane", props);
+    pane.effects[0]!();
+    await Promise.resolve();
+    const tree = pane.render("StackPane", props);
+    pane.effects.at(-1)!();
+    assert.equal(available, discovery);
+    if (discovery) {
+      assert.match(JSON.stringify(tree), /GitHub is offline/);
+      assert.equal(find(tree, "Button", node => node.props.children === "Refresh stack").props.disabled, false);
+    } else assert.equal(tree, null);
+  }
+});
+
+it("keeps a rejected Stack status command visible as a retryable error", async () => {
+  let available = false;
+  const pane = component("stack-pane", async () => { throw new Error("command rejected"); });
+  const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tree = pane.render("StackPane", props);
+  pane.effects.at(-1)!();
+  assert.equal(available, true);
+  assert.match(find(tree, "p", node => node.props.role === "alert").props.children, /command rejected/);
+  assert.equal(find(tree, "Button", node => node.props.children === "Refresh stack").props.disabled, false);
+});
+
+it("clears stale Stack graphs and errors as soon as a refresh revision starts", async () => {
+  let attempt = 0;
+  let resolveSecond: ((value: any) => void) | undefined;
+  const pane = component("stack-pane", async () => {
+    attempt++;
+    if (attempt === 1) throw new Error("stale failure");
+    return await new Promise(resolve => { resolveSecond = resolve; });
+  });
+  const first = { sessionId: "session", revision: 0, onChange() {} };
+  pane.render("StackPane", first);
+  pane.effects[0]!();
+  await Promise.resolve();
+  assert.match(JSON.stringify(pane.render("StackPane", first)), /stale failure/);
+
+  const second = { ...first, revision: 1 };
+  const effectIndex = pane.effects.length;
+  pane.render("StackPane", second);
+  pane.effects[effectIndex]!();
+  assert.equal(pane.render("StackPane", second), null);
+  resolveSecond!({ available: true, conflicts: [], rebasing: false });
+  await Promise.resolve();
+  assert.equal(pane.render("StackPane", second), null);
+});
