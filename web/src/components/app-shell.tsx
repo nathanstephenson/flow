@@ -302,14 +302,14 @@ export function AppShell() {
         {/* A single-row grid rather than upstream's flex column: the pane inside is itself a grid
             sized to its row, and a flex parent would need `flex-1` threading down into it. One row
             of `minmax(0,1fr)` is what the frame's outer grid used to give it, unchanged. */}
-        <SidebarInset className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
+        <SidebarInset className="mobile-safe-frame grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden">
           {/*
            * The only way back to the rail on a narrow window. Upstream hides the whole rail below
-           * `md` and offers it as a Sheet instead, which takes the resize handle with it — so
-           * without this, collapsing on a small screen would be one-way. Hidden from `md` up, where
+           * `lg` and offers it as a Sheet instead, which takes the resize handle with it — so
+           * without this, collapsing on a small screen would be one-way. Hidden from `lg` up, where
            * the handle itself is the affordance.
            */}
-          <SidebarTrigger className="absolute top-2 left-2 z-30 md:hidden" />
+          <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
           {settings ? (
             <SettingsPage section={route.section} />
           ) : focusedId === undefined ? (

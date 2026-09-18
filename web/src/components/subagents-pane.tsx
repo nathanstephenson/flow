@@ -118,7 +118,7 @@ function SubagentRow({
       <button
         type="button"
         onClick={onSelect}
-        className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent"
+        className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-accent max-lg:min-h-11 max-lg:justify-center"
       >
         <span className="flex w-full items-center gap-2">
           <StatusDot status={entry.status} />

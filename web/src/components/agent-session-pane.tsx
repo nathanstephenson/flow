@@ -1,5 +1,6 @@
 import { McpConnectionStatus } from "./mcp-status.tsx";
-import { useState, type CSSProperties } from "react";
+import { MessageSquare, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
@@ -7,6 +8,17 @@ import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions } from "@/agent-sessions.tsx";
 import { useSessionActions } from "@/composer-actions.ts";
 import type { Docks } from "@/docks.ts";
+import { useIsMobile } from "@/lib/use-mobile.ts";
+import {
+  historyWithMobileView,
+  MOBILE_TRANSCRIPT,
+  mobileViewFromHistory,
+  sameMobileView,
+  validMobileView,
+  type MobileDetail,
+  type MobileView,
+} from "@/presentation/mobile-navigation.ts";
+import { tabLabel, type DockSide } from "@/presentation/docks.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
@@ -15,6 +27,7 @@ import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
 import { TranscriptView } from "@/components/transcript-view.tsx";
+import { Button } from "@/components/ui/button.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -101,6 +114,99 @@ function AttachedPane({
   // no longer knows there is a session behind it — see web/src/composer-actions.ts.
   const actions = useSessionActions(sessionId);
   const [query, setQuery] = useState("");
+  const mobile = useIsMobile();
+  const [mobileView, setMobileView] = useState<MobileView>(() =>
+    validMobileView(mobileViewFromHistory(window.history.state, sessionId), docks.layout),
+  );
+  const mobileViewRef = useRef(mobileView);
+  mobileViewRef.current = mobileView;
+  const rememberedDetails = useRef<Record<string, MobileDetail | undefined>>({});
+  const handledReveal = useRef(0);
+
+  const writeMobileView = useCallback((next: MobileView, replace = false) => {
+    if (sameMobileView(mobileViewRef.current, next) && !replace) return;
+    mobileViewRef.current = next;
+    setMobileView(next);
+    if (!mobile) return;
+    const state = historyWithMobileView(window.history.state, sessionId, next);
+    window.history[replace ? "replaceState" : "pushState"](state, "", window.location.href);
+  }, [mobile, sessionId]);
+
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent): void => {
+      setMobileView(validMobileView(mobileViewFromHistory(event.state, sessionId), docks.layout));
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [docks.layout, sessionId]);
+
+  const shownMobileView = validMobileView(mobileView, docks.layout);
+  useEffect(() => {
+    if (!sameMobileView(shownMobileView, mobileView)) setMobileView(shownMobileView);
+  }, [mobileView, shownMobileView]);
+
+  useEffect(() => {
+    if (shownMobileView.kind !== "dock") return;
+    const key = `${shownMobileView.side}:${shownMobileView.tabId}`;
+    rememberedDetails.current[key] = shownMobileView.detail;
+    const dock = docks.layout[shownMobileView.side];
+    if (dock.activeId !== shownMobileView.tabId) {
+      docks.dispatch({ type: "activate", side: shownMobileView.side, tabId: shownMobileView.tabId });
+    }
+    const tab = dock.tabs.find((candidate) => candidate.id === shownMobileView.tabId);
+    if (tab?.content?.kind !== "subagents") return;
+    const selected = shownMobileView.detail?.kind === "subagent" ? shownMobileView.detail.id : undefined;
+    if (tab.content.subagentId !== selected) {
+      docks.dispatch({
+        type: "select-subagent",
+        side: shownMobileView.side,
+        tabId: shownMobileView.tabId,
+        ...(selected ? { subagentId: selected } : {}),
+      });
+    }
+  }, [docks, shownMobileView]);
+
+  // Existing transcript actions open Dock content. On mobile they must also reveal it; a direct
+  // Subagent link gets a list entry beneath its detail so browser Back visits both levels.
+  useEffect(() => {
+    const reveal = docks.reveal;
+    if (!reveal || reveal.sessionId !== sessionId || reveal.nonce === handledReveal.current) return;
+    handledReveal.current = reveal.nonce;
+    docks.acknowledgeReveal(reveal.nonce);
+    if (!mobile) return;
+    for (const side of ["right", "bottom"] as const) {
+      const tab = docks.layout[side].tabs.find((candidate) => candidate.content?.kind === reveal.kind);
+      if (!tab) continue;
+      const base: MobileView = { kind: "dock", side, tabId: tab.id };
+      if (tab.content?.kind === "subagents" && tab.content.subagentId) {
+        writeMobileView(base);
+        writeMobileView({ ...base, detail: { kind: "subagent", id: tab.content.subagentId } });
+      } else {
+        writeMobileView(base);
+      }
+      break;
+    }
+  }, [docks.layout, docks.reveal, mobile, sessionId, writeMobileView]);
+
+  const selectMobileTab = useCallback((side: DockSide, tabId: string) => {
+    docks.dispatch({ type: "activate", side, tabId });
+    const key = `${side}:${tabId}`;
+    const detail = rememberedDetails.current[key];
+    writeMobileView({ kind: "dock", side, tabId, ...(detail ? { detail } : {}) });
+  }, [docks, writeMobileView]);
+
+  const navigateDetail = useCallback((detail: MobileDetail) => {
+    if (shownMobileView.kind !== "dock") return;
+    rememberedDetails.current[`${shownMobileView.side}:${shownMobileView.tabId}`] = detail;
+    writeMobileView({ ...shownMobileView, detail });
+  }, [shownMobileView, writeMobileView]);
+
+  const backFromDetail = useCallback(() => {
+    if (shownMobileView.kind !== "dock") return;
+    rememberedDetails.current[`${shownMobileView.side}:${shownMobileView.tabId}`] = undefined;
+    if (shownMobileView.detail) window.history.back();
+    else writeMobileView({ kind: "dock", side: shownMobileView.side, tabId: shownMobileView.tabId }, true);
+  }, [shownMobileView, writeMobileView]);
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
@@ -174,62 +280,174 @@ function AttachedPane({
     </section>
   );
 
-  const bottom = docks?.layout.bottom;
-  const right = docks?.layout.right;
-  const bottomOpen = bottom !== undefined && !bottom.minimised;
-  const rightOpen = right !== undefined && !right.minimised;
+  const bottom = docks.layout.bottom;
+  const right = docks.layout.right;
+  const bottomOpen = !bottom.minimised;
+  const rightOpen = !right.minimised;
+  const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
-  /*
-   * Header across the top, then the Docks divide what is under it.
-   *
-   * The header spans the full width rather than stopping at the right Dock's edge, because what it
-   * says — the title, the status, the Scope — is true of the whole Agent Session and not of the
-   * conversation column alone. It is also where the Dock toggles live, and a button sitting to the
-   * left of the thing it controls reads as belonging to something else.
-   *
-   * Beneath it the right Dock takes the full height and the bottom Dock only the conversation's
-   * width. A terminal wants rows more than it wants columns, so the taller Dock is the one that gets
-   * the whole column; the bottom Dock is for something glanced at under what you are reading.
-   *
-   * Each Dock's size is a CSS custom property rather than a React value in the grid template,
-   * because that is what lets a drag repaint without a re-render (web/src/components/use-resize-drag.ts).
-   * A minimised Dock is left out of the template entirely rather than sized to zero: a zero-height
-   * row would still have the Shell's FitAddon measuring a container it is not in.
-   */
   return (
-    <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
+    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
       <div>
-        <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={docks} />
+        <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
         <McpConnectionStatus sessionId={sessionId} />
       </div>
 
+      {mobile ? (
+        <MobileViewSelector
+          layout={docks.layout}
+          selected={shownMobileView}
+          shells={shells}
+          onTranscript={() => writeMobileView(MOBILE_TRANSCRIPT)}
+          onSelect={selectMobileTab}
+          onNew={() => {
+            const tabId = crypto.randomUUID();
+            docks.dispatch({ type: "add-tab", side: "right", tabId });
+            writeMobileView({ kind: "dock", side: "right", tabId });
+          }}
+          onClose={(side, tabId) => {
+            if (shownMobileView.kind === "dock" && shownMobileView.side === side && shownMobileView.tabId === tabId) {
+              writeMobileView(MOBILE_TRANSCRIPT, true);
+            }
+            delete rememberedDetails.current[`${side}:${tabId}`];
+            docks.dispatch({ type: "close-tab", side, tabId });
+          }}
+        />
+      ) : null}
+
       <div
-        // The frame the Docks are a share of, and the element their live sizes are written onto. It
-        // is this element rather than the pane so that "how much room is there" excludes the header,
-        // which no drag can take space from.
         data-dock-frame=""
-        className={cn(
-          "grid min-h-0 min-w-0",
-          rightOpen ? "grid-cols-[minmax(0,1fr)_var(--dock-right)]" : "grid-cols-[minmax(0,1fr)]",
-        )}
-        style={{ "--dock-bottom": `${bottom?.size ?? 0}px`, "--dock-right": `${right?.size ?? 0}px` } as CSSProperties}
+        className="grid min-h-0 min-w-0 overflow-hidden"
+        style={{
+          "--dock-bottom": `${bottom.size}px`,
+          "--dock-right": `${right.size}px`,
+          gridTemplateColumns: mobile || !rightOpen ? "minmax(0,1fr)" : "minmax(0,1fr) var(--dock-right)",
+          gridTemplateRows: mobile
+            ? "minmax(0,1fr)"
+            : bottomOpen
+              ? "minmax(0,1fr) var(--dock-bottom)"
+              : "minmax(0,1fr) 0px",
+        } as CSSProperties}
       >
-        <div
-          className={cn(
-            "grid min-h-0 min-w-0",
-            bottomOpen ? "grid-rows-[minmax(0,1fr)_var(--dock-bottom)]" : "grid-rows-[minmax(0,1fr)]",
-          )}
-        >
+        <div className={cn("col-start-1 row-start-1 grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden", mobile && shownMobileView.kind !== "transcript" && "hidden")}>
           {conversation}
-          {bottomOpen && bottom ? (
-            <Dock side="bottom" dock={bottom} sessionId={sessionId} shells={shells} dispatch={docks.dispatch} />
-          ) : null}
         </div>
 
-        {rightOpen && right ? (
-          <Dock side="right" dock={right} sessionId={sessionId} shells={shells} dispatch={docks.dispatch} />
-        ) : null}
+        <Dock
+          side="bottom"
+          dock={bottom}
+          sessionId={sessionId}
+          shells={shells}
+          dispatch={docks.dispatch}
+          mobile={mobile}
+          visible={mobile ? selectedDock?.side === "bottom" : bottomOpen}
+          mobileNavigation={mobile && selectedDock?.side === "bottom" ? {
+            tabId: selectedDock.tabId,
+            detail: selectedDock.detail,
+            onDetail: navigateDetail,
+            onBackDetail: backFromDetail,
+          } : undefined}
+        />
+        <Dock
+          side="right"
+          dock={right}
+          sessionId={sessionId}
+          shells={shells}
+          dispatch={docks.dispatch}
+          mobile={mobile}
+          visible={mobile ? selectedDock?.side === "right" : rightOpen}
+          mobileNavigation={mobile && selectedDock?.side === "right" ? {
+            tabId: selectedDock.tabId,
+            detail: selectedDock.detail,
+            onDetail: navigateDetail,
+            onBackDetail: backFromDetail,
+          } : undefined}
+        />
       </div>
+    </div>
+  );
+}
+
+function MobileViewSelector({
+  layout,
+  selected,
+  shells,
+  onTranscript,
+  onSelect,
+  onNew,
+  onClose,
+}: {
+  layout: Docks["layout"];
+  selected: MobileView;
+  shells: boolean;
+  onTranscript: () => void;
+  onSelect: (side: DockSide, tabId: string) => void;
+  onNew: () => void;
+  onClose: (side: DockSide, tabId: string) => void;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1 border-b bg-card px-1.5 py-1" aria-label="Agent Session views">
+      <div role="tablist" aria-label="Agent Session content" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={selected.kind === "transcript"}
+          onClick={onTranscript}
+          className={cn(
+            "flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            selected.kind === "transcript" ? "bg-muted text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <MessageSquare className="size-4" aria-hidden />
+          Transcript
+        </button>
+        {(["bottom", "right"] as const).flatMap((side) =>
+          layout[side].tabs.map((tab) => {
+            const active = selected.kind === "dock" && selected.side === side && selected.tabId === tab.id;
+            const label = tabLabel(layout[side], tab.id);
+            return (
+              <div
+                key={`${side}:${tab.id}`}
+                className={cn(
+                  "flex min-h-10 shrink-0 items-center rounded-xl pr-0.5 pl-3 text-xs",
+                  active ? "bg-muted text-foreground" : "text-muted-foreground",
+                )}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className="max-w-36 truncate py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => onSelect(side, tab.id)}
+                  title={`${label} · ${side} Dock`}
+                >
+                  {label}
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="rounded-xl"
+                  onClick={() => onClose(side, tab.id)}
+                  title={tab.content?.kind === "shell" ? "Close this tab — ends its Shell" : "Close this tab"}
+                  aria-label={`Close ${label}${tab.content?.kind === "shell" ? " — ends its Shell" : ""}`}
+                >
+                  <X aria-hidden />
+                </Button>
+              </div>
+            );
+          }),
+        )}
+      </div>
+      <Button
+        variant="ghost"
+        size="icon-lg"
+        className="shrink-0 rounded-xl"
+        onClick={onNew}
+        aria-label="New tab in the right Dock"
+        title={shells ? "New tab" : "New Git, Workflows, or Agents tab"}
+      >
+        <Plus aria-hidden />
+      </Button>
     </div>
   );
 }

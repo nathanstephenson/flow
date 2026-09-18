@@ -12,6 +12,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar.tsx";
 import { cn } from "@/lib/utils.ts";
 
@@ -47,6 +48,15 @@ export function SettingsNav({
   onSelect: (section: SettingsSection) => void;
   onLeave: () => void;
 }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  const selected = (next: SettingsSection) => {
+    onSelect(next);
+    if (isMobile) setOpenMobile(false);
+  };
+  const leave = () => {
+    onLeave();
+    if (isMobile) setOpenMobile(false);
+  };
   return (
     <>
       <SidebarHeader className="flex-row items-center gap-1 border-b border-sidebar-border">
@@ -66,7 +76,7 @@ export function SettingsNav({
                       size="lg"
                       isActive={current}
                       aria-current={current ? "page" : undefined}
-                      onClick={() => onSelect(name)}
+                      onClick={() => selected(name)}
                       // Full-bleed with a left-edge marker, exactly as an Agent Session row is: the
                       // two lists sit in the same frame and must not look like two designs.
                       className={cn(
@@ -94,7 +104,7 @@ export function SettingsNav({
          * entry to pop. This returns to the Agent Session that was on screen before the Settings
          * were opened — see `leaveSettings` in web/src/route.ts.
          */}
-        <Button variant="ghost" size="sm" className="justify-start gap-2" onClick={onLeave}>
+        <Button variant="ghost" size="sm" className="justify-start gap-2" onClick={leave}>
           <ArrowLeft aria-hidden />
           Back to Agent Sessions
         </Button>

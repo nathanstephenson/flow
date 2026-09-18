@@ -39,10 +39,9 @@ export function AttachmentTray({
             aria-label="Remove this attachment"
             onClick={() => onRemove(attachment.key)}
             className={cn(
-              "absolute -top-1.5 -right-1.5 size-5 rounded-full shadow",
-              // Shown on hover and on focus — keyboard-only removal must not depend on a pointer
-              // ever being over the thumbnail.
-              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+              "absolute -top-1.5 -right-1.5 size-5 rounded-full shadow max-lg:size-7",
+              // Touch has no hover reveal, while pointer and keyboard users keep the quieter tray.
+              "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
             )}
           >
             <X className="size-3" aria-hidden />

@@ -1,3 +1,4 @@
+import { ChevronLeft } from "lucide-react";
 import { useRef, useState } from "react";
 import { useHost } from "../host.tsx";
 import { resolveDefaultBackend } from "../../../src/protocol/settings.ts";
@@ -23,6 +24,7 @@ import { StepTest } from "./workflow-test.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { ModelPicker } from "./model-picker.tsx";
 import { Button } from "./ui/button.tsx";
+import { useIsMobile } from "../lib/use-mobile.ts";
 import { Input } from "./ui/input.tsx";
 import { Textarea } from "./ui/textarea.tsx";
 import {
@@ -44,6 +46,12 @@ export default function WorkflowsSettings() {
   const [busy, setBusy] = useState(false);
   const [definition, setDefinition] = useState<WorkflowDefinition>();
   const [selected, select] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<"graph" | "inspector">("graph");
+  const mobile = useIsMobile();
+  const selectStep = (id: string) => {
+    select(id);
+    if (mobile) setWorkspaceView(id ? "inspector" : "graph");
+  };
   const [message, setMessage] = useState("");
   const [secretName, setSecretName] = useState("");
   const referenceSecret = secrets.data?.names.includes(secretName)
@@ -129,7 +137,7 @@ export default function WorkflowsSettings() {
               ? { ...base, kind, condition: { operator: "truthy", path: [] } }
               : kind === "mcp" ? { ...base, kind, tool: { connectionId: "unselected", connectionName: "", identity: "0".repeat(64), serverIdentity: "0".repeat(64), toolName: "unselected", inputSchema: { type: "object" } }, mapping: { kind: "template", template: { kind: "object", fields: {} } } } : { ...base, kind };
     setDefinition({ ...definition, steps: [...definition.steps, next] });
-    select(id);
+    selectStep(id);
   };
   return (
     <SettingsGroup title="Workflows">
@@ -140,6 +148,7 @@ export default function WorkflowsSettings() {
             onValueChange={(value) => {
               setDefinition(list.data?.workflows.find((d) => d.id === value));
               select("");
+              setWorkspaceView("graph");
             }}
           >
             <SelectTrigger
@@ -176,6 +185,7 @@ export default function WorkflowsSettings() {
                 edges: [],
               });
               select("");
+              setWorkspaceView("graph");
             }}
           >
             New workflow
@@ -358,14 +368,32 @@ export default function WorkflowsSettings() {
                 {invalid}
               </p>
             )}
-            <div className="workflow-workspace">
+            <div className="workflow-workspace" data-mobile-view={mobile ? workspaceView : "desktop"}>
               <WorkflowGraph
                 definition={definition}
-                onChange={setDefinition}
-                onSelect={select}
+                onChange={(next) => {
+                  setDefinition(next);
+                  if (selected && !next.steps.some((candidate) => candidate.id === selected)) {
+                    select("");
+                    setWorkspaceView("graph");
+                  }
+                }}
+                onSelect={selectStep}
+                selectedStepId={mobile ? selected : undefined}
               />
               {step && (
                 <aside className="workflow-inspector grid gap-3 rounded-lg border p-4">
+                  {mobile ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="min-h-10 justify-self-start"
+                      onClick={() => setWorkspaceView("graph")}
+                    >
+                      <ChevronLeft aria-hidden data-icon="inline-start" />
+                      Back to workflow graph
+                    </Button>
+                  ) : null}
                   <h3 className="text-sm font-semibold">Selected step</h3>
                   <label className="flex flex-col gap-1">
                     <span className="text-sm font-medium">Name</span>
@@ -702,6 +730,7 @@ export default function WorkflowsSettings() {
                         ),
                       }));
                       select("");
+                      setWorkspaceView("graph");
                     }}
                   >
                     Delete step

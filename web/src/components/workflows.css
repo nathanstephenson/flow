@@ -95,18 +95,33 @@
 .workflow-step[data-status="cancelled"] {
   opacity: 0.65;
 }
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .workflow-metadata {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .workflow-workspace {
+    display: block;
+    height: min(70dvh, 720px);
+    min-height: 420px;
+  }
+  .workflow-workspace .workflow-canvas,
+  .workflow-workspace .workflow-inspector {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+  }
+  .workflow-workspace[data-mobile-view="graph"] .workflow-inspector,
+  .workflow-workspace[data-mobile-view="inspector"] .workflow-canvas {
+    display: none;
+  }
+}
+
+@media (max-width: 639px) {
+  .workflow-metadata {
     grid-template-columns: minmax(0, 1fr);
-    height: auto;
   }
-  .workflow-workspace .workflow-canvas {
-    height: 360px;
-  }
-  .workflow-inspector {
-    max-height: 480px;
+  .workflow-workspace {
+    height: calc(100dvh - 8rem);
+    min-height: 360px;
   }
 }
