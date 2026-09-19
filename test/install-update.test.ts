@@ -77,7 +77,7 @@ else {
  }
  const finish = () => {
   const version = latest && !process.env.TEST_UNCHANGED ? '2.0.0' : '1.2.3';
-  if (process.env.TEST_BAD_BUILD) fs.writeFileSync(p.join(slot, 'dist/build-id'), 'wrong-build');
+  fs.writeFileSync(p.join(slot, 'dist/build-id'), process.env.TEST_BAD_BUILD ? 'wrong-build' : 'test-build');
   fs.writeFileSync(p.join(slot, 'package.json'), JSON.stringify({ name: '@nathanstephenson/flow', version, type: 'module' }));
   fs.writeFileSync(p.join(prefix, 'npm-finished'), 'done');
   if (process.env.TEST_FAIL === 'both' || (latest && process.env.TEST_FAIL === 'latest')) process.exit(1);

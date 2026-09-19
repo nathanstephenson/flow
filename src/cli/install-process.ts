@@ -7,6 +7,7 @@ function groupAlive(pid: number): boolean {
   try { process.kill(-pid, 0); return true; }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true;
     throw error;
   }
 }
@@ -14,7 +15,10 @@ function groupAlive(pid: number): boolean {
 async function stopGroup(pid: number): Promise<void> {
   for (const [signal, timeout] of [['SIGTERM', 1000], ['SIGKILL', 5000]] as const) {
     try { process.kill(-pid, signal); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+    }
     const deadline = Date.now() + timeout;
     while (groupAlive(pid) && Date.now() < deadline) await delay(25);
     if (!groupAlive(pid)) return;
