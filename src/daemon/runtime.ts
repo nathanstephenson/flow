@@ -61,7 +61,7 @@ export async function startRuntime(options: {
       if (running) await running.close();
       else { mcpAuth.dispose(); oidc?.dispose(); }
       ownership.release();
-    })().catch(error => { stopping = undefined; throw error; });
+    })();
     cleanup = stop;
     registerBackends(host);
     const workflows = new WorkflowStore(root);
