@@ -30,7 +30,7 @@ try {
   const archive = process.argv[2] ? resolve(process.argv[2]) : join(temp, readdirSync(temp).find(name => name.endsWith('.tgz')));
   const files = run('tar', ['-tzf', archive]).trim().split('\n');
   for (const file of files) {
-    assert.match(file, /^package\/(?:package\.json|README\.md|dist\/.*\.js|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
+    assert.match(file, /^package\/(?:package\.json|README\.md|LICEN[CS]E(?:\.(?:md|txt))?|dist\/.*\.js|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
   }
   for (const file of ['dist/cli/main.js', 'web/dist/index.html', 'build/workflow-runtime.cjs']) {
     assert.ok(files.includes(`package/${file}`), `Missing ${file}`);
