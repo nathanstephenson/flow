@@ -35,3 +35,19 @@ jobs:
       # now also the only build that embeds a web client, so it is what proves the Vite build, the
       # manifest generator and the esbuild swap in scripts/build-binary.mjs still agree.
       - run: npm run build:binary
+      - run: test "$(build/flow --version)" = "$(node -p 'require("./package.json").version')"
+
+  package:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:package

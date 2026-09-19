@@ -80,7 +80,7 @@ console.log(`bundle: ${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
 writeFileSync(
   join(out, "sea-config.json"),
-  JSON.stringify({ main: join(out, "flow.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true, assets: { 'workflow-runtime.cjs': workflowRuntime } }, null, 2),
+  JSON.stringify({ main: join(out, "flow.cjs"), output: join(out, "sea.blob"), disableExperimentalSEAWarning: true, assets: { 'workflow-runtime.cjs': workflowRuntime, 'package.json': join(root, 'package.json') } }, null, 2),
 );
 
 execFileSync(process.execPath, ["--experimental-sea-config", join(out, "sea-config.json")], { stdio: "inherit" });

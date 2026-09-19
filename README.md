@@ -8,6 +8,40 @@ Run and watch coding-agent sessions from a terminal or a browser, over more than
 
 See [CONTEXT.md](./CONTEXT.md) for the domain language and [docs/adr](./docs/adr) for decisions.
 
+## Install
+
+Requires Node.js 22 or later and npm. Linux and macOS installs are checked in CI.
+
+```bash
+npm install --global @nathanstephenson/flow
+flow --version
+flow serve
+```
+
+Open the web handoff URL printed by `flow serve`, or run `flow tui` in another terminal.
+Configure credentials for the Backend Adapter you use.
+
+To check a release from source, run `npm ci` and `npm run test:package`.
+This builds, packs, and installs the archive into a temporary prefix, then checks it
+from an unrelated directory. Build outputs are not tracked in Git.
+
+The `prepack` script builds the CLI, web client, and Workflow runtime; users do not need to build them.
+
+### Releases
+
+Publish the first version manually from a clean, tested `main` checkout, after choosing a license:
+`npm ci`, `npm run test:package`, `npm login`, then `npm publish --access public`.
+Next, configure npm Trusted Publishing for owner `nathanstephenson`, repository `flow`, and
+workflow filename `publish.yml` (GitHub Actions), with direct `npm publish` allowed.
+No npm token secret is used.
+
+For later releases, update `package.json` and both lockfile version fields through a PR, merge it,
+then push a matching stable tag such as `v0.1.1` on that `main` commit. The publish workflow
+rejects tags outside `main`, prerelease tags, and mismatched versions. It builds and tests one
+archive without publishing credentials, then publishes that exact archive with OIDC and provenance.
+Protect `main` and release-tag creation in GitHub. Tag creation is the release approval;
+do not tag a version until its license and release contents are approved.
+
 ## Publish branch names
 
 Publish offers an editable branch name before the first push. It uses the Summary Model

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +11,7 @@ import { WorkflowStore } from '../workflows/store.ts';
 import { WorkflowExecutionService } from '../daemon/workflow-executions.ts';
 import { embeddedWorkflowRuntime } from '../workflows/runtime-asset.ts';
 import { fileURLToPath } from 'node:url';
-import { isSea } from 'node:sea';
+import { getAsset, isSea } from 'node:sea';
 import { SessionHost } from "../daemon/host.ts";
 import { serve, type RunningServer } from "../daemon/server.ts";
 import { ShellRegistry } from "../daemon/shell.ts";
@@ -26,6 +27,7 @@ import type { AssetManifest } from "../web/assets.ts";
 import { runTui } from "../tui/app.ts";
 
 const USAGE = `usage:
+  flow --version                                        print the installed version
   flow tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow list                                             list Agent Sessions
@@ -69,8 +71,17 @@ async function main(): Promise<number> {
       port: { type: "string" },
       address: { type: "string" },
       help: { type: "boolean", default: false },
+      version: { type: "boolean", default: false },
     },
   });
+
+  if (values.version) {
+    const metadata = isSea()
+      ? getAsset('package.json', 'utf8')
+      : readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
+    console.log(JSON.parse(metadata).version);
+    return 0;
+  }
 
   const command = positionals[0];
   if (values.help) {
