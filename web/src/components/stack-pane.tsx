@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Plus } from "lucide-react";
-import type { StackAction, StackGraphBranch, StackPullRequest, StackReview, StackStatus } from "../../../src/protocol/stack.ts";
+import { stackDisplayGraph, type StackAction, type StackGraphBranch, type StackPullRequest, type StackReview, type StackStatus } from "../../../src/protocol/stack.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
@@ -37,7 +37,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const [syncFailed, setSyncFailed] = useState(false);
-  const [requestGeneration] = useState({ current: 0 });
+  const requestGeneration = useRef(0);
   function refresh(): Promise<void> {
     const generation = ++requestGeneration.current;
     setStatus(undefined);
@@ -47,6 +47,8 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     });
   }
   useEffect(() => {
+    setStatus(undefined);
+    setReview(undefined);
     setAdding(false);
     setNames("");
     setSyncFailed(false);
@@ -101,27 +103,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  // Managed and candidate states remain useful when broad graph discovery is unavailable.
-  const displayBranches = status?.graph?.branches.map(branch => ({ ...branch })) ?? [];
-  const displayByName = new Map(displayBranches.map(branch => [branch.name, branch]));
-  let displayParent = status?.view?.trunk ?? status?.candidate?.trunk;
-  for (const member of status?.view?.branches ?? []) {
-    const existing = displayByName.get(member.name);
-    const branch: StackGraphBranch = existing ?? { name: member.name, parent: displayParent, relation: "local", isCurrent: member.isCurrent, availability: "local" };
-    branch.pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : branch.pr;
-    branch.isCurrent = member.isCurrent;
-    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
-    displayParent = member.name;
-  }
-  displayParent = status?.candidate?.trunk;
-  for (const [index, member] of (status?.candidate?.pullRequests ?? []).entries()) {
-    const name = member.branch ?? status?.candidate?.branches?.[index] ?? `pr-${member.number}`;
-    const existing = displayByName.get(name);
-    const branch: StackGraphBranch = existing ?? { name, parent: displayParent, relation: "pull-request", isCurrent: name === status?.graph?.currentBranch, availability: "local" };
-    branch.pr = member;
-    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
-    displayParent = name;
-  }
+  const displayBranches = stackDisplayGraph(status ?? {})?.branches ?? [];
   const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
     .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {

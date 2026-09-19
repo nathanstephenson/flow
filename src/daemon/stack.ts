@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { gh, repositoryTarget, type Gh } from "./publish.ts";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
-import type { StackCandidate, StackGraph, StackGraphBranch, StackInput, StackPullRequest, StackStatus, StackView } from "../protocol/stack.ts";
+import { stackDisplayGraph, type StackCandidate, type StackGraph, type StackGraphBranch, type StackInput, type StackPullRequest, type StackStatus, type StackView } from "../protocol/stack.ts";
 
 async function git(scope: string, args: string[], write = false): Promise<string> {
   const result = await run(scope, args, write ? GIT_WRITE_TIMEOUT_MS : GIT_READ_TIMEOUT_MS);
@@ -120,33 +120,14 @@ function addWarning(warnings: string[], value: string): void {
 
 async function ancestry(scope: string, tips: string[]): Promise<(ancestor: string, descendant: string) => boolean> {
   const unique = [...new Set(tips)];
-  if (!unique.length) return () => false;
-  // One graph walk replaces the former quadratic sequence of merge-base processes.
-  const raw = await git(scope, ["rev-list", "--parents", ...unique]);
-  const parents = new Map<string, string[]>();
-  for (const line of raw.trim().split("\n").filter(Boolean)) {
-    const [commit, ...values] = line.split(" ");
-    parents.set(commit!, values);
-  }
-  // Walk only the query's ancestry. Caching each commit's transitive set used quadratic
-  // memory on linear histories and recursion overflowed on otherwise ordinary repositories.
-  const results = new Map<string, boolean>();
-  return (ancestor, descendant) => {
-    const key = `${ancestor}\0${descendant}`;
-    const cached = results.get(key);
-    if (cached !== undefined) return cached;
-    const pending = [descendant];
-    const visited = new Set<string>();
-    while (pending.length) {
-      const commit = pending.pop()!;
-      if (commit === ancestor) { results.set(key, true); return true; }
-      if (visited.has(commit)) continue;
-      visited.add(commit);
-      pending.push(...(parents.get(commit) ?? []));
-    }
-    results.set(key, false);
-    return false;
-  };
+  const merged = new Map<string, Set<string>>();
+  // Ask Git to walk each tip, but emit only matching refs. Unlike rev-list this keeps output
+  // bounded by the number of refs rather than by repository history.
+  await Promise.all(unique.map(async descendant => {
+    const raw = await git(scope, ["for-each-ref", `--merged=${descendant}`, "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+    merged.set(descendant, new Set(raw.trim().split("\n").filter(Boolean)));
+  }));
+  return (ancestor, descendant) => ancestor === descendant || Boolean(merged.get(descendant)?.has(ancestor));
 }
 
 /**
@@ -321,8 +302,11 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
   const trunkValue = trunkValues[0];
   if (trunk && trunkValue) {
     const localValues = [...reference.local.values()];
-    const isAncestor = await ancestry(scope, [...localValues, ...trunkValues].map(value => value.oid));
+    let isAncestor: ((ancestor: string, descendant: string) => boolean) | undefined;
+    try { isAncestor = await ancestry(scope, [...localValues, ...trunkValues].map(value => value.oid)); }
+    catch (error) { addWarning(warnings, `Local ancestry could not be read: ${message(error)}`); }
     const usable: string[] = [];
+    if (isAncestor) {
     for (const [branch, value] of reference.local) {
       // Either trunk tip may know that a branch is already merged. A stale local trunk
       // must never resurrect a branch contained by the remote tracking tip.
@@ -362,6 +346,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
         nodes.add(child);
         edges.set(child, { parent: trunk, relation: "ancestry" });
       }
+    }
     }
   } else if (!trunk && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
     addWarning(warnings, "The trunk branch is unknown, so local branch relationships could not be inferred.");
@@ -518,59 +503,6 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
   } catch { return; }
 }
 
-function graphFromView(view: StackView): StackGraph | undefined {
-  if (view.currentBranch === view.trunk) return;
-  let parent = view.trunk;
-  return {
-    trunk: view.trunk,
-    currentBranch: view.currentBranch,
-    explicit: true,
-    branches: view.branches.map(branch => {
-      const pr = branch.pr ? { ...branch.pr, state: branch.isMerged ? "MERGED" : branch.pr.state } : undefined;
-      const result: StackGraphBranch = { name: branch.name, parent, relation: "local", isCurrent: branch.isCurrent, availability: "local", ...(pr ? { pr } : {}) };
-      parent = branch.name;
-      return result;
-    }),
-  };
-}
-
-function graphFromCandidate(candidate: StackCandidate, currentBranch: string): StackGraph {
-  let parent = candidate.trunk;
-  return {
-    trunk: candidate.trunk,
-    currentBranch,
-    explicit: false,
-    branches: candidate.pullRequests.map(pr => {
-      const branch: StackGraphBranch = { name: pr.branch, parent, relation: "pull-request", isCurrent: pr.branch === currentBranch, availability: "local", pr };
-      parent = pr.branch;
-      return branch;
-    }),
-  };
-}
-
-function overlayDisplayGraph(graph: StackGraph | undefined, view: StackView | undefined, candidate: StackCandidate | undefined): StackGraph | undefined {
-  const display = graph ?? (view ? graphFromView(view) : candidate ? graphFromCandidate(candidate, candidate.branches.at(-1) ?? "") : undefined);
-  if (!display) return;
-  const byName = new Map(display.branches.map(branch => [branch.name, branch]));
-  const append = (branch: StackGraphBranch) => { if (!byName.has(branch.name)) { display.branches.push(branch); byName.set(branch.name, branch); } };
-  let parent = view?.trunk;
-  for (const member of view?.branches ?? []) {
-    const existing = byName.get(member.name);
-    const pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : undefined;
-    if (existing) Object.assign(existing, { isCurrent: member.isCurrent, ...(pr ? { pr } : {}) });
-    else append({ name: member.name, ...(parent ? { parent } : {}), relation: "local", isCurrent: member.isCurrent, availability: "local", ...(pr ? { pr } : {}) });
-    parent = member.name;
-  }
-  parent = candidate?.trunk;
-  for (const pr of candidate?.pullRequests ?? []) {
-    const existing = byName.get(pr.branch);
-    if (existing) existing.pr = pr;
-    else append({ name: pr.branch, ...(parent ? { parent } : {}), relation: "pull-request", isCurrent: pr.branch === display.currentBranch, availability: "local", pr });
-    parent = pr.branch;
-  }
-  return display;
-}
-
 export async function actionStackStatus(scope: string, github: Gh = gh): Promise<StackStatus> {
   const status: StackStatus = { available: false, conflicts: [], rebasing: false };
   try { await github(scope, ["stack", "--help"]); status.available = true; }
@@ -589,9 +521,9 @@ export async function actionStackStatus(scope: string, github: Gh = gh): Promise
   if (status.available) {
     try { status.view = parseStack(await github(scope, ["stack", "view", "--json"])); }
     catch (error) {
-      if (!/current branch .+ (?:is not|not) (?:a )?part of (?:a |any )?stack/i.test(message(error))) {
-        status.warnings = [`Managed stack details could not be read: ${message(error)}`];
-      }
+      if (/current branch .+ (?:is not|not) (?:a )?part of (?:a |any )?stack/i.test(message(error))) {
+        status.warnings = ["gh-stack reports that the current branch is not part of a managed stack."];
+      } else status.warnings = [`Managed stack details could not be read: ${message(error)}`];
     }
   }
   return status;
@@ -601,6 +533,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
   const status = await actionStackStatus(scope, github);
   const actionProblem = status.problemKind === "action" ? status.problem : undefined;
   if (actionProblem) { delete status.problem; delete status.problemKind; }
+  const notManagedWarning = "gh-stack reports that the current branch is not part of a managed stack.";
   const warnings = [...(status.warnings ?? [])];
   delete status.warnings;
   let discovery: Discovery | undefined;
@@ -616,6 +549,10 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
       }
     }
     for (const warning of discovery.warnings) addWarning(warnings, warning);
+    if (!discovery.snapshot?.stacks.some(stack => stack.branches.some(branch => branch.branch === discovery!.snapshot!.current))) {
+      const index = warnings.indexOf(notManagedWarning);
+      if (index >= 0) warnings.splice(index, 1);
+    }
   } catch (error) { addWarning(warnings, `Stack discovery failed: ${message(error)}`); }
   if (!status.view && !status.rebasing) {
     try {
@@ -627,7 +564,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
       if (status.graph) addWarning(warnings, `This graph is read-only because registration eligibility could not be verified: ${message(error)}`);
     }
   }
-  const displayGraph = overlayDisplayGraph(status.graph, status.view, status.candidate);
+  const displayGraph = stackDisplayGraph(status);
   if (displayGraph) status.graph = displayGraph;
   else delete status.graph;
   if (warnings.length) status.warnings = warnings;

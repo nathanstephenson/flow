@@ -46,3 +46,37 @@ export type StackStatus = {
 export type StackAction = "init" | "add" | "checkout" | "rebase" | "continue" | "abort" | "submit" | "sync";
 export type StackReview = { token: string; action: "submit" | "sync"; view: StackView };
 export type StackInput = { action: StackAction; branches?: string[]; fingerprint?: string; token?: string };
+
+/** Produce the single display graph contract used by the daemon and UI. Never mutates its inputs. */
+export function stackDisplayGraph(status: Pick<StackStatus, "graph" | "view" | "candidate">): StackGraph | undefined {
+  const { graph, view, candidate } = status;
+  let display: StackGraph | undefined = graph ? { ...graph, branches: graph.branches.map(branch => ({ ...branch, ...(branch.pr ? { pr: { ...branch.pr } } : {}) })) } : undefined;
+  if (!display && view && view.currentBranch !== view.trunk) {
+    let parent = view.trunk;
+    display = { trunk: view.trunk, currentBranch: view.currentBranch, explicit: true, branches: view.branches.map(member => {
+      const branch: StackGraphBranch = { name: member.name, parent, relation: "local", isCurrent: member.isCurrent, availability: "local", ...(member.pr ? { pr: { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } } : {}) };
+      parent = member.name;
+      return branch;
+    }) };
+  }
+  if (!display && candidate) display = { trunk: candidate.trunk, currentBranch: candidate.branches?.at(-1) ?? candidate.pullRequests.at(-1)?.branch ?? "", explicit: false, branches: [] };
+  if (!display) return;
+  const byName = new Map(display.branches.map(branch => [branch.name, branch]));
+  let parent = view?.trunk;
+  for (const member of view?.branches ?? []) {
+    const pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : undefined;
+    const branch: StackGraphBranch = byName.get(member.name) ?? { name: member.name, ...(parent ? { parent } : {}), relation: "local", isCurrent: member.isCurrent, availability: "local" };
+    Object.assign(branch, { isCurrent: member.isCurrent, ...(pr ? { pr } : {}) });
+    if (!byName.has(member.name)) { display.branches.push(branch); byName.set(member.name, branch); }
+    parent = member.name;
+  }
+  parent = candidate?.trunk;
+  for (const [index, pr] of (candidate?.pullRequests ?? []).entries()) {
+    const name = pr.branch ?? candidate?.branches?.[index] ?? `pr-${pr.number}`;
+    const branch: StackGraphBranch = byName.get(name) ?? { name, ...(parent ? { parent } : {}), relation: "pull-request", isCurrent: name === display.currentBranch, availability: "local" };
+    branch.pr = { ...pr };
+    if (!byName.has(name)) { display.branches.push(branch); byName.set(name, branch); }
+    parent = name;
+  }
+  return display;
+}

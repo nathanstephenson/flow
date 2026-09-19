@@ -18,9 +18,11 @@ function component(file: string, command: (input: any) => Promise<any>, globals:
     if (name === "react") return {
       useState: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = initial; return [states[slot], (value: any) => { states[slot] = typeof value === "function" ? value(states[slot]) : value; }]; },
       useEffect: (effect: () => void) => { effects.push(effect); },
+      useRef: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = { current: initial }; return states[slot]; },
     };
     if (name === "react/jsx-runtime") return require(name);
     if (name === "@/host.tsx") return { useHost: () => ({ connection: { command } }) };
+    if (name.endsWith("src/protocol/stack.ts")) return require("../src/protocol/stack.ts");
     return new Proxy({}, { get: (_target, key) => key });
   } });
   return { render: (name: string, props: any) => { index = 0; return module.exports[name]!(props); }, effects };
