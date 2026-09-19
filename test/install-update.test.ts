@@ -3,11 +3,17 @@ import { test } from 'node:test';
 import { build } from 'esbuild';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { alive, installation, json, type Barrier } from '../src/cli/install-guard.ts';
+import { canonicalRoot, installation, updateEligible, type Barrier, type Lease } from '../src/cli/install-guard.ts';
+import { processAlive as alive } from '../src/cli/host-control.ts';
+
+function json<T>(path: string): T | undefined {
+  try { return JSON.parse(readFileSync(path, 'utf8')) as T; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+}
 
 const bootstrap = readFileSync(resolve('src/cli/bootstrap.ts'), 'utf8').replace('    const lease = await install.register', `
     if (process.env.TEST_PAUSE) {
@@ -19,13 +25,15 @@ const bootstrap = readFileSync(resolve('src/cli/bootstrap.ts'), 'utf8').replace(
 const bundle = await build({ stdin: { contents: bootstrap, resolveDir: resolve('src/cli'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false, define: { FLOW_BUILD_ID: '"test-build"' } });
 const hostCode = `
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
+export async function runCli() {
 const root = process.env.FLOW_STATE_DIR;
 const version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url))).version;
 if (process.argv[2] === '--version') { console.log(version); }
 else {
+ mkdirSync(root, { recursive: true });
  if (process.env.TEST_RESTORE_FAIL === 'both' || (process.env.TEST_RESTORE_FAIL === 'latest' && version === '2.0.0')) { console.error('synthetic host restore failure'); process.exit(1); }
  const args = process.argv.slice(2), value = key => args[args.indexOf(key) + 1];
  const settings = { port: Number(value('--port')), address: value('--address'), cwd: process.cwd(), oidc: createHash('sha256').update(JSON.stringify(['ISSUER','CLIENT_ID','CLIENT_SECRET','PUBLIC_APP_URL'].map(k => process.env['FLOW_OIDC_' + k]?.trim() ?? ''))).digest('hex') };
@@ -43,6 +51,7 @@ else {
   writeFileSync(join(root, 'daemon.json'), JSON.stringify(identity));
  });
 }
+}
 `;
 async function until(check: () => boolean) { for (let n = 0; n < 150; n++) { if (check()) return; await delay(30); } throw new Error('Test timed out'); }
 function fixture() {
@@ -52,7 +61,7 @@ function fixture() {
   writeFileSync(join(slot, 'package.json'), JSON.stringify({ name: '@nathanstephenson/flow', version: '1.2.3', type: 'module' }));
   writeFileSync(join(slot, 'dist/build-id'), 'test-build');
   writeFileSync(join(slot, 'dist/cli/bootstrap.js'), bundle.outputFiles[0]!.text);
-  writeFileSync(join(slot, 'dist/cli/main.js'), hostCode);
+  writeFileSync(join(slot, 'dist/cli/application.js'), hostCode);
   const npm = join(temp, 'bin/npm');
   writeFileSync(npm, `#!${process.execPath}\nconst fs = require('node:fs'), p = require('node:path');
 const args = process.argv.slice(2), prefix = process.env.TEST_PREFIX, slot = p.join(prefix, 'lib/node_modules/@nathanstephenson/flow');
@@ -61,6 +70,11 @@ else if (args[0] === 'root') console.log(p.join(process.env.TEST_WRONG_PREFIX ||
 else {
  fs.appendFileSync(p.join(prefix, 'npm-log'), JSON.stringify(args) + '\\n');
  const latest = args.at(-1).endsWith('@latest');
+ if (latest && process.env.TEST_ORPHAN) {
+  const child = require('node:child_process').spawn(process.execPath, ['-e', "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'ORPHAN-CORRUPTED'), 2500)", p.join(slot, 'dist/build-id')], { stdio: 'ignore' });
+  child.once('spawn', () => process.kill(process.pid, 'SIGTERM'));
+  return;
+ }
  const finish = () => {
   const version = latest && !process.env.TEST_UNCHANGED ? '2.0.0' : '1.2.3';
   if (process.env.TEST_BAD_BUILD) fs.writeFileSync(p.join(slot, 'dist/build-id'), 'wrong-build');
@@ -75,7 +89,9 @@ else {
   delete env.NODE_OPTIONS;
   for (const key of Object.keys(env)) if (key.startsWith('FLOW_OIDC_')) delete env[key as keyof typeof env];
   const children: ChildProcess[] = [];
+  const roots = new Set([root]);
   function start(args: string[], extra: Record<string, string> = {}) {
+    roots.add(extra.FLOW_STATE_DIR ?? root);
     const child = spawn(process.execPath, [join(slot, 'dist/cli/bootstrap.js'), ...args], { env: { ...env, ...extra }, cwd: temp, stdio: ['ignore', 'pipe', 'pipe'] });
     children.push(child);
     let output = ''; child.stdout!.on('data', data => output += data); child.stderr!.on('data', data => output += data);
@@ -83,9 +99,12 @@ else {
     return { child, done };
   }
   const install = installation(slot);
-  return { temp, prefix, slot, root, env, install, start, async close() {
-    const host = json<{ pid: number }>(join(root, 'daemon.json'));
-    if (host) { try { process.kill(host.pid, 'SIGTERM'); } catch {} }
+  const leases = () => readdirSync(install.directory).filter(name => name.startsWith('lease-')).map(name => json<Lease>(join(install.directory, name))!);
+  return { temp, prefix, slot, root, env, install, leases, start, async close() {
+    for (const stateRoot of roots) {
+      const host = json<{ pid: number }>(join(stateRoot, 'daemon.json'));
+      if (host) { try { process.kill(host.pid, 'SIGTERM'); } catch {} }
+    }
     for (const child of children) if (child.exitCode === null) child.kill('SIGTERM');
     await delay(100); rmSync(temp, { recursive: true, force: true });
   } };
@@ -115,7 +134,7 @@ test('npm-link startup uses the source entry without an installation lease', asy
     renameSync(f.slot, source); symlinkSync(source, f.slot);
     const result = await f.start(['--version']).done;
     assert.equal(result.code, 0, result.output); assert.equal(result.output.trim(), '1.2.3');
-    assert.equal(f.install.leases().length, 0);
+    assert.equal(f.leases().length, 0);
     const refused = await f.start(['update']).done;
     assert.equal(refused.code, 1); assert.match(refused.output, /source and npm link are unsupported/);
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
@@ -146,12 +165,12 @@ test('a bootstrap paused before registration rejects a replaced build', async ()
     const waiting = f.start(['--version'], { TEST_PAUSE: pause });
     await until(() => existsSync(pause));
     writeFileSync(join(f.slot, 'dist/build-id'), 'replacement-build');
-    writeFileSync(join(f.slot, 'dist/cli/main.js'), "console.log('UNGUARDED MAIN');");
+    writeFileSync(join(f.slot, 'dist/cli/application.js'), "console.log('UNGUARDED MAIN');");
     rmSync(pause);
     const result = await waiting.done;
     assert.equal(result.code, 1); assert.match(result.output, /replaced during startup/);
     assert.doesNotMatch(result.output, /UNGUARDED MAIN/);
-    assert.equal(f.install.leases().length, 0);
+    assert.equal(f.leases().length, 0);
   } finally { await f.close(); }
 });
 
@@ -204,10 +223,10 @@ test('registry rejects old builds, concurrent roots, invalid owners, and dead up
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
     lease.release();
     writeFileSync(join(f.install.directory, 'lease-invalid.json'), JSON.stringify({ pid: -1, id: 'bad', root: '/', args: [] }));
-    assert.throws(() => f.install.leases(), /Invalid/);
+    await assert.rejects(f.install.beginUpdate(lease, '1.2.3'), /Invalid/);
     rmSync(join(f.install.directory, 'lease-invalid.json'));
     const exited = spawn(process.execPath, ['-e', '']); await once(exited, 'exit');
-    f.install.save({ pid: exited.pid!, id: 'dead', phase: 'replacing', previous: '1.2.3' });
+    writeFileSync(f.install.barrierPath, JSON.stringify({ pid: exited.pid!, id: 'dead', phase: 'replacing', previous: '1.2.3' }));
     const blocked = await f.start(['--version']).done;
     assert.equal(blocked.code, 1); assert.match(blocked.output, /startup blocked/);
   } finally { await f.close(); }
@@ -216,7 +235,7 @@ test('registry rejects old builds, concurrent roots, invalid owners, and dead up
 test('only a bound one-use capability passes the update barrier', async () => {
   const f = fixture();
   try {
-    f.install.save({ pid: process.pid, id: 'owner', phase: 'restoring', previous: '1.2.3', capability: { token: 'secret', root: f.root, args: ['--version'] } });
+    writeFileSync(f.install.barrierPath, JSON.stringify({ pid: process.pid, id: 'owner', phase: 'restoring', previous: '1.2.3', capability: { token: 'secret', root: f.root, args: ['--version'] } }));
     await assert.rejects(f.install.register('test-build', '/wrong-root', ['--version'], 'secret'), /blocked/);
     await assert.rejects(f.install.register('test-build', f.root, ['serve'], 'secret'), /blocked/);
     const lease = await f.install.register('test-build', f.root, ['--version'], 'secret'); lease.release();
@@ -292,7 +311,7 @@ test('OIDC mismatch and an unregistered selected host refuse before stopping', a
     await until(() => existsSync(join(f.root, 'daemon.json')));
     assert.match((await f.start(['update'], { FLOW_OIDC_ISSUER: 'https://different.invalid' }).done).output, /matching OIDC/);
     const host = json<{ pid: number }>(join(f.root, 'daemon.json'))!;
-    const lease = f.install.leases().find(lease => lease.pid === host.pid)!;
+    const lease = f.leases().find(lease => lease.pid === host.pid)!;
     rmSync(join(f.install.directory, `lease-${lease.id}.json`));
     assert.match((await f.start(['update']).done).output, /pre-guard Flow/);
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
@@ -345,11 +364,89 @@ test('mutex reaps only confirmed-dead owners and serializes live callers', async
     const mutex = join(f.install.directory, 'mutex');
     mkdirSync(mutex); writeFileSync(join(mutex, 'dead.json'), JSON.stringify({ pid: dead.pid, id: 'dead' }));
     const order: number[] = [];
-    await Promise.all([f.install.locked(() => order.push(1)), f.install.locked(() => order.push(2))]);
+    await Promise.all([1, 2].map(async n => { const lease = await f.install.register('test-build', f.root, ['list']); order.push(n); lease.release(); }));
     assert.deepEqual(order.sort(), [1, 2]);
     mkdirSync(mutex); writeFileSync(join(mutex, 'a.json'), JSON.stringify({ pid: process.pid, id: 'a' }));
-    await assert.rejects(f.install.locked(() => {}), /busy/);
+    await assert.rejects(f.install.register('test-build', f.root, ['list']), /busy/);
     assert.equal(existsSync(join(mutex, 'a.json')), true);
+  } finally { await f.close(); }
+});
+
+test('failed npm descendants are stopped before rollback unblocks startup', async () => {
+  const f = fixture();
+  try {
+    const result = await f.start(['update'], { TEST_ORPHAN: '1' }).done;
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /Reinstalled and verified/);
+    assert.equal(existsSync(f.install.barrierPath), false);
+    await delay(2700);
+    assert.equal(readFileSync(join(f.slot, 'dist/build-id'), 'utf8'), 'test-build');
+    assert.equal((await f.start(['--version']).done).output.trim(), '1.2.3');
+  } finally { await f.close(); }
+});
+
+test('uncertain npm process cleanup blocks recovery and startup', async () => {
+  const f = fixture();
+  try {
+    const entry = join(f.slot, 'dist/cli/bootstrap.js');
+    writeFileSync(entry, `const kill = process.kill; process.kill = (pid, signal) => { if (pid < 0) throw Object.assign(new Error('denied'), { code: 'EPERM' }); return kill(pid, signal); };\n` + bundle.outputFiles[0]!.text.replace(/^#!.*\n/, ''));
+    const result = await f.start(['update']).done;
+    assert.equal(result.code, 1);
+    assert.match(result.output, /Cannot confirm npm descendants stopped/);
+    assert.equal(readFileSync(join(f.prefix, 'npm-log'), 'utf8').trim().split('\n').length, 1);
+    assert.equal(existsSync(f.install.barrierPath), true);
+    assert.equal((await f.start(['--version']).done).code, 1);
+  } finally { await f.close(); }
+});
+
+test('permission changes cannot bypass a previously guarded installation', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(f.install.barrierPath, JSON.stringify({ pid: process.pid, id: 'owner', phase: 'replacing', previous: '1.2.3' }));
+    chmodSync(f.slot, 0o775);
+    const result = await f.start(['--version']).done;
+    assert.equal(result.code, 1, result.output);
+    assert.equal(existsSync(f.install.barrierPath), true);
+  } finally { await f.close(); }
+});
+
+test('new state roots resolve symlinked ancestors without creating directories', async () => {
+  const f = fixture();
+  try {
+    const alias = join(f.temp, 'alias');
+    symlinkSync(f.root, alias);
+    const pending = join(alias, 'new-state');
+    assert.equal(canonicalRoot(pending), join(f.root, 'new-state'));
+    const lease = await f.install.register('test-build', pending, ['list']);
+    assert.equal(lease.root, join(f.root, 'new-state'));
+    assert.equal(existsSync(pending), false);
+    lease.release();
+  } finally { await f.close(); }
+});
+
+test('first background start beneath a symlink remains eligible for update and restoration', async () => {
+  const f = fixture();
+  try {
+    const alias = join(f.temp, 'alias');
+    symlinkSync(f.root, alias);
+    const root = join(alias, 'new-state');
+    const extra = { FLOW_STATE_DIR: root };
+    f.start(['serve', '--background-host', '--port', '0', '--address', '127.0.0.1'], extra);
+    await until(() => existsSync(join(root, 'daemon.json')));
+    const result = await f.start(['update'], extra).done;
+    assert.equal(result.code, 0, result.output);
+    assert.equal(json<{ version: string }>(join(root, 'daemon.json'))?.version, '2.0.0');
+  } finally { await f.close(); }
+});
+
+test('private prefixes require protected ancestors, permitting trusted sticky directories', async () => {
+  const f = fixture();
+  try {
+    assert.equal(updateEligible(f.slot), true);
+    chmodSync(f.temp, 0o777);
+    assert.equal(updateEligible(f.slot), false);
+    chmodSync(f.temp, 0o1777);
+    assert.equal(updateEligible(f.slot), true);
   } finally { await f.close(); }
 });
 
@@ -359,7 +456,7 @@ test('foreground and embedded hosts are never stopped', async () => {
     try {
       f.start(['serve', '--background-host', '--port', '0', '--address', '127.0.0.1'], { TEST_MODE: mode });
       await until(() => existsSync(join(f.root, 'daemon.json')));
-      assert.match((await f.start(['update', '--force']).done).output, /foreground or embedded/);
+      assert.match((await f.start(['update', '--force']).done).output, /Only a background-owned Session Host/);
       assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
     } finally { await f.close(); }
   }

@@ -61,7 +61,7 @@ do not tag a version until its license and release contents are approved.
 
 Run `flow update` to install `@nathanstephenson/flow@latest` with the npm selected by PATH.
 Its global prefix must match this exact installation. Only user-owned prefixes without group or
-other write access are supported. Source, npm-link, root/sudo, shared prefixes, and SEA self-update
+other write access are supported; their ancestor directories must also prevent replacement by other users. Source, npm-link, root/sudo, shared prefixes, and SEA self-update
 are not supported. Ordinary commands still work for these installations. Update shared or system
 installations manually with npm after stopping all Flow processes.
 
@@ -76,11 +76,14 @@ installation lease and cannot be reliably detected. External `npm install` comma
 Flow's guard: never run them while Flow is active or an update is in progress.
 
 For eligible private installations, the guard registers every CLI process before loading application
-code. Registry errors prevent startup; they do not disable the guard. It blocks new
+code. Registry errors or changed permissions on an already guarded installation prevent startup;
+they do not disable the guard. It blocks new
 starts across state roots until update and restoration finish. Use `flow`, not `dist/cli/main.js`.
 On failure, Flow attempts to reinstall the previous exact version and restore the host. This is
 best-effort recovery, not preservation of the old package files. A failed update exits nonzero,
-even if recovery succeeds. An unchanged version is reported as unchanged. Restored Session Host
+even if recovery succeeds. npm's process group must stop before verification or rollback;
+uncertain termination retains the recovery barrier. Lifecycle scripts that detach into another
+process group are not supported. An unchanged version is reported as unchanged. Restored Session Host
 output is kept in the selected state root's private `host.log`.
 
 If the updater dies or recovery fails, startup stays blocked. The error names
