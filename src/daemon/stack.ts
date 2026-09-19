@@ -49,7 +49,7 @@ type RefState = {
 };
 
 type Edge = { parent: string; relation: NonNullable<StackGraphBranch["relation"]> };
-type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Awaited<ReturnType<typeof repositoryTarget>>; prs: PullRequest[] };
+type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Awaited<ReturnType<typeof repositoryTarget>>; prs: PullRequest[]; pullsComplete?: boolean };
 type Discovery = { graph?: StackGraph; warnings: string[]; snapshot?: DiscoverySnapshot };
 
 // Project each API page to one compact JSON line. gh forbids combining --slurp and
@@ -64,12 +64,8 @@ function message(error: unknown): string {
 function pages<T>(raw: string, label: string): T[] {
   try {
     const parsed = raw.trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as unknown);
-    // Keep accepting the old nested shape in tests and from injected Gh implementations.
-    const values = parsed.length === 1 && Array.isArray(parsed[0]) && parsed[0]!.every(Array.isArray)
-      ? (parsed[0] as T[][])
-      : parsed;
-    if (values.some(page => !Array.isArray(page))) throw new Error();
-    return (values as T[][]).flat();
+    if (parsed.some(page => !Array.isArray(page) || page.some(Array.isArray))) throw new Error();
+    return (parsed as T[][]).flat();
   } catch { throw new Error(`GitHub returned invalid ${label} data.`); }
 }
 
@@ -89,6 +85,42 @@ function validPull(pr: PullRequest): boolean {
 function sameRepository(pr: PullRequest, id: string): boolean {
   const identity = (repo: PullRequest["head"]["repo"]) => repo?.node_id ?? (repo?.id === undefined ? undefined : String(repo.id));
   return identity(pr.head.repo) === id && identity(pr.base.repo) === id;
+}
+
+async function loadPullRequests(scope: string, github: Gh, destination: Awaited<ReturnType<typeof repositoryTarget>>, current: string, localEdges: Map<string, Edge> = new Map(), explicitEdges: Map<string, Edge> = new Map(), blocked: Set<string> = new Set(), trunk = destination.defaultBranch): Promise<{ prs: PullRequest[]; warnings: string[] }> {
+  const warnings: string[] = [];
+  const load = async (query: string) => {
+    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?${query}&per_page=100`]), "pull request");
+    if (loaded.some(pr => !validPull(pr))) addWarning(warnings, "Some invalid pull request relationships were ignored.");
+    return loaded.filter(pr => validPull(pr) && sameRepository(pr, String(destination.id)));
+  };
+  const prs = await load("state=open");
+  const component = new Set([current]);
+  const queried = new Set<string>();
+  for (;;) {
+    let changed = false;
+    for (const pr of prs) {
+      if (pr.head.ref === trunk || explicitEdges.has(pr.head.ref) || blocked.has(pr.head.ref)) continue;
+      if (component.has(pr.head.ref) || (pr.base.ref !== trunk && component.has(pr.base.ref))) {
+        for (const branch of [pr.head.ref, pr.base.ref]) if (branch !== trunk && !component.has(branch)) { component.add(branch); changed = true; }
+      }
+    }
+    for (const [child, edge] of new Map([...localEdges, ...explicitEdges])) {
+      if (blocked.has(child) || (!explicitEdges.has(child) && prs.some(pr => pr.head.ref === child)) || edge.parent === trunk) continue;
+      if (component.has(child) || component.has(edge.parent)) {
+        for (const name of [child, edge.parent]) if (!component.has(name)) { component.add(name); changed = true; }
+      }
+    }
+    if (changed) continue;
+    const branch = [...component].find(name => name !== trunk && !queried.has(name) && !prs.some(pr => pr.head.ref === name && pr.state === "open"));
+    if (!branch) break;
+    queried.add(branch);
+    try {
+      const history = await load(`state=closed&head=${encodeURIComponent(`${destination.repo.split("/")[0]}:${branch}`)}`);
+      prs.push(...history.filter(pr => pr.head.ref === branch && Boolean(pr.merged_at)));
+    } catch (error) { addWarning(warnings, `Pull request ancestors for ${branch} could not be read: ${message(error)}`); }
+  }
+  return { prs, warnings };
 }
 
 async function refs(scope: string): Promise<RefState> {
@@ -149,6 +181,9 @@ async function ancestry(scope: string, tips: string[]): Promise<(ancestor: strin
  */
 export async function discoverStackGraph(scope: string, github: Gh = gh): Promise<Discovery> {
   const warnings: string[] = [];
+  const branchWarnings: { branches: string[]; text: string }[] = [];
+  const warnBranch = (branch: string, text: string) => branchWarnings.push({ branches: [branch], text });
+  const scopedWarnings = (component: Set<string>) => [...warnings, ...branchWarnings.filter(warning => warning.branches.some(branch => component.has(branch))).map(warning => warning.text)];
   const currentResult = await head(scope);
   if (!currentResult.ok) return { warnings: [currentResult.failure.message] };
   if (currentResult.value.detached) return { warnings };
@@ -165,14 +200,14 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
 
   let destination: Awaited<ReturnType<typeof repositoryTarget>> | undefined;
   let prs: PullRequest[] = [];
+  let pullsComplete = false;
   let nativeStacks: NativeStack[] = [];
   if (reference.remoteName) {
     try { destination = await repositoryTarget(scope, github); }
     catch (error) { addWarning(warnings, `GitHub stack discovery failed: ${message(error)}`); }
     if (destination) {
-      const [nativeResult, pullsResult] = await Promise.allSettled([
+      const [nativeResult] = await Promise.allSettled([
         github(scope, ["api", "--paginate", "--jq", nativeProjection, `repos/${destination.repo}/stacks?per_page=100`]),
-        github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]),
       ]);
       if (nativeResult.status === "fulfilled") {
         try {
@@ -182,20 +217,8 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
           if (nativeStacks.length !== loaded.length) addWarning(warnings, "Some invalid native stack data was ignored.");
         } catch (error) { addWarning(warnings, `Native GitHub stack data could not be parsed: ${message(error)}`); }
       } else if (!expectedNativeUnavailable(nativeResult.reason)) addWarning(warnings, `Native GitHub stacks could not be read: ${message(nativeResult.reason)}`);
-      if (pullsResult.status === "fulfilled") {
-        try {
-          const loaded = pages<PullRequest>(pullsResult.value, "pull request");
-          if (loaded.some(pr => !validPull(pr))) addWarning(warnings, "Some invalid pull request relationships were ignored.");
-          prs = loaded.filter(validPull);
-        } catch (error) { addWarning(warnings, `Pull request relationship data could not be parsed: ${message(error)}`); }
-      } else addWarning(warnings, `Pull request relationships could not be read: ${message(pullsResult.reason)}`);
     }
   }
-
-  const repositoryId = destination?.id ? String(destination.id) : undefined;
-  if (repositoryId) prs = prs.filter(pr => sameRepository(pr, repositoryId));
-  else prs = [];
-  const snapshot: DiscoverySnapshot = { current, reference, stacks, ...(destination ? { destination } : {}), prs };
 
   const nodes = new Set<string>();
   const prsByBranch = new Map<string, StackPullRequest>();
@@ -265,6 +288,34 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
   else if (explicitTrunks.size > 1) addWarning(warnings, "Conflicting explicit stack trunks were found; the trunk was left unknown.");
   else trunk = destination?.defaultBranch ?? reference.remoteHead;
 
+  const localParents = new Map<string, Edge>();
+  const ambiguousParents = new Set<string>();
+  const trunkValues = trunk ? [reference.local.get(trunk), reference.remote.get(trunk)].filter((value): value is { oid: string } => Boolean(value)) : [];
+  const trunkValue = trunkValues[0];
+  if (trunk && trunkValue) {
+    try {
+      const isAncestor = await ancestry(scope, [...reference.local.values(), ...trunkValues].map(value => value.oid));
+      const usable = [...reference.local].filter(([branch, value]) => branch !== trunk &&
+        !trunkValues.some(tip => isAncestor(value.oid, tip.oid)) && trunkValues.some(tip => isAncestor(tip.oid, value.oid)));
+      for (const [child, childRef] of usable) {
+        const ancestors = usable.filter(([parent, parentRef]) => parent !== child && parentRef.oid !== childRef.oid && isAncestor(parentRef.oid, childRef.oid));
+        const nearest = ancestors.filter(([, candidate]) => !ancestors.some(([, other]) => candidate.oid !== other.oid && isAncestor(candidate.oid, other.oid)));
+        if (nearest.length > 1) ambiguousParents.add(child);
+        else localParents.set(child, { parent: nearest[0]?.[0] ?? trunk, relation: "ancestry" });
+      }
+    } catch (error) { addWarning(warnings, `Local ancestry could not be read: ${message(error)}`); }
+  }
+
+  if (destination) {
+    try {
+      const loaded = await loadPullRequests(scope, github, destination, current, localParents, edges, blocked, trunk);
+      prs = loaded.prs;
+      pullsComplete = !loaded.warnings.length;
+      for (const warning of loaded.warnings) addWarning(warnings, warning);
+    } catch (error) { addWarning(warnings, `Pull request relationships could not be read: ${message(error)}`); }
+  }
+  const snapshot: DiscoverySnapshot = { current, reference, stacks, ...(destination ? { destination } : {}), prs, pullsComplete };
+
   const byHead = new Map<string, PullRequest[]>();
   for (const pr of prs) {
     const list = byHead.get(pr.head.ref) ?? [];
@@ -278,7 +329,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     else if (open.length > 1) {
       claimed.add(branch);
       blocked.add(branch);
-      addWarning(warnings, `Multiple open pull requests describe ${branch}; its parent was omitted.`);
+      warnBranch(branch, `Multiple open pull requests describe ${branch}; its parent was omitted.`);
     }
   }
 
@@ -295,7 +346,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     if (parents.length !== 1) {
       claimed.add(branch);
       blocked.add(branch);
-      addWarning(warnings, `Historical pull requests disagree about the parent of ${branch}; its parent was omitted.`);
+      warnBranch(branch, `Historical pull requests disagree about the parent of ${branch}; its parent was omitted.`);
       continue;
     }
     // GitHub lists newest PRs first. Equivalent historical relationships do not compete.
@@ -311,57 +362,18 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     if (!edges.has(child) && !blocked.has(child)) edges.set(child, { parent: pr.base.ref, relation: "pull-request" });
   }
 
-  const trunkValues = trunk ? [reference.local.get(trunk), reference.remote.get(trunk)].filter((value): value is { oid: string } => Boolean(value)) : [];
-  const trunkValue = trunkValues[0];
-  if (trunk && trunkValue) {
-    const localValues = [...reference.local.values()];
-    let isAncestor: ((ancestor: string, descendant: string) => boolean) | undefined;
-    try { isAncestor = await ancestry(scope, [...localValues, ...trunkValues].map(value => value.oid)); }
-    catch (error) { addWarning(warnings, `Local ancestry could not be read: ${message(error)}`); }
-    const usable: string[] = [];
-    if (isAncestor) {
-    for (const [branch, value] of reference.local) {
-      // Either trunk tip may know that a branch is already merged. A stale local trunk
-      // must never resurrect a branch contained by the remote tracking tip.
-      if (branch === trunk || trunkValues.some(tip => isAncestor(value.oid, tip.oid))) continue;
-      if (trunkValues.some(tip => isAncestor(tip.oid, value.oid))) usable.push(branch);
-    }
-    for (const child of usable) {
-      if (claimed.has(child) || blocked.has(child) || edges.has(child)) continue;
-      const childRef = reference.local.get(child)!;
-      const ancestors: string[] = [];
-      for (const parent of usable) {
-        if (parent === child) continue;
-        const parentRef = reference.local.get(parent)!;
-        if (parentRef.oid === childRef.oid) continue;
-        if (isAncestor(parentRef.oid, childRef.oid)) ancestors.push(parent);
-      }
-      const nearest: string[] = [];
-      for (const candidate of ancestors) {
-        let shadowed = false;
-        for (const other of ancestors) {
-          if (other === candidate) continue;
-          const candidateRef = reference.local.get(candidate)!;
-          const otherRef = reference.local.get(other)!;
-          if (candidateRef.oid !== otherRef.oid && isAncestor(candidateRef.oid, otherRef.oid)) { shadowed = true; break; }
-        }
-        if (!shadowed) nearest.push(candidate);
-      }
-      if (nearest.length === 1) {
-        nodes.add(child);
-        nodes.add(nearest[0]!);
-        edges.set(child, { parent: nearest[0]!, relation: "ancestry" });
-      } else if (nearest.length > 1) {
-        blocked.add(child);
-        addWarning(warnings, `Local history has multiple equally near parents for ${child}; its parent was omitted.`);
-      } else {
-        // This records the root without making a lone branch qualify as an inferred stack.
-        nodes.add(child);
-        edges.set(child, { parent: trunk, relation: "ancestry" });
-      }
-    }
-    }
-  } else if (!trunk && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
+  for (const [child, edge] of localParents) {
+    if (claimed.has(child) || blocked.has(child) || edges.has(child)) continue;
+    nodes.add(child);
+    if (edge.parent !== trunk) nodes.add(edge.parent);
+    edges.set(child, edge);
+  }
+  for (const child of ambiguousParents) {
+    if (claimed.has(child) || blocked.has(child) || edges.has(child)) continue;
+    blocked.add(child);
+    warnBranch(child, `Local history has multiple equally near parents for ${child}; its parent was omitted.`);
+  }
+  if (!trunk && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
     addWarning(warnings, "The trunk branch is unknown, so local branch relationships could not be inferred.");
   } else if (trunk && !trunkValue && new Set([...reference.local.values()].map(value => value.oid)).size >= 2 && !explicitMembers.size && !selected.size) {
     addWarning(warnings, `The trunk ${trunk} is not available in local refs, so local branch relationships could not be inferred.`);
@@ -380,7 +392,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
       if (seen !== undefined) {
         const cycle = path.slice(seen);
         for (const member of cycle) { edges.delete(member); blocked.add(member); }
-        addWarning(warnings, `A stack relationship cycle involving ${[...cycle].sort().join(", ")} was omitted.`);
+        branchWarnings.push({ branches: cycle, text: `A stack relationship cycle involving ${[...cycle].sort().join(", ")} was omitted.` });
         break;
       }
       position.set(branch, path.length);
@@ -390,7 +402,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     for (const member of path) checked.add(member);
   }
 
-  if (current === trunk || !nodes.has(current)) return { warnings, snapshot };
+  if (current === trunk || !nodes.has(current)) return { warnings: scopedWarnings(new Set([current])), snapshot };
 
   // Scope through non-trunk edges only. Trunk is a boundary, not a hub joining unrelated stacks.
   const adjacent = new Map<string, Set<string>>();
@@ -408,7 +420,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     const parent = edges.get(branch)?.parent;
     return parent !== undefined && parent !== trunk && component.has(parent);
   });
-  if (!explicit && (component.size < 2 || !related)) return { warnings, snapshot };
+  if (!explicit && (component.size < 2 || !related)) return { warnings: scopedWarnings(component), snapshot };
 
   const children = new Map<string, string[]>();
   for (const branch of component) {
@@ -434,7 +446,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
       ...(prsByBranch.has(name) ? { pr: prsByBranch.get(name)! } : {}),
     };
   });
-  return { graph: { ...(trunk ? { trunk } : {}), currentBranch: current, branches, explicit }, warnings, snapshot };
+  return { graph: { ...(trunk ? { trunk } : {}), currentBranch: current, branches, explicit }, warnings: scopedWarnings(component), snapshot };
 }
 
 type PullIndexes = { byHead: Map<string, PullRequest[]>; openByBase: Map<string, PullRequest[]> };
@@ -509,9 +521,8 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
     const current = await head(scope);
     if (!current.ok || current.value.detached) return;
     const [reference, stacks, destination] = await Promise.all([refs(scope), localStacks(scope), repositoryTarget(scope, github)]);
-    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]), "pull request");
-    if (loaded.some(pr => !validPull(pr)) || !destination.id) return;
-    const prs = loaded.filter(pr => sameRepository(pr, String(destination.id)));
+    const { prs, warnings } = await loadPullRequests(scope, github, destination, current.value.name);
+    if (warnings.length || !destination.id) return;
     return candidateFromSnapshot({ current: current.value.name, reference, stacks, destination, prs });
   } catch { return; }
 }
@@ -569,7 +580,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
   } catch (error) { addWarning(warnings, `Stack discovery failed: ${message(error)}`); }
   if (!status.view && !status.rebasing) {
     try {
-      const candidate = discovery?.snapshot ? candidateFromSnapshot(discovery.snapshot) : undefined;
+      const candidate = discovery?.snapshot?.pullsComplete ? candidateFromSnapshot(discovery.snapshot) : undefined;
       if (candidate) status.candidate = candidate;
     }
     catch (error) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Plus } from "lucide-react";
-import { stackDisplayGraph, type StackAction, type StackGraphBranch, type StackPullRequest, type StackReview, type StackStatus } from "../../../src/protocol/stack.ts";
+import { type StackAction, type StackGraphBranch, type StackPullRequest, type StackReview, type StackStatus } from "../../../src/protocol/stack.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
@@ -103,7 +103,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  const displayBranches = stackDisplayGraph(status ?? {})?.branches ?? [];
+  const displayBranches = status?.graph?.branches ?? [];
   const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
     .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {

@@ -247,6 +247,15 @@ function pr(number: number, branch: string, base: string, merged = false) {
   return { number, state: merged ? "closed" : "open", merged_at: merged ? "2026-01-01" : null,
     head: { ref: branch, repo: { node_id: "repo-id" } }, base: { ref: base, repo: { node_id: "repo-id" } } };
 }
+function pullPage(args: string[], pulls: ReturnType<typeof pr>[]) {
+  const url = new URL(args.at(-1)!, "https://api.github.com/");
+  assert.equal(url.pathname, "/repos/test/repo/pulls");
+  const state = url.searchParams.get("state");
+  assert.ok(state === "open" || state === "closed");
+  const head = url.searchParams.get("head");
+  if (state === "closed") assert.ok(head?.startsWith("test:"));
+  return JSON.stringify(pulls.filter(pr => pr.state === state && (!head || pr.head.ref === head.slice(5))));
+}
 function githubFixture(prs = [pr(23, "feature", "main", true), pr(22, "second", "feature")]) {
   const calls: string[][] = [];
   const github = async (scope: string, args: string[]) => {
@@ -256,8 +265,7 @@ function githubFixture(prs = [pr(23, "feature", "main", true), pr(22, "second", 
     if (args[0] === "api") {
       assert.equal(args[0], "api");
       assert.ok(args.includes("--jq"));
-      assert.equal(args.at(-1), "repos/test/repo/pulls?state=all&per_page=100");
-      return JSON.stringify([prs]);
+      return pullPage(args, prs);
     }
     calls.push(args);
     return "done";
@@ -389,9 +397,9 @@ function discoveryGithub(pulls: ReturnType<typeof pr>[] = [], native: any[] = []
     if (args[0] === "repo") return JSON.stringify({ id: "repo-id", defaultBranchRef: { name: "main" }, isFork: false });
     if (args[0] === "api" && args.at(-1)?.includes("/stacks?")) {
       if (options.nativeFailure) throw options.nativeFailure;
-      return JSON.stringify([native]);
+      return JSON.stringify(native);
     }
-    if (args[0] === "api" && args.at(-1)?.includes("/pulls?")) return JSON.stringify([pulls]);
+    if (args[0] === "api" && args.at(-1)?.includes("/pulls?")) return pullPage(args, pulls);
     throw new Error(`Unexpected GitHub call: ${args.join(" ")}`);
   };
   return { github, calls };
@@ -523,6 +531,127 @@ it("reports an unknown trunk for meaningful local history without guessing main"
   assert.equal(result.graph, undefined);
   assert.match(result.warnings.join("\n"), /trunk branch is unknown/);
   assert.equal(git(repo, "show-ref"), before);
+});
+
+it("queries only open PRs and merged ancestors of the current component", async () => {
+  chain();
+  const fixture = discoveryGithub([
+    pr(1, "feature", "older", true), pr(2, "older", "main", true), pr(3, "second", "feature"),
+    pr(4, "unrelated", "unrelated-base"), pr(5, "unrelated-base", "main", true),
+  ]);
+  const result = await discoverStackGraph(repo, fixture.github);
+  assert.deepEqual(result.graph?.branches.map(branch => branch.name), ["older", "feature", "second"]);
+  const queries = fixture.calls.filter(args => args.at(-1)?.includes("/pulls?")).map(args => new URL(args.at(-1)!, "https://api.github.com").searchParams);
+  assert.equal(queries.filter(query => query.get("state") === "open").length, 1);
+  assert.deepEqual(queries.filter(query => query.get("state") === "closed").map(query => query.get("head")), ["test:feature", "test:older"]);
+});
+
+it("loads merged ancestors reached through an unpublished local descendant", async () => {
+  chain();
+  git(repo, "branch", "-m", "unpublished");
+  const fixture = discoveryGithub([
+    pr(1, "feature", "older"), pr(2, "older", "oldest", true), pr(3, "oldest", "main", true),
+    pr(4, "unrelated", "unrelated-base"), pr(5, "unrelated-base", "main", true),
+  ]);
+  const status = await stackStatus(repo, fixture.github);
+  assert.deepEqual(status.graph?.branches.map(branch => [branch.name, branch.parent, branch.relation, branch.pr?.state]), [
+    ["oldest", "main", "pull-request", "MERGED"],
+    ["older", "oldest", "pull-request", "MERGED"],
+    ["feature", "older", "pull-request", "OPEN"],
+    ["unpublished", "feature", "ancestry", undefined],
+  ]);
+  assert.equal(status.candidate, undefined);
+  assert.deepEqual(status.warnings ?? [], []);
+  const queries = fixture.calls.filter(args => args.at(-1)?.includes("/pulls?")).map(args => new URL(args.at(-1)!, "https://api.github.com").searchParams);
+  assert.equal(queries.filter(query => query.get("state") === "open").length, 1);
+  assert.deepEqual(queries.filter(query => query.get("state") === "closed").map(query => query.get("head")), ["test:unpublished", "test:older", "test:oldest"]);
+});
+
+it("does not expand history through ambiguous local parents", async () => {
+  chain();
+  git(repo, "branch", "same-feature", "feature");
+  const fixture = discoveryGithub([pr(1, "feature", "older"), pr(2, "older", "main", true)]);
+  const result = await discoverStackGraph(repo, fixture.github);
+  assert.equal(result.graph, undefined);
+  assert.match(result.warnings.join("\n"), /equally near parents for second/);
+  const history = fixture.calls.filter(args => args.at(-1)?.includes("state=closed"));
+  assert.deepEqual(history.map(args => new URL(args.at(-1)!, "https://api.github.com").searchParams.get("head")), ["test:second"]);
+});
+
+it("does not expand history through a local parent superseded by an open PR", async () => {
+  chain();
+  const fixture = discoveryGithub([
+    pr(1, "feature", "unrelated-base"), pr(2, "unrelated-base", "main", true),
+    pr(3, "second", "older"), pr(4, "older", "main", true),
+  ]);
+  const result = await discoverStackGraph(repo, fixture.github);
+  assert.deepEqual(result.graph?.branches.map(branch => branch.name), ["older", "second"]);
+  assert.deepEqual(result.warnings, []);
+  const history = fixture.calls.filter(args => args.at(-1)?.includes("state=closed"));
+  assert.deepEqual(history.map(args => new URL(args.at(-1)!, "https://api.github.com").searchParams.get("head")), ["test:older"]);
+});
+
+it("keeps explicit parents ahead of PR and local parents during history discovery", async () => {
+  chain();
+  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "second" }] }] }));
+  const fixture = discoveryGithub([
+    pr(1, "feature", "unrelated-base"), pr(2, "unrelated-base", "main", true),
+    pr(3, "second", "older"), pr(4, "older", "main", true),
+  ]);
+  const result = await discoverStackGraph(repo, fixture.github);
+  assert.deepEqual(result.graph?.branches.map(branch => [branch.name, branch.parent, branch.relation]), [["second", "main", "local"]]);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(fixture.calls.filter(args => args.at(-1)?.includes("state=closed")).length, 0);
+});
+
+it("does not report ambiguity or cycles from unrelated components", async () => {
+  chain();
+  const fixture = discoveryGithub([
+    pr(1, "feature", "main"), pr(2, "second", "feature"),
+    pr(3, "unrelated", "main"), pr(4, "unrelated", "other"),
+    pr(5, "cycle-a", "cycle-b"), pr(6, "cycle-b", "cycle-a"),
+  ]);
+  const result = await discoverStackGraph(repo, fixture.github);
+  assert.deepEqual(result.graph?.branches.map(branch => branch.name), ["feature", "second"]);
+  assert.deepEqual(result.warnings, []);
+});
+
+it("does not report ambiguous local ancestry outside the current component", async () => {
+  chain();
+  git(repo, "switch", "main");
+  git(repo, "switch", "-c", "other-base");
+  git(repo, "commit", "--allow-empty", "-m", "other base");
+  git(repo, "branch", "other-equal");
+  git(repo, "switch", "-c", "other-top");
+  git(repo, "commit", "--allow-empty", "-m", "other top");
+  git(repo, "switch", "second");
+  const result = await discoverStackGraph(repo, discoveryGithub().github);
+  assert.deepEqual(result.graph?.branches.map(branch => branch.name), ["feature", "second"]);
+  assert.deepEqual(result.warnings, []);
+});
+
+it("keeps partial display data but refuses registration after an ancestor query fails", async () => {
+  chain();
+  const fixture = discoveryGithub([pr(2, "second", "feature")]);
+  const github = async (scope: string, args: string[]) => {
+    if (args.at(-1)?.includes("state=closed")) throw new Error("history unavailable");
+    return fixture.github(scope, args);
+  };
+  const status = await stackStatus(repo, github);
+  assert.ok(status.graph);
+  assert.match(status.warnings?.join("\n") ?? "", /history unavailable/);
+  assert.equal(status.candidate, undefined);
+  assert.equal(await discoverStack(repo, github), undefined);
+});
+
+it("rejects nested page arrays rather than treating them as GitHub output", async () => {
+  chain();
+  const fixture = discoveryGithub();
+  const github = async (scope: string, args: string[]) => args.at(-1)?.includes("/pulls?")
+    ? JSON.stringify([[pr(1, "feature", "main"), pr(2, "second", "feature")]])
+    : fixture.github(scope, args);
+  assert.equal(await discoverStack(repo, github), undefined);
+  assert.match((await discoverStackGraph(repo, github)).warnings.join("\n"), /invalid pull request data/);
 });
 
 it("lets a current open PR replace historical PRs for candidate registration", async () => {

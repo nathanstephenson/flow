@@ -5,6 +5,15 @@ import { runInNewContext } from "node:vm";
 import { it } from "node:test";
 import { transformSync } from "esbuild";
 
+function managedStack(branches: { name: string; pr?: { number: number; state?: string; title?: string; url?: string } | undefined; isMerged?: boolean }[]) {
+  const members = branches.map((branch, index) => ({ ...branch, isCurrent: index === branches.length - 1, isMerged: branch.isMerged ?? false, isQueued: false, needsRebase: false, ...(branch.pr ? { pr: { ...branch.pr, state: branch.pr.state ?? "OPEN" } } : {}) }));
+  const currentBranch = branches.at(-1)?.name ?? "main";
+  return {
+    view: { trunk: "main", currentBranch, branches: members },
+    graph: { trunk: "main", currentBranch, explicit: true, branches: members.map((branch, index) => ({ name: branch.name, parent: branches[index - 1]?.name ?? "main", relation: "local", availability: "local", isCurrent: branch.isCurrent, ...(branch.pr ? { pr: { ...branch.pr, state: branch.isMerged ? "MERGED" : branch.pr.state } } : {}) })) },
+  };
+}
+
 type Element = { type: string; key?: string; props: Record<string, any> };
 function component(file: string, command: (input: any) => Promise<any>, globals: Record<string, unknown> = {}) {
   const states: any[] = [];
@@ -109,7 +118,7 @@ it("refreshes Stack after a PR action or Pull", async () => {
 
 for (const candidate of [false, true]) it(`reports a ${candidate ? "candidate" : "tracked"} Stack as available`, async () => {
   let available = false;
-  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, ...(candidate ? { candidate: { pullRequests: [] } } : { view: { branches: [] } }) }));
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, ...(candidate ? { graph: managedStack([{ name: "base" }, { name: "top" }]).graph, candidate: { trunk: "main", branches: ["base", "top"], pullRequests: [{ branch: "base", number: 1, state: "OPEN" }, { branch: "top", number: 2, state: "OPEN" }], fingerprint: "fixture" } } : managedStack([{ name: "base" }])) }));
   const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
   pane.render("StackPane", props);
   pane.effects[0]!();
@@ -239,7 +248,7 @@ for (const fails of [false, true]) it(`opens and cancels new branch entry, then 
       if (fails) throw new Error("Branch already exists");
       return "Branch added";
     }
-    return { available: true, conflicts: [], rebasing: false, view: { trunk: "main", branches: [] } };
+    return { available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "feature" }]) };
   });
   const props = { sessionId: "session", onChange() {} };
   const render = () => pane.render("StackPane", props);
@@ -279,7 +288,7 @@ for (const fails of [false, true]) it(`opens and cancels new branch entry, then 
 
 for (const fails of [false, true]) it(`Stack checkout invalidates Git state after ${fails ? "failure" : "success"}`, async () => {
   let changes = 0;
-  const status = { available: true, conflicts: [], rebasing: false, view: { trunk: "main", branches: [{ name: "123" }] } };
+  const status = { available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "123" }]) };
   const pane = component("stack-pane", async (input) => {
     if (input.type === "change_stack" && fails) throw new Error("checkout failed");
     return input.type === "stack_status" ? status : "switched";
@@ -351,7 +360,8 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
   ];
   let copied: any[] = [];
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
-    ...(candidate ? { candidate: { trunk: "main", pullRequests: prs } } : { view: { trunk: "main", branches: [{ name: "base", pr: prs[0] }, { name: "unpublished" }, { name: "top", pr: prs[1] }] } }),
+    ...managedStack([{ name: "base", pr: prs[0] }, { name: "unpublished" }, { name: "top", pr: prs[1] }]),
+    ...(candidate ? { view: undefined, candidate: { trunk: "main", branches: ["base", "top"], pullRequests: prs.map((pr, index) => ({ ...pr, branch: index ? "top" : "base" })), fingerprint: "fixture" } } : {}),
   }), { Blob, ClipboardItem: class { data: any; constructor(data: any) { this.data = data; } }, navigator: { clipboard: { write: async (items: any[]) => { copied = items; } } } });
   const props = { sessionId: "session", onChange() { assert.fail("Copy must not change Git state"); } };
   pane.render("StackPane", props);
@@ -385,7 +395,7 @@ for (const candidate of [false, true]) it(`copies linked titles top to bottom fr
 
 for (const single of [false, true]) it(`reports clipboard failures for ${single ? "one PR" : "the stack"}`, async () => {
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
-    view: { trunk: "main", branches: [{ name: "base", pr: { number: 1, title: "Base", url: "https://github.com/test/repo/pull/1" } }] },
+    ...managedStack([{ name: "base", pr: { number: 1, title: "Base", url: "https://github.com/test/repo/pull/1" } }]),
   }), { Blob, ClipboardItem: class {}, navigator: { clipboard: { write: async () => { throw new Error("Permission denied"); } } } });
   const props = { sessionId: "session", onChange() {} };
   pane.render("StackPane", props);
@@ -398,7 +408,7 @@ for (const single of [false, true]) it(`reports clipboard failures for ${single 
 
 for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy without ${pr ? "PR details" : "PRs"}`, async () => {
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
-    view: { trunk: "main", branches: [{ name: "base", pr }] },
+    ...managedStack([{ name: "base", pr }]),
   }));
   const props = { sessionId: "session", onChange() {} };
   pane.render("StackPane", props);
@@ -412,9 +422,22 @@ for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy wi
   else assert.throws(single, /Missing Button/);
 });
 
+it("renders the daemon graph without rebuilding it from managed data", async () => {
+  const managed = managedStack([{ name: "managed-only", pr: { number: 99, state: "OPEN" } }]);
+  const display = managedStack([{ name: "display-only", pr: { number: 23, state: "MERGED" } }]);
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, view: managed.view, graph: display.graph }));
+  const props = { sessionId: "session", onChange() {} };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await Promise.resolve();
+  const tree = JSON.stringify(pane.render("StackPane", props));
+  assert.match(tree, /display-only/);
+  assert.doesNotMatch(tree, /#99/);
+});
+
 it("keeps merged members from the tracked stack visible", async () => {
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
-    view: { trunk: "main", branches: [{ name: "merged-member", isMerged: true, pr: { number: 23, state: "CLOSED" } }] } }));
+    ...managedStack([{ name: "merged-member", isMerged: true, pr: { number: 23, state: "CLOSED" } }]) }));
   const props = { sessionId: "session", onChange() {} };
   pane.render("StackPane", props);
   pane.effects[0]!();

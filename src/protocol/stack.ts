@@ -47,7 +47,7 @@ export type StackAction = "init" | "add" | "checkout" | "rebase" | "continue" | 
 export type StackReview = { token: string; action: "submit" | "sync"; view: StackView };
 export type StackInput = { action: StackAction; branches?: string[]; fingerprint?: string; token?: string };
 
-/** Produce the single display graph contract used by the daemon and UI. Never mutates its inputs. */
+/** Normalize display data in the daemon. Never mutates its inputs. */
 export function stackDisplayGraph(status: Pick<StackStatus, "graph" | "view" | "candidate">): StackGraph | undefined {
   const { graph, view, candidate } = status;
   let display: StackGraph | undefined = graph ? { ...graph, branches: graph.branches.map(branch => ({ ...branch, ...(branch.pr ? { pr: { ...branch.pr } } : {}) })) } : undefined;
@@ -59,7 +59,7 @@ export function stackDisplayGraph(status: Pick<StackStatus, "graph" | "view" | "
       return branch;
     }) };
   }
-  if (!display && candidate) display = { trunk: candidate.trunk, currentBranch: candidate.branches?.at(-1) ?? candidate.pullRequests.at(-1)?.branch ?? "", explicit: false, branches: [] };
+  if (!display && candidate) display = { trunk: candidate.trunk, currentBranch: candidate.branches.at(-1) ?? "", explicit: false, branches: [] };
   if (!display) return;
   const byName = new Map(display.branches.map(branch => [branch.name, branch]));
   let parent = view?.trunk;
@@ -71,8 +71,8 @@ export function stackDisplayGraph(status: Pick<StackStatus, "graph" | "view" | "
     parent = member.name;
   }
   parent = candidate?.trunk;
-  for (const [index, pr] of (candidate?.pullRequests ?? []).entries()) {
-    const name = pr.branch ?? candidate?.branches?.[index] ?? `pr-${pr.number}`;
+  for (const pr of candidate?.pullRequests ?? []) {
+    const name = pr.branch;
     const branch: StackGraphBranch = byName.get(name) ?? { name, ...(parent ? { parent } : {}), relation: "pull-request", isCurrent: name === display.currentBranch, availability: "local" };
     branch.pr = { ...pr };
     if (!byName.has(name)) { display.branches.push(branch); byName.set(name, branch); }
