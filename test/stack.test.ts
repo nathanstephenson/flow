@@ -430,6 +430,25 @@ it("loads each remote discovery resource once for status", async () => {
   assert.equal(fixture.calls.filter(args => args.at(-1)?.includes("/stacks?")).length, 1);
 });
 
+it("uses gh-compatible paginated jq projections and reads NDJSON pages", async () => {
+  chain();
+  const pulls = [pr(1, "feature", "main"), pr(2, "second", "feature")];
+  const fixture = discoveryGithub(pulls);
+  const github = async (scope: string, args: string[]) => {
+    if (args[0] === "api") {
+      assert.ok(args.includes("--paginate"));
+      assert.ok(args.includes("--jq"));
+      assert.equal(args.includes("--slurp"), false);
+      if (args.at(-1)?.includes("/pulls?")) return `${JSON.stringify([pulls[0]])}\n${JSON.stringify([pulls[1]])}`;
+    }
+    return fixture.github(scope, args);
+  };
+  const result = await discoverStackGraph(repo, github);
+  assert.deepEqual(result.graph?.branches.map(branch => branch.name), ["feature", "second"]);
+  const candidate = await discoverStack(repo, github);
+  assert.deepEqual(candidate?.branches, ["feature", "second"]);
+});
+
 it("builds a PR branching graph, keeps merged ancestors, and ignores history and unrelated roots", async () => {
   chain();
   const pulls = [

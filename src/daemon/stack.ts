@@ -52,17 +52,25 @@ type Edge = { parent: string; relation: NonNullable<StackGraphBranch["relation"]
 type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Awaited<ReturnType<typeof repositoryTarget>>; prs: PullRequest[] };
 type Discovery = { graph?: StackGraph; warnings: string[]; snapshot?: DiscoverySnapshot };
 
-const pullProjection = "map(map({number,title,html_url,state,merged_at,head:{ref:.head.ref,repo:(.head.repo|if . then {node_id,id} else null end)},base:{ref:.base.ref,repo:(.base.repo|if . then {node_id,id} else null end)}}))";
-const nativeProjection = "map(map({id,base:{ref:.base.ref},pull_requests:(.pull_requests|map({number,state,merged_at,head:{ref:.head.ref}}))}))";
+// Project each API page to one compact JSON line. gh forbids combining --slurp and
+// --jq, while --paginate applies the jq expression separately to every page.
+const pullProjection = "map({number,title,html_url,state,merged_at,head:{ref:.head.ref,repo:(.head.repo|if . then {node_id,id} else null end)},base:{ref:.base.ref,repo:(.base.repo|if . then {node_id,id} else null end)}}) | @json";
+const nativeProjection = "map({id,base:{ref:.base.ref},pull_requests:(.pull_requests|map({number,state,merged_at,head:{ref:.head.ref}}))}) | @json";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function pages<T>(raw: string, label: string): T[] {
-  const value = JSON.parse(raw) as unknown;
-  if (!Array.isArray(value) || value.some(page => !Array.isArray(page))) throw new Error(`GitHub returned invalid ${label} data.`);
-  return (value as T[][]).flat();
+  try {
+    const parsed = raw.trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as unknown);
+    // Keep accepting the old nested shape in tests and from injected Gh implementations.
+    const values = parsed.length === 1 && Array.isArray(parsed[0]) && parsed[0]!.every(Array.isArray)
+      ? (parsed[0] as T[][])
+      : parsed;
+    if (values.some(page => !Array.isArray(page))) throw new Error();
+    return (values as T[][]).flat();
+  } catch { throw new Error(`GitHub returned invalid ${label} data.`); }
 }
 
 function pullRequest(pr: { number: number; state: string; merged_at: string | null; title?: string; html_url?: string }): StackPullRequest {
@@ -123,10 +131,15 @@ async function ancestry(scope: string, tips: string[]): Promise<(ancestor: strin
   const merged = new Map<string, Set<string>>();
   // Ask Git to walk each tip, but emit only matching refs. Unlike rev-list this keeps output
   // bounded by the number of refs rather than by repository history.
-  await Promise.all(unique.map(async descendant => {
-    const raw = await git(scope, ["for-each-ref", `--merged=${descendant}`, "--format=%(objectname)", "refs/heads", "refs/remotes"]);
-    merged.set(descendant, new Set(raw.trim().split("\n").filter(Boolean)));
-  }));
+  const next = unique.values();
+  const worker = async () => {
+    for (let item = next.next(); !item.done; item = next.next()) {
+      const descendant = item.value;
+      const raw = await git(scope, ["for-each-ref", `--merged=${descendant}`, "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+      merged.set(descendant, new Set(raw.trim().split("\n").filter(Boolean)));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, unique.length) }, worker));
   return (ancestor, descendant) => ancestor === descendant || Boolean(merged.get(descendant)?.has(ancestor));
 }
 
@@ -158,8 +171,8 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     catch (error) { addWarning(warnings, `GitHub stack discovery failed: ${message(error)}`); }
     if (destination) {
       const [nativeResult, pullsResult] = await Promise.allSettled([
-        github(scope, ["api", "--paginate", "--slurp", "--jq", nativeProjection, `repos/${destination.repo}/stacks?per_page=100`]),
-        github(scope, ["api", "--paginate", "--slurp", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]),
+        github(scope, ["api", "--paginate", "--jq", nativeProjection, `repos/${destination.repo}/stacks?per_page=100`]),
+        github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]),
       ]);
       if (nativeResult.status === "fulfilled") {
         try {
@@ -496,7 +509,7 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
     const current = await head(scope);
     if (!current.ok || current.value.detached) return;
     const [reference, stacks, destination] = await Promise.all([refs(scope), localStacks(scope), repositoryTarget(scope, github)]);
-    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--slurp", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]), "pull request");
+    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]), "pull request");
     if (loaded.some(pr => !validPull(pr)) || !destination.id) return;
     const prs = loaded.filter(pr => sameRepository(pr, String(destination.id)));
     return candidateFromSnapshot({ current: current.value.name, reference, stacks, destination, prs });
