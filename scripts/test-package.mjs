@@ -25,8 +25,9 @@ let host;
 let hostClosed;
 let hostOutput = '';
 try {
-  run('npm', ['pack', '--pack-destination', temp], { cwd: root, stdio: 'inherit', timeout: 300_000 });
-  const archive = join(temp, readdirSync(temp).find(name => name.endsWith('.tgz')));
+  if (process.argv.length > 3) throw new Error('usage: test-package.mjs [archive.tgz]');
+  if (!process.argv[2]) run('npm', ['pack', '--pack-destination', temp], { cwd: root, stdio: 'inherit', timeout: 300_000 });
+  const archive = process.argv[2] ? resolve(process.argv[2]) : join(temp, readdirSync(temp).find(name => name.endsWith('.tgz')));
   const files = run('tar', ['-tzf', archive]).trim().split('\n');
   for (const file of files) {
     assert.match(file, /^package\/(?:package\.json|README\.md|dist\/.*\.js|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
