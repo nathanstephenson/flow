@@ -26,29 +26,24 @@ type PullRequest = {
   html_url?: string;
   state: string;
   merged_at: string | null;
-  created_at?: string;
-  updated_at?: string;
   head: { ref: string; repo: { node_id?: string; id?: number } | null };
   base: { ref: string; repo: { node_id?: string; id?: number } | null };
 };
 
 type NativeStack = {
   id: number;
-  number?: number;
-  open?: boolean;
   base: { ref: string };
   pull_requests: {
     number: number;
     state: string;
-    draft?: boolean;
     merged_at: string | null;
-    head: { ref: string; sha?: string };
+    head: { ref: string };
   }[];
 };
 
 type RefState = {
-  local: Map<string, { oid: string; ref: string }>;
-  remote: Map<string, { oid: string; ref: string }>;
+  local: Map<string, { oid: string }>;
+  remote: Map<string, { oid: string }>;
   remoteName?: string;
   remoteHead?: string;
 };
@@ -58,7 +53,7 @@ type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalSt
 type Discovery = { graph?: StackGraph; warnings: string[]; snapshot?: DiscoverySnapshot };
 
 const pullProjection = "map(map({number,title,html_url,state,merged_at,head:{ref:.head.ref,repo:(.head.repo|if . then {node_id,id} else null end)},base:{ref:.base.ref,repo:(.base.repo|if . then {node_id,id} else null end)}}))";
-const nativeProjection = "map(map({id,number,open,base:{ref:.base.ref},pull_requests:(.pull_requests|map({number,state,draft,merged_at,head:{ref:.head.ref,sha:.head.sha}}))}))";
+const nativeProjection = "map(map({id,base:{ref:.base.ref},pull_requests:(.pull_requests|map({number,state,merged_at,head:{ref:.head.ref}}))}))";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -96,11 +91,11 @@ async function refs(scope: string): Promise<RefState> {
     if (space < 0) continue;
     const ref = line.slice(0, space);
     const oid = line.slice(space + 1);
-    if (ref.startsWith("refs/heads/")) result.local.set(ref.slice("refs/heads/".length), { oid, ref });
+    if (ref.startsWith("refs/heads/")) result.local.set(ref.slice("refs/heads/".length), { oid });
     else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD")) {
       const short = ref.slice("refs/remotes/".length);
       const slash = short.indexOf("/");
-      if (slash >= 0 && !result.remote.has(short.slice(slash + 1))) result.remote.set(short.slice(slash + 1), { oid, ref });
+      if (slash >= 0 && !result.remote.has(short.slice(slash + 1))) result.remote.set(short.slice(slash + 1), { oid });
     }
   }
   const remotes = (await git(scope, ["remote"])).trim().split("\n").filter(Boolean);
@@ -135,16 +130,21 @@ async function ancestry(scope: string, tips: string[]): Promise<(ancestor: strin
   }
   // Walk only the query's ancestry. Caching each commit's transitive set used quadratic
   // memory on linear histories and recursion overflowed on otherwise ordinary repositories.
+  const results = new Map<string, boolean>();
   return (ancestor, descendant) => {
+    const key = `${ancestor}\0${descendant}`;
+    const cached = results.get(key);
+    if (cached !== undefined) return cached;
     const pending = [descendant];
     const visited = new Set<string>();
     while (pending.length) {
       const commit = pending.pop()!;
-      if (commit === ancestor) return true;
+      if (commit === ancestor) { results.set(key, true); return true; }
       if (visited.has(commit)) continue;
       visited.add(commit);
       pending.push(...(parents.get(commit) ?? []));
     }
+    results.set(key, false);
     return false;
   };
 }
@@ -317,7 +317,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
     if (!edges.has(child) && !blocked.has(child)) edges.set(child, { parent: pr.base.ref, relation: "pull-request" });
   }
 
-  const trunkValues = trunk ? [reference.local.get(trunk), reference.remote.get(trunk)].filter((value): value is { oid: string; ref: string } => Boolean(value)) : [];
+  const trunkValues = trunk ? [reference.local.get(trunk), reference.remote.get(trunk)].filter((value): value is { oid: string } => Boolean(value)) : [];
   const trunkValue = trunkValues[0];
   if (trunk && trunkValue) {
     const localValues = [...reference.local.values()];

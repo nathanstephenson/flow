@@ -41,24 +41,27 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
   function refresh(): Promise<void> {
     const generation = ++requestGeneration.current;
     setStatus(undefined);
-    setError("");
-    setOutput("");
     setReview(undefined);
-    return connection.command<StackStatus>({ type: "stack_status", sessionId }).then(
-      value => { if (generation === requestGeneration.current) setStatus(value); },
-      failure => { if (generation === requestGeneration.current) setError(String(failure)); },
-    );
+    return connection.command<StackStatus>({ type: "stack_status", sessionId }).then(value => {
+      if (generation === requestGeneration.current) setStatus(value);
+    });
   }
   useEffect(() => {
     setAdding(false);
     setNames("");
     setSyncFailed(false);
-    void refresh();
+    setError("");
+    setOutput("");
+    const generation = ++requestGeneration.current;
+    void connection.command<StackStatus>({ type: "stack_status", sessionId }).then(
+      value => { if (generation === requestGeneration.current) setStatus(value); },
+      failure => { if (generation === requestGeneration.current) setError(String(failure)); },
+    );
     return () => { requestGeneration.current++; };
   }, [connection, sessionId, revision]);
-  const managedVisible = Boolean(status?.view && status.view.currentBranch !== status.view.trunk);
+  const managedVisible = Boolean(status?.view && (!status.view.currentBranch || !status.view.trunk || status.view.currentBranch !== status.view.trunk));
   const diagnostic = Boolean(error || status?.warnings?.length || (status?.problem && status.problemKind !== "action"));
-  const discovered = Boolean(status?.graph || status?.rebasing);
+  const discovered = Boolean(status?.graph || managedVisible || status?.candidate || status?.rebasing);
   const visible = discovered || diagnostic || busy || Boolean(output || review || syncFailed);
   useEffect(() => { onAvailable?.(visible); }, [visible, onAvailable]);
 
@@ -98,7 +101,27 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  const displayBranches = status?.graph?.branches ?? [];
+  // Managed and candidate states remain useful when broad graph discovery is unavailable.
+  const displayBranches = status?.graph?.branches.map(branch => ({ ...branch })) ?? [];
+  const displayByName = new Map(displayBranches.map(branch => [branch.name, branch]));
+  let displayParent = status?.view?.trunk ?? status?.candidate?.trunk;
+  for (const member of status?.view?.branches ?? []) {
+    const existing = displayByName.get(member.name);
+    const branch: StackGraphBranch = existing ?? { name: member.name, parent: displayParent, relation: "local", isCurrent: member.isCurrent, availability: "local" };
+    branch.pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : branch.pr;
+    branch.isCurrent = member.isCurrent;
+    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
+    displayParent = member.name;
+  }
+  displayParent = status?.candidate?.trunk;
+  for (const [index, member] of (status?.candidate?.pullRequests ?? []).entries()) {
+    const name = member.branch ?? status?.candidate?.branches?.[index] ?? `pr-${member.number}`;
+    const existing = displayByName.get(name);
+    const branch: StackGraphBranch = existing ?? { name, parent: displayParent, relation: "pull-request", isCurrent: name === status?.graph?.currentBranch, availability: "local" };
+    branch.pr = member;
+    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
+    displayParent = name;
+  }
   const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
     .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {
@@ -151,7 +174,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
       </ul>
     </> : null}
 
-    {status?.graph && status.candidate ? <div aria-label="Branches to create" className="space-y-1">
+    {status?.candidate ? <div aria-label="Branches to create" className="space-y-1">
       <p>Branches Create stack will register (bottom to top):</p>
       <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch}>{pr.branch} · #{pr.number} {pr.state}</li>)}</ol>
     </div> : null}

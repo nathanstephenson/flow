@@ -269,6 +269,7 @@ for (const fails of [false, true]) it(`opens and cancels new branch entry, then 
     assert.match(JSON.stringify(render()), /Branch already exists/);
   } else {
     assert.throws(() => find(render(), "Input"));
+    assert.match(JSON.stringify(render()), /Branch added/);
     open().props.onClick();
     assert.equal(find(render(), "Input").props.value, "");
   }
