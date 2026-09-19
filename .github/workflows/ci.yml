@@ -50,4 +50,5 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: node --experimental-strip-types --test test/install-update.test.ts test/host-control.test.ts test/host-control-client.test.ts test/host-runtime.test.ts
       - run: npm run test:package

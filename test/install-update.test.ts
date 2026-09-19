@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { build } from 'esbuild';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -55,7 +55,7 @@ else {
 `;
 async function until(check: () => boolean) { for (let n = 0; n < 150; n++) { if (check()) return; await delay(30); } throw new Error('Test timed out'); }
 function fixture() {
-  const temp = mkdtempSync(join(tmpdir(), 'flow-update-test-'));
+  const temp = realpathSync(mkdtempSync(join(tmpdir(), 'flow-update-test-')));
   const prefix = join(temp, 'prefix'), slot = join(prefix, 'lib/node_modules/@nathanstephenson/flow'), root = join(temp, 'state');
   mkdirSync(join(slot, 'dist/cli'), { recursive: true }); mkdirSync(root); mkdirSync(join(temp, 'bin'));
   writeFileSync(join(slot, 'package.json'), JSON.stringify({ name: '@nathanstephenson/flow', version: '1.2.3', type: 'module' }));
