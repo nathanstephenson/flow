@@ -7,6 +7,8 @@ import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { hostControlRoute, type HostControl } from './host-control-routes.ts';
+import { readBody, send } from './http.ts';
 import { workflowExecutionRoutes } from './workflow-execution-routes.ts';
 import type { WorkflowExecutionService } from './workflow-executions.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
@@ -39,6 +41,7 @@ import type { TranscriptStore } from "./store.ts";
 
 export type ServeOptions = {
   host: SessionHost;
+  control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
   secrets?: SecretStore;
@@ -85,31 +88,66 @@ export type RunningServer = {
   /** Present only when browser access is delegated to an external OpenID Provider. */
   oidc?: OidcGate;
   close(): Promise<void>;
+  stopAdmission(interrupt?: () => Promise<void>, timeoutMs?: number): Promise<void>;
 };
 
 export async function serve(options: ServeOptions): Promise<RunningServer> {
   const address = options.address ?? "127.0.0.1";
+  let stopping = false;
+  const pending = new Set<Promise<unknown>>();
+  const sockets = new Set<Duplex>();
+  const track = (work: Promise<unknown>) => { pending.add(work); void work.finally(() => pending.delete(work)); };
   const server = createServer((request, response) => {
-    void handle(request, response, options).catch((error: unknown) => {
+    let path: string;
+    try { path = new URL(request.url ?? '/', 'http://localhost').pathname; }
+    catch { send(response, 400, { error: 'Invalid request URL' }); return; }
+    if (options.control && (path === '/api/host' || path === '/api/host/stop')) {
+      if (!originAllowed(request, options.oidc?.config.publicAppUrl)) { send(response, 403, {}); return; }
+      if (!tokenMatches(options.token, presentedBearer(request))) { unauthorized(response); return; }
+      void hostControlRoute(request, response, path, options.control, {
+        isStopping: () => stopping, hasPending: () => pending.size > 0, stop: () => { stopping = true; },
+      });
+      return;
+    }
+    if (stopping) { send(response, 503, { error: 'Session Host is stopping' }); return; }
+    const work = handle(request, response, options).catch((error: unknown) => {
       send(response, 500, { error: error instanceof Error ? error.message : String(error) });
     });
+    track(work);
   });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
 
   const shells = options.shells;
   if (shells) {
     server.on("upgrade", (request, socket, head) => {
-      void handleUpgrade(request, socket, head, options, shells).catch(() => refuse(socket, 500));
+      if (stopping) { refuse(socket, 503); return; }
+      track(handleUpgrade(request, socket, head, options, shells).catch(() => refuse(socket, 500)));
     });
   }
 
-  await new Promise<void>((resolve) => server.listen(options.port ?? 0, address, resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(options.port ?? 0, address, () => { server.off('error', reject); resolve(); });
+  });
   const port = (server.address() as AddressInfo).port;
 
   return {
     server,
     url: `http://${address}:${port}`,
     ...(options.oidc === undefined ? {} : { oidc: options.oidc }),
+    stopAdmission: async (interrupt, timeoutMs = 10000) => {
+      stopping = true;
+      for (const socket of sockets) socket.destroy();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.all([...pending, interrupt?.()]),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Session Host drain timed out; ownership retained')), timeoutMs); }),
+        ]);
+      } finally { clearTimeout(timer); }
+    },
     close: () => {
+      for (const socket of sockets) socket.destroy();
       options.mcpAuth?.dispose();
       options.oidc?.dispose();
       return new Promise<void>((resolve, reject) =>
@@ -953,24 +991,4 @@ function presentedToken(request: IncomingMessage): string | undefined {
   const cookie = request.headers.cookie;
   const match = cookie ? /(?:^|;\s*)flow=([^;]+)/.exec(cookie) : null;
   return match?.[1];
-}
-
-async function readBody(request: IncomingMessage, limit?: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (limit !== undefined && size > limit) throw new Error("Request body too large");
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8") || "{}";
-}
-
-function send(response: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  response.writeHead(status, {
-    "content-type": "application/json",
-    "content-length": Buffer.byteLength(payload),
-  });
-  response.end(payload);
 }
