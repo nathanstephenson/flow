@@ -60,7 +60,7 @@ it('requires bearer control, exact instance, and force for active work; closes a
   const backend = new FakeBackend(); host.registerBackend(backend);
   const identity: HostIdentity = { instanceId: 'instance', pid: process.pid, version: 'test', token: 'secret', url: '', mode: 'background', settings: { port: 0, address: '127.0.0.1', cwd: process.cwd(), oidc: oidcFingerprint() } };
   let stopped = 0;
-  const running = await serve({ host, token: identity.token, assets: {}, control: { identity, stop: async () => { stopped++; } } });
+  const running = await serve({ host, token: identity.token, assets: {}, control: { identity, hasActiveWork: () => host.hasActiveWork(), stop: async () => { stopped++; } } });
   const request = (path: string, body?: unknown, headers: Record<string, string> = { authorization: 'Bearer secret' }) => fetch(`${running.url}${path}`, { headers, ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) });
   try {
     assert.equal((await request('/api/sessions', undefined, { cookie: 'flow=secret' })).status, 200);
@@ -103,7 +103,7 @@ it('refuses occupied Workflow test slots and live Shells even when the parent is
   let exit: ((event: { exitCode: number }) => void) | undefined;
   const shells = new ShellRegistry({ loadPty: async () => ({ spawn: () => ({ onData() {}, onExit(listener) { exit = listener; }, write() {}, resize() {}, kill() { exit?.({ exitCode: 0 }); } }) }) });
   const identity = { instanceId: 'work', token: 'secret' } as HostIdentity;
-  const running = await serve({ host, token: 'secret', assets: {}, shells, workflowExecutions: service, control: { identity, stop: async () => {} } });
+  const running = await serve({ host, token: 'secret', assets: {}, shells, workflowExecutions: service, control: { identity, hasActiveWork: () => host.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => service.list(session.id).occupied), stop: async () => {} } });
   const stop = () => fetch(`${running.url}/api/host/stop`, { method: 'POST', headers: { authorization: 'Bearer secret' }, body: JSON.stringify({ instanceId: 'work' }) });
   try {
     const sessionId = await host.create({ scope: root, backend: 'fake' });
@@ -154,7 +154,7 @@ it('force stop cancels incomplete command bodies and interrupts active work befo
   let finish!: () => void;
   let fail!: (error: unknown) => void;
   const stopped = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
-  const running = await serve({ host, token: 'secret', assets: {}, control: { identity, stop: async () => {
+  const running = await serve({ host, token: 'secret', assets: {}, control: { identity, hasActiveWork: () => host.hasActiveWork(), stop: async () => {
     try { await running.stopAdmission(() => host.shutdown(), 500); finish(); }
     catch (error) { fail(error); }
   } } });

@@ -7,6 +7,8 @@ import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { hostControlRoute, type HostControl } from './host-control-routes.ts';
+import { readBody, send } from './http.ts';
 import { workflowExecutionRoutes } from './workflow-execution-routes.ts';
 import type { WorkflowExecutionService } from './workflow-executions.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
@@ -39,7 +41,7 @@ import type { TranscriptStore } from "./store.ts";
 
 export type ServeOptions = {
   host: SessionHost;
-  control?: { identity: import('./ownership.ts').HostIdentity; stop(): Promise<void> };
+  control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
   secrets?: SecretStore;
@@ -102,19 +104,9 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     if (options.control && (path === '/api/host' || path === '/api/host/stop')) {
       if (!originAllowed(request, options.oidc?.config.publicAppUrl)) { send(response, 403, {}); return; }
       if (!tokenMatches(options.token, presentedBearer(request))) { unauthorized(response); return; }
-      if (path === '/api/host' && request.method === 'GET') {
-        send(response, 200, { ...options.control.identity, token: undefined, stopping }); return;
-      }
-      if (path !== '/api/host/stop' || request.method !== 'POST') { send(response, 405, {}); return; }
-      void readBody(request, 4096).then(text => {
-        const body = JSON.parse(text);
-        if (body.instanceId !== options.control!.identity.instanceId) { send(response, 409, { error: 'Session Host instance changed' }); return; }
-        const busy = pending.size > 0 || options.host.hasActiveWork() || options.shells?.hasLiveShells() || options.host.list().some(session => options.workflowExecutions?.list(session.id).occupied);
-        if (!stopping && busy && body.force !== true) { send(response, 409, { error: 'Session Host has active work; use --force to interrupt it' }); return; }
-        stopping = true;
-        send(response, 202, { stopping: true });
-        setImmediate(() => { void options.control!.stop().catch(error => console.error(error)); });
-      }).catch(error => send(response, 400, { error: String(error) }));
+      void hostControlRoute(request, response, path, options.control, {
+        isStopping: () => stopping, hasPending: () => pending.size > 0, stop: () => { stopping = true; },
+      });
       return;
     }
     if (stopping) { send(response, 503, { error: 'Session Host is stopping' }); return; }
@@ -999,24 +991,4 @@ function presentedToken(request: IncomingMessage): string | undefined {
   const cookie = request.headers.cookie;
   const match = cookie ? /(?:^|;\s*)flow=([^;]+)/.exec(cookie) : null;
   return match?.[1];
-}
-
-async function readBody(request: IncomingMessage, limit?: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += (chunk as Buffer).length;
-    if (limit !== undefined && size > limit) throw new Error("Request body too large");
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString("utf8") || "{}";
-}
-
-function send(response: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  response.writeHead(status, {
-    "content-type": "application/json",
-    "content-length": Buffer.byteLength(payload),
-  });
-  response.end(payload);
 }

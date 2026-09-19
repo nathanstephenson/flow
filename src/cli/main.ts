@@ -1,25 +1,19 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { readFileSync, statSync, mkdirSync, realpathSync, openSync, closeSync, fchmodSync } from "node:fs";
-import { spawn } from 'node:child_process';
-import { acquireHost, readHost, oidcFingerprint, type HostIdentity } from '../daemon/ownership.ts';
+import { readFileSync } from "node:fs";
+import { getHostStatus, launchBackground, requestHostStop, requireRestartable, waitUntil } from './host-control.ts';
+import { readHost, oidcFingerprint, type HostIdentity } from '../daemon/ownership.ts';
+import { startRuntime } from '../daemon/runtime.ts';
 import { join, resolve } from "node:path";
 
-import { registerBackends } from "../backend/registry.ts";
-import { createOidcGateFromEnv, readOrCreateToken } from "../daemon/auth.ts";
 import { ConfigStore } from "../daemon/config-store.ts";
-import { SecretStore } from '../daemon/secret-store.ts';
-import { WorkflowStore } from '../workflows/store.ts';
-import { WorkflowExecutionService } from '../daemon/workflow-executions.ts';
 import { embeddedWorkflowRuntime } from '../workflows/runtime-asset.ts';
 import { fileURLToPath } from 'node:url';
 import { getAsset, isSea } from 'node:sea';
-import { SessionHost } from "../daemon/host.ts";
-import { serve, type RunningServer } from "../daemon/server.ts";
-import { ShellRegistry } from "../daemon/shell.ts";
+import type { RunningServer } from "../daemon/server.ts";
 import { EMBEDDED } from "../web/embedded.ts";
 import { manifestOf, NoWebBuild } from "../web/manifest.ts";
-import { defaultStateRoot, TranscriptStore } from "../daemon/store.ts";
+import { defaultStateRoot } from "../daemon/store.ts";
 import { connect, type Connection } from "../client/connection.ts";
 import { answerLines } from "../client/enquiry.ts";
 import { authorisationLabel } from "../client/permission.ts";
@@ -98,7 +92,7 @@ async function main(): Promise<number> {
   if (command === "serve") {
     if (positionals.length > 2) throw new Error(`Unexpected serve arguments: ${positionals.slice(2).join(' ')}`);
     if (positionals[1]) return await controlHost(positionals[1], values);
-    const { running, daemon } = await startHost(
+    const { running, daemon, stop } = await startHost(
       values.port ? Number(values.port) : undefined,
       values.address,
       values['background-host'] ? 'background' : 'foreground',
@@ -118,6 +112,7 @@ async function main(): Promise<number> {
       console.log(`  web handoff: ${daemon.url}/auth?token=${daemon.token}`);
     }
     await new Promise<void>((resolve) => running.server.on("close", resolve));
+    await stop();
     return 0;
   }
 
@@ -174,121 +169,32 @@ function configuredScope(): string | undefined {
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */
 const LOOPBACK = "127.0.0.1";
 
-/** How often a running Session Host sweeps for Settled Agent Sessions past their window. */
-const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
-
 async function startHost(
   port?: number,
   address?: string,
   mode: HostIdentity['mode'] = 'embedded',
 ): Promise<{ running: RunningServer; daemon: Daemon; stop: () => Promise<void> }> {
-  const ownership = acquireHost(defaultStateRoot());
-  const root = ownership.root;
-  let cleanup: (() => Promise<void>) | undefined;
-  try {
-    const previous = readHost(root);
-    if (previous && await reachable(previous)) throw new Error('A Session Host is already reachable for this state root');
-    // One owner of config.json, read through by both the reaper and the HTTP surface, so a Setting
-    // changed from a browser applies to this daemon rather than to the next one.
-    const config = new ConfigStore(root);
-    const { McpAuth } = await import("../daemon/mcp-auth.ts");
-    const mcpAuth = new McpAuth(root);
-    if (config.warning) console.error(`  WARNING: ${config.warning}`);
-
-    // One store, shared: the Session Host writes Attachments through it and the HTTP surface reads
-    // them back through the same one, so there is no second opinion about where they live.
-    const store = new TranscriptStore(root);
-    const secrets = new SecretStore(root);
-    const host = new SessionHost({
-      store,
-      resolveSecret: (name) => secrets.resolve(name),
-      retention: config.retention,
-      mcpConnections: config.mcpConnections,
-      mcpAuth,
-      standingAuthorisations: config.standingAuthorisations,
-      allowTool: config.allowTool,
-      defaultBackend: config.defaultBackend,
-      defaultModel: config.defaultModel,
-      defaultEffort: config.defaultEffort,
-      autoCompaction: config.autoCompaction,
-      summaryModel: config.summaryModel,
-    });
-    cleanup = async () => { await host.shutdown(); mcpAuth.dispose(); };
-    registerBackends(host);
-    const workflows = new WorkflowStore(root);
-    const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config,
-      isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)));
-    // load() sweeps once, so a daemon that was off for a week catches up on the way in.
-    await host.load();
-    workflowExecutions.reconcile();
-    // unref: a one-shot prompt and the tests build a host in-process and must still be able to exit.
-    // `void`-ed rather than awaited: the sweep now runs git to decide whether a worktree is safe to
-    // remove, and nothing is waiting on the answer.
-    let reaping = Promise.resolve();
-    const sweep = setInterval(() => { reaping = reaping.then(async () => { await host.reap(); }); }, SWEEP_INTERVAL_MS);
-    sweep.unref();
-
-    // Shells exit with the Agent Session they were opened beside. The host announces the closure and
-    // stays ignorant of what listened — it owns Agent Sessions, not the things hanging off them.
-    const shells = new ShellRegistry();
-    host.onSessionClosed((sessionId) => shells.killFor(sessionId));
-    cleanup = async () => { clearInterval(sweep); await host.shutdown(); await shells.killAll(); mcpAuth.dispose(); };
-
-    const token = readOrCreateToken(root);
-    // Discovery happens before listen(): partial configuration, an issuer mismatch, or an unreachable
-    // provider fails closed without briefly exposing a host under local-mode browser semantics.
-    const oidc = await createOidcGateFromEnv(root);
-    let running: RunningServer | undefined;
-    let stopping: Promise<void> | undefined;
-    const signal = () => { void stop().then(() => process.exit(0), error => { console.error(error); }); };
-    const stop = (): Promise<void> => stopping ??= (async () => {
-      clearInterval(sweep);
-      await running?.stopAdmission(async () => { await Promise.all([host.shutdown(), shells.killAll(), reaping]); });
-      if (running) await running.stopAdmission(() => host.shutdown());
-      else await host.shutdown();
-      await shells.killAll();
-      if (running) await running.close();
-      else { mcpAuth.dispose(); oidc?.dispose(); }
-      ownership.release();
-      process.off('SIGINT', signal);
-      process.off('SIGTERM', signal);
-      process.off('SIGHUP', signal);
-    })();
-    cleanup = stop;
-    const identity: HostIdentity = {
-      instanceId: ownership.instanceId, pid: process.pid, version: installedVersion(), url: '', token, mode,
-      settings: { port: port ?? 0, address: address ?? LOOPBACK, cwd: process.cwd(), oidc: oidcFingerprint() },
-    };
-    running = await serve({
-      control: { identity, stop },
-      host,
-      token,
-      shells,
-      config,
-      mcpAuth,
-      store,
-      workflows,
-      secrets,
-      workflowExecutions,
-      assets: webClient(),
-      scope: process.cwd(),
-      ...(oidc === undefined ? {} : { oidc }),
-      ...(port === undefined ? {} : { port }),
-      ...(address === undefined ? {} : { address }),
-    });
-    // Clients on this machine should dial loopback even when the socket is bound wider.
-    const url = running.url.replace(`//${address ?? LOOPBACK}:`, `//${LOOPBACK}:`);
-    identity.url = url;
-    ownership.publish(identity);
-    process.on('SIGINT', signal);
-    process.on('SIGTERM', signal);
-    process.on('SIGHUP', signal);
-    return { running, daemon: { url, token }, stop };
-  } catch (error) {
-    await cleanup?.();
-    ownership.release();
-    throw error;
-  }
+  const runtime = await startRuntime({
+    root: defaultStateRoot(), version: installedVersion(), mode, assets: webClient,
+    workflowRuntime: () => isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)),
+    ...(port === undefined ? {} : { port }), ...(address === undefined ? {} : { address }),
+  });
+  const stop = async () => {
+    await runtime.stop();
+    process.off('SIGINT', signal);
+    process.off('SIGTERM', signal);
+    process.off('SIGHUP', signal);
+  };
+  const signal = () => { void stop().then(() => process.exit(0), error => console.error(error)); };
+  process.on('SIGINT', signal);
+  process.on('SIGTERM', signal);
+  process.on('SIGHUP', signal);
+  runtime.running.server.once('close', () => {
+    process.off('SIGINT', signal);
+    process.off('SIGTERM', signal);
+    process.off('SIGHUP', signal);
+  });
+  return { ...runtime, stop };
 }
 
 /**
@@ -453,56 +359,17 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
   }
 }
 
-async function hostStatus(identity: HostIdentity): Promise<HostIdentity | undefined> {
-  try {
-    const response = await fetch(`${identity.url}/api/host`, { headers: { authorization: `Bearer ${identity.token}` }, signal: AbortSignal.timeout(1000) });
-    if (!response.ok) return undefined;
-    const status = await response.json() as HostIdentity;
-    return status.instanceId === identity.instanceId ? status : undefined;
-  } catch { return undefined; }
-}
-
-async function waitUntil(check: () => Promise<boolean>, message: string): Promise<void> {
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    if (await check()) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(message);
-}
-
 async function startBackground(settings: HostIdentity['settings']): Promise<void> {
-  mkdirSync(resolve(defaultStateRoot()), { recursive: true, mode: 0o700 });
-  const root = realpathSync(resolve(defaultStateRoot()));
-  const logPath = join(root, 'host.log');
-  const log = openSync(logPath, 'a', 0o600);
-  let child: ReturnType<typeof spawn>;
-  try {
-    fchmodSync(log, 0o600);
-    child = spawn(process.execPath, [...(isSea() ? [] : [...process.execArgv, resolve(process.argv[1]!)]), 'serve', '--background-host', '--port', String(settings.port), '--address', settings.address], {
-      cwd: settings.cwd, detached: true, stdio: ['ignore', log, log], env: { ...process.env, FLOW_STATE_DIR: root },
-    });
-  } finally { closeSync(log); }
-  let failure: Error | undefined;
-  child.on('error', error => { failure = error; });
-  child.on('exit', code => { failure = new Error(`Session Host startup failed (${code})`); });
-  child.unref();
-  try {
-    await waitUntil(async () => {
-      if (failure) throw failure;
-      const identity = readHost(root);
-      return !!identity && identity.pid === child.pid && !!await hostStatus(identity);
-    }, 'Session Host startup timed out; inspect serve status before retrying');
-  } catch (error) {
-    child.kill('SIGTERM');
-    throw new Error(`${error instanceof Error ? error.message : String(error)}; see ${logPath}`);
-  }
+  await launchBackground({
+    root: defaultStateRoot(), settings, env: process.env,
+    entry: isSea() ? [] : [...process.execArgv, resolve(process.argv[1]!)],
+  });
   console.log('Session Host started');
 }
 
 async function controlHost(command: string, values: { port?: string; address?: string; force: boolean }): Promise<number> {
   const identity = readHost(defaultStateRoot());
-  const status = identity ? await hostStatus(identity) : undefined;
+  const status = identity ? await getHostStatus(identity).catch(() => undefined) : undefined;
   if (command === 'status') {
     console.log(`Installed version: ${installedVersion()}`);
     console.log(status ? `Session Host: ${status.mode} ${status.url}\nRunning version: ${status.version}` : 'Session Host: not reachable');
@@ -515,16 +382,8 @@ async function controlHost(command: string, values: { port?: string; address?: s
   }
   if (command !== 'stop' && command !== 'restart') throw new Error(`Unknown serve command: ${command}`);
   if (!identity || !status) throw new Error('No reachable Session Host');
-  if (command === 'restart') {
-    if (status.mode !== 'background') throw new Error('Only a background-owned Session Host can restart');
-    if (status.settings.oidc !== oidcFingerprint()) throw new Error('Restart requires matching OIDC configuration');
-    if (!statSync(status.settings.cwd).isDirectory()) throw new Error('Saved working directory is unavailable');
-  }
-  const response = await fetch(`${identity.url}/api/host/stop`, {
-    method: 'POST', headers: { authorization: `Bearer ${identity.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ instanceId: identity.instanceId, force: values.force }), signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) throw new Error(await response.text());
+  if (command === 'restart') requireRestartable(status);
+  await requestHostStop(identity, values.force);
   await waitUntil(async () => readHost(defaultStateRoot())?.instanceId !== identity.instanceId, 'Session Host stop timed out; it is still stopping');
   console.log('Session Host stopped');
   if (command === 'restart') await startBackground(status.settings);

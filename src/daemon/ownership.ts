@@ -8,6 +8,8 @@ export type HostIdentity = {
   settings: { port: number; address: string; cwd: string; oidc: string };
 };
 
+export type HostStatus = Omit<HostIdentity, 'token'> & { stopping: boolean };
+
 export function oidcFingerprint(env: NodeJS.ProcessEnv = process.env): string {
   return createHash('sha256').update(JSON.stringify(['ISSUER', 'CLIENT_ID', 'CLIENT_SECRET', 'PUBLIC_APP_URL'].map(key => env[`FLOW_OIDC_${key}`]?.trim() ?? ''))).digest('hex');
 }
