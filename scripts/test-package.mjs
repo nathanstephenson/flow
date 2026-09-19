@@ -30,9 +30,9 @@ try {
   const archive = process.argv[2] ? resolve(process.argv[2]) : join(temp, readdirSync(temp).find(name => name.endsWith('.tgz')));
   const files = run('tar', ['-tzf', archive]).trim().split('\n');
   for (const file of files) {
-    assert.match(file, /^package\/(?:package\.json|README\.md|LICEN[CS]E(?:\.(?:md|txt))?|dist\/.*\.js|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
+    assert.match(file, /^package\/(?:package\.json|README\.md|LICEN[CS]E(?:\.(?:md|txt))?|dist\/.*\.js|dist\/build-id|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
   }
-  for (const file of ['dist/cli/main.js', 'web/dist/index.html', 'build/workflow-runtime.cjs']) {
+  for (const file of ['dist/cli/bootstrap.js', 'dist/build-id', 'dist/cli/main.js', 'web/dist/index.html', 'build/workflow-runtime.cjs']) {
     assert.ok(files.includes(`package/${file}`), `Missing ${file}`);
   }
   run('npm', ['install', '--global', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', archive], {
@@ -42,6 +42,15 @@ try {
   assert.equal(run(flow, ['--version']).trim(), metadata.version);
   assert.match(run(flow, ['--help']), /usage:/);
   assert.throws(() => run(flow, ['serve', 'start', 'extra']), /Unexpected serve arguments/);
+  const installed = join(prefix, 'lib/node_modules', metadata.name);
+  assert.throws(() => run(process.execPath, [join(installed, 'dist/cli/main.js'), '--version']), /internal CLI entry/);
+  assert.throws(() => run(flow, ['update', '--force', 'extra']), /usage: flow update/);
+  assert.throws(() => run(flow, ['--force', 'update']), /Use flow update/);
+  const registry = join(prefix, '.flow-installations', readdirSync(join(prefix, '.flow-installations'))[0]);
+  const barrier = join(registry, 'update.json');
+  writeFileSync(barrier, JSON.stringify({ pid: process.pid, id: 'smoke', phase: 'replacing', previous: metadata.version }));
+  assert.throws(() => run(flow, ['--version']), /startup blocked/);
+  rmSync(barrier);
 
   host = spawn(flow, ['serve', '--port', '0'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
   hostClosed = once(host, 'close');

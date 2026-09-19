@@ -10,7 +10,7 @@
     "node": ">=22"
   },
   "bin": {
-    "flow": "./dist/cli/main.js"
+    "flow": "./dist/cli/bootstrap.js"
   },
   "files": [
     "dist/",
