@@ -37,28 +37,28 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
   const [error, setError] = useState("");
   const [output, setOutput] = useState("");
   const [syncFailed, setSyncFailed] = useState(false);
-  async function refresh() {
-    setStatus(await connection.command<StackStatus>({ type: "stack_status", sessionId }));
-  }
-  useEffect(() => {
-    let cancelled = false;
-    // Branch, session, and explicit refresh transitions must not retain the prior graph or error.
+  const [requestGeneration] = useState({ current: 0 });
+  function refresh(): Promise<void> {
+    const generation = ++requestGeneration.current;
     setStatus(undefined);
     setError("");
     setOutput("");
     setReview(undefined);
+    return connection.command<StackStatus>({ type: "stack_status", sessionId }).then(
+      value => { if (generation === requestGeneration.current) setStatus(value); },
+      failure => { if (generation === requestGeneration.current) setError(String(failure)); },
+    );
+  }
+  useEffect(() => {
     setAdding(false);
     setNames("");
     setSyncFailed(false);
-    void connection.command<StackStatus>({ type: "stack_status", sessionId }).then(
-      (value) => { if (!cancelled) setStatus(value); },
-      (failure: unknown) => { if (!cancelled) setError(String(failure)); },
-    );
-    return () => { cancelled = true; };
+    void refresh();
+    return () => { requestGeneration.current++; };
   }, [connection, sessionId, revision]);
-  const managedVisible = Boolean(status?.view && (!status.view.currentBranch || !status.view.trunk || status.view.currentBranch !== status.view.trunk));
+  const managedVisible = Boolean(status?.view && status.view.currentBranch !== status.view.trunk);
   const diagnostic = Boolean(error || status?.warnings?.length || (status?.problem && status.problemKind !== "action"));
-  const discovered = Boolean(status?.graph || managedVisible || status?.candidate || status?.rebasing);
+  const discovered = Boolean(status?.graph || status?.rebasing);
   const visible = discovered || diagnostic || busy || Boolean(output || review || syncFailed);
   useEffect(() => { onAvailable?.(visible); }, [visible, onAvailable]);
 
@@ -98,28 +98,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  // Normalize every status shape into one display graph. Managed and candidate status can
-  // legitimately exist without broad discovery (for example when GitHub is unavailable).
-  const displayBranches = status?.graph?.branches.map(branch => ({ ...branch })) ?? [];
-  const displayByName = new Map(displayBranches.map(branch => [branch.name, branch]));
-  let displayParent = status?.view?.trunk ?? status?.candidate?.trunk;
-  for (const member of status?.view?.branches ?? []) {
-    const existing = displayByName.get(member.name);
-    const branch: StackGraphBranch = existing ?? { name: member.name, parent: displayParent, relation: "local", isCurrent: member.isCurrent, availability: "local" };
-    branch.pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : branch.pr;
-    branch.isCurrent = member.isCurrent;
-    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
-    displayParent = member.name;
-  }
-  displayParent = status?.candidate?.trunk;
-  for (const [index, member] of (status?.candidate?.pullRequests ?? []).entries()) {
-    const name = member.branch ?? status?.candidate?.branches?.[index] ?? `pr-${member.number}`;
-    const existing = displayByName.get(name);
-    const branch: StackGraphBranch = existing ?? { name, parent: displayParent, relation: "pull-request", isCurrent: name === status?.graph?.currentBranch, availability: "local" };
-    branch.pr = member;
-    if (!existing) { displayBranches.push(branch); displayByName.set(branch.name, branch); }
-    displayParent = name;
-  }
+  const displayBranches = status?.graph?.branches ?? [];
   const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
     .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {
@@ -152,7 +131,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
 
     {displayBranches.length ? <>
-      <p>{status?.graph?.trunk ?? status?.view?.trunk ?? status?.candidate?.trunk ? <>Trunk: <span className="font-mono">{status?.graph?.trunk ?? status?.view?.trunk ?? status?.candidate?.trunk}</span></> : "Trunk unknown"}</p>
+      <p>{status?.graph?.trunk ? <>Trunk: <span className="font-mono">{status.graph.trunk}</span></> : "Trunk unknown"}</p>
       <ul role="tree" aria-label="Stack branches" className="space-y-1 border-l border-border/70 py-1">
         {rows.map(({ branch, depth }) => {
           const managed = managedByName.get(branch.name);

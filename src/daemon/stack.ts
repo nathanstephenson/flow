@@ -133,16 +133,20 @@ async function ancestry(scope: string, tips: string[]): Promise<(ancestor: strin
     const [commit, ...values] = line.split(" ");
     parents.set(commit!, values);
   }
-  const cache = new Map<string, Set<string>>();
-  const ancestors = (commit: string): Set<string> => {
-    const known = cache.get(commit);
-    if (known) return known;
-    const result = new Set<string>([commit]);
-    cache.set(commit, result);
-    for (const parent of parents.get(commit) ?? []) for (const value of ancestors(parent)) result.add(value);
-    return result;
+  // Walk only the query's ancestry. Caching each commit's transitive set used quadratic
+  // memory on linear histories and recursion overflowed on otherwise ordinary repositories.
+  return (ancestor, descendant) => {
+    const pending = [descendant];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const commit = pending.pop()!;
+      if (commit === ancestor) return true;
+      if (visited.has(commit)) continue;
+      visited.add(commit);
+      pending.push(...(parents.get(commit) ?? []));
+    }
+    return false;
   };
-  return (ancestor, descendant) => ancestors(descendant).has(ancestor);
 }
 
 /**
@@ -453,9 +457,9 @@ function indexPullRequests(pullRequests: PullRequest[]): PullIndexes {
   return { byHead, openByBase };
 }
 
-function candidateFromSnapshot(snapshot: DiscoverySnapshot, indexes = indexPullRequests(snapshot.prs)): StackCandidate | undefined {
+function candidateFromSnapshot(snapshot: DiscoverySnapshot): StackCandidate | undefined {
   const { current, reference, stacks, destination } = snapshot;
-  const { byHead, openByBase } = indexes;
+  const { byHead, openByBase } = indexPullRequests(snapshot.prs);
   if (!destination?.id || current === destination.defaultBranch) return;
   const tracked = new Set(stacks.flatMap(stack => [stack.trunk.branch, ...stack.branches.map(branch => branch.branch)]));
   if (stacks.some(stack => stack.branches.some(branch => branch.branch === current))) return;
@@ -510,7 +514,7 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
     const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--slurp", "--jq", pullProjection, `repos/${destination.repo}/pulls?state=all&per_page=100`]), "pull request");
     if (loaded.some(pr => !validPull(pr)) || !destination.id) return;
     const prs = loaded.filter(pr => sameRepository(pr, String(destination.id)));
-    return candidateFromSnapshot({ current: current.value.name, reference, stacks, destination, prs }, indexPullRequests(prs));
+    return candidateFromSnapshot({ current: current.value.name, reference, stacks, destination, prs });
   } catch { return; }
 }
 
@@ -522,11 +526,49 @@ function graphFromView(view: StackView): StackGraph | undefined {
     currentBranch: view.currentBranch,
     explicit: true,
     branches: view.branches.map(branch => {
-      const result: StackGraphBranch = { name: branch.name, parent, relation: "local", isCurrent: branch.isCurrent, availability: "local", ...(branch.pr ? { pr: branch.pr } : {}) };
+      const pr = branch.pr ? { ...branch.pr, state: branch.isMerged ? "MERGED" : branch.pr.state } : undefined;
+      const result: StackGraphBranch = { name: branch.name, parent, relation: "local", isCurrent: branch.isCurrent, availability: "local", ...(pr ? { pr } : {}) };
       parent = branch.name;
       return result;
     }),
   };
+}
+
+function graphFromCandidate(candidate: StackCandidate, currentBranch: string): StackGraph {
+  let parent = candidate.trunk;
+  return {
+    trunk: candidate.trunk,
+    currentBranch,
+    explicit: false,
+    branches: candidate.pullRequests.map(pr => {
+      const branch: StackGraphBranch = { name: pr.branch, parent, relation: "pull-request", isCurrent: pr.branch === currentBranch, availability: "local", pr };
+      parent = pr.branch;
+      return branch;
+    }),
+  };
+}
+
+function overlayDisplayGraph(graph: StackGraph | undefined, view: StackView | undefined, candidate: StackCandidate | undefined): StackGraph | undefined {
+  const display = graph ?? (view ? graphFromView(view) : candidate ? graphFromCandidate(candidate, candidate.branches.at(-1) ?? "") : undefined);
+  if (!display) return;
+  const byName = new Map(display.branches.map(branch => [branch.name, branch]));
+  const append = (branch: StackGraphBranch) => { if (!byName.has(branch.name)) { display.branches.push(branch); byName.set(branch.name, branch); } };
+  let parent = view?.trunk;
+  for (const member of view?.branches ?? []) {
+    const existing = byName.get(member.name);
+    const pr = member.pr ? { ...member.pr, state: member.isMerged ? "MERGED" : member.pr.state } : undefined;
+    if (existing) Object.assign(existing, { isCurrent: member.isCurrent, ...(pr ? { pr } : {}) });
+    else append({ name: member.name, ...(parent ? { parent } : {}), relation: "local", isCurrent: member.isCurrent, availability: "local", ...(pr ? { pr } : {}) });
+    parent = member.name;
+  }
+  parent = candidate?.trunk;
+  for (const pr of candidate?.pullRequests ?? []) {
+    const existing = byName.get(pr.branch);
+    if (existing) existing.pr = pr;
+    else append({ name: pr.branch, ...(parent ? { parent } : {}), relation: "pull-request", isCurrent: pr.branch === display.currentBranch, availability: "local", pr });
+    parent = pr.branch;
+  }
+  return display;
 }
 
 export async function actionStackStatus(scope: string, github: Gh = gh): Promise<StackStatus> {
@@ -575,18 +617,6 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
     }
     for (const warning of discovery.warnings) addWarning(warnings, warning);
   } catch (error) { addWarning(warnings, `Stack discovery failed: ${message(error)}`); }
-  if (!status.graph && status.view) {
-    const fallback = graphFromView(status.view);
-    if (fallback) status.graph = fallback;
-  }
-  if (status.graph && status.view) {
-    const managed = new Map(status.view.branches.map(branch => [branch.name, branch]));
-    for (const branch of status.graph.branches) {
-      const pr = managed.get(branch.name)?.pr;
-      if (pr) branch.pr = pr;
-    }
-  }
-
   if (!status.view && !status.rebasing) {
     try {
       const candidate = discovery?.snapshot ? candidateFromSnapshot(discovery.snapshot) : undefined;
@@ -597,9 +627,12 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
       if (status.graph) addWarning(warnings, `This graph is read-only because registration eligibility could not be verified: ${message(error)}`);
     }
   }
+  const displayGraph = overlayDisplayGraph(status.graph, status.view, status.candidate);
+  if (displayGraph) status.graph = displayGraph;
+  else delete status.graph;
   if (warnings.length) status.warnings = warnings;
 
-  const hasDisplay = Boolean(status.graph || (status.view && status.view.currentBranch !== status.view.trunk) || status.candidate || status.rebasing);
+  const hasDisplay = Boolean(status.graph || status.rebasing);
   if (!status.problem && warnings.length && !hasDisplay) {
     status.problem = warnings.shift()!;
     status.problemKind = "discovery";
