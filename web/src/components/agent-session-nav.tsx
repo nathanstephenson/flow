@@ -124,7 +124,10 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     restoreRailFocus.current = false;
     if (hadFocus) {
       const row = container.querySelector<HTMLElement>('[data-cursor="true"]');
-      if (row && row !== focused) row.focus();
+      const focusedItem = focused instanceof HTMLElement
+        ? focused.closest<HTMLElement>('[data-sidebar="menu-item"]')
+        : null;
+      if (row && !focusedItem?.contains(row)) row.focus();
     }
     return () => {
       const active = document.activeElement;
@@ -189,10 +192,6 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
  * than as "focus the settle button" — that is the same amount of code and does not have to be
  * rewritten the day a row grows a second action. Delegated from the list rather than bound per row,
  * so the number of listeners does not grow with the number of Agent Sessions.
- *
- * The action is `visibility: hidden` until the row is hovered or holds focus, and a hidden element is
- * not focusable — which is fine and in fact required: focus is on the row button by the time this
- * runs, so `group-focus-within` has already revealed it.
  */
 function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
   const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;

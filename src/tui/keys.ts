@@ -66,10 +66,27 @@ export function splitKeys(chunk: string): string[] {
 
 export class KeySplitter {
   private buffered = "";
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly onFlush: ((keys: string[]) => void) | undefined;
+  private readonly flushAfterMs: number;
+
+  constructor(onFlush?: (keys: string[]) => void, flushAfterMs = 25) {
+    this.onFlush = onFlush;
+    this.flushAfterMs = flushAfterMs;
+  }
 
   push(chunk: string): string[] {
+    if (this.timer) clearTimeout(this.timer);
     const parsed = parseKeys(this.buffered + chunk);
     this.buffered = parsed.remainder;
+    if (this.buffered) {
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        const buffered = this.buffered;
+        this.buffered = "";
+        this.onFlush?.([...buffered]);
+      }, this.flushAfterMs);
+    }
     return parsed.keys;
   }
 }

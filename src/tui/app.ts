@@ -232,11 +232,10 @@ export async function runTui(options: TuiOptions): Promise<void> {
     // Chunks are processed one at a time. handleKey is async, so without this a chunk arriving
     // mid-walk would interleave with the previous one and keys would be applied out of order.
     let pending: Promise<void> = Promise.resolve();
-    const keys = new KeySplitter();
-    stdin.on("data", (chunk: string) => {
+    const processKeys = (received: string[]): void => {
       pending = pending.then(async () => {
         try {
-          for (const key of keys.push(chunk)) {
+          for (const key of received) {
             if (await handleKey(key)) {
               finish();
               return;
@@ -247,7 +246,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
           draw();
         }
       });
-    });
+    };
+    const keys = new KeySplitter(processKeys);
+    stdin.on("data", (chunk: string) => processKeys(keys.push(chunk)));
   });
 
   /** Returns true when the app should exit. */

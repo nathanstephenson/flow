@@ -139,8 +139,8 @@ type SessionRecord = {
   readAttentionVersion: number;
   outputPreview: string | undefined;
   /** Relevant ages for unresolved parent/Subagent requests, indexed independently of occupancy. */
-  openPermissionAttention: Map<string, { at: string; version: number }>;
-  openEnquiryAttention: Map<string, { at: string; version: number }>;
+  openPermissionAttention: Map<string, { at: string; version: number; independent: boolean }>;
+  openEnquiryAttention: Map<string, { at: string; version: number; independent: boolean }>;
   /**
    * Events an adapter emits while its Backend Session is still being created, held back so the
    * transcript opens with session_started (or revived) rather than with whatever the adapter
@@ -584,7 +584,8 @@ export class SessionHost {
     return deriveStatus({
       lifecycle: record.lifecycle,
       turnInFlight: record.turnInFlight,
-      awaiting: record.openPermissionAttention.size > 0 || record.openEnquiryAttention.size > 0,
+      awaiting: [...record.openPermissionAttention.values(), ...record.openEnquiryAttention.values()]
+        .some((request) => !request.independent),
     });
   }
 
@@ -2421,14 +2422,20 @@ export class SessionHost {
     if (event.type === "permission") {
       if (event.state === "asked") {
         if (!record.openPermissionAttention.has(event.callId)) {
-          record.openPermissionAttention.set(event.callId, inputAttention ?? { at, version: record.latestAttention?.version ?? 0 });
+          record.openPermissionAttention.set(event.callId, {
+            ...(inputAttention ?? { at, version: record.latestAttention?.version ?? 0 }),
+            independent: event.producer !== undefined,
+          });
         }
       } else record.openPermissionAttention.delete(event.callId);
     }
     if (event.type === "enquiry") {
       if (event.state === "asked") {
         if (!record.openEnquiryAttention.has(event.askId)) {
-          record.openEnquiryAttention.set(event.askId, inputAttention ?? { at, version: record.latestAttention?.version ?? 0 });
+          record.openEnquiryAttention.set(event.askId, {
+            ...(inputAttention ?? { at, version: record.latestAttention?.version ?? 0 }),
+            independent: event.producer !== undefined,
+          });
         }
       } else record.openEnquiryAttention.delete(event.askId);
     }
@@ -2447,8 +2454,8 @@ export class SessionHost {
      * outlives the turn that started it and reports into a later one (ADR 0016, ADR 0021).
      */
     if (event.type === "turn_ended") {
-      record.openEnquiryAttention.clear();
-      record.openPermissionAttention.clear();
+      for (const [id, request] of record.openEnquiryAttention) if (!request.independent) record.openEnquiryAttention.delete(id);
+      for (const [id, request] of record.openPermissionAttention) if (!request.independent) record.openPermissionAttention.delete(id);
     }
   }
 
@@ -2490,7 +2497,12 @@ export class SessionHost {
     try {
       await this.dispatch(record, next);
     } catch (error) {
-      record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+      const before = this.activityOf(record);
+      const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+      record.turnInFlight = false;
+      this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
+      this.noteResting(record, before);
+      this.touch(record);
     }
   }
 
@@ -2616,19 +2628,22 @@ function newestInput(record: SessionRecord): { at: string; version: number } | u
 function openInputAttention(
   entries: LoggedEvent[],
   type: "permission" | "enquiry",
-): Map<string, { at: string; version: number }> {
-  const open = new Map<string, { at: string; version: number }>();
+): Map<string, { at: string; version: number; independent: boolean }> {
+  const open = new Map<string, { at: string; version: number; independent: boolean }>();
+  const clearParent = (): void => {
+    for (const [id, request] of open) if (!request.independent) open.delete(id);
+  };
   for (const entry of entries) {
     const event = entry.event;
     if (type === "permission" && event.type === "permission") {
-      if (event.state === "asked") open.set(event.callId, { at: entry.at, version: 0 });
+      if (event.state === "asked") open.set(event.callId, { at: entry.at, version: 0, independent: event.producer !== undefined });
       else open.delete(event.callId);
     }
     if (type === "enquiry" && event.type === "enquiry") {
-      if (event.state === "asked") open.set(event.askId, { at: entry.at, version: 0 });
+      if (event.state === "asked") open.set(event.askId, { at: entry.at, version: 0, independent: event.producer !== undefined });
       else open.delete(event.askId);
     }
-    if (event.type === "turn_ended") open.clear();
+    if (event.type === "turn_ended") clearParent();
   }
   return open;
 }
