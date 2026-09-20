@@ -1,6 +1,7 @@
 import { recoveryRevision, safeAutomaticRecovery, successfulProgress } from "../workflows/recovery.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput, type WorkflowParent } from "../backend/workflow-tools.ts";
 import { redactCredentials } from './credential-redaction.ts';
+import { workflowAgentNameInput, workflowOutcomeNameInput } from './summariser.ts';
 import { connectionIdentity, snapshotTool, sameSchema } from './workflow-mcp.ts';
 import { compileJsonSchema, validateJsonSchema } from '../workflows/json-schema.ts';
 import { boundedMcpValue } from '../workflows/mcp.ts';
@@ -416,14 +417,13 @@ export class WorkflowExecutionService {
       if (existing) return this.view(sessionId, existing.id);
     }
     if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    const record = this.scheduler.start(definition, session, input, stepId, launchId);
+    const record = this.scheduler.start(definition, session, input, stepId, launchId, nameSession && !stepId);
     this.secretValues.set(record.id, values);
     this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
     this.snapshots.set(record.id, this.code);
     this.watch(record);
-    if (nameSession && !stepId) void this.host.nameWorkflow(sessionId, record.definition.name, record.input);
     return this.view(sessionId, record.id);
   }
 
@@ -672,6 +672,7 @@ export class WorkflowExecutionService {
 
   private async agent(context: ExecutorContext): Promise<Json> {
     if (context.step.kind !== 'agent') throw new Error('Invalid Agent step');
+    const resolvedInstructions = context.step.instructions;
     const backend = this.host.workflowSession(context.sessionId).session;
     if (!backend?.startWorkflowSubagent) throw new Error('Workflow Backend Session is unavailable');
     context.signal.throwIfAborted();
@@ -747,6 +748,16 @@ export class WorkflowExecutionService {
         if (event.type === 'spend' && view.spend) this.host.workflowSpend(context.sessionId, context.executionId, view.spend);
       },
     });
+    // Starting the backend handle is the first point at which this is actual Agent work rather than
+    // a possible route through a graph. Persist the one-shot claim before launching the independent
+    // Summary Model request; parallel steps, retries and loops can all arrive here concurrently.
+    this.requestNaming(context.sessionId, context.executionId, record => workflowAgentNameInput({
+      workflowName: record.definition.name,
+      workflowInput: record.input,
+      stepName: context.step.name,
+      instructions: resolvedInstructions,
+      input: context.input,
+    }, [...values, ...this.host.workflowMcpCredentials()]));
     if (context.permission === 'ask' && typeof handle.answerPermission !== 'function') {
       await handle.cancel();
       throw new Error('Workflow Agent permissions are unavailable');
@@ -779,16 +790,49 @@ export class WorkflowExecutionService {
   private watch(record: WorkflowExecution): void {
     void this.scheduler.wait(record.sessionId, record.id).then(result => {
       this.snapshots.delete(record.id);
+      const credentials = this.secretValues.get(record.id) ?? [];
+      this.publishResult(result, credentials);
       this.secretValues.delete(record.id);
-      this.publishResult(result);
     }).catch(() => {});
   }
 
-  private publishResult(result: WorkflowExecution): void {
+  private publishResult(result: WorkflowExecution, knownCredentials: readonly string[] = []): void {
+    if (!result.testStepId && ['recovery-required', 'completed', 'completed-with-recovery', 'cancelled'].includes(result.status)) {
+      this.requestNaming(result.sessionId, result.id, record => {
+        const { results, errors } = outcomeNamingData(record);
+        return workflowOutcomeNameInput({
+          workflowName: record.definition.name,
+          workflowInput: record.input,
+          outcome: record.status,
+          ...(results === undefined ? {} : { results }),
+          ...(errors === undefined ? {} : { errors }),
+        }, [...knownCredentials, ...this.namingCredentials(record)]);
+      });
+    }
     if (!result.testStepId && result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
     if (!result.testStepId && (result.status === 'completed' || result.status === 'completed-with-recovery')) {
       this.host.workflowComplete(result.sessionId, result.id);
     }
+  }
+
+  /** Persist the request before starting fire-and-forget model work. Every failure stays cosmetic. */
+  private requestNaming(sessionId: string, executionId: string, context: (record: WorkflowExecution) => string): void {
+    let record: WorkflowExecution | undefined;
+    try { record = this.scheduler.claimNaming(sessionId, executionId); }
+    catch { return; }
+    if (!record) return;
+    let input: string;
+    try { input = context(record); }
+    catch { return; }
+    void this.host.nameWorkflow(sessionId, input).catch(() => {});
+  }
+
+  private namingCredentials(record: WorkflowExecution): string[] {
+    const values = [...this.host.workflowMcpCredentials()];
+    for (const reference of new Set(record.definition.steps.flatMap(step => Object.values(step.secrets ?? {})))) {
+      try { values.push(this.secrets.resolve(reference)); } catch { /* Missing secrets cannot make naming affect execution. */ }
+    }
+    return values;
   }
 
   private privateView(sessionId: string, executionId: string): PrivateView {
@@ -872,6 +916,23 @@ function assertNoSecrets(value: unknown, secrets: string[], checkKeys = false): 
 function safeError(error: unknown, values: string[]): Error {
   const message = redact(error instanceof Error ? error.message : String(error), values);
   return error instanceof WorkflowStepError ? new WorkflowStepError(message, error.partialOutput === undefined ? undefined : redact(error.partialOutput, values)) : new Error(message);
+}
+
+function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?: Json } {
+  const results = Object.entries(record.steps).flatMap(([id, state]) => state.output === undefined ? [] : [{
+    step: record.definition.steps.find(step => step.id === id)?.name ?? id,
+    output: state.output,
+  }]);
+  const errors = Object.entries(record.steps).flatMap(([id, state]) => state.attempts.flatMap(attempt => attempt.error === undefined ? [] : [{
+    step: record.definition.steps.find(step => step.id === id)?.name ?? id,
+    attempt: attempt.number,
+    error: attempt.error,
+    ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
+  }]));
+  return {
+    ...(record.result === undefined && !results.length ? {} : { results: { ...(record.result === undefined ? {} : { final: record.result }), ...(results.length ? { steps: results } : {}) } as Json }),
+    ...(errors.length ? { errors: errors as unknown as Json } : {}),
+  };
 }
 
 function relayContext(record: WorkflowExecution, stepId: string, attempt: number): string {

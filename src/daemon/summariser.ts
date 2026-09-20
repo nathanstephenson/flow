@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { credentialKey } from "./credential-redaction.ts";
+import { redactCredentialContext } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
@@ -126,21 +126,61 @@ ${text}`;
 /**
  * Naming context for a workflow-launched Agent Session.
  *
- * Inputs are already schema-validated by the Workflow Scheduler. Keys that conventionally carry
- * credentials are omitted here as a final, independent boundary: naming is a convenience and never
- * a reason to send a secret to a second model invocation.
+ * A Workflow Execution waits until it knows the work an Agent Step will actually receive. The
+ * original launch remains useful background, but it is deliberately the first thing truncated:
+ * mapped upstream results and resolved instructions say what the work is, while launch inputs only
+ * say where the execution began.
+ *
+ * `credentials` contains values already resolved for this execution. Credential-shaped keys are
+ * omitted and known values are replaced before serialisation and truncation. In particular, callers
+ * pass the Step's resolved instructions, never the final backend prompt containing injected private
+ * named secrets.
  */
-export function workflowNameInput(workflowName: string, input: unknown): string {
-  const safe = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(safe);
-    if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => !credentialKey.test(key))
-        .map(([key, nested]) => [key, safe(nested)]),
-    );
-  };
-  return boundedNameInput(`Workflow: ${workflowName}\nValidated inputs: ${JSON.stringify(safe(input))}`);
+export function workflowAgentNameInput(options: {
+  workflowName: string;
+  workflowInput: unknown;
+  stepName: string;
+  instructions: string;
+  input: unknown;
+}, credentials: readonly string[] = []): string {
+  const safe = redactCredentialContext(options, credentials);
+  return boundedWorkflowContext([
+    { label: "Workflow", value: safe.workflowName, priority: 3 },
+    { label: "Validated launch inputs", value: safe.workflowInput, priority: 1 },
+    { label: "Agent step", value: safe.stepName, priority: 3 },
+    { label: "Resolved task instructions", value: safe.instructions, priority: 2 },
+    { label: "Resolved task input", value: safe.input, priority: 2 },
+  ]);
+}
+
+/**
+ * Context used only when an eligible execution reaches an outcome before any Agent Step starts.
+ * Results and errors outrank launch inputs because they describe what the execution actually did.
+ */
+export function workflowOutcomeNameInput(options: {
+  workflowName: string;
+  workflowInput: unknown;
+  outcome: string;
+  results?: unknown;
+  errors?: unknown;
+}, credentials: readonly string[] = []): string {
+  const safe = redactCredentialContext(options, credentials);
+  return boundedWorkflowContext([
+    { label: "Workflow", value: safe.workflowName, priority: 3 },
+    { label: "Validated launch inputs", value: safe.workflowInput, priority: 1 },
+    { label: "Outcome", value: safe.outcome, priority: 3 },
+    ...(safe.results === undefined ? [] : [{ label: "Available results", value: safe.results, priority: 2 }]),
+    ...(safe.errors === undefined ? [] : [{ label: "Available errors", value: safe.errors, priority: 2 }]),
+  ]);
+}
+
+/** Kept as the small launch-only form for callers that do not own execution state. */
+export function workflowNameInput(workflowName: string, input: unknown, credentials: readonly string[] = []): string {
+  const safe = redactCredentialContext({ workflowName, input }, credentials);
+  return boundedWorkflowContext([
+    { label: "Workflow", value: safe.workflowName, priority: 2 },
+    { label: "Validated launch inputs", value: safe.input, priority: 1 },
+  ]);
 }
 
 export type SummaryRequest = {
@@ -490,6 +530,53 @@ function boundedNameInput(whole: string): string {
   if (whole.length <= MAX_INPUT_LENGTH) return whole;
   const half = Math.floor(MAX_INPUT_LENGTH / 2);
   return `${whole.slice(0, half)}\n\n…\n\n${whole.slice(-half)}`;
+}
+
+/**
+ * Bound labelled workflow data while spending space on high-priority sections first.
+ *
+ * Every field keeps its label and at least an ellipsis, so a model can distinguish missing data
+ * from data that lost the size contest. Sections at the same priority share space rather than one
+ * giant instruction starving the resolved input beside it.
+ */
+function boundedWorkflowContext(sections: Array<{ label: string; value: unknown; priority: number }>): string {
+  const serialised = sections.map(section => ({
+    ...section,
+    text: typeof section.value === "string" ? JSON.stringify(section.value) : JSON.stringify(section.value) ?? "null",
+  }));
+  const separators = Math.max(0, serialised.length - 1);
+  const labels = serialised.reduce((length, section) => length + section.label.length + 2, 0);
+  const available = Math.max(0, MAX_INPUT_LENGTH - labels - separators);
+  const allocations = serialised.map(section => Math.min(1, section.text.length));
+  let remaining = available - allocations.reduce((sum, length) => sum + length, 0);
+
+  for (const priority of [...new Set(serialised.map(section => section.priority))].sort((a, b) => b - a)) {
+    const indexes = serialised.map((section, index) => section.priority === priority ? index : -1).filter(index => index >= 0);
+    while (remaining > 0) {
+      const open = indexes.filter(index => allocations[index]! < serialised[index]!.text.length);
+      if (!open.length) break;
+      const share = Math.max(1, Math.floor(remaining / open.length));
+      let spent = 0;
+      for (const index of open) {
+        const addition = Math.min(share, remaining - spent, serialised[index]!.text.length - allocations[index]!);
+        allocations[index]! += addition;
+        spent += addition;
+        if (spent === remaining) break;
+      }
+      if (!spent) break;
+      remaining -= spent;
+    }
+  }
+
+  return serialised.map((section, index) => `${section.label}: ${clipContext(section.text, allocations[index]!)}`).join("\n");
+}
+
+function clipContext(text: string, length: number): string {
+  if (text.length <= length) return text;
+  if (length <= 0) return "";
+  if (length === 1) return "…";
+  const head = Math.ceil((length - 1) / 2);
+  return text.slice(0, head) + "…" + text.slice(text.length - (length - 1 - head));
 }
 
 /**

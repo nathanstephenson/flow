@@ -26,12 +26,20 @@ const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
 
-async function fixture() {
+async function fixture(options: { naming?: boolean; automaticNaming?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'flow-executions-'));
   const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
   config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
   const backend = new FakeBackend();
-  const host = new SessionHost({ store, retention: 0, allowTool: config.allowTool }); host.registerBackend(backend);
+  const summary = new FakeBackend();
+  summary.autoReply = 'Name the actual workflow work';
+  let automaticNaming = options.automaticNaming ?? true;
+  const host = new SessionHost({
+    store, retention: 0, allowTool: config.allowTool,
+    ...(options.naming ? { summaryModel: () => ({ backend: 'summary', modelId: 'fake-2', automatic: automaticNaming }) } : {}),
+  });
+  host.registerBackend(backend);
+  if (options.naming) host.registerBackend({ ...summary, name: 'summary', create: create => summary.create(create) });
   const service = new WorkflowExecutionService(host, workflows, secrets, config, runtimePath);
   await host.load(); service.reconcile();
   const id = await host.create({ scope: root, backend: 'fake' });
@@ -39,7 +47,7 @@ async function fixture() {
   const server = await serve({ host, store, workflows, secrets, config, workflowExecutions: service, token: 'test', assets: {} });
   const request = (path: string, method = 'GET', body?: unknown) => fetch(server.url + path, { method, headers: { authorization: 'Bearer test' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const base = `/api/sessions/${id}/workflows`;
-  return { root, store, workflows, secrets, config, backend, host, service, id, request, base, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
+  return { root, store, workflows, secrets, config, backend, summary, host, service, id, request, base, setAutomaticNaming(value: boolean) { automaticNaming = value; }, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 it('deduplicates concurrent ambiguous launches by their durable launch id', async () => {
@@ -56,6 +64,158 @@ it('deduplicates concurrent ambiguous launches by their durable launch id', asyn
     const b = await second.json() as WorkflowExecutionView;
     assert.equal(b.execution.id, a.execution.id);
     assert.equal(f.service.list(f.id).executions.length, 1);
+  } finally { await f.close(); }
+});
+
+it('delays non-blocking naming until an Agent Step starts and sends only its resolved work', async () => {
+  const f = await fixture({ naming: true });
+  try {
+    const agent = definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>;
+    const graph: WorkflowDefinition = {
+      ...definition,
+      name: 'Deploy release',
+      inputSchema: { type: 'object', fields: { request: { schema: { type: 'string' }, required: true } } },
+      steps: [
+        { id: 'source', name: 'Resolve artifact', kind: 'shell', command: 'sleep 0.05; printf mapped-upstream-result' },
+        { id: 'unrelated', name: 'Unrelated', kind: 'shell', command: 'printf UNRELATED_UPSTREAM_OUTPUT' },
+        { ...agent, name: 'Apply rollout', instructions: 'Deploy the resolved artifact safely' },
+      ],
+      edges: [{ id: 'next', from: 'source', to: 'agent', outcome: 'success' }],
+    };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: { request: 'launch-context' }, nameSession: true });
+    assert.deepEqual(started.execution.naming, { eligible: true, requested: false });
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0, 'launch inputs alone do not trigger naming');
+
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+    assert.deepEqual(f.service.view(f.id, started.execution.id).execution.naming, { eligible: true, requested: true });
+    assert.equal(f.host.list().find(session => session.id === f.id)?.title, 'Name the actual workflow work');
+    assert.equal(f.service.view(f.id, started.execution.id).execution.steps.agent?.status, 'running', 'naming did not wait for Agent output');
+
+    const prompt = f.summary.sessions.flatMap(session => session.prompts)[0]!;
+    assert.match(prompt, /Deploy release/);
+    assert.match(prompt, /launch-context/);
+    assert.match(prompt, /Apply rollout/);
+    assert.match(prompt, /Deploy the resolved artifact safely/);
+    assert.match(prompt, /mapped-upstream-result/);
+    assert.doesNotMatch(prompt, /UNRELATED_UPSTREAM_OUTPUT|Resolve artifact|Unrelated/);
+
+    f.backend.latest.workflowSubagents[0]!.complete('deployed');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
+  } finally { await f.close(); }
+});
+
+it('claims automatic naming once across parallel Agent Steps', async () => {
+  const f = await fixture({ naming: true });
+  try {
+    const agent = definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>;
+    const graph: WorkflowDefinition = {
+      ...definition,
+      steps: [
+        { ...agent, id: 'first', name: 'First', instructions: 'Perform the first task' },
+        { ...agent, id: 'second', name: 'Second', instructions: 'Perform the second task' },
+      ],
+      edges: [],
+    };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, nameSession: true });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+    assert.equal(f.service.view(f.id, started.execution.id).execution.naming?.requested, true);
+    assert.match(f.summary.sessions.flatMap(session => session.prompts)[0]!, /Perform the first task/);
+    assert.doesNotMatch(f.summary.sessions.flatMap(session => session.prompts)[0]!, /Perform the second task/);
+    for (const handle of f.backend.latest.workflowSubagents) handle.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
+    f.service.reconcile();
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
+  } finally { await f.close(); }
+});
+
+for (const outcome of ['completed', 'completed-with-recovery', 'cancelled'] as const) {
+  it(`falls back to ${outcome} context when no Agent Step starts`, async () => {
+    const f = await fixture({ naming: true });
+    try {
+      const steps: WorkflowDefinition['steps'] = outcome === 'completed'
+        ? [{ id: 'done', name: 'Final result', kind: 'join' }]
+        : outcome === 'completed-with-recovery'
+          ? [{ id: 'fail', name: 'Failed check', kind: 'shell', command: 'printf useful-partial; exit 2' }, { id: 'handled', name: 'Handled failure', kind: 'join' }]
+          : [{ id: 'slow', name: 'Slow work', kind: 'shell', command: 'sleep 5' }];
+      const graph: WorkflowDefinition = {
+        ...definition,
+        name: `Fallback ${outcome}`,
+        steps,
+        edges: outcome === 'completed-with-recovery' ? [{ id: 'handled', from: 'fail', to: 'handled', outcome: 'failure' }] : [],
+      };
+      const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, nameSession: true });
+      if (outcome === 'cancelled') await f.service.cancel(f.id, started.execution.id);
+      const result = await f.service.scheduler.wait(f.id, started.execution.id);
+      assert.equal(result.status, outcome);
+      await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+      const prompt = f.summary.sessions.flatMap(session => session.prompts)[0]!;
+      assert.match(prompt, new RegExp(outcome));
+      if (outcome === 'completed') assert.match(prompt, /Final result/);
+      if (outcome === 'completed-with-recovery') assert.match(prompt, /Failed check|Shell exit code was not accepted/);
+      assert.equal(f.service.view(f.id, started.execution.id).execution.naming?.requested, true);
+    } finally { await f.close(); }
+  });
+}
+
+it('persists a recovery-required fallback claim so recovery reaching an Agent does not rename', async () => {
+  const f = await fixture({ naming: true });
+  try {
+    const graph: WorkflowDefinition = {
+      ...definition,
+      steps: [{ id: 'prepare', name: 'Prepare', kind: 'shell', command: 'exit 2' }, definition.steps[0]!],
+      edges: [{ id: 'next', from: 'prepare', to: 'agent', outcome: 'success' }],
+    };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, nameSession: true });
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'recovery-required');
+    await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+    const saved = f.workflows.getExecution(f.id, started.execution.id);
+    assert.deepEqual(saved.naming, { eligible: true, requested: true });
+
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    restarted.reconcile(); restarted.reconcile();
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
+    await restarted.recover(f.id, started.execution.id, { kind: 'supply', stepId: 'prepare', output: { exitCode: 0, stdout: 'prepared', stderr: '' } });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
+    f.backend.latest.workflowSubagents[0]!.complete('done');
+    await restarted.scheduler.wait(f.id, started.execution.id);
+  } finally { await f.close(); }
+});
+
+it('consumes disabled or failed naming without retrying and leaves legacy and Step-test records ineligible', async () => {
+  const f = await fixture({ naming: true, automaticNaming: false });
+  try {
+    const done: WorkflowDefinition = { ...definition, steps: [{ id: 'done', name: 'Done', kind: 'join' }], edges: [] };
+    const disabled = await f.service.start({ sessionId: f.id, definition: done, input: {}, nameSession: true });
+    await f.service.scheduler.wait(f.id, disabled.execution.id);
+    assert.equal(f.service.view(f.id, disabled.execution.id).execution.naming?.requested, true);
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0);
+    f.setAutomaticNaming(true);
+    f.service.reconcile();
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0, 'enabling later does not refund the request');
+
+    const second = await f.host.create({ scope: f.root, backend: 'fake' });
+    f.summary.autoReply = 'No';
+    const failed = await f.service.start({ sessionId: second, definition: done, input: {}, nameSession: true });
+    await f.service.scheduler.wait(second, failed.execution.id);
+    await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+    f.service.reconcile(); f.service.reconcile();
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1, 'invalid responses are not retried');
+    assert.equal(f.host.list().find(session => session.id === second)?.title, f.root);
+
+    const third = await f.host.create({ scope: f.root, backend: 'fake' });
+    const legacy = await f.service.start({ sessionId: third, definition: done, input: {} });
+    await f.service.scheduler.wait(third, legacy.execution.id);
+    assert.equal(f.service.view(third, legacy.execution.id).execution.naming, undefined);
+    const tested = await f.service.start({ sessionId: third, definition, input: {}, stepId: 'agent', nameSession: true });
+    assert.equal(tested.execution.naming, undefined);
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.complete('done');
+    await f.service.scheduler.wait(third, tested.execution.id);
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
   } finally { await f.close(); }
 });
 
