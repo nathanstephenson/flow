@@ -128,14 +128,14 @@ export class WorkflowScheduler {
   }
 
   /** Atomically consume an automatic naming request before model work starts. */
-  claimNaming(sessionId: string, executionId: string): WorkflowExecution | undefined {
+  claimNaming(sessionId: string, executionId: string): boolean {
     const active = this.active.get(executionId);
     const record = active?.record.sessionId === sessionId ? active.record : this.store.getExecution(sessionId, executionId);
-    if (record.naming !== 'pending' || record.testStepId) return undefined;
+    if (record.naming !== 'pending' || record.testStepId) return false;
     record.naming = 'requested';
     if (active?.record === record) this.persist(active);
     else this.store.saveExecution(record);
-    return structuredClone(record);
+    return true;
   }
 
   wait(sessionId: string, executionId: string): Promise<WorkflowExecution> {

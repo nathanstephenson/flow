@@ -65,6 +65,7 @@ export class WorkflowExecutionService {
   private code: WorkflowExecutors = {};
   private runtime!: WorkflowRuntimeStatus;
   private readonly snapshots = new Map<string, WorkflowExecutors>();
+  private readonly namingSnapshots = new Map<string, Pick<WorkflowExecution, 'definition' | 'input'>>();
   private readonly views = new Map<string, PrivateView>();
   private readonly directPermissions = new Map<string, { sessionId: string; executionId: string; callId: string; resolve: (allowed: boolean) => void }>();
   private readonly launches = new Map<string, Launch>();
@@ -423,6 +424,7 @@ export class WorkflowExecutionService {
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
     this.snapshots.set(record.id, this.code);
+    this.namingSnapshots.set(record.id, record);
     this.watch(record);
     return this.view(sessionId, record.id);
   }
@@ -460,6 +462,7 @@ export class WorkflowExecutionService {
     catch (error) { if (error instanceof WorkflowLoopConflict) throw new WorkflowConflict(); throw error; }
     finally { this.checkingCode = undefined; }
     this.snapshots.set(executionId, code);
+    this.namingSnapshots.set(executionId, record);
     this.watch(record);
     return this.view(sessionId, executionId);
   }
@@ -748,10 +751,8 @@ export class WorkflowExecutionService {
         if (event.type === 'spend' && view.spend) this.host.workflowSpend(context.sessionId, context.executionId, view.spend);
       },
     });
-    // Starting the backend handle is the first point at which this is actual Agent work rather than
-    // a possible route through a graph. Persist the one-shot claim before launching the independent
-    // Summary Model request; parallel steps, retries and loops can all arrive here concurrently.
-    this.requestNaming(context.sessionId, context.executionId, record => workflowAgentNameInput({
+    const namingSnapshot = this.namingSnapshots.get(context.executionId);
+    this.requestNaming(context.sessionId, context.executionId, namingSnapshot, record => workflowAgentNameInput({
       workflowName: record.definition.name,
       workflowInput: record.input,
       stepName: context.step.name,
@@ -792,13 +793,14 @@ export class WorkflowExecutionService {
       this.snapshots.delete(record.id);
       const credentials = this.secretValues.get(record.id) ?? [];
       this.publishResult(result, credentials);
+      this.namingSnapshots.delete(record.id);
       this.secretValues.delete(record.id);
     }).catch(() => {});
   }
 
   private publishResult(result: WorkflowExecution, knownCredentials: readonly string[] = []): void {
     if (!result.testStepId && ['recovery-required', 'completed', 'completed-with-recovery', 'cancelled'].includes(result.status)) {
-      this.requestNaming(result.sessionId, result.id, record => {
+      this.requestNaming(result.sessionId, result.id, result, record => {
         const { results, errors } = outcomeNamingData(record);
         return workflowOutcomeNameInput({
           workflowName: record.definition.name,
@@ -816,15 +818,14 @@ export class WorkflowExecutionService {
   }
 
   /** A shutdown leaves the durable request pending so restart reconciliation can name it. */
-  private requestNaming(sessionId: string, executionId: string, context: (record: WorkflowExecution) => string): void {
-    if (!this.host.workflowNamingAllowed(sessionId)) return;
-    let record: WorkflowExecution | undefined;
-    try { record = this.scheduler.claimNaming(sessionId, executionId); }
+  private requestNaming(sessionId: string, executionId: string, snapshot: Pick<WorkflowExecution, 'definition' | 'input'> | WorkflowExecution | undefined, context: (record: WorkflowExecution) => string): void {
+    if (!this.host.workflowNamingAllowed(sessionId) || !snapshot) return;
+    try { if (!this.scheduler.claimNaming(sessionId, executionId)) return; }
     catch { return; }
-    if (!record) return;
     let input: string;
-    try { input = context(record); }
+    try { input = context(snapshot as WorkflowExecution); }
     catch { return; }
+    this.namingSnapshots.delete(executionId);
     void this.host.nameWorkflow(sessionId, input).catch(() => {});
   }
 
@@ -919,21 +920,25 @@ function safeError(error: unknown, values: string[]): Error {
   return error instanceof WorkflowStepError ? new WorkflowStepError(message, error.partialOutput === undefined ? undefined : redact(error.partialOutput, values)) : new Error(message);
 }
 
-function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?: Json } {
+function outcomeNamingData(record: WorkflowExecution): { results?: unknown; errors?: unknown } {
   const stepNames = new Map(record.definition.steps.map(step => [step.id, step.name]));
-  const results = record.result === undefined ? Object.entries(record.steps).flatMap(([id, state]) => state.output === undefined ? [] : [{
-    step: stepNames.get(id) ?? id,
-    output: state.output,
-  }]) : [];
-  const errors = Object.entries(record.steps).flatMap(([id, state]) => state.attempts.flatMap(attempt => attempt.error === undefined ? [] : [{
-    step: stepNames.get(id) ?? id,
-    attempt: attempt.number,
-    error: attempt.error,
-    ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
-  }]));
+  function* results() {
+    for (const id in record.steps) {
+      const output = record.steps[id]!.output;
+      if (output !== undefined) yield { step: stepNames.get(id) ?? id, output };
+    }
+  }
+  function* errors() {
+    for (const id in record.steps) for (const attempt of record.steps[id]!.attempts) {
+      if (attempt.error !== undefined) yield {
+        step: stepNames.get(id) ?? id, attempt: attempt.number, error: attempt.error,
+        ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
+      };
+    }
+  }
   return {
-    ...(record.result !== undefined ? { results: record.result } : results.length ? { results: results as unknown as Json } : {}),
-    ...(errors.length ? { errors: errors as unknown as Json } : {}),
+    results: record.result === undefined ? results() : record.result,
+    errors: errors(),
   };
 }
 

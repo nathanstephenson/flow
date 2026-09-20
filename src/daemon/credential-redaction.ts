@@ -6,20 +6,6 @@ export function redactCredentials<T>(value: T, credentials: readonly string[]): 
   return visit(value) as T;
 }
 
-/** Omit credential-shaped naming fields and redact known values before truncation. */
-export function redactCredentialContext<T>(value: T, credentials: readonly string[]): T {
-  const text = credentialTextRedactor(credentials);
-  const visit = (item: unknown): unknown => {
-    if (typeof item === 'string') return text(item);
-    if (Array.isArray(item)) return item.map(visit);
-    if (!item || typeof item !== 'object') return item;
-    return Object.fromEntries(Object.entries(item)
-      .filter(([key]) => !namingCredentialKey.test(key))
-      .map(([key, nested]) => [text(key), visit(nested)]));
-  };
-  return visit(value) as T;
-}
-
 function credentialTextRedactor(credentials: readonly string[]): (value: string) => string {
   const patterns = credentials.filter(Boolean).flatMap(secret => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1)]).sort((a, b) => b.length - a.length);
   return value => patterns.reduce((result, secret) => result.split(secret).join('[REDACTED]'), value);
@@ -42,16 +28,23 @@ export function boundedCredentialJson(value: unknown, credentials: readonly stri
     if (!remaining) return "";
     if (typeof item === "string") return emit(JSON.stringify(redact(item)));
     if (item === null || typeof item !== "object") return emit(JSON.stringify(item) ?? "null");
-    const array = Array.isArray(item);
-    let result = emit(array ? "[" : "{");
-    const entries = array ? item.map((nested, index) => [String(index), nested] as const) : Object.entries(item).filter(([key]) => !namingCredentialKey.test(key));
-    for (let index = 0; index < entries.length && remaining; index += 1) {
-      const [key, nested] = entries[index]!;
-      result += emit(index ? "," : "");
-      if (!array) result += emit(JSON.stringify(redact(key)) + ":");
-      result += visit(nested);
+    if (Array.isArray(item) || Symbol.iterator in item) {
+      let result = emit("[");
+      let index = 0;
+      for (const nested of item as Iterable<unknown>) {
+        if (!remaining) break;
+        result += emit(index++ ? "," : "") + visit(nested);
+      }
+      return result + emit("]");
     }
-    return result + emit(array ? "]" : "}");
+    let result = emit("{");
+    let index = 0;
+    for (const key in item) {
+      if (!remaining) break;
+      if (!Object.prototype.hasOwnProperty.call(item, key) || namingCredentialKey.test(key)) continue;
+      result += emit(index++ ? "," : "") + emit(JSON.stringify(redact(key)) + ":") + visit((item as Record<string, unknown>)[key]);
+    }
+    return result + emit("}");
   };
   return visit(value);
 }

@@ -120,6 +120,21 @@ describe("workflow naming context", () => {
     assert.ok((context.match(/launch-/g) ?? []).length < 2_000, "launch input yields space to outcome data");
   });
 
+  it("redacts fallback result and error credentials before truncating", () => {
+    const secret = "fallback-private-value";
+    const context = workflowOutcomeNameInput({
+      workflowName: "Failed deployment",
+      workflowInput: {},
+      outcome: "recovery-required",
+      results: { visible: secret, apiKey: "shaped-result", padding: "r".repeat(8_000) },
+      errors: [{ message: secret, authorization: "shaped-error", padding: "e".repeat(8_000) }],
+    }, [secret]);
+
+    assert.match(context, /\[REDACTED\]/);
+    assert.doesNotMatch(context, /fallback-private-value|apiKey|shaped-result|authorization|shaped-error/i);
+    assert.ok(context.length <= 4_000);
+  });
+
   it("bounds serialization work for large fallback histories", () => {
     const results = Array.from({ length: 100_000 }, (_, index) => ({ index, output: "x".repeat(100) }));
     const context = workflowOutcomeNameInput({ workflowName: "Large history", workflowInput: {}, outcome: "completed", results });
