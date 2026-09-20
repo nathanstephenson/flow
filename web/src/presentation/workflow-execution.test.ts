@@ -80,6 +80,69 @@ it('keeps sequential nested sibling loop bounds apart along either rank axis', (
   }
 });
 
+function assertRectanglesDoNotIntersect(definition: WorkflowDefinition) {
+  assert.doesNotThrow(() => validateDefinition(definition));
+  for (const vertical of [false, true]) {
+    const boxes = loopBoxes(definition, vertical);
+    for (let left = 0; left < boxes.length; left++) for (let right = left + 1; right < boxes.length; right++) {
+      const a = boxes[left]!, b = boxes[right]!;
+      assert.ok(a.x + a.width <= b.x || b.x + b.width <= a.x ||
+        a.y + a.height <= b.y || b.y + b.height <= a.y,
+      `${a.id} intersects ${b.id} in ${vertical ? 'vertical' : 'horizontal'} layout`);
+    }
+  }
+}
+
+it('places a non-header loop exit after the complete loop rectangle', () => {
+  const definition: WorkflowDefinition = {
+    version: 1, id: 'non-header-exit', name: 'Non-header exit', backend: 'fake',
+    inputSchema: { type: 'object', fields: { ok: { schema: { type: 'boolean' }, required: true } } },
+    steps: [
+      { id: 'start', name: 'start', kind: 'typescript', code: 'return true', outputSchema: { type: 'boolean' } },
+      { id: 'header', name: 'header', kind: 'branch', condition: { operator: 'truthy', path: [] } },
+      { id: 'body', name: 'body', kind: 'branch', condition: { operator: 'truthy', path: [] } },
+      { id: 'done', name: 'done', kind: 'join' },
+    ],
+    edges: [
+      { id: 'start', from: 'start', to: 'header', outcome: 'success' },
+      { id: 'enter', from: 'header', to: 'body', outcome: 'false' },
+      { id: 'retry', from: 'body', to: 'header', outcome: 'false' },
+      { id: 'exit', from: 'body', to: 'done', outcome: 'true' },
+    ],
+  };
+  assert.doesNotThrow(() => validateDefinition(definition));
+  for (const vertical of [false, true]) {
+    const laidOut = executionLayout(definition, vertical);
+    const nodes = loopLayout(laidOut, { orientation: vertical ? 'vertical' : 'horizontal' });
+    const loop = nodes.find(node => node.type === 'loop')!;
+    const done = nodes.find(node => node.id === 'done')!;
+    const loopPosition = absolutePosition(loop, nodes), donePosition = absolutePosition(done, nodes);
+    assert.ok(vertical
+      ? loopPosition.y + Number(loop.style?.height) <= donePosition.y
+      : loopPosition.x + Number(loop.style?.width) <= donePosition.x);
+  }
+});
+
+it('reserves non-overlapping rectangles for parallel branching sibling loops', () => {
+  const branch = (id: string) => ({ id, name: id, kind: 'branch' as const, condition: { operator: 'equals' as const, path: [], value: true } });
+  const join = (id: string) => ({ id, name: id, kind: 'join' as const });
+  const booleanStep = (id: string) => ({ id, name: id, kind: 'typescript' as const, code: 'return true', outputSchema: { type: 'boolean' as const } });
+  const definition: WorkflowDefinition = {
+    version: 1, id: 'parallel-loops', name: 'Parallel loops', backend: 'fake',
+    inputSchema: { type: 'object', fields: { ok: { schema: { type: 'boolean' }, required: true } } },
+    steps: [booleanStep('start'), branch('a'), branch('a-body'), booleanStep('a-left'), booleanStep('a-right'), branch('b'), booleanStep('b-body'), join('done')],
+    edges: [
+      { id: 'to-a', from: 'start', to: 'a', outcome: 'success' }, { id: 'to-b', from: 'start', to: 'b', outcome: 'success' },
+      { id: 'a-enter', from: 'a', to: 'a-body', outcome: 'false' }, { id: 'a-exit', from: 'a', to: 'done', outcome: 'true' },
+      { id: 'a-left', from: 'a-body', to: 'a-left', outcome: 'true' }, { id: 'a-right', from: 'a-body', to: 'a-right', outcome: 'false' },
+      { id: 'a-left-back', from: 'a-left', to: 'a', outcome: 'success' }, { id: 'a-right-back', from: 'a-right', to: 'a', outcome: 'success' },
+      { id: 'b-enter', from: 'b', to: 'b-body', outcome: 'false' }, { id: 'b-back', from: 'b-body', to: 'b', outcome: 'success' },
+      { id: 'b-exit', from: 'b', to: 'done', outcome: 'true' },
+    ],
+  };
+  assertRectanglesDoNotIntersect(definition);
+});
+
 it('lays out branches in either direction without altering the launch/editor snapshot', () => {
   const definition: WorkflowDefinition = { version: 1, id: 'layout', name: 'Layout', backend: 'fake', inputSchema: { type: 'object', fields: { ready: { schema: { type: 'boolean' }, required: true } } }, steps: [
     { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'equals', path: ['ready'], value: true }, position: { x: 99, y: 99 } },
