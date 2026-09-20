@@ -91,16 +91,17 @@ describe("workflow naming context", () => {
     assert.ok((context.match(/launch-/g) ?? []).length < 100, "launch input yields space to resolved work");
   });
 
-  it("does not leak a long credential prefix in Agent context", () => {
-    const secret = "agent-private-".repeat(1_500);
+  it("does not leak a repeated long credential prefix in Agent context", () => {
+    const prefix = "agent-private-prefix-";
+    const secret = prefix + "x".repeat(5_000 - prefix.length);
     const context = workflowAgentNameInput({
       workflowName: "Secure workflow",
       workflowInput: {},
       stepName: "Secure step",
-      instructions: secret,
+      instructions: secret.repeat(5),
       input: {},
     }, [secret]);
-    assert.doesNotMatch(context, /agent-private-/);
+    assert.doesNotMatch(context, new RegExp(prefix));
   });
 
   it("keeps Agent work when workflow and step names are unbounded", () => {
@@ -148,15 +149,16 @@ describe("workflow naming context", () => {
     assert.ok(context.length <= 4_000);
   });
 
-  it("does not leak a long credential prefix in outcome context", () => {
-    const secret = "outcome-private-".repeat(1_200);
+  it("does not leak a repeated long credential prefix in outcome context", () => {
+    const prefix = "outcome-private-prefix-";
+    const secret = prefix + "x".repeat(5_000 - prefix.length);
     const context = workflowOutcomeNameInput({
       workflowName: "Secure outcome",
       workflowInput: {},
       outcome: "failed",
-      results: secret,
+      results: secret.repeat(5),
     }, [secret]);
-    assert.doesNotMatch(context, /outcome-private-/);
+    assert.doesNotMatch(context, new RegExp(prefix));
   });
 
   it("uses a replacement marker that does not retain a credential", () => {

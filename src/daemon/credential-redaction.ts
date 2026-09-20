@@ -6,15 +6,33 @@ export function redactCredentials<T>(value: T, credentials: readonly string[]): 
   return visit(value) as T;
 }
 
-function credentialTextRedactor(credentials: readonly string[]): { redact: (value: string) => string; lookahead: number } {
+function credentialTextRedactor(credentials: readonly string[]): { redact: (value: string) => string; inspect: (value: string, work: number) => string } {
   const patterns = [...new Set(credentials.filter(Boolean).flatMap(secret => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1)]))]
     .sort((a, b) => b.length - a.length);
   // A replacement must not itself contain a credential. This matters for credentials such as
   // "REDACTED", which would otherwise survive inside the conventional marker.
   const replacement = ["[REDACTED]", "[FILTERED]", "<hidden>", ""].find(candidate => patterns.every(pattern => !candidate.includes(pattern)))!;
+  const lookahead = patterns.reduce((maximum, pattern) => Math.max(maximum, pattern.length - 1), 0);
   return {
     redact: value => patterns.reduce((result, secret) => result.split(secret).join(replacement), value),
-    lookahead: patterns.reduce((maximum, pattern) => Math.max(maximum, pattern.length - 1), 0),
+    inspect: (value, work) => {
+      if (value.length <= work) return value;
+      const inspected = value.slice(0, work + lookahead);
+      // Include a credential which straddles the work boundary, but nothing after it. Redacting
+      // the entire lookahead is unsafe: several long matches can shrink enough that output reaches
+      // a credential fragment at the end of that lookahead.
+      let end = work;
+      for (;;) {
+        let extended = end;
+        for (const pattern of patterns) {
+          const start = inspected.lastIndexOf(pattern, end - 1);
+          if (start >= 0 && start < end && start + pattern.length > extended) extended = start + pattern.length;
+        }
+        if (extended === end) break;
+        end = Math.min(extended, inspected.length);
+      }
+      return inspected.slice(0, end);
+    },
   };
 }
 
@@ -22,7 +40,7 @@ export const credentialKey = /(?:authorization|cookie|password|passphrase|creden
 const namingCredentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|token)/i;
 
 export function credentialJsonSerializer(credentials: readonly string[]): (value: unknown, limit: number) => string {
-  const { redact, lookahead } = credentialTextRedactor(credentials);
+  const { redact, inspect } = credentialTextRedactor(credentials);
   return (value: unknown, limit: number): string => {
     let remaining = limit;
     // Output limits do not bound omitted fields or the input scanned before encoding.
@@ -41,7 +59,7 @@ export function credentialJsonSerializer(credentials: readonly string[]): (value
     const visit = (item: unknown): string => {
       if (!remaining || work <= 0) return "";
       if (typeof item === "string") {
-        const inspected = item.slice(0, work + lookahead);
+        const inspected = inspect(item, work);
         consume(Math.min(item.length, work));
         return emit(JSON.stringify(redact(inspected)));
       }
@@ -63,7 +81,7 @@ export function credentialJsonSerializer(credentials: readonly string[]): (value
       for (const key in item) {
         if (!remaining || work <= 0) break;
         if (!Object.prototype.hasOwnProperty.call(item, key)) continue;
-        const inspected = key.slice(0, work + lookahead);
+        const inspected = inspect(key, work);
         consume(Math.min(key.length, work));
         if (namingCredentialKey.test(inspected)) continue;
         result += emit(index++ ? "," : "") + emit(JSON.stringify(redact(inspected)) + ":") + visit((item as Record<string, unknown>)[key]);
