@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -34,6 +34,7 @@ import {
 import {
   WORKFLOW_CARD_HEIGHT,
   WORKFLOW_CARD_WIDTH,
+  workflowFallbackPosition,
 } from "../presentation/workflow-dimensions.ts";
 import {
   Select,
@@ -163,6 +164,8 @@ export function WorkflowGraph({
   const flow = useRef<ReactFlowInstance<Node, Edge>>(null);
   const fitted = useRef(false);
   const fitting = useRef(false);
+  const mounted = useRef(true);
+  const fitGeneration = useRef(0);
   const fitOnceVisible = useCallback(() => {
     const element = canvas.current;
     const instance = flow.current;
@@ -176,13 +179,31 @@ export function WorkflowGraph({
       element.clientHeight === 0
     ) return;
     fitting.current = true;
-    requestAnimationFrame(() => {
-      void instance.fitView(FIT_VIEW_OPTIONS).then((didFit) => {
-        fitted.current ||= didFit;
-        fitting.current = false;
-      });
+    const generation = fitGeneration.current;
+    void instance.fitView(FIT_VIEW_OPTIONS).then((didFit) => {
+      const current = canvas.current;
+      if (
+        mounted.current &&
+        generation === fitGeneration.current &&
+        current &&
+        current.clientWidth > 0 &&
+        current.clientHeight > 0
+      ) fitted.current ||= didFit;
+      fitting.current = false;
     });
   }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      fitGeneration.current++;
+    };
+  }, []);
+  useEffect(() => {
+    fitted.current = false;
+    fitting.current = false;
+    fitGeneration.current++;
+  }, [execution?.id, orientation]);
   useEffect(() => {
     if (typeof ResizeObserver === "undefined" || !canvas.current) return;
     const observer = new ResizeObserver(fitOnceVisible);
@@ -190,7 +211,7 @@ export function WorkflowGraph({
     fitOnceVisible();
     return () => observer.disconnect();
   }, [fitOnceVisible]);
-  useEffect(fitOnceVisible, [fitOnceVisible, nodes.length]);
+  useEffect(fitOnceVisible, [fitOnceVisible, nodes.length, execution?.id, orientation]);
   const controlledSelection = selectedStepId !== undefined;
   const selectionChanged = useCallback(
     ({ nodes }: { nodes: Node[] }) => {
@@ -200,7 +221,8 @@ export function WorkflowGraph({
     },
     [onSelect, controlledSelection],
   );
-  useEffect(() => {
+  const topologyKey = execution?.id ?? definition;
+  const staticGraph = useMemo(() => {
     let layout: Node[];
     try {
       layout = loopLayout(
@@ -213,23 +235,31 @@ export function WorkflowGraph({
       layout = definition.steps.map((step, i) => ({
         id: step.id,
         type: "workflow",
-        position: step.position ?? {
-          x: (i % 3) * 270,
-          y: Math.floor(i / 3) * 180,
-        },
+        position: step.position ?? workflowFallbackPosition(i),
         data: { step },
       }));
     }
-    setNodes((previous) =>
-      layout.map((node) => {
+    return {
+      layout,
+      edges: definition.edges.map((edge) => ({
+        id: edge.id, source: edge.from, target: edge.to,
+        sourceHandle: edge.outcome, label: edge.outcome, zIndex: 0,
+      })),
+      steps: new Map(definition.steps.map(step => [step.id, step])),
+    };
+  }, [topologyKey, orientation]);
+  useEffect(() => {
+    const awaiting = new Set(awaitingSteps);
+    setNodes((previous) => {
+      const previousById = new Map(previous.map(node => [node.id, node]));
+      return staticGraph.layout.map((node) => {
         if (node.type === "loop") {
           const headerId = node.data.headerId as string;
           const maxTries = definition.loopSettings?.[headerId]?.maxTries ?? 3;
           return {
             ...node,
             data: {
-              title: definition.steps.find((step) => step.id === headerId)!
-                .name,
+              title: staticGraph.steps.get(headerId)!.name,
               maxTries,
               orientation,
               progress: execution?.loops?.[headerId]
@@ -253,7 +283,7 @@ export function WorkflowGraph({
           ...node,
           selected:
             selectedStepId === undefined
-              ? previous.find((n) => n.id === step.id)?.selected
+              ? previousById.get(step.id)?.selected
               : selectedStepId === step.id,
           data: {
             step,
@@ -261,25 +291,18 @@ export function WorkflowGraph({
             execution: !!execution,
             permission:
               step.permission ?? definition.permission ?? "auto-accept",
-            status: awaitingSteps.includes(step.id)
+            status: awaiting.has(step.id)
               ? "awaiting-input"
               : execution?.steps[step.id]?.status,
           },
         };
-      }),
-    );
-    setEdges((previous) =>
-      definition.edges.map((edge) => ({
-        id: edge.id,
-        source: edge.from,
-        target: edge.to,
-        sourceHandle: edge.outcome,
-        label: edge.outcome,
-        selected: previous.find((old) => old.id === edge.id)?.selected,
-        zIndex: 0,
-      })),
-    );
-  }, [definition, execution, selectedStepId, JSON.stringify(awaitingSteps), orientation]);
+      });
+    });
+    setEdges((previous) => {
+      const selected = new Set(previous.filter(edge => edge.selected).map(edge => edge.id));
+      return staticGraph.edges.map(edge => ({ ...edge, selected: selected.has(edge.id) }));
+    });
+  }, [staticGraph, execution, selectedStepId, awaitingSteps, definition, onChange, orientation]);
   const connect = (connection: Connection) => {
     if (connection.source && connection.target)
       onChange?.({

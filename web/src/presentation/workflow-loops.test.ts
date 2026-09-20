@@ -11,10 +11,14 @@ import {
   limitedLoops,
   loopLayout,
   loopProgress,
-  WORKFLOW_CARD_HEIGHT,
-  WORKFLOW_CARD_WIDTH,
 } from "./workflow-loops.ts";
+import { WORKFLOW_CARD_HEIGHT, WORKFLOW_CARD_WIDTH, workflowFallbackPosition } from "./workflow-dimensions.ts";
 import { mappingChoices } from "./workflows.ts";
+
+test("fallback rows clear full-height workflow cards", () => {
+  const positions = Array.from({ length: 4 }, (_, index) => workflowFallbackPosition(index));
+  assert.ok(positions[3]!.y >= positions[0]!.y + WORKFLOW_CARD_HEIGHT);
+});
 
 const schema = {
   type: "object" as const,

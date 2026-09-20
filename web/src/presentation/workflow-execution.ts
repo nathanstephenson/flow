@@ -38,6 +38,20 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
     }
     if (!progressed) break;
   }
+  const loopByHeader = new Map(loops.loops.map(loop => [loop.headerId, loop]));
+  const loopDepth = (id: string) => {
+    let depth = 0;
+    let loop = [...loops.loops].reverse().find(candidate => candidate.memberIds.includes(id));
+    while (loop) {
+      depth++;
+      loop = loop.parentHeaderId ? loopByHeader.get(loop.parentHeaderId) : undefined;
+    }
+    return depth;
+  };
+  const maxDepth = Math.max(0, ...definition.steps.map(step => loopDepth(step.id)));
+  const laneStride = vertical
+    ? WORKFLOW_CARD_WIDTH + WORKFLOW_LANE_GAP + maxDepth * 288
+    : WORKFLOW_CARD_HEIGHT + WORKFLOW_ROW_GAP + maxDepth * 136;
   const lanes = new Map<number, number>();
   return { ...definition, steps: definition.steps.map(step => {
     const rank = ranks.get(step.id) ?? 0;
@@ -47,12 +61,12 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
       ...step,
       position: vertical
         ? {
-            x: lane * (WORKFLOW_CARD_WIDTH + WORKFLOW_LANE_GAP),
+            x: lane * laneStride,
             y: rank * (WORKFLOW_CARD_HEIGHT + WORKFLOW_RANK_GAP),
           }
         : {
             x: rank * (WORKFLOW_CARD_WIDTH + WORKFLOW_COLUMN_GAP),
-            y: lane * (WORKFLOW_CARD_HEIGHT + WORKFLOW_ROW_GAP),
+            y: lane * laneStride,
           },
     };
   }) };

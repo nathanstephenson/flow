@@ -9,9 +9,8 @@ import { analyzeLoops } from "../../../src/workflows/loops.ts";
 import {
   WORKFLOW_CARD_HEIGHT,
   WORKFLOW_CARD_WIDTH,
+  workflowFallbackPosition,
 } from "./workflow-dimensions.ts";
-
-export { WORKFLOW_CARD_HEIGHT, WORKFLOW_CARD_WIDTH } from "./workflow-dimensions.ts";
 
 export function cleanLoopSettings(
   definition: WorkflowDefinition,
@@ -78,7 +77,7 @@ export function loopLayout(
   const positions = new Map(
     definition.steps.map((step, i) => [
       step.id,
-      step.position ?? { x: (i % 3) * 270, y: Math.floor(i / 3) * 180 },
+      step.position ?? workflowFallbackPosition(i),
     ]),
   );
   const boxes = new Map<
@@ -107,10 +106,6 @@ export function loopLayout(
     const contentBottom = Math.max(
       ...contents.map((box) => box.y + box.height),
     );
-    // In a top-to-bottom graph the incoming edge occupies the space immediately above the
-    // loop's first card. Put the loop summary in a dedicated left rail instead of making the
-    // title, status, edge and edge label compete for that same strip. Top headers remain best for
-    // the editor and left-to-right execution layout, where incoming edges approach from the side.
     const vertical = orientation === "vertical";
     const x = contentLeft - (vertical ? LOOP_SIDE_HEADER_WIDTH : LOOP_PADDING);
     const y = contentTop - (vertical ? LOOP_PADDING : LOOP_TOP_HEADER_HEIGHT);
