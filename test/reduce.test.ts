@@ -573,6 +573,23 @@ describe("an Enquiry in the transcript", () => {
     assert.equal(once.asking, twice.asking, "the same object, not an equal one");
   });
 
+  it("preserves attribution while open and across terminal snapshots", () => {
+    const producer = { subagentId: "subagent-1" };
+    const attributed: AgentEvent = { ...asked, producer };
+    const open = reduceAll(transcript(attributed).since(0));
+    assert.deepEqual(open.asking?.producer, producer);
+
+    for (const closing of [
+      { type: "turn_ended", turnId: "t1", reason: "aborted" },
+      { type: "session_ended", reason: "disposed" },
+    ] as AgentEvent[]) {
+      const closed = reduceAll(transcript(attributed, closing).since(0));
+      const row = closed.entries.find((entry) => entry.kind === "enquiry");
+      assert.deepEqual(row?.producer, producer);
+      assert.equal(closed.asking, undefined);
+    }
+  });
+
   it("carries the answers on the Entry rather than leaving them to the tool result", () => {
     // The SDK writes its tool result as prose, so a front-end reading that would be parsing an
     // English sentence to recover what its own user clicked.

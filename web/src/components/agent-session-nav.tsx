@@ -100,7 +100,9 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
   const groups = RAIL_GROUPS.map((group) => ({ group, sessions: grouped.get(group)! }))
     .filter(({ sessions }) => sessions.length > 0);
   const filedAway = groups.find(({ group }) => group === "filed-away");
-  const cursorInFiledAway = filedAway?.sessions.some((session) => session.id === props.cursorId) ?? false;
+  const cursorGroup = props.sessions.find((session) => session.id === props.cursorId);
+  const cursorGroupId = cursorGroup ? railGroup(cursorGroup) : undefined;
+  const cursorInFiledAway = cursorGroupId === "filed-away";
   const [filedAwayOpen, setFiledAwayOpen] = useState(false);
 
   const list = useRef<HTMLDivElement>(null);
@@ -111,16 +113,15 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
    * fact before React moves a row between group subtrees; after that move `activeElement` is already
    * the body, which is too late to discover that the now-unmounted row used to own focus.
    *
-   * A layout effect keeps the roving tabindex and DOM focus in the same paint. `sessions` is a
-   * dependency as well as `cursorId` because an attention transition can reparent the cursor row
-   * without changing its identity.
+   * A layout effect keeps the roving tabindex and DOM focus in the same paint. Group identity is a
+   * dependency because an attention transition can reparent the cursor row without changing it.
    */
   useLayoutEffect(() => {
     const container = list.current;
     if (!container) return;
     const focused = document.activeElement;
     const hadFocus = restoreRailFocus.current
-      || (focused instanceof HTMLElement && container.contains(focused));
+      || (focused instanceof HTMLElement && focused.matches('[data-cursor="true"]'));
     restoreRailFocus.current = false;
     if (hadFocus) {
       const row = container.querySelector<HTMLElement>('[data-cursor="true"]');
@@ -131,9 +132,10 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     }
     return () => {
       const active = document.activeElement;
-      restoreRailFocus.current = active instanceof HTMLElement && container.contains(active);
+      restoreRailFocus.current = active instanceof HTMLElement
+        && active.matches('[data-cursor="true"]');
     };
-  }, [props.cursorId, props.sessions]);
+  }, [props.cursorId, cursorGroupId]);
 
   return (
     <>

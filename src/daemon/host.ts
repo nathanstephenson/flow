@@ -575,17 +575,12 @@ export class SessionHost {
     return this.activityOf(this.record(sessionId));
   }
 
-  /**
-   * Three `Set.size` reads and a comparison, because this runs for every Agent Session on every
-   * `GET /api/sessions` — the same budget `branch` is held on the record to stay inside. Independent
-   * workflow activity is a separate scheduler-map lookup when summaries are assembled below.
-   */
   private activityOf(record: SessionRecord): SessionStatus {
     return deriveStatus({
       lifecycle: record.lifecycle,
       turnInFlight: record.turnInFlight,
-      awaiting: [...record.openPermissionAttention.values(), ...record.openEnquiryAttention.values()]
-        .some((request) => !request.independent),
+      awaiting: hasParentRequest(record.openPermissionAttention)
+        || hasParentRequest(record.openEnquiryAttention),
     });
   }
 
@@ -654,7 +649,7 @@ export class SessionHost {
               version: record.latestAttention?.version ?? input.version,
               observedSeq: record.latestAttention?.observedSeq ?? record.log.lastSeq,
             }
-          : unread && record.latestAttention
+          : unread && record.latestAttention && record.latestAttention.reason !== "Input needed"
             ? {
                 group: "unread",
                 reason: record.latestAttention.reason,
@@ -2615,6 +2610,13 @@ function newestAt<T extends { at: string; version: number }>(
   if (!left) return right;
   if (!right) return left;
   return right.at > left.at ? right : left;
+}
+
+function hasParentRequest(
+  requests: Map<string, { independent: boolean }>,
+): boolean {
+  for (const request of requests.values()) if (!request.independent) return true;
+  return false;
 }
 
 function newestInput(record: SessionRecord): { at: string; version: number } | undefined {

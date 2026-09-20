@@ -330,7 +330,11 @@ function overlay(ui: UiState, width: number, height: number): string[] {
   if (ui.overlay.kind === "sessions") {
     const cursor = (ui.overlay as { index: number }).index;
     const now = ui.now ?? Date.now();
-    const rows: Array<{ line: string; sessionIndex?: number }> = [];
+    type SessionRow =
+      | { type: "heading"; line: string }
+      | { type: "session"; line: string; sessionIndex: number }
+      | { type: "preview"; line: string };
+    const rows: SessionRow[] = [];
     const counts = new Map(RAIL_GROUPS.map((group) => [group, 0]));
     for (const session of ui.sessions) {
       const group = railGroup(session);
@@ -344,7 +348,7 @@ function overlay(ui: UiState, width: number, height: number): string[] {
       const group = railGroup(session);
       if (group !== opened) {
         opened = group;
-        rows.push({ line: clip(`  ── ${railGroupLabel(group)} (${counts.get(group) ?? 0}) ──`, width) });
+        rows.push({ type: "heading", line: clip(`  ── ${railGroupLabel(group)} (${counts.get(group) ?? 0}) ──`, width) });
       }
       const ageAt = session.attention?.at ?? session.restingAt;
       const age = relativeTime(ageAt, now);
@@ -359,25 +363,26 @@ function overlay(ui: UiState, width: number, height: number): string[] {
           ? `${attention.padEnd(16)} ${age.padEnd(10)}`
           : `${attention} ${age}`;
       rows.push({
+        type: "session",
         sessionIndex: index,
         line: clip(`${index === cursor ? ">" : " "} ${detail} ${sessionLabel(session)}`, width),
       });
-      if (session.outputPreview) rows.push({ line: ellipsised(`    ${session.outputPreview}`, width) });
+      if (session.outputPreview) rows.push({ type: "preview", line: ellipsised(`    ${session.outputPreview}`, width) });
     }
 
     // Group headings consume rows but not cursor positions. Window the rendered rows around the
     // selected identity so adding headings never makes keyboard navigation walk off-screen.
     const room = Math.max(1, height - 1);
-    const cursorRow = rows.findIndex((row) => row.sessionIndex === cursor);
+    const cursorRow = rows.findIndex((row) => row.type === "session" && row.sessionIndex === cursor);
     const start = Math.max(0, Math.min(cursorRow - Math.floor(room / 2), rows.length - room));
     let visibleRows = rows.slice(start, start + room);
     // When the window starts halfway through a large group, keep its heading as a sticky first row.
     // There is always still room for the cursor because a centered/clamped cursor is not first.
-    if (room > 1 && start > 0 && visibleRows[0]?.sessionIndex !== undefined) {
+    if (room > 1 && start > 0 && visibleRows[0]?.type !== "heading") {
       let heading = start - 1;
-      while (heading > 0 && rows[heading]?.sessionIndex !== undefined) heading -= 1;
+      while (heading > 0 && rows[heading]?.type !== "heading") heading -= 1;
       const groupHeading = rows[heading];
-      if (groupHeading !== undefined && groupHeading.sessionIndex === undefined) {
+      if (groupHeading?.type === "heading") {
         visibleRows = [groupHeading, ...visibleRows.slice(1)];
       }
     }

@@ -528,7 +528,12 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         open && state.asking?.askId === event.askId
           ? state.asking
           : open
-            ? { askId: event.askId, questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) }
+            ? {
+                askId: event.askId,
+                questions: event.questions,
+                ...(event.context === undefined ? {} : { context: event.context }),
+                ...(event.producer === undefined ? {} : { producer: event.producer }),
+              }
             : state.asking?.askId === event.askId
               ? undefined
               : state.asking;

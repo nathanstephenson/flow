@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { canSettle, occupied } from "@client/status.ts";
+import { canSettle, occupied, railGroup } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
@@ -114,12 +114,12 @@ export function AppShell() {
 
   /**
    * Open the freshest Agent Session on arrival — but only when the URL did not already name one, and
-   * not when the candidate is Settled.
+   * not when the candidate is Filed away.
    *
    * The Session Host groups the list by attention and activity (`railGroup`), so `sessions[0]` is the one most
    * worth landing on — whatever is awaiting a decision, else whatever is working, else the freshest
-   * Idle one — and it is Settled only when every one of them is. Opening a Settled Agent Session
-   * unasked would put a finished transcript in front of someone who came to start work.
+   * Idle one. Opening a Filed away Agent Session unasked would put a finished transcript in front
+   * of someone who came to start work.
    *
    * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold
    * load into `#/settings` must not be answered by silently navigating away from them.
@@ -146,10 +146,8 @@ export function AppShell() {
     if (!loaded) return;
     setLanded(true);
     const candidate = sessions[0];
-    // Nothing worth opening, so the New Agent Session view stands: either there are none, or every
-    // one of them is Settled and putting a finished transcript in front of somebody who came to
-    // start work is not an improvement on offering them the form.
-    if (!candidate || candidate.status === "settled") return;
+    // Nothing worth opening when there are none or every Agent Session is Filed away.
+    if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
   }, [landed, loaded, sessions, focusedId, focus, route.view]);
 
