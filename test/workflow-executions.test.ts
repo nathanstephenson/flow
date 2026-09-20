@@ -83,12 +83,12 @@ it('delays non-blocking naming until an Agent Step starts and sends only its res
       edges: [{ id: 'next', from: 'source', to: 'agent', outcome: 'success' }],
     };
     const started = await f.service.start({ sessionId: f.id, definition: graph, input: { request: 'launch-context' }, nameSession: true });
-    assert.deepEqual(started.execution.naming, { eligible: true, requested: false });
+    assert.deepEqual(started.execution.naming, 'pending');
     assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0, 'launch inputs alone do not trigger naming');
 
     await until(() => f.backend.latest.workflowSubagents.length === 1);
     await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
-    assert.deepEqual(f.service.view(f.id, started.execution.id).execution.naming, { eligible: true, requested: true });
+    assert.deepEqual(f.service.view(f.id, started.execution.id).execution.naming, 'requested');
     assert.equal(f.host.list().find(session => session.id === f.id)?.title, 'Name the actual workflow work');
     assert.equal(f.service.view(f.id, started.execution.id).execution.steps.agent?.status, 'running', 'naming did not wait for Agent output');
 
@@ -121,7 +121,7 @@ it('claims automatic naming once across parallel Agent Steps', async () => {
     const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, nameSession: true });
     await until(() => f.backend.latest.workflowSubagents.length === 2);
     await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
-    assert.equal(f.service.view(f.id, started.execution.id).execution.naming?.requested, true);
+    assert.equal(f.service.view(f.id, started.execution.id).execution.naming, 'requested');
     assert.match(f.summary.sessions.flatMap(session => session.prompts)[0]!, /Perform the first task/);
     assert.doesNotMatch(f.summary.sessions.flatMap(session => session.prompts)[0]!, /Perform the second task/);
     for (const handle of f.backend.latest.workflowSubagents) handle.complete('done');
@@ -155,10 +155,32 @@ for (const outcome of ['completed', 'completed-with-recovery', 'cancelled'] as c
       assert.match(prompt, new RegExp(outcome));
       if (outcome === 'completed') assert.match(prompt, /Final result/);
       if (outcome === 'completed-with-recovery') assert.match(prompt, /Failed check|Shell exit code was not accepted/);
-      assert.equal(f.service.view(f.id, started.execution.id).execution.naming?.requested, true);
+      assert.equal(f.service.view(f.id, started.execution.id).execution.naming, 'requested');
     } finally { await f.close(); }
   });
 }
+
+it('consumes a pre-trigger naming request once across restarts', async () => {
+  const f = await fixture({ naming: true });
+  try {
+    const done: WorkflowDefinition = { ...definition, steps: [{ id: 'done', name: 'Done', kind: 'join' }], edges: [] };
+    const executionId = 'persisted-before-trigger';
+    f.workflows.saveExecution({
+      version: 1, id: executionId, sessionId: f.id, scope: f.root, definition: done, input: {},
+      naming: 'pending', status: 'completed', startedAt: 1, finishedAt: 2, loops: {}, result: {},
+      steps: { done: { status: 'completed', output: {}, outcome: 'success', attempts: [{ number: 1, action: 'execute', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } },
+    });
+
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    restarted.reconcile();
+    await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
+    assert.equal(f.workflows.getExecution(f.id, executionId).naming, 'requested');
+
+    const restartedAgain = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    restartedAgain.reconcile();
+    assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 1);
+  } finally { await f.close(); }
+});
 
 it('persists a recovery-required fallback claim so recovery reaching an Agent does not rename', async () => {
   const f = await fixture({ naming: true });
@@ -172,7 +194,7 @@ it('persists a recovery-required fallback claim so recovery reaching an Agent do
     assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'recovery-required');
     await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
     const saved = f.workflows.getExecution(f.id, started.execution.id);
-    assert.deepEqual(saved.naming, { eligible: true, requested: true });
+    assert.deepEqual(saved.naming, 'requested');
 
     const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
     restarted.reconcile(); restarted.reconcile();
@@ -191,7 +213,7 @@ it('consumes disabled or failed naming without retrying and leaves legacy and St
     const done: WorkflowDefinition = { ...definition, steps: [{ id: 'done', name: 'Done', kind: 'join' }], edges: [] };
     const disabled = await f.service.start({ sessionId: f.id, definition: done, input: {}, nameSession: true });
     await f.service.scheduler.wait(f.id, disabled.execution.id);
-    assert.equal(f.service.view(f.id, disabled.execution.id).execution.naming?.requested, true);
+    assert.equal(f.service.view(f.id, disabled.execution.id).execution.naming, 'requested');
     assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0);
     f.setAutomaticNaming(true);
     f.service.reconcile();

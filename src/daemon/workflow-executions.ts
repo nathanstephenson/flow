@@ -693,7 +693,7 @@ export class WorkflowExecutionService {
     }
     const aliases: Record<string, string> = Object.create(null);
     for (const [alias, reference] of Object.entries(context.step.secrets ?? {})) aliases[alias] = this.secrets.resolve(reference, context.signal);
-    const values = [...(this.secretValues.get(context.executionId) ?? []), ...Object.values(aliases)];
+    const values = uniqueCredentials([...(this.secretValues.get(context.executionId) ?? []), ...Object.values(aliases)]);
     const id = randomUUID();
     const view = this.privateView(context.sessionId, context.executionId);
     const priorSpend = view.stepSpend[context.step.id];
@@ -757,7 +757,7 @@ export class WorkflowExecutionService {
       stepName: context.step.name,
       instructions: resolvedInstructions,
       input: context.input,
-    }, [...values, ...this.host.workflowMcpCredentials()]));
+    }, values));
     if (context.permission === 'ask' && typeof handle.answerPermission !== 'function') {
       await handle.cancel();
       throw new Error('Workflow Agent permissions are unavailable');
@@ -806,7 +806,7 @@ export class WorkflowExecutionService {
           outcome: record.status,
           ...(results === undefined ? {} : { results }),
           ...(errors === undefined ? {} : { errors }),
-        }, [...knownCredentials, ...this.namingCredentials(record)]);
+        }, uniqueCredentials([...knownCredentials, ...this.namingCredentials(record)]));
       });
     }
     if (!result.testStepId && result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
@@ -832,7 +832,7 @@ export class WorkflowExecutionService {
     for (const reference of new Set(record.definition.steps.flatMap(step => Object.values(step.secrets ?? {})))) {
       try { values.push(this.secrets.resolve(reference)); } catch { /* Missing secrets cannot make naming affect execution. */ }
     }
-    return values;
+    return uniqueCredentials(values);
   }
 
   private privateView(sessionId: string, executionId: string): PrivateView {
@@ -919,12 +919,13 @@ function safeError(error: unknown, values: string[]): Error {
 }
 
 function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?: Json } {
+  const stepNames = new Map(record.definition.steps.map(step => [step.id, step.name]));
   const results = Object.entries(record.steps).flatMap(([id, state]) => state.output === undefined ? [] : [{
-    step: record.definition.steps.find(step => step.id === id)?.name ?? id,
+    step: stepNames.get(id) ?? id,
     output: state.output,
   }]);
   const errors = Object.entries(record.steps).flatMap(([id, state]) => state.attempts.flatMap(attempt => attempt.error === undefined ? [] : [{
-    step: record.definition.steps.find(step => step.id === id)?.name ?? id,
+    step: stepNames.get(id) ?? id,
     attempt: attempt.number,
     error: attempt.error,
     ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
@@ -933,6 +934,10 @@ function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?
     ...(record.result === undefined && !results.length ? {} : { results: { ...(record.result === undefined ? {} : { final: record.result }), ...(results.length ? { steps: results } : {}) } as Json }),
     ...(errors.length ? { errors: errors as unknown as Json } : {}),
   };
+}
+
+function uniqueCredentials(values: readonly string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function relayContext(record: WorkflowExecution, stepId: string, attempt: number): string {

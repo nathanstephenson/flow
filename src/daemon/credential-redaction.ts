@@ -6,14 +6,7 @@ export function redactCredentials<T>(value: T, credentials: readonly string[]): 
   return visit(value) as T;
 }
 
-/**
- * Prepare arbitrary data for a convenience model invocation.
- *
- * Workflow naming has a stricter boundary than persisted execution data: conventional credential
- * fields are not useful naming context, so omit them recursively as well as replacing every known
- * credential value. This must run before a caller serialises or truncates the context; otherwise a
- * secret near the cut can be only partly retained.
- */
+/** Omit credential-shaped naming fields and redact known values before truncation. */
 export function redactCredentialContext<T>(value: T, credentials: readonly string[]): T {
   const text = credentialTextRedactor(credentials);
   const visit = (item: unknown): unknown => {
@@ -21,7 +14,7 @@ export function redactCredentialContext<T>(value: T, credentials: readonly strin
     if (Array.isArray(item)) return item.map(visit);
     if (!item || typeof item !== 'object') return item;
     return Object.fromEntries(Object.entries(item)
-      .filter(([key]) => !credentialKey.test(key))
+      .filter(([key]) => !namingCredentialKey.test(key))
       .map(([key, nested]) => [text(key), visit(nested)]));
   };
   return visit(value) as T;
@@ -32,4 +25,5 @@ function credentialTextRedactor(credentials: readonly string[]): (value: string)
   return value => patterns.reduce((result, secret) => result.split(secret).join('[REDACTED]'), value);
 }
 
-export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|token)/i;
+export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;
+const namingCredentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|token)/i;

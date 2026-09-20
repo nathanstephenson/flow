@@ -19,7 +19,7 @@ const attemptValidator = z.object({
 
 export const workflowExecutionValidator = z.object({
   version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
-  input: z.json(), launchId: z.string().min(1).optional(), naming: z.object({ eligible: z.literal(true), requested: z.boolean() }).strict().optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
+  input: z.json(), launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
   startedAt: z.number().nonnegative(), finishedAt: z.number().nonnegative().optional(), result: z.json().optional(),
   loops: z.record(z.string(), loopValidator).optional(),
   steps: z.record(z.string(), z.object({

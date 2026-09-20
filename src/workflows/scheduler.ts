@@ -111,7 +111,7 @@ export class WorkflowScheduler {
       version: 1, id: randomUUID(), sessionId: session.sessionId, scope: session.scope,
       definition: graph.definition, input: parsed, status: 'running', startedAt: Date.now(),
       ...(launchId ? { launchId } : {}),
-      ...(namingEligible && testStepId === undefined ? { naming: { eligible: true as const, requested: false } } : {}),
+      ...(namingEligible && testStepId === undefined ? { naming: 'pending' as const } : {}),
       steps: Object.fromEntries(graph.order.map(step => [step.id, { status: testStep && step.id !== testStep.id ? 'skipped' : 'pending', attempts: [] }])),
       ...(testStepId === undefined ? { loops: Object.fromEntries(graph.loops.map(loop => [loop.headerId, { activation: 0, try: 0, phase: 'inactive', grants: [] }])) } : { testStepId }),
     };
@@ -127,18 +127,12 @@ export class WorkflowScheduler {
     return this.store.getExecution(sessionId, executionId);
   }
 
-  /**
-   * Atomically consume one execution's automatic naming request before any model work starts.
-   *
-   * Completed executions are not installed after restart, so this also updates a historical record
-   * during reconciliation. Absence is intentionally ineligible: loading a legacy record must never
-   * invent a naming request it did not opt into when launched.
-   */
+  /** Atomically consume an automatic naming request before model work starts. */
   claimNaming(sessionId: string, executionId: string): WorkflowExecution | undefined {
     const active = this.active.get(executionId);
     const record = active?.record.sessionId === sessionId ? active.record : this.store.getExecution(sessionId, executionId);
-    if (!record.naming?.eligible || record.naming.requested || record.testStepId) return undefined;
-    record.naming.requested = true;
+    if (record.naming !== 'pending' || record.testStepId) return undefined;
+    record.naming = 'requested';
     if (active?.record === record) this.persist(active);
     else this.store.saveExecution(record);
     return structuredClone(record);

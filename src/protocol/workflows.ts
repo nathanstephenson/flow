@@ -121,11 +121,8 @@ export interface WorkflowExecution {
   input: Json;
   /** Durable identity for an idempotent full-execution launch request. */
   launchId?: string;
-  /**
-   * Durable one-shot automatic naming state. Absence means ineligible, including every legacy
-   * execution written before this state existed. Step tests never receive it.
-   */
-  naming?: { eligible: true; requested: boolean };
+  /** Durable one-shot automatic naming state; absence means ineligible. */
+  naming?: 'pending' | 'requested';
   testStepId?: string;
   status: ExecutionStatus;
   startedAt: number;
