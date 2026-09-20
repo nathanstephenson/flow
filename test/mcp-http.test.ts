@@ -11,6 +11,7 @@ import { McpAuth } from "../src/daemon/mcp-auth.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve } from "../src/daemon/server.ts";
+import { FIXTURE_ASSETS, FIXTURE_ICON_PATHS } from "./assets-fixture.ts";
 
 test(
   "remote HTTP MCP uses OAuth discovery, PKCE callback, and private shared tokens",
@@ -110,7 +111,7 @@ test(
     const config = new ConfigStore(root);
     config.update({ mcp: [connection] });
     const host = new SessionHost();
-    const flow = await serve({ host, config, mcpAuth: auth, token: "test-token", assets: {} });
+    const flow = await serve({ host, config, mcpAuth: auth, token: "test-token", assets: FIXTURE_ASSETS });
     const runtime = new McpSession([connection], root, (connection) =>
       auth.provider(connection),
     );
@@ -184,7 +185,13 @@ test(
         assert.equal(completed.headers.get("referrer-policy"), "no-referrer");
         const destination = new URL(returnUrl);
         destination.searchParams.set("mcpAuth", "signed-in");
-        assert.ok((await completed.text()).includes(JSON.stringify(destination.href)));
+        const returnPage = await completed.text();
+        assert.ok(returnPage.includes(JSON.stringify(destination.href)));
+        for (const path of FIXTURE_ICON_PATHS) {
+          assert.match(returnPage, new RegExp(`href="${path.replace(".", "\\.")}"`), path);
+        }
+        assert.match(completed.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+        assert.doesNotMatch(returnPage, /state=|code=/, "callback parameters must not enter auth HTML or icon URLs");
         assert.equal((await fetch(callback)).status, 400);
       }
       const remoteLogin = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {

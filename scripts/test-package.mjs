@@ -32,7 +32,22 @@ try {
   for (const file of files) {
     assert.match(file, /^package\/(?:package\.json|README\.md|LICEN[CS]E(?:\.(?:md|txt))?|dist\/.*\.js|dist\/build-id|web\/dist\/.+|build\/workflow-runtime\.cjs)$/);
   }
-  for (const file of ['dist/cli/bootstrap.js', 'dist/build-id', 'dist/cli/main.js', 'web/dist/index.html', 'build/workflow-runtime.cjs']) {
+  const iconTypes = {
+    'favicon.svg': 'image/svg+xml; charset=utf-8',
+    'favicon-16x16.png': 'image/png',
+    'favicon-32x32.png': 'image/png',
+    'favicon.ico': 'image/x-icon',
+    'safari-pinned-tab.svg': 'image/svg+xml; charset=utf-8',
+    'apple-touch-icon.png': 'image/png',
+  };
+  for (const file of [
+    'dist/cli/bootstrap.js',
+    'dist/build-id',
+    'dist/cli/main.js',
+    'web/dist/index.html',
+    ...Object.keys(iconTypes).map(file => `web/dist/${file}`),
+    'build/workflow-runtime.cjs',
+  ]) {
     assert.ok(files.includes(`package/${file}`), `Missing ${file}`);
   }
   run('npm', ['install', '--global', '--prefix', prefix, '--omit=dev', '--no-audit', '--no-fund', archive], {
@@ -74,9 +89,23 @@ try {
   };
   const html = await (await request('/')).text();
   assert.match(html, /<html/);
+  for (const file of Object.keys(iconTypes)) assert.match(html, new RegExp(`href="/${file.replace('.', '\\.')}"`));
   const asset = /src="([^"]+\.js)"/.exec(html)?.[1];
   assert.ok(asset, 'Entry Document has no JavaScript asset');
   assert.match((await request(asset)).headers.get('content-type'), /javascript/);
+  assert.equal((await fetch(`${daemon.url}${asset}`)).status, 401, 'non-icon build assets stay protected');
+  for (const [file, type] of Object.entries(iconTypes)) {
+    const path = `/${file}`;
+    const icon = await fetch(`${daemon.url}${path}`);
+    assert.equal(icon.status, 200, path);
+    assert.equal(icon.headers.get('content-type'), type, path);
+    assert.ok((await icon.arrayBuffer()).byteLength > 0, path);
+    const head = await fetch(`${daemon.url}${path}`, { method: 'HEAD' });
+    assert.equal(head.status, 200, path);
+    assert.equal(head.headers.get('content-type'), type, path);
+    assert.equal((await head.arrayBuffer()).byteLength, 0, path);
+  }
+  assert.equal((await fetch(`${daemon.url}/favicon.svg`, { method: 'POST' })).status, 401);
   const runtimeStatus = await (await request('/api/workflow-runtime')).json();
   assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
   await request('/api/command', { method: 'POST', body: JSON.stringify({ type: 'create', scope: cwd, backend: 'fake' }) });

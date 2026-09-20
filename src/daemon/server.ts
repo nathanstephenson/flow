@@ -26,6 +26,22 @@ import { CommandRefused, type SessionHost } from "./host.ts";
 import type { ShellRegistry } from "./shell.ts";
 import type { TranscriptStore } from "./store.ts";
 
+const PUBLIC_ICON_PATHS = new Set([
+  "/favicon.svg",
+  "/favicon-16x16.png",
+  "/favicon-32x32.png",
+  "/favicon.ico",
+  "/safari-pinned-tab.svg",
+  "/apple-touch-icon.png",
+]);
+const PUBLIC_ICON_CACHE = "public, max-age=3600, must-revalidate";
+const ICON_LINKS = `<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="/favicon-16x16.png" type="image/png" sizes="16x16">
+<link rel="icon" href="/favicon.ico" type="image/x-icon" sizes="16x16 32x32 48x48">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5f6368">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">`;
+
 /**
  * The Session Host's loopback HTTP surface (ADR 0004).
  *
@@ -164,12 +180,33 @@ async function handle(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
 
+  // Browser chrome asks for icons before there is a browser session. Keep that exception exact: the
+  // six root paths below are public for GET/HEAD only, while every other asset remains behind the
+  // same authentication gate as the app. A missing icon is a real 404, never the SPA Entry Document.
+  if ((request.method === "GET" || request.method === "HEAD") && PUBLIC_ICON_PATHS.has(url.pathname)) {
+    const icon = options.assets[url.pathname];
+    if (!icon) {
+      send(response, 404, { error: "Not found" });
+      return;
+    }
+    sendAsset(response, icon, request.method === "HEAD", PUBLIC_ICON_CACHE);
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/mcp/callback") {
     try {
       if (!options.mcpAuth) throw new Error("MCP auth unavailable");
       const location = await options.mcpAuth.callback(url);
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" });
-      response.end(`<!doctype html><title>Return to Flow</title><script>window.location.replace(${JSON.stringify(location).replace(/</g, "\\u003c")})</script>`);
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Return to Flow</title>
+${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(location).replace(/</g, "\\u003c")})</script></body></html>`;
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(html),
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
+      response.end(html);
     } catch {
       send(response, 400, { error: "Invalid or expired MCP sign-in. Return to Flow and try again." });
     }
@@ -800,18 +837,22 @@ function refuse(socket: Duplex, status: number): void {
   socket.destroy();
 }
 
-function sendAsset(response: ServerResponse, asset: EmbeddedAsset): void {
+function sendAsset(
+  response: ServerResponse,
+  asset: EmbeddedAsset,
+  headOnly = false,
+  cacheControl = asset.immutable ? "public, max-age=31536000, immutable" : "no-store",
+): void {
   const body = Buffer.from(asset.body, asset.encoding);
   response.writeHead(200, {
     "content-type": asset.type,
     "content-length": body.byteLength,
-    // Caching an immutable asset forever is safe for a sharper reason than usual: its URL carries
-    // the bundler's content hash, so different content is a different URL by construction and there
-    // is no revalidation path to get wrong. The corollary is that no-store on the shell is doing
-    // real work — a cached shell would pin its reader to an asset hash that no longer exists.
-    "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-store",
+    // Hashed assets are immutable. Public icons keep a short revalidation window instead: their
+    // stable browser-known paths cannot carry Vite hashes, so a deployment must be able to replace
+    // them without leaving old browser chrome cached indefinitely.
+    "cache-control": cacheControl,
   });
-  response.end(body);
+  response.end(headOnly ? undefined : body);
 }
 
 /**
@@ -911,15 +952,15 @@ function documentNavigation(request: IncomingMessage, pathname: string): boolean
 }
 
 function sendLoginRedirectPage(response: ServerResponse): void {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Signing in · Flow</title></head>
-<body><script>location.replace("/oauth/login?return_to="+encodeURIComponent(location.pathname+location.search+location.hash))</script>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Signing in · Flow</title>
+${ICON_LINKS}</head><body><script>location.replace("/oauth/login?return_to="+encodeURIComponent(location.pathname+location.search+location.hash))</script>
 <noscript><a href="/oauth/login">Sign in</a></noscript></body></html>`;
   response.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
     "content-length": Buffer.byteLength(html),
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
-    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(html);
 }
@@ -945,7 +986,7 @@ function sendAuthPage(
 ): void {
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · Flow</title><style>
+<title>${title} · Flow</title>${ICON_LINKS}<style>
 :root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#f6f6f4;color:#181817}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% 0,#fff 0,#f6f6f4 52%)}
 main{width:min(100%,430px);border:1px solid #deded9;border-radius:18px;background:rgba(255,255,255,.9);padding:30px;box-shadow:0 18px 55px rgba(28,28,24,.08)}
@@ -958,7 +999,7 @@ a{display:inline-flex;align-items:center;justify-content:center;width:100%;heigh
     "content-length": Buffer.byteLength(html),
     "cache-control": "no-store",
     "referrer-policy": "no-referrer",
-    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(html);
 }
