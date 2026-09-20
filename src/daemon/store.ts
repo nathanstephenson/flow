@@ -76,6 +76,8 @@ export type SessionMeta = {
    * existed start read rather than flooding the inbox after an upgrade.
    */
   latestAttention?: Omit<SessionAttention, "group"> & { key: string };
+  /** Keys already published, retained so reconciliation cannot publish an old outcome again. */
+  seenAttentionKeys?: string[];
   /** Highest attention version a client actually observed. Machine-wide, not per front-end. */
   readAttentionVersion?: number;
   /**

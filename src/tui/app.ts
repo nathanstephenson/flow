@@ -200,16 +200,20 @@ export async function runTui(options: TuiOptions): Promise<void> {
   if (stdin.isTTY) stdout.write("\u001b[?1004h");
   stdout.on("resize", draw);
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
-  const poll = async (generation: number): Promise<void> => {
+  function schedulePoll(): void {
+    if (!stopped) refreshTimer = setTimeout(() => void poll(), 2_000);
+  }
+  async function poll(): Promise<void> {
     try {
       await refreshSessions();
-      if (stopped || generation !== refreshGeneration) return;
-      draw();
-      await acknowledgeVisible();
+      if (!stopped) {
+        draw();
+        await acknowledgeVisible();
+      }
     } catch {}
-    if (!stopped && generation === refreshGeneration) refreshTimer = setTimeout(() => void poll(generation), 2_000);
-  };
-  refreshTimer = setTimeout(() => void poll(refreshGeneration), 2_000);
+    schedulePoll();
+  }
+  schedulePoll();
 
   await new Promise<void>((resolve) => {
     const finish = (): void => {

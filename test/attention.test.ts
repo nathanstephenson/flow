@@ -104,6 +104,28 @@ describe("attention inbox", () => {
     assert.equal(restarted.list()[0]?.restingAt, restingAt, "acknowledgement does not change Resting");
   });
 
+  it("does not republish older workflow outcomes after restart", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-attention-workflows-"));
+    roots.push(root);
+    const { host, id } = await fixture(root);
+    host.workflowComplete(id, "workflow-1");
+    host.workflowWake(id, "workflow-2", "revision-1");
+    const version = host.list()[0]!.attention!.version;
+    await host.shutdown();
+
+    const store = new TranscriptStore(root);
+    const restarted = new SessionHost({ store });
+    restarted.registerBackend(new FakeBackend());
+    await restarted.load();
+    const notices = () => store.readEntries(id).filter((entry) => entry.event.type === "notice").length;
+    const before = notices();
+
+    restarted.workflowComplete(id, "workflow-1");
+    restarted.workflowWake(id, "workflow-2", "revision-1");
+    assert.equal(notices(), before);
+    assert.equal(restarted.list()[0]?.attention?.version, version);
+  });
+
   it("End clears unread while preserving its terminal lifecycle", async () => {
     const { backend, host, id } = await fixture();
     await complete(host, backend, id, "error");

@@ -719,7 +719,7 @@ export class SessionHost {
         // No metadata means a legacy record starts read. Open requests are still indexed below and
         // therefore remain Needs input for as long as they are genuinely answerable.
         latestAttention: meta.latestAttention,
-        seenAttentionKeys: new Set(meta.latestAttention ? [meta.latestAttention.key] : []),
+        seenAttentionKeys: new Set(meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])),
         readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
         openPermissionAttention: openInputAttention(entries, "permission"),
         openEnquiryAttention: openInputAttention(entries, "enquiry"),
@@ -1453,9 +1453,10 @@ export class SessionHost {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowNotifications.set(sessionId, { executionId, revision });
     const record = this.sessions.get(sessionId);
-    if (record) {
+    const key = `workflow-failure:${executionId}:${revision}`;
+    if (record && !record.seenAttentionKeys.has(key)) {
       const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow requires recovery. The parent will inspect it when free.' });
-      this.markAttention(record, 'Failed', `workflow-failure:${executionId}:${revision}`, boundary.at);
+      this.markAttention(record, 'Failed', key, boundary.at);
       this.persist(record);
     }
     this.queueWorkflowDrain(sessionId);
@@ -1468,9 +1469,10 @@ export class SessionHost {
     pending.push(executionId);
     this.workflowCompletions.set(sessionId, pending);
     const record = this.sessions.get(sessionId);
-    if (record) {
+    const key = `workflow-completion:${executionId}`;
+    if (record && !record.seenAttentionKeys.has(key)) {
       const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow completed. The parent will prepare the result when free.' });
-      this.markAttention(record, 'Completed', `workflow-completion:${executionId}`, boundary.at);
+      this.markAttention(record, 'Completed', key, boundary.at);
       this.persist(record);
     }
     this.queueWorkflowDrain(sessionId);
@@ -2522,6 +2524,7 @@ export class SessionHost {
       restingAt: record.restingAt,
       ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
       ...(record.latestAttention === undefined ? {} : { latestAttention: record.latestAttention }),
+      seenAttentionKeys: [...record.seenAttentionKeys],
       readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),

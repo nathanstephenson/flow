@@ -70,29 +70,32 @@ export function TranscriptView({
   }, [onObserved, view, visible]);
   const reportObservedRef = useRef(reportObserved);
   reportObservedRef.current = reportObserved;
-
-  useEffect(() => {
-    // A layout effect (and even the first animation-frame callback) runs before paint. Wait through
-    // a frame boundary so attention is acknowledged only after the committed rows were visible.
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      second = requestAnimationFrame(() => reportObservedRef.current());
+  const paintFrames = useRef<[number, number]>([0, 0]);
+  const scheduleObserved = useCallback(() => {
+    cancelAnimationFrame(paintFrames.current[0]);
+    cancelAnimationFrame(paintFrames.current[1]);
+    paintFrames.current[0] = requestAnimationFrame(() => {
+      paintFrames.current[1] = requestAnimationFrame(() => reportObservedRef.current());
     });
-    return () => {
-      cancelAnimationFrame(first);
-      if (second) cancelAnimationFrame(second);
-    };
-  });
+  }, []);
+
+  useEffect(() => scheduleObserved());
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(paintFrames.current[0]);
+      cancelAnimationFrame(paintFrames.current[1]);
+    },
+    [],
+  );
 
   useEffect(() => {
-    const report = () => reportObservedRef.current();
-    window.addEventListener("focus", report);
-    document.addEventListener("visibilitychange", report);
+    window.addEventListener("focus", scheduleObserved);
+    document.addEventListener("visibilitychange", scheduleObserved);
     return () => {
-      window.removeEventListener("focus", report);
-      document.removeEventListener("visibilitychange", report);
+      window.removeEventListener("focus", scheduleObserved);
+      document.removeEventListener("visibilitychange", scheduleObserved);
     };
-  }, []);
+  }, [scheduleObserved]);
 
   /**
    * The pin is derived from the reader's own scrolling rather than measured before a commit and
@@ -114,7 +117,7 @@ export function TranscriptView({
       throttle = setTimeout(() => {
         throttle = undefined;
         setAtBottom(pinned.current);
-        if (pinned.current) reportObservedRef.current();
+        if (pinned.current) scheduleObserved();
       }, 150);
     };
 
@@ -123,7 +126,7 @@ export function TranscriptView({
       element.removeEventListener("scroll", onScroll);
       if (throttle) clearTimeout(throttle);
     };
-  }, []);
+  }, [scheduleObserved]);
 
   /**
    * Hold the pin while the Composer changes height.
@@ -160,7 +163,6 @@ export function TranscriptView({
     element.scrollTop = element.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
-    reportObservedRef.current();
   }, [query, view]);
 
   const toBottom = useCallback(() => {
@@ -169,8 +171,8 @@ export function TranscriptView({
     element.scrollTop = element.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
-    reportObserved();
-  }, [reportObserved]);
+    scheduleObserved();
+  }, [scheduleObserved]);
 
   return (
     <div className="relative min-h-0 min-w-0">
@@ -216,7 +218,7 @@ export function TranscriptView({
             </p>
           ) : null}
 
-          <StickToBottom view={view} scroller={scroller} pinned={pinned} onObserved={reportObserved} />
+          <StickToBottom view={view} scroller={scroller} pinned={pinned} scheduleObserved={scheduleObserved} />
         </div>
       </div>
 
@@ -257,12 +259,12 @@ function StickToBottom({
   view,
   scroller,
   pinned,
-  onObserved,
+  scheduleObserved,
 }: {
   view: AgentSessionView;
   scroller: RefObject<HTMLDivElement | null>;
   pinned: RefObject<boolean>;
-  onObserved: () => void;
+  scheduleObserved: () => void;
 }) {
   const [, setTick] = useState(0);
 
@@ -270,11 +272,10 @@ function StickToBottom({
 
   useLayoutEffect(() => {
     const element = scroller.current;
-    if (element && pinned.current) {
-      element.scrollTop = element.scrollHeight;
-      onObserved();
-    }
+    if (element && pinned.current) element.scrollTop = element.scrollHeight;
   });
+
+  useEffect(() => scheduleObserved());
 
   return null;
 }
