@@ -138,7 +138,6 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   find(flow, 'WorkflowGraph').props.onSelect('join');
   const step = p.render();
   assert.equal(find(step, 'Tabs').props.value, 'Flow');
-  // The graph stays mounted (but hidden by its wrapper), retaining pan/zoom across details and Back.
   assert.ok(find(step, 'WorkflowGraph'));
   assert.ok(find(step, 'Select', node => node.props.value === 1));
   find(step, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();

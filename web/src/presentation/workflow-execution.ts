@@ -2,6 +2,14 @@ import type {
   WorkflowDefinition,
 } from '../../../src/protocol/workflows.ts';
 import { analyzeLoops } from '../../../src/workflows/loops.ts';
+import {
+  WORKFLOW_CARD_HEIGHT,
+  WORKFLOW_CARD_WIDTH,
+  WORKFLOW_COLUMN_GAP,
+  WORKFLOW_LANE_GAP,
+  WORKFLOW_RANK_GAP,
+  WORKFLOW_ROW_GAP,
+} from './workflow-dimensions.ts';
 
 export function attemptDuration(startedAt: number, finishedAt?: number): string {
   if (finishedAt === undefined) return 'In progress';
@@ -35,6 +43,17 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
     const rank = ranks.get(step.id) ?? 0;
     const lane = lanes.get(rank) ?? 0;
     lanes.set(rank, lane + 1);
-    return { ...step, position: vertical ? { x: lane * 310, y: rank * 220 } : { x: rank * 350, y: lane * 270 } };
+    return {
+      ...step,
+      position: vertical
+        ? {
+            x: lane * (WORKFLOW_CARD_WIDTH + WORKFLOW_LANE_GAP),
+            y: rank * (WORKFLOW_CARD_HEIGHT + WORKFLOW_RANK_GAP),
+          }
+        : {
+            x: rank * (WORKFLOW_CARD_WIDTH + WORKFLOW_COLUMN_GAP),
+            y: lane * (WORKFLOW_CARD_HEIGHT + WORKFLOW_ROW_GAP),
+          },
+    };
   }) };
 }

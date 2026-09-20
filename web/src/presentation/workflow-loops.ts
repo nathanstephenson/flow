@@ -6,6 +6,12 @@ import type {
 } from "../../../src/protocol/workflows.ts";
 import type { RecoverWorkflow } from "../../../src/protocol/workflow-executions.ts";
 import { analyzeLoops } from "../../../src/workflows/loops.ts";
+import {
+  WORKFLOW_CARD_HEIGHT,
+  WORKFLOW_CARD_WIDTH,
+} from "./workflow-dimensions.ts";
+
+export { WORKFLOW_CARD_HEIGHT, WORKFLOW_CARD_WIDTH } from "./workflow-dimensions.ts";
 
 export function cleanLoopSettings(
   definition: WorkflowDefinition,
@@ -55,8 +61,6 @@ export function cleanLoopSettings(
   };
 }
 
-export const WORKFLOW_CARD_WIDTH = 208;
-export const WORKFLOW_CARD_HEIGHT = 160;
 const LOOP_PADDING = 24;
 const LOOP_TOP_HEADER_HEIGHT = 112;
 const LOOP_SIDE_HEADER_WIDTH = 264;

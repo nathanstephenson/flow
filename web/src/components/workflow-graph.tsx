@@ -32,6 +32,10 @@ import {
   loopProgress,
 } from "../presentation/workflow-loops.ts";
 import {
+  WORKFLOW_CARD_HEIGHT,
+  WORKFLOW_CARD_WIDTH,
+} from "../presentation/workflow-dimensions.ts";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -93,7 +97,7 @@ function LoopNode({
     </div>
   );
 }
-function WorkflowNode({
+export function WorkflowNode({
   data,
 }: NodeProps<
   Node<{ step: WorkflowStep; permission: string; status?: string; vertical?: boolean; execution?: boolean }>
@@ -105,7 +109,8 @@ function WorkflowNode({
     <div
       data-status={data.status}
       data-orientation={data.vertical ? "vertical" : "horizontal"}
-      className="workflow-step relative h-44 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
+      className="workflow-step relative rounded-lg border bg-card p-3 text-xs text-card-foreground"
+      style={{ width: WORKFLOW_CARD_WIDTH, height: WORKFLOW_CARD_HEIGHT }}
     >
       <Handle type="target" position={data.vertical ? Position.Top : Position.Left} />
       <strong
