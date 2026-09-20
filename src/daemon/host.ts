@@ -1785,7 +1785,7 @@ export class SessionHost {
     if (name === undefined) return;
 
     const current = this.sessions.get(record.id);
-    if (!current || current !== record || current.lifecycle === "ended" || current.lifecycle === "settled") return;
+    if (!current || current !== record || !this.workflowNamingAllowed(record.id)) return;
     if (current.titleSource !== expectedSource || current.titleGeneration !== generation) return;
     current.title = name;
     current.titleSource = "summary";

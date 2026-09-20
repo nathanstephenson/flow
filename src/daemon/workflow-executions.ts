@@ -424,7 +424,7 @@ export class WorkflowExecutionService {
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
     this.snapshots.set(record.id, this.code);
-    this.namingSnapshots.set(record.id, record);
+    if (record.naming === 'pending') this.namingSnapshots.set(record.id, { definition: record.definition, input: record.input });
     this.watch(record);
     return this.view(sessionId, record.id);
   }
@@ -462,7 +462,7 @@ export class WorkflowExecutionService {
     catch (error) { if (error instanceof WorkflowLoopConflict) throw new WorkflowConflict(); throw error; }
     finally { this.checkingCode = undefined; }
     this.snapshots.set(executionId, code);
-    this.namingSnapshots.set(executionId, record);
+    if (record.naming === 'pending') this.namingSnapshots.set(executionId, { definition: record.definition, input: record.input });
     this.watch(record);
     return this.view(sessionId, executionId);
   }
@@ -752,13 +752,13 @@ export class WorkflowExecutionService {
       },
     });
     const namingSnapshot = this.namingSnapshots.get(context.executionId);
-    this.requestNaming(context.sessionId, context.executionId, namingSnapshot, record => workflowAgentNameInput({
-      workflowName: record.definition.name,
-      workflowInput: record.input,
+    this.requestNaming(context.sessionId, context.executionId, namingSnapshot && (() => workflowAgentNameInput({
+      workflowName: namingSnapshot.definition.name,
+      workflowInput: namingSnapshot.input,
       stepName: context.step.name,
       instructions: resolvedInstructions,
       input: context.input,
-    }, values));
+    }, values)));
     if (context.permission === 'ask' && typeof handle.answerPermission !== 'function') {
       await handle.cancel();
       throw new Error('Workflow Agent permissions are unavailable');
@@ -790,25 +790,26 @@ export class WorkflowExecutionService {
 
   private watch(record: WorkflowExecution): void {
     void this.scheduler.wait(record.sessionId, record.id).then(result => {
-      this.snapshots.delete(record.id);
       const credentials = this.secretValues.get(record.id) ?? [];
       this.publishResult(result, credentials);
+    }).catch(() => {}).finally(() => {
+      this.snapshots.delete(record.id);
       this.namingSnapshots.delete(record.id);
       this.secretValues.delete(record.id);
-    }).catch(() => {});
+    });
   }
 
   private publishResult(result: WorkflowExecution, knownCredentials: readonly string[] = []): void {
     if (!result.testStepId && ['recovery-required', 'completed', 'completed-with-recovery', 'cancelled'].includes(result.status)) {
-      this.requestNaming(result.sessionId, result.id, result, record => {
-        const { results, errors } = outcomeNamingData(record);
+      this.requestNaming(result.sessionId, result.id, () => {
+        const { results, errors } = outcomeNamingData(result);
         return workflowOutcomeNameInput({
-          workflowName: record.definition.name,
-          workflowInput: record.input,
-          outcome: record.status,
-          ...(results === undefined ? {} : { results }),
-          ...(errors === undefined ? {} : { errors }),
-        }, uniqueCredentials([...knownCredentials, ...this.namingCredentials(record)]));
+          workflowName: result.definition.name,
+          workflowInput: result.input,
+          outcome: result.status,
+          results,
+          errors,
+        }, uniqueCredentials([...knownCredentials, ...this.namingCredentials(result)]));
       });
     }
     if (!result.testStepId && result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
@@ -818,13 +819,18 @@ export class WorkflowExecutionService {
   }
 
   /** A shutdown leaves the durable request pending so restart reconciliation can name it. */
-  private requestNaming(sessionId: string, executionId: string, snapshot: Pick<WorkflowExecution, 'definition' | 'input'> | WorkflowExecution | undefined, context: (record: WorkflowExecution) => string): void {
-    if (!this.host.workflowNamingAllowed(sessionId) || !snapshot) return;
-    try { if (!this.scheduler.claimNaming(sessionId, executionId)) return; }
-    catch { return; }
+  private requestNaming(sessionId: string, executionId: string, context: (() => string) | undefined): void {
+    if (!this.host.workflowNamingAllowed(sessionId) || !context) return;
+    try {
+      if (!this.scheduler.claimNaming(sessionId, executionId)) {
+        this.namingSnapshots.delete(executionId);
+        return;
+      }
+    }
+    catch { this.namingSnapshots.delete(executionId); return; }
     let input: string;
-    try { input = context(snapshot as WorkflowExecution); }
-    catch { return; }
+    try { input = context(); }
+    catch { this.namingSnapshots.delete(executionId); return; }
     this.namingSnapshots.delete(executionId);
     void this.host.nameWorkflow(sessionId, input).catch(() => {});
   }
@@ -920,7 +926,7 @@ function safeError(error: unknown, values: string[]): Error {
   return error instanceof WorkflowStepError ? new WorkflowStepError(message, error.partialOutput === undefined ? undefined : redact(error.partialOutput, values)) : new Error(message);
 }
 
-function outcomeNamingData(record: WorkflowExecution): { results?: unknown; errors?: unknown } {
+function outcomeNamingData(record: WorkflowExecution): { results: unknown; errors: unknown } {
   const stepNames = new Map(record.definition.steps.map(step => [step.id, step.name]));
   function* results() {
     for (const id in record.steps) {

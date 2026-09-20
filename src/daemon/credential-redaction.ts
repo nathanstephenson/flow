@@ -18,6 +18,14 @@ const namingCredentialKey = /(?:authorization|cookie|password|passphrase|credent
 export function boundedCredentialJson(value: unknown, credentials: readonly string[], limit: number): string {
   const redact = credentialTextRedactor(credentials);
   let remaining = limit;
+  // Output budget alone is insufficient: omitted fields emit nothing, and a single string can be
+  // arbitrarily large before redaction or JSON encoding. Charge all inspected input separately.
+  let work = Math.max(4_096, limit * 4);
+  const consume = (size: number): boolean => {
+    if (work <= 0) return false;
+    work -= Math.max(1, size);
+    return true;
+  };
   const emit = (text: string): string => {
     if (text.length <= remaining) { remaining -= text.length; return text; }
     const clipped = text.slice(0, Math.max(0, remaining - 1)) + (remaining ? "…" : "");
@@ -25,14 +33,21 @@ export function boundedCredentialJson(value: unknown, credentials: readonly stri
     return clipped;
   };
   const visit = (item: unknown): string => {
-    if (!remaining) return "";
-    if (typeof item === "string") return emit(JSON.stringify(redact(item)));
-    if (item === null || typeof item !== "object") return emit(JSON.stringify(item) ?? "null");
+    if (!remaining || work <= 0) return "";
+    if (typeof item === "string") {
+      const bounded = item.slice(0, work);
+      consume(bounded.length);
+      return emit(JSON.stringify(redact(bounded)));
+    }
+    if (item === null || typeof item !== "object") {
+      consume(1);
+      return emit(JSON.stringify(item) ?? "null");
+    }
     if (Array.isArray(item) || Symbol.iterator in item) {
       let result = emit("[");
       let index = 0;
       for (const nested of item as Iterable<unknown>) {
-        if (!remaining) break;
+        if (!remaining || !consume(1)) break;
         result += emit(index++ ? "," : "") + visit(nested);
       }
       return result + emit("]");
@@ -40,7 +55,7 @@ export function boundedCredentialJson(value: unknown, credentials: readonly stri
     let result = emit("{");
     let index = 0;
     for (const key in item) {
-      if (!remaining) break;
+      if (!remaining || !consume(key.length + 1)) break;
       if (!Object.prototype.hasOwnProperty.call(item, key) || namingCredentialKey.test(key)) continue;
       result += emit(index++ ? "," : "") + emit(JSON.stringify(redact(key)) + ":") + visit((item as Record<string, unknown>)[key]);
     }

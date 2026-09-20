@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
+import { boundedCredentialJson } from "../src/daemon/credential-redaction.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 import { nameFrom, nameInput, summariseToName, workflowAgentNameInput, workflowOutcomeNameInput } from "../src/daemon/summariser.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
@@ -140,6 +141,23 @@ describe("workflow naming context", () => {
     const context = workflowOutcomeNameInput({ workflowName: "Large history", workflowInput: {}, outcome: "completed", results });
     assert.ok(context.length <= 4_000);
     assert.match(context, /Large history|completed/);
+  });
+
+  it("bounds redaction work for a huge string", () => {
+    const context = boundedCredentialJson("private ".repeat(1_000_000), ["private"], 1_000);
+    assert.ok(context.length <= 1_000);
+    assert.match(context, /\[REDACTED\]/);
+  });
+
+  it("charges omitted credential keys against the traversal budget", () => {
+    let inspected = 0;
+    const keys = Array.from({ length: 100_000 }, (_, index) => `password${index}`);
+    const input = new Proxy({}, {
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor: () => { inspected += 1; return { enumerable: true, configurable: true }; },
+    });
+    boundedCredentialJson(input, [], 100);
+    assert.ok(inspected < keys.length / 10, `inspected ${inspected} omitted properties`);
   });
 
   it("keeps outcome data when workflow names are unbounded", () => {
@@ -514,6 +532,23 @@ describe("naming an Agent Session", () => {
       summary.sessions.filter((session) => !session.disposed).map((session) => session.modelId),
       [],
     );
+  });
+
+  it("does not persist an in-flight automatic name after shutdown", async () => {
+    summary.autoReply = undefined;
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "fix the uploader", "after_turn");
+    await settled();
+    const naming = summary.sessions.find((session) => session.prompts.length > 0);
+    assert.ok(naming, "the Summary Model request is in flight");
+
+    await host.shutdown();
+    naming.say("Add retry to the uploader");
+    naming.completeTurn("complete");
+    await settled();
+
+    assert.equal(host.list().find((entry) => entry.id === id)?.status, "dormant");
+    assert.equal(titleOf(id), "fix the uploader");
   });
 
   it("disposes a spare that was still booting when the host shut down", async () => {
