@@ -64,20 +64,20 @@ export function TranscriptView({
   const scroller = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
-  const reportObserved = useCallback(() => {
+  const reportObserved = useCallback((throughSeq: number) => {
     if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
-    onObserved?.(view.getLastSeq());
-  }, [onObserved, view, visible]);
+    onObserved?.(throughSeq);
+  }, [onObserved, visible]);
   const reportObservedRef = useRef(reportObserved);
   reportObservedRef.current = reportObserved;
   const paintFrames = useRef<[number, number]>([0, 0]);
-  const scheduleObserved = useCallback(() => {
+  const scheduleObserved = useCallback((throughSeq = view.getLastSeq()) => {
     cancelAnimationFrame(paintFrames.current[0]);
     cancelAnimationFrame(paintFrames.current[1]);
     paintFrames.current[0] = requestAnimationFrame(() => {
-      paintFrames.current[1] = requestAnimationFrame(() => reportObservedRef.current());
+      paintFrames.current[1] = requestAnimationFrame(() => reportObservedRef.current(throughSeq));
     });
-  }, []);
+  }, [view]);
 
   useEffect(() => scheduleObserved());
   useEffect(
@@ -89,11 +89,12 @@ export function TranscriptView({
   );
 
   useEffect(() => {
-    window.addEventListener("focus", scheduleObserved);
-    document.addEventListener("visibilitychange", scheduleObserved);
+    const observeCurrent = () => scheduleObserved();
+    window.addEventListener("focus", observeCurrent);
+    document.addEventListener("visibilitychange", observeCurrent);
     return () => {
-      window.removeEventListener("focus", scheduleObserved);
-      document.removeEventListener("visibilitychange", scheduleObserved);
+      window.removeEventListener("focus", observeCurrent);
+      document.removeEventListener("visibilitychange", observeCurrent);
     };
   }, [scheduleObserved]);
 
@@ -264,7 +265,7 @@ function StickToBottom({
   view: AgentSessionView;
   scroller: RefObject<HTMLDivElement | null>;
   pinned: RefObject<boolean>;
-  scheduleObserved: () => void;
+  scheduleObserved: (throughSeq?: number) => void;
 }) {
   const [, setTick] = useState(0);
 
@@ -273,9 +274,8 @@ function StickToBottom({
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    scheduleObserved(view.getLastSeq());
   });
-
-  useEffect(() => scheduleObserved());
 
   return null;
 }

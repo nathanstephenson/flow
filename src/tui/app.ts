@@ -17,7 +17,7 @@ import {
 } from "../client/enquiry.ts";
 import { permissionChoices } from "../client/permission.ts";
 import type { PermissionDecision } from "../protocol/events.ts";
-import { isPrintable, KEY, splitKeys } from "./keys.ts";
+import { isPrintable, KeySplitter, KEY } from "./keys.ts";
 import { renderFrame, type Overlay, type UiState } from "./render.ts";
 
 /**
@@ -232,10 +232,11 @@ export async function runTui(options: TuiOptions): Promise<void> {
     // Chunks are processed one at a time. handleKey is async, so without this a chunk arriving
     // mid-walk would interleave with the previous one and keys would be applied out of order.
     let pending: Promise<void> = Promise.resolve();
+    const keys = new KeySplitter();
     stdin.on("data", (chunk: string) => {
       pending = pending.then(async () => {
         try {
-          for (const key of splitKeys(chunk)) {
+          for (const key of keys.push(chunk)) {
             if (await handleKey(key)) {
               finish();
               return;

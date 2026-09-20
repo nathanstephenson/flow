@@ -28,6 +28,20 @@ describe("attention inbox", () => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
+  it("updates the output preview as a streamed message grows without moving the row", async () => {
+    const { backend, host, id } = await fixture();
+    const other = await host.create({ scope: "/tmp/other", backend: "fake" });
+    await host.send(id, "go", "now");
+    const before = host.list().map((session) => session.id);
+
+    backend.sessions[0]!.say("first\nline", false);
+    assert.equal(host.list().find((session) => session.id === id)?.outputPreview, "first line");
+    backend.sessions[0]!.say("first line continues", false);
+    assert.equal(host.list().find((session) => session.id === id)?.outputPreview, "first line continues");
+    assert.deepEqual(host.list().map((session) => session.id), before);
+    assert.ok(before.includes(other));
+  });
+
   it("qualifies parent outcomes and acknowledges only the observed version", async () => {
     const { backend, host, id } = await fixture();
     await complete(host, backend, id);

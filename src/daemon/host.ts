@@ -137,6 +137,7 @@ type SessionRecord = {
   latestAttention: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
   seenAttentionKeys: Set<string>;
   readAttentionVersion: number;
+  outputPreview: string | undefined;
   /** Relevant ages for unresolved parent/Subagent requests, indexed independently of occupancy. */
   openPermissionAttention: Map<string, { at: string; version: number }>;
   openEnquiryAttention: Map<string, { at: string; version: number }>;
@@ -598,6 +599,10 @@ export class SessionHost {
       return { at: record.latestAttention?.at ?? at, version: record.latestAttention?.version ?? record.readAttentionVersion };
     }
     record.seenAttentionKeys.add(key);
+    while (record.seenAttentionKeys.size > 256) {
+      const oldest = record.seenAttentionKeys.values().next().value;
+      if (oldest !== undefined) record.seenAttentionKeys.delete(oldest);
+    }
     const version = (record.latestAttention?.version ?? record.readAttentionVersion) + 1;
     record.latestAttention = {
       reason,
@@ -663,6 +668,7 @@ export class SessionHost {
           backend: record.backendName,
           status,
           title: record.title,
+          ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
           restingAt: record.restingAt,
           activeSubagents: record.openSubagentIds.size,
           activeBackgroundCalls: record.openBackgroundCallIds.size,
@@ -719,8 +725,9 @@ export class SessionHost {
         // No metadata means a legacy record starts read. Open requests are still indexed below and
         // therefore remain Needs input for as long as they are genuinely answerable.
         latestAttention: meta.latestAttention,
-        seenAttentionKeys: new Set(meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])),
+        seenAttentionKeys: new Set((meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])).slice(-256)),
         readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
+        outputPreview: meta.outputPreview,
         openPermissionAttention: openInputAttention(entries, "permission"),
         openEnquiryAttention: openInputAttention(entries, "enquiry"),
         buffered: undefined,
@@ -804,6 +811,7 @@ export class SessionHost {
       latestAttention: undefined,
       seenAttentionKeys: new Set(),
       readAttentionVersion: 0,
+      outputPreview: undefined,
       openPermissionAttention: new Map(),
       openEnquiryAttention: new Map(),
       buffered: undefined,
@@ -1519,7 +1527,7 @@ export class SessionHost {
       return false;
     }
     record.turnInFlight = true;
-    const logged = record.log.append({
+    record.log.append({
       type: 'notice',
       level: 'info',
       text: kind === 'input'
@@ -2345,6 +2353,10 @@ export class SessionHost {
     const subagentWasOpen = event.type === "subagent" && record.openSubagentIds.has(event.subagentId);
     const backgroundWasOpen = event.type === "background_call" && record.openBackgroundCallIds.has(event.callId);
     const logged = record.log.append(event);
+    if (event.type === "message" && event.producer === undefined) {
+      const preview = event.text.replace(/\s+/g, " ").trim();
+      record.outputPreview = preview ? preview.slice(0, 500) : undefined;
+    }
 
     let inputAttention: { at: string; version: number } | undefined;
     if (event.type === "permission" && event.state === "asked" && !permissionWasOpen) {
@@ -2435,7 +2447,7 @@ export class SessionHost {
      * outlives the turn that started it and reports into a later one (ADR 0016, ADR 0021).
      */
     if (event.type === "turn_ended") {
-          record.openEnquiryAttention.clear();
+      record.openEnquiryAttention.clear();
       record.openPermissionAttention.clear();
     }
   }
@@ -2515,6 +2527,7 @@ export class SessionHost {
       backend: record.backendName,
       title: record.title,
       titleSource: record.titleSource,
+      ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       lifecycle: record.lifecycle,

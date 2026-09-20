@@ -48,6 +48,8 @@ export type SessionSummary = {
   backend: string;
   status: SessionStatus;
   title: string;
+  /** Latest assistant output, updated as its streamed snapshot grows. */
+  outputPreview?: string;
   /**
    * When this Agent Session last came to rest — the time its row prints, and what orders the rail
    * within its inbox group. The group itself comes from `railGroup`, not from here.

@@ -43,6 +43,7 @@ export type SessionMeta = {
    * `SessionHost.load` infers it from the title for those, so nothing has to be migrated.
    */
   titleSource?: TitleSource;
+  outputPreview?: string;
   createdAt: string;
   updatedAt: string;
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */
@@ -76,7 +77,7 @@ export type SessionMeta = {
    * existed start read rather than flooding the inbox after an upgrade.
    */
   latestAttention?: Omit<SessionAttention, "group"> & { key: string };
-  /** Keys already published, retained so reconciliation cannot publish an old outcome again. */
+  /** Recent qualifying keys retained across restart for bounded replay deduplication. */
   seenAttentionKeys?: string[];
   /** Highest attention version a client actually observed. Machine-wide, not per front-end. */
   readAttentionVersion?: number;

@@ -38,21 +38,38 @@ export function isPrintable(key: string): boolean {
  * A chunk is not a keystroke: a paste arrives as one chunk of many characters, and an arrow key
  * arrives as a three-byte escape sequence. Treating a chunk as one key silently drops both.
  */
-export function splitKeys(chunk: string): string[] {
+function parseKeys(chunk: string): { keys: string[]; remainder: string } {
   const keys: string[] = [];
   let index = 0;
   while (index < chunk.length) {
     const char = chunk[index] ?? "";
-    if (char === "\u001b" && chunk[index + 1] === "[") {
-      // CSI sequence: ESC [ ... final byte in @-~
-      let end = index + 2;
-      while (end < chunk.length && !/[@-~]/.test(chunk[end] ?? "")) end += 1;
-      keys.push(chunk.slice(index, end + 1));
-      index = end + 1;
-      continue;
+    if (char === "\u001b") {
+      if (index + 1 === chunk.length) return { keys, remainder: chunk.slice(index) };
+      if (chunk[index + 1] === "[") {
+        let end = index + 2;
+        while (end < chunk.length && !/[@-~]/.test(chunk[end] ?? "")) end += 1;
+        if (end === chunk.length) return { keys, remainder: chunk.slice(index) };
+        keys.push(chunk.slice(index, end + 1));
+        index = end + 1;
+        continue;
+      }
     }
     keys.push(char);
     index += 1;
   }
-  return keys;
+  return { keys, remainder: "" };
+}
+
+export function splitKeys(chunk: string): string[] {
+  return parseKeys(chunk).keys;
+}
+
+export class KeySplitter {
+  private buffered = "";
+
+  push(chunk: string): string[] {
+    const parsed = parseKeys(this.buffered + chunk);
+    this.buffered = parsed.remainder;
+    return parsed.keys;
+  }
 }

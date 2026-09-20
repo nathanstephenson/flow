@@ -95,10 +95,10 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
       closeMobile();
     },
   };
-  const groups = RAIL_GROUPS.map((group) => ({
-    group,
-    sessions: props.sessions.filter((session) => railGroup(session) === group),
-  })).filter(({ sessions }) => sessions.length > 0);
+  const grouped = new Map(RAIL_GROUPS.map((group) => [group, [] as SessionSummary[]]));
+  for (const session of props.sessions) grouped.get(railGroup(session))?.push(session);
+  const groups = RAIL_GROUPS.map((group) => ({ group, sessions: grouped.get(group)! }))
+    .filter(({ sessions }) => sessions.length > 0);
   const filedAway = groups.find(({ group }) => group === "filed-away");
   const cursorInFiledAway = filedAway?.sessions.some((session) => session.id === props.cursorId) ?? false;
   const [filedAwayOpen, setFiledAwayOpen] = useState(false);
@@ -323,19 +323,10 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             <span className={cn("min-w-0 flex-1 truncate text-sm", summary.attention && "font-semibold")}>
               {sessionLabel(summary)}
             </span>
-            {summary.attention ? (
-              <span
-                className={cn(
-                  "shrink-0 rounded-sm border px-1 text-[9px] leading-4 font-bold tracking-wide",
-                  summary.attention.group === "needs-input"
-                    ? "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                    : "border-primary/40 bg-primary/10 text-primary",
-                )}
-              >
-                {summary.attention.group === "needs-input" ? "INPUT" : "NEW"}
-              </span>
-            ) : null}
           </span>
+          {summary.outputPreview ? (
+            <span className="block truncate text-xs text-muted-foreground">{summary.outputPreview}</span>
+          ) : null}
           <ScopeLine summary={summary} />
           {summary.attention ? (
             <span className="flex items-center gap-1.5 text-xs font-medium">

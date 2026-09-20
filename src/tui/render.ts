@@ -331,7 +331,11 @@ function overlay(ui: UiState, width: number, height: number): string[] {
     const cursor = (ui.overlay as { index: number }).index;
     const now = ui.now ?? Date.now();
     const rows: Array<{ line: string; sessionIndex?: number }> = [];
-    const counts = new Map(RAIL_GROUPS.map((group) => [group, ui.sessions.filter((session) => railGroup(session) === group).length]));
+    const counts = new Map(RAIL_GROUPS.map((group) => [group, 0]));
+    for (const session of ui.sessions) {
+      const group = railGroup(session);
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
     let opened: ReturnType<typeof railGroup> | undefined;
 
     // Headings are inserted into the rendered rows but never into ui.sessions, so the numeric
@@ -358,6 +362,7 @@ function overlay(ui: UiState, width: number, height: number): string[] {
         sessionIndex: index,
         line: clip(`${index === cursor ? ">" : " "} ${detail} ${sessionLabel(session)}`, width),
       });
+      if (session.outputPreview) rows.push({ line: ellipsised(`    ${session.outputPreview}`, width) });
     }
 
     // Group headings consume rows but not cursor positions. Window the rendered rows around the
