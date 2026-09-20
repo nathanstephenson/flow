@@ -8,6 +8,7 @@ import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
+import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
 import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
@@ -59,7 +60,8 @@ export function AppShell() {
   } = useRoute();
   const run = useCommand();
 
-  const [cursor, setCursor] = useState(0);
+  // Identity, not an index: attention events may reorder the rail while the keyboard is in it.
+  const [cursorId, setCursorId] = useState<string | undefined>(undefined);
   const [railOpen, setRailOpen] = useState(true);
   /**
    * Whether the pane's transcript search field is on screen.
@@ -151,10 +153,15 @@ export function AppShell() {
     focus(candidate.id);
   }, [landed, loaded, sessions, focusedId, focus, route.view]);
 
-  // The cursor addresses the rail as it is rendered, so it cannot point past the end of it.
+  // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
+  // that identity was Reaped, never merely because it moved to another group.
   useEffect(() => {
-    setCursor((current) => Math.max(0, Math.min(current, sessions.length - 1)));
-  }, [sessions.length]);
+    setCursorId((current) => retainSessionCursor(sessions, current));
+  }, [sessions]);
+
+  const moveCursor = useCallback((step: number) => {
+    setCursorId((current) => moveSessionCursor(sessions, current, step));
+  }, [sessions]);
 
   useEffect(() => {
     setSearchOpen(false);
@@ -184,13 +191,12 @@ export function AppShell() {
   const handlers = useMemo<KeyboardHandlers>(
     () => ({
       "new-agent-session": openNewAgentSession,
-      "sidebar-next": () => setCursor((current) => Math.min(current + 1, sessions.length - 1)),
-      "sidebar-previous": () => setCursor((current) => Math.max(current - 1, 0)),
-      "sidebar-first": () => setCursor(0),
-      "sidebar-last": () => setCursor(Math.max(sessions.length - 1, 0)),
+      "sidebar-next": () => moveCursor(1),
+      "sidebar-previous": () => moveCursor(-1),
+      "sidebar-first": () => setCursorId(sessions[0]?.id),
+      "sidebar-last": () => setCursorId(sessions.at(-1)?.id),
       "focus-pane": () => {
-        const candidate = sessions[cursor];
-        if (candidate) focus(candidate.id);
+        if (cursorId) focus(cursorId);
         // The Composer's input, whatever element it is made of. It was a `textarea` until it became
         // a CodeMirror editor, which renders a contenteditable div — a selector naming the tag would
         // have stopped working with nothing to say so.
@@ -239,7 +245,7 @@ export function AppShell() {
     [
       chrome,
       config.shell,
-      cursor,
+      cursorId,
       docks,
       focus,
       focusInPane,
@@ -247,6 +253,7 @@ export function AppShell() {
       leaveSettings,
       openNewAgentSession,
       openSettings,
+      moveCursor,
       run,
       sessions,
       settle,
@@ -289,7 +296,7 @@ export function AppShell() {
               sessions={sessions}
               focusedId={focusedId}
               focusedStatus={chrome?.status}
-              cursorId={sessions[cursor]?.id}
+              cursorId={cursorId}
               link={chrome?.link}
               onFocus={focus}
               onSettle={settle}

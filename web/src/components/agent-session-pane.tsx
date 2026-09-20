@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
-import { useAgentSessions } from "@/agent-sessions.tsx";
+import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useSessionActions } from "@/composer-actions.ts";
 import type { Docks } from "@/docks.ts";
 import { useIsMobile } from "@/lib/use-mobile.ts";
@@ -28,6 +28,7 @@ import { TranscriptSearchField } from "@/components/transcript-search-field.tsx"
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
 import { TranscriptView } from "@/components/transcript-view.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { useSidebar } from "@/components/ui/sidebar.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -110,11 +111,13 @@ function AttachedPane({
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const { sessions } = useAgentSessions();
+  const run = useCommand();
   // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
   // no longer knows there is a session behind it — see web/src/composer-actions.ts.
   const actions = useSessionActions(sessionId);
   const [query, setQuery] = useState("");
   const mobile = useIsMobile();
+  const { openMobile } = useSidebar();
   const [mobileView, setMobileView] = useState<MobileView>(() =>
     validMobileView(mobileViewFromHistory(window.history.state, sessionId), docks.layout),
   );
@@ -239,6 +242,21 @@ function AttachedPane({
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
+  const acknowledged = useRef(0);
+  const observe = useCallback((throughSeq: number) => {
+    const attention = summary?.attention;
+    if (!attention || attention.version <= acknowledged.current || throughSeq < attention.observedSeq) return;
+    // Reserve before the request leaves. A poll may keep the old summary for one interval, but it
+    // must not turn one observation into a command storm.
+    acknowledged.current = attention.version;
+    void run<true>({ type: "acknowledge", sessionId, throughVersion: attention.version }).then((accepted) => {
+      // A failed command nudges a list poll. Release only this reservation so the unchanged boundary
+      // can be attempted when that poll re-renders; never roll back over a newer in-flight version.
+      if (accepted !== true && acknowledged.current === attention.version) {
+        acknowledged.current = Math.max(0, attention.version - 1);
+      }
+    });
+  }, [run, sessionId, summary?.attention]);
 
   const conversation = (
     <section
@@ -279,7 +297,15 @@ function AttachedPane({
       <SubagentOpenProvider
         value={(subagentKey) => docks.dispatch({ type: "open-subagents", subagentId: subagentKey })}
       >
-        <TranscriptView view={view} query={query} />
+        <TranscriptView
+          view={view}
+          query={query}
+          // Search results and a mobile Sheet can leave this mounted at the bottom while hiding the
+          // qualifying output. Neither is an observation: wait until the unfiltered transcript is
+          // the surface the reader can actually see.
+          visible={query === "" && (!mobile || (shownMobileView.kind === "transcript" && !openMobile))}
+          onObserved={observe}
+        />
       </SubagentOpenProvider>
 
       <Composer

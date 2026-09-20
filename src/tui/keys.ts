@@ -23,6 +23,9 @@ export const KEY = {
   backspaceAlt: "\b",
   up: "\u001b[A",
   down: "\u001b[B",
+  /** Focus events emitted after the client enables DECSET 1004. Unsupported terminals ignore it. */
+  focusIn: "\u001b[I",
+  focusOut: "\u001b[O",
 } as const;
 
 export function isPrintable(key: string): boolean {

@@ -744,6 +744,8 @@ it('queues exact Workflow questions behind a running parent, then relays and for
     handle.ask(questions, 'private-relay-ask');
     await pause();
     assert.equal(f.backend.latest.prompts.length, 1, 'the Workflow request does not interrupt the running parent');
+    assert.equal(f.host.list()[0]?.attention?.group, 'needs-input', 'independent Workflow input owns the parent inbox row');
+    assert.equal(f.host.list()[0]?.status, 'running', 'attention does not redefine parent occupancy');
     f.backend.latest.completeTurn();
     await until(() => f.backend.latest.prompts.some(prompt => prompt.includes('workflow_relay_enquiry')));
     const prompt = f.backend.latest.prompts.find(text => text.includes('workflow_relay_enquiry'))!;

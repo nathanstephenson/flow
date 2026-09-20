@@ -120,6 +120,9 @@ export type AgentSessionView = {
 
   /** Keyed by `entryKey(entry)` — kind and id, because an id is only unique within a kind. */
   getEntry(key: string): Entry | undefined;
+
+  /** Sequence boundary actually delivered to this transcript view; not part of reactive chrome. */
+  getLastSeq(): number;
 };
 
 /**

@@ -25,7 +25,19 @@ import { ownKeys } from "@/presentation/subagent-rows.ts";
  */
 const TAIL_WINDOW = 400;
 
-export function TranscriptView({ view, query }: { view: AgentSessionView; query: string }) {
+export function TranscriptView({
+  view,
+  query,
+  visible = true,
+  onObserved,
+}: {
+  view: AgentSessionView;
+  query: string;
+  /** False when mobile is showing a Dock over the still-mounted transcript. */
+  visible?: boolean;
+  /** Called only once the transcript is painted, focused, visible, and pinned to its newest row. */
+  onObserved?: (throughSeq: number) => void;
+}) {
   const keys = useTranscriptKeys(view);
   const matching = useFilteredKeys(view, keys, query);
 
@@ -52,6 +64,24 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   const scroller = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const reportObserved = useCallback(() => {
+    if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
+    onObserved?.(view.getLastSeq());
+  }, [onObserved, view, visible]);
+
+  // A row is acknowledged only after the transcript DOM exists, never merely because its rail row
+  // was highlighted. A changed attention boundary re-runs this same visibility check.
+  useLayoutEffect(() => reportObserved(), [reportObserved]);
+
+  useEffect(() => {
+    const report = () => reportObserved();
+    window.addEventListener("focus", report);
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      window.removeEventListener("focus", report);
+      document.removeEventListener("visibilitychange", report);
+    };
+  }, [reportObserved]);
 
   /**
    * The pin is derived from the reader's own scrolling rather than measured before a commit and
@@ -73,6 +103,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
       throttle = setTimeout(() => {
         throttle = undefined;
         setAtBottom(pinned.current);
+        if (pinned.current) reportObserved();
       }, 150);
     };
 
@@ -81,7 +112,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
       element.removeEventListener("scroll", onScroll);
       if (throttle) clearTimeout(throttle);
     };
-  }, []);
+  }, [reportObserved]);
 
   /**
    * Hold the pin while the Composer changes height.
@@ -118,7 +149,8 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
     element.scrollTop = element.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
-  }, [query, view]);
+    reportObserved();
+  }, [query, reportObserved, view]);
 
   const toBottom = useCallback(() => {
     const element = scroller.current;
@@ -126,7 +158,8 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
     element.scrollTop = element.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
-  }, []);
+    reportObserved();
+  }, [reportObserved]);
 
   return (
     <div className="relative min-h-0 min-w-0">
@@ -172,7 +205,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
             </p>
           ) : null}
 
-          <StickToBottom view={view} scroller={scroller} pinned={pinned} />
+          <StickToBottom view={view} scroller={scroller} pinned={pinned} onObserved={reportObserved} />
         </div>
       </div>
 
@@ -213,10 +246,12 @@ function StickToBottom({
   view,
   scroller,
   pinned,
+  onObserved,
 }: {
   view: AgentSessionView;
   scroller: RefObject<HTMLDivElement | null>;
   pinned: RefObject<boolean>;
+  onObserved: () => void;
 }) {
   const [, setTick] = useState(0);
 
@@ -224,7 +259,10 @@ function StickToBottom({
 
   useLayoutEffect(() => {
     const element = scroller.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    if (element && pinned.current) {
+      element.scrollTop = element.scrollHeight;
+      onObserved();
+    }
   });
 
   return null;

@@ -30,6 +30,18 @@ export type SessionStatus = "idle" | "running" | "awaiting" | "dormant" | "settl
  */
 export type SessionLifecycle = "live" | "dormant" | "settled" | "ended";
 
+/** Why an Agent Session is above the ordinary activity bands in the inbox-style rail. */
+export type SessionAttention = {
+  group: "needs-input" | "unread";
+  reason: "Input needed" | "Completed" | "Failed";
+  /** The qualifying event whose age the row shows. */
+  at: string;
+  /** Opaque per-session boundary used by acknowledgements. */
+  version: number;
+  /** Transcript boundary visible when this attention was raised. */
+  observedSeq: number;
+};
+
 export type SessionSummary = {
   id: string;
   scope: string;
@@ -85,6 +97,8 @@ export type SessionSummary = {
    * another full window.
    */
   settledAt?: string;
+  /** Absent when this Agent Session needs no attention. Independent from activity and Lifecycle. */
+  attention?: SessionAttention;
   lastSeq: number;
   capabilities?: Capabilities;
   /**
@@ -163,6 +177,12 @@ export type Command =
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }
   | { type: "settle"; sessionId: string }
+  /**
+   * Acknowledge only the attention version the client actually observed. The host deliberately does
+   * not interpret this as "mark whatever is newest read": a response delayed behind newer output
+   * must leave that newer output unread.
+   */
+  | { type: "acknowledge"; sessionId: string; throughVersion: number }
   | { type: "set_model"; sessionId: string; modelId: string }
   | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   /**

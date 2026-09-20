@@ -58,6 +58,10 @@ export async function runTui(options: TuiOptions): Promise<void> {
   let decidingFor: string | undefined;
   let notice: string | undefined;
   let unsubscribe: (() => void) | undefined;
+  // Assume focus until a terminal answers DECSET 1004 with an event. Terminals that do not support
+  // focus reporting ignore the mode and retain the documented fallback; supporting ones stop a
+  // background window from consuming attention.
+  let focused = true;
 
   const draw = (): void => {
     const ui: UiState = {
@@ -75,6 +79,25 @@ export async function runTui(options: TuiOptions): Promise<void> {
     stdout.write(`[H[2J${frame.join("\r\n")}`);
   };
 
+  const refreshSessions = async (): Promise<void> => {
+    // A list refresh may move the cursor into another attention group. Preserve what it addressed
+    // by identity; headings never enter the selectable sessions array.
+    const cursorId = overlay.kind === "sessions" ? sessions[overlay.index]?.id : undefined;
+    sessions = await options.connection.listSessions();
+    if (overlay.kind === "sessions" && cursorId) {
+      const moved = sessions.findIndex((session) => session.id === cursorId);
+      overlay = { kind: "sessions", index: moved < 0 ? Math.min(overlay.index, Math.max(0, sessions.length - 1)) : moved };
+    }
+  };
+
+  const acknowledgeVisible = async (): Promise<void> => {
+    if (!focused || !selected || overlay.kind !== "none") return;
+    const summary = sessions.find((session) => session.id === selected);
+    const attention = summary?.attention;
+    if (!attention || view.lastSeq < attention.observedSeq) return;
+    await options.connection.command({ type: "acknowledge", sessionId: selected, throughVersion: attention.version });
+  };
+
   const attach = (sessionId: string): void => {
     unsubscribe?.();
     selected = sessionId;
@@ -87,6 +110,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
         view = reduce(view, entry);
         if (view.asking?.askId !== previousAsk) enquiryInput = "";
         draw();
+        // The transcript has been drawn at its tail. The summary's exact version makes a delayed
+        // command harmless if newer output lands before it reaches the host.
+        void acknowledgeVisible().catch(() => {});
       },
       onError: (error) => {
         notice = error.message;
@@ -94,10 +120,7 @@ export async function runTui(options: TuiOptions): Promise<void> {
       },
     });
     draw();
-  };
-
-  const refreshSessions = async (): Promise<void> => {
-    sessions = await options.connection.listSessions();
+    void acknowledgeVisible().catch(() => {});
   };
 
   const newSession = async (worktree?: { from: string }): Promise<void> => {
@@ -158,11 +181,24 @@ export async function runTui(options: TuiOptions): Promise<void> {
   stdin.setRawMode?.(true);
   stdin.resume();
   stdin.setEncoding("utf8");
+  // Ask terminals that support it to report ESC [ I / ESC [ O. Unsupported terminals ignore this
+  // mode, in which case `focused` deliberately remains true.
+  if (stdin.isTTY) stdout.write("\u001b[?1004h");
   stdout.on("resize", draw);
+  // Poll while the terminal is running, preserving the selected identity above. This is also how a
+  // focus event learns the exact shared attention version rather than guessing from transcript data.
+  const refreshTimer = setInterval(() => {
+    void refreshSessions().then(() => {
+      draw();
+      return acknowledgeVisible();
+    }).catch(() => {});
+  }, 2_000);
 
   await new Promise<void>((resolve) => {
     const finish = (): void => {
+      clearInterval(refreshTimer);
       unsubscribe?.();
+      if (stdin.isTTY) stdout.write("\u001b[?1004l");
       stdin.setRawMode?.(false);
       stdin.pause();
       stdout.write("[H[2J");
@@ -192,10 +228,26 @@ export async function runTui(options: TuiOptions): Promise<void> {
   /** Returns true when the app should exit. */
   async function handleKey(key: string): Promise<boolean> {
     if (key === KEY.ctrlC) return true;
+    if (key === KEY.focusOut) {
+      focused = false;
+      return false;
+    }
+    if (key === KEY.focusIn) {
+      focused = true;
+      // Pull the shared boundary immediately. The stream may already have rendered output while the
+      // terminal was unfocused, and waiting for the next interval would leave it falsely unread.
+      await refreshSessions();
+      draw();
+      void acknowledgeVisible().catch(() => {});
+      return false;
+    }
 
     if (overlay.kind !== "none") {
       await handleOverlayKey(key);
       draw();
+      // Escape has just made the transcript visible. Any other overlay action leaves this guarded
+      // by overlay.kind, so it cannot acknowledge through an obscuring picker.
+      void acknowledgeVisible().catch(() => {});
       return false;
     }
 
@@ -450,9 +502,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
       if (!chosen || !canSettle(chosen.status)) return;
       await options.connection.command({ type: "settle", sessionId: chosen.id });
       await refreshSessions();
-      // Stay in the list rather than attaching. Settling is filing something away, not choosing
-      // what to work on next, and the settled session has just sunk to the bottom anyway.
-      overlay = { kind: "sessions", index: Math.min(current.index, Math.max(0, sessions.length - 1)) };
+      // Stay on the same identity even though settling moved it into Filed away.
+      const moved = sessions.findIndex((session) => session.id === chosen.id);
+      overlay = { kind: "sessions", index: Math.max(0, moved) };
       notice = `settled ${sessionLabel(chosen)}`;
       return;
     }

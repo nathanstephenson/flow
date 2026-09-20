@@ -228,14 +228,24 @@ turn: the Band already surfaces it, and a stamp would let a turn that hit two un
 jump the working Band on its way back out.
 _Avoid_: last activity, updated, touched, modified
 
+**Attention**:
+Durable, machine-wide inbox state, separate from activity and Lifecycle. **Needs input** means an
+unresolved parent, Subagent, or Workflow Enquiry or Permission Prompt. **Unread** means a qualifying
+parent/Workflow outcome or standalone independent-work failure has not been observed. Successful
+standalone completions, streaming snapshots and ordinary tool chatter do not qualify. Opening a
+visible transcript at its bottom acknowledges only the attention version actually observed; the
+request carries that version so a delayed client cannot consume a newer event. Reading never resolves
+an input request. Settle and End acknowledge without changing Resting or their Lifecycle effects.
+_Avoid_: activity, occupancy, per-client read state, notification
+
 **Band**:
-Which tier of the rail an Agent Session sits in, ordered by how alive it is: Awaiting, then working,
-then Idle, then Dormant, then Settled and Ended together. A row moves when its Band changes and at
-no other time, which is what lets a turn stream for an hour without reordering the list. Working is
-the one Band that is not simply a status — an Agent Session whose only work is backgrounded
-Subagents or Background Calls is Idle and sits there anyway, because sinking it below something that
-finished yesterday would hide the thing its owner wanted to watch. It is the one question that does
-not care which kind of work it is.
+Which ordinary tier of the rail an Agent Session sits in, ordered by how alive it is: working, then
+Idle, then Dormant, then Settled and Ended together. Needs input and Unread are attention groups above
+these Bands. A row moves when its group changes and at no other time, which is what lets a turn stream
+for an hour without reordering the list. Working is the one Band that is not simply a status — an
+Agent Session whose only work is backgrounded Subagents, Background Calls, or a Workflow Execution is
+Idle and sits there anyway, because sinking it below something that finished yesterday would hide the
+thing its owner wanted to watch. It is the one question that does not care which kind of work it is.
 _Avoid_: group, tier, section, bucket
 
 **Dormant**:

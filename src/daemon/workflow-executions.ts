@@ -39,6 +39,8 @@ type RelayRequestBase = {
   attempt: number;
   subagentId: string;
   context: string;
+  attentionAt: string;
+  attentionVersion: number;
   announced: boolean;
   deliveryAttempts: number;
   relaying: boolean;
@@ -49,8 +51,8 @@ type RelayRequest = RelayRequestBase & (
   | { kind: 'permission'; callId: string; tool: string; direct: boolean; details?: unknown; scope: string }
 );
 type NewRelayRequest =
-  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>
-  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>;
+  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'attentionAt' | 'attentionVersion' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>
+  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'attentionAt' | 'attentionVersion' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>;
 
 export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
@@ -152,6 +154,14 @@ export class WorkflowExecutionService {
   /** Full executions doing work; step tests and recovery-required slots are not working activity. */
   active(sessionId: string): number {
     return this.scheduler.activeFull(sessionId) ? 1 : 0;
+  }
+
+  pendingInput(sessionId: string): { at: string; version: number } | undefined {
+    let newest: RelayRequest | undefined;
+    for (const request of this.relayRequests.values()) {
+      if (request.sessionId === sessionId && (!newest || request.attentionAt > newest.attentionAt)) newest = request;
+    }
+    return newest ? { at: newest.attentionAt, version: newest.attentionVersion } : undefined;
   }
 
   list(sessionId: string) {
@@ -537,9 +547,10 @@ export class WorkflowExecutionService {
       item.sessionId === request.sessionId && item.executionId === request.executionId && item.subagentId === request.subagentId &&
       item.kind === request.kind && (item.kind === 'enquiry' && request.kind === 'enquiry' ? item.askId === request.askId : item.kind === 'permission' && request.kind === 'permission' && item.callId === request.callId));
     if (duplicate) return;
-    const item = { ...request, id: randomUUID(), order: ++this.relayOrder, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
+    const id = randomUUID();
+    const attention = this.host.workflowInput(request.sessionId, id) ?? { at: new Date().toISOString(), version: 0 };
+    const item = { ...request, id, order: ++this.relayOrder, attentionAt: attention.at, attentionVersion: attention.version, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
     this.relayRequests.set(item.id, item);
-    this.host.workflowInput(item.sessionId);
   }
 
   private dropRelays(match: (request: RelayRequest) => boolean, abort = true): void {

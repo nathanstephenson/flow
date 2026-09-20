@@ -155,6 +155,7 @@ export function createAgentSessionView(
     getKeys,
 
     getEntry: (key) => currentIndex().get(key),
+    getLastSeq: () => view.lastSeq,
 
     start(): void {
       if (unsubscribe) return;

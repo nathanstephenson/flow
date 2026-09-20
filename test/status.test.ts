@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { canRevive, canSettle, deriveStatus, occupied, railBand, working } from "../src/client/status.ts";
+import { canRevive, canSettle, deriveStatus, occupied, railBand, railGroup, working } from "../src/client/status.ts";
 import type { SessionLifecycle, SessionStatus } from "../src/protocol/commands.ts";
 
 /**
@@ -99,6 +99,28 @@ describe("what a status means", () => {
     it("keeps an Idle Agent Session with a full Workflow Execution in the working band", () => {
       assert.equal(band("idle", 0, 0, 1), band("running"));
       assert.equal(band("idle", 0, 0, 0), 2);
+    });
+  });
+
+  describe("attention groups", () => {
+    const summary = {
+      status: "idle" as const,
+      activeSubagents: 0,
+      activeBackgroundCalls: 0,
+      activeWorkflows: 0,
+    };
+
+    it("puts Needs input and Unread above activity without redefining it", () => {
+      assert.equal(railGroup({ ...summary, attention: { group: "needs-input", reason: "Input needed", at: "", version: 1, observedSeq: 1 } }), "needs-input");
+      assert.equal(railGroup({ ...summary, attention: { group: "unread", reason: "Completed", at: "", version: 1, observedSeq: 1 } }), "unread");
+      assert.equal(railGroup(summary), "idle");
+      assert.equal(summary.status, "idle", "attention must not fabricate parent occupancy");
+    });
+
+    it("files both terminal lifecycle states away, even with a stale request index", () => {
+      const stale = { group: "needs-input" as const, reason: "Input needed" as const, at: "", version: 1, observedSeq: 1 };
+      assert.equal(railGroup({ ...summary, status: "settled", attention: stale }), "filed-away");
+      assert.equal(railGroup({ ...summary, status: "ended", attention: stale }), "filed-away");
     });
   });
 
