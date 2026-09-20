@@ -579,8 +579,13 @@ describe("an Enquiry in the transcript", () => {
     const open = reduceAll(transcript(attributed).since(0));
     assert.deepEqual(open.asking?.producer, producer);
 
+    const afterParentTurn = reduceAll(transcript(attributed, {
+      type: "turn_ended", turnId: "t1", reason: "aborted",
+    }).since(0));
+    assert.deepEqual(afterParentTurn.asking?.producer, producer, "an independent request outlives the parent turn");
+
     for (const closing of [
-      { type: "turn_ended", turnId: "t1", reason: "aborted" },
+      { type: "enquiry", askId: "a1", questions: QUESTIONS, state: "aborted", producer },
       { type: "session_ended", reason: "disposed" },
     ] as AgentEvent[]) {
       const closed = reduceAll(transcript(attributed, closing).since(0));

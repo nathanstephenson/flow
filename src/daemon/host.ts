@@ -723,7 +723,7 @@ export class SessionHost {
         latestAttention: meta.latestAttention,
         seenAttentionKeys: new Set((meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])).slice(-256)),
         readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
-        outputPreview: meta.outputPreview,
+        outputPreview: meta.outputPreview ?? latestParentOutputPreview(entries),
         openPermissionAttention: openInputAttention(entries, "permission"),
         openEnquiryAttention: openInputAttention(entries, "enquiry"),
         buffered: undefined,
@@ -993,7 +993,12 @@ export class SessionHost {
       this.touch(record);
       return;
     }
-    await this.dispatch(record, { text, attachments: ids });
+    try {
+      await this.dispatch(record, { text, attachments: ids });
+    } catch (error) {
+      this.recordDispatchFailure(record, error);
+      throw error;
+    }
   }
 
   /**
@@ -2481,6 +2486,15 @@ export class SessionHost {
     }
   }
 
+  private recordDispatchFailure(record: SessionRecord, error: unknown): void {
+    const before = this.activityOf(record);
+    const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+    record.turnInFlight = false;
+    this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
+    this.noteResting(record, before);
+    this.touch(record);
+  }
+
   private async drain(record: SessionRecord): Promise<void> {
     // Avoid an `await` at all when there is no workflow notification. Yielding here lets a backend
     // mint a new turn between the check and the queue shift, which would dispatch into that turn.
@@ -2492,12 +2506,7 @@ export class SessionHost {
     try {
       await this.dispatch(record, next);
     } catch (error) {
-      const before = this.activityOf(record);
-      const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
-      record.turnInFlight = false;
-      this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
-      this.noteResting(record, before);
-      this.touch(record);
+      this.recordDispatchFailure(record, error);
     }
   }
 
@@ -2668,12 +2677,24 @@ function lifecycleFrom(meta: SessionMeta): SessionLifecycle {
   return stored === "ended" || stored === "settled" || stored === "dormant" ? stored : "dormant";
 }
 
-function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[]; context?: string }[] {
-  const open = new Map<string, { questions: Question[]; context?: string }>();
+/** Backfill the rail preview for metadata written before outputPreview existed. */
+function latestParentOutputPreview(entries: LoggedEvent[]): string | undefined {
+  const message = entries.findLast(({ event }) => event.type === "message" && event.producer === undefined)?.event;
+  if (message?.type !== "message") return undefined;
+  const preview = message.text.replace(/\s+/g, " ").trim();
+  return preview ? preview.slice(0, 500) : undefined;
+}
+
+function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[]; context?: string; producer?: Producer }[] {
+  const open = new Map<string, { questions: Question[]; context?: string; producer?: Producer }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "enquiry") continue;
-    if (event.state === "asked") open.set(event.askId, { questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) });
+    if (event.state === "asked") open.set(event.askId, {
+      questions: event.questions,
+      ...(event.context === undefined ? {} : { context: event.context }),
+      ...(event.producer === undefined ? {} : { producer: event.producer }),
+    });
     else open.delete(event.askId);
   }
   return [...open].map(([askId, value]) => ({ askId, ...value }));
@@ -2689,8 +2710,8 @@ function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Ques
  * The tool name comes back with it, because a snapshot carries the whole state and the terminal one
  * the host is about to append needs it again.
  */
-function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }[] {
-  const open = new Map<string, { tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }>();
+function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer }[] {
+  const open = new Map<string, { tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "permission") continue;
@@ -2699,6 +2720,7 @@ function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string
       ...(event.context === undefined ? {} : { context: event.context }),
       ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
       ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
+      ...(event.producer === undefined ? {} : { producer: event.producer }),
     });
     else open.delete(event.callId);
   }

@@ -120,20 +120,18 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     const container = list.current;
     if (!container) return;
     const focused = document.activeElement;
+    const cursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
+    const cursorItem = cursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
     const hadFocus = restoreRailFocus.current
-      || (focused instanceof HTMLElement && focused.matches('[data-cursor="true"]'));
+      || (focused instanceof HTMLElement && cursorItem?.contains(focused) === true);
     restoreRailFocus.current = false;
-    if (hadFocus) {
-      const row = container.querySelector<HTMLElement>('[data-cursor="true"]');
-      const focusedItem = focused instanceof HTMLElement
-        ? focused.closest<HTMLElement>('[data-sidebar="menu-item"]')
-        : null;
-      if (row && !focusedItem?.contains(row)) row.focus();
-    }
+    if (hadFocus && cursor && !cursorItem?.contains(focused)) cursor.focus();
     return () => {
       const active = document.activeElement;
+      const currentCursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
+      const currentItem = currentCursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
       restoreRailFocus.current = active instanceof HTMLElement
-        && active.matches('[data-cursor="true"]');
+        && currentItem?.contains(active) === true;
     };
   }, [props.cursorId, cursorGroupId]);
 
