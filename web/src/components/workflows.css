@@ -73,6 +73,64 @@
   overflow-wrap: anywhere;
   border-left-width: 3px;
 }
+.workflow-step__outcomes--horizontal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.workflow-step__outcomes--horizontal .workflow-step__outcome {
+  position: relative;
+  margin-right: -12px;
+  padding-right: 12px;
+  text-align: right;
+}
+.workflow-step__outcomes--vertical {
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 8px;
+  display: flex;
+}
+.workflow-step__outcomes--vertical .workflow-step__outcome {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding-bottom: 8px;
+  text-align: center;
+}
+.workflow-step__outcomes--vertical .react-flow__handle-bottom {
+  left: 50%;
+  transform: translate(-50%, 50%);
+}
+.workflow-loop {
+  position: relative;
+  overflow: visible;
+}
+.workflow-loop__summary {
+  position: relative;
+  z-index: 2;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--background) 82%, transparent);
+}
+.workflow-loop__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.workflow-loop__heading strong {
+  flex: 1 1 10rem;
+}
+.workflow-loop[data-orientation="vertical"] .workflow-loop__summary {
+  width: 228px;
+}
+.workflow-loop[data-orientation="vertical"] .workflow-loop__heading strong {
+  flex-basis: 100%;
+}
 .react-flow__node.selected .workflow-step {
   outline: 2px solid var(--ring);
   outline-offset: 2px;

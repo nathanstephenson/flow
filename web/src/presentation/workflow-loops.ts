@@ -55,7 +55,21 @@ export function cleanLoopSettings(
   };
 }
 
-export function loopLayout(definition: WorkflowDefinition): Node[] {
+export const WORKFLOW_CARD_WIDTH = 208;
+export const WORKFLOW_CARD_HEIGHT = 160;
+const LOOP_PADDING = 24;
+const LOOP_TOP_HEADER_HEIGHT = 112;
+const LOOP_SIDE_HEADER_WIDTH = 264;
+const LOOP_MIN_TOP_HEADER_WIDTH = 360;
+
+type LoopLayoutOptions = {
+  orientation?: "horizontal" | "vertical";
+};
+
+export function loopLayout(
+  definition: WorkflowDefinition,
+  { orientation = "horizontal" }: LoopLayoutOptions = {},
+): Node[] {
   const loops = analyzeLoops(definition).loops;
   const positions = new Map(
     definition.steps.map((step, i) => [
@@ -74,16 +88,38 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
     const contents = [
       ...loop.memberIds
         .filter((id) => !children.some((child) => child.memberIds.includes(id)))
-        .map((id) => ({ ...positions.get(id)!, width: 210, height: 150 })),
+        .map((id) => ({
+          ...positions.get(id)!,
+          width: WORKFLOW_CARD_WIDTH,
+          height: WORKFLOW_CARD_HEIGHT,
+        })),
       ...children.map((child) => boxes.get(child.headerId)!),
     ];
-    const x = Math.min(...contents.map((box) => box.x)) - 24;
-    const y = Math.min(...contents.map((box) => box.y)) - 100;
+    const contentLeft = Math.min(...contents.map((box) => box.x));
+    const contentTop = Math.min(...contents.map((box) => box.y));
+    const contentRight = Math.max(
+      ...contents.map((box) => box.x + box.width),
+    );
+    const contentBottom = Math.max(
+      ...contents.map((box) => box.y + box.height),
+    );
+    // In a top-to-bottom graph the incoming edge occupies the space immediately above the
+    // loop's first card. Put the loop summary in a dedicated left rail instead of making the
+    // title, status, edge and edge label compete for that same strip. Top headers remain best for
+    // the editor and left-to-right execution layout, where incoming edges approach from the side.
+    const vertical = orientation === "vertical";
+    const x = contentLeft - (vertical ? LOOP_SIDE_HEADER_WIDTH : LOOP_PADDING);
+    const y = contentTop - (vertical ? LOOP_PADDING : LOOP_TOP_HEADER_HEIGHT);
     boxes.set(loop.headerId, {
       x,
       y,
-      width: Math.max(...contents.map((box) => box.x + box.width)) + 24 - x,
-      height: Math.max(...contents.map((box) => box.y + box.height)) + 24 - y,
+      width: vertical
+        ? contentRight + LOOP_PADDING - x
+        : Math.max(
+            LOOP_MIN_TOP_HEADER_WIDTH,
+            contentRight + LOOP_PADDING - x,
+          ),
+      height: contentBottom + LOOP_PADDING - y,
     });
   }
   let prefix = "loop:";
@@ -110,7 +146,8 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
       deletable: false,
       draggable: false,
       connectable: false,
-      data: { headerId: loop.headerId },
+      zIndex: 1,
+      data: { headerId: loop.headerId, orientation },
     })),
     ...definition.steps.map((step) => {
       const parent = [...loops]
@@ -121,6 +158,7 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
         type: "workflow",
         ...(parent ? { parentId: groupId(parent.headerId) } : {}),
         position: relative(positions.get(step.id)!, parent?.headerId),
+        zIndex: 2,
         data: { step },
       };
     }),

@@ -1,4 +1,8 @@
-import type { WorkflowDefinition } from '../../../src/protocol/workflows.ts';
+import type {
+  WorkflowDefinition,
+  WorkflowOutcome,
+  WorkflowStep,
+} from '../../../src/protocol/workflows.ts';
 import { analyzeLoops } from '../../../src/workflows/loops.ts';
 
 export function attemptDuration(startedAt: number, finishedAt?: number): string {
@@ -6,6 +10,25 @@ export function attemptDuration(startedAt: number, finishedAt?: number): string 
   const seconds = Math.max(0, Math.floor((finishedAt - startedAt) / 1000));
   return [[Math.floor(seconds / 3600), 'h'], [Math.floor(seconds / 60) % 60, 'm'], [seconds % 60, 's']]
     .filter(([value]) => value !== 0).map(([value, unit]) => `${value}${unit}`).join(' ') || '0s';
+}
+
+export type OutcomePort = {
+  outcome: WorkflowOutcome;
+  side: "bottom" | "right";
+};
+
+/** Keep each visible outcome label and source port together, in protocol order. */
+export function outcomePorts(
+  kind: WorkflowStep["kind"],
+  vertical: boolean,
+): OutcomePort[] {
+  const outcomes: WorkflowOutcome[] = kind === "branch"
+    ? ["true", "false"]
+    : ["success", "failure", "timeout"];
+  return outcomes.map((outcome) => ({
+    outcome,
+    side: vertical ? "bottom" : "right",
+  }));
 }
 
 /** Ignore editor coordinates, but keep the same loop grouping and every outcome edge. */
@@ -30,6 +53,6 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
     const rank = ranks.get(step.id) ?? 0;
     const lane = lanes.get(rank) ?? 0;
     lanes.set(rank, lane + 1);
-    return { ...step, position: vertical ? { x: lane * 310, y: rank * 260 } : { x: rank * 350, y: lane * 270 } };
+    return { ...step, position: vertical ? { x: lane * 310, y: rank * 220 } : { x: rank * 350, y: lane * 270 } };
   }) };
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,8 +11,12 @@ import {
   type NodeProps,
   type Node,
   type Connection,
+  type ReactFlowInstance,
 } from "@xyflow/react";
-import { executionLayout } from "../presentation/workflow-execution.ts";
+import {
+  executionLayout,
+  outcomePorts,
+} from "../presentation/workflow-execution.ts";
 import "@xyflow/react/dist/style.css";
 import type {
   WorkflowDefinition,
@@ -35,6 +39,12 @@ import {
 } from "./ui/select.tsx";
 
 const nodeTypes = { workflow: WorkflowNode, loop: LoopNode };
+const EXECUTION_MIN_ZOOM = 0.05;
+const FIT_VIEW_OPTIONS = {
+  padding: 0.08,
+  minZoom: EXECUTION_MIN_ZOOM,
+  maxZoom: 1,
+};
 function LoopNode({
   data,
 }: NodeProps<
@@ -43,39 +53,42 @@ function LoopNode({
     maxTries: number;
     progress?: string;
     change?: (value: number) => void;
+    orientation: "horizontal" | "vertical";
   }>
 >) {
   return (
-    <div className="h-full rounded-lg border border-primary/40 bg-primary/5 p-3 text-xs">
-      <div className="nodrag nopan flex items-center gap-3">
-        <strong
-          title={data.title}
-          className="min-w-0 max-w-48 truncate text-sm"
-        >
-          Loop · {data.title}
-        </strong>
-        <span className="shrink-0">Max tries</span>
-        <Select
-          value={data.maxTries}
-          disabled={!data.change}
-          onValueChange={(value) => value !== null && data.change?.(value)}
-        >
-          <SelectTrigger size="sm" aria-label={`Max tries · ${data.title}`}>
-            <SelectValue>{data.maxTries}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {Array.from({ length: 100 }, (_, i) => (
-              <SelectItem key={i + 1} value={i + 1}>
-                {i + 1}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div
+      className="workflow-loop h-full rounded-lg border border-primary/40 bg-primary/5 p-3 text-xs"
+      data-orientation={data.orientation}
+    >
+      <div className="workflow-loop__summary">
+        <div className="workflow-loop__heading nodrag nopan">
+          <strong title={data.title} className="line-clamp-2 min-w-0 text-sm">
+            Loop · {data.title}
+          </strong>
+          <span className="shrink-0">Max tries</span>
+          <Select
+            value={data.maxTries}
+            disabled={!data.change}
+            onValueChange={(value) => value !== null && data.change?.(value)}
+          >
+            <SelectTrigger size="sm" aria-label={`Max tries · ${data.title}`}>
+              <SelectValue>{data.maxTries}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 100 }, (_, i) => (
+                <SelectItem key={i + 1} value={i + 1}>
+                  {i + 1}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <p className="mt-1 text-muted-foreground">
+          {data.progress ??
+            "First check included. Inner limits reset on each outer try."}
+        </p>
       </div>
-      <p className="mt-1 text-muted-foreground">
-        {data.progress ??
-          "First check included. Inner limits reset on each outer try."}
-      </p>
     </div>
   );
 }
@@ -85,19 +98,17 @@ function WorkflowNode({
   Node<{ step: WorkflowStep; permission: string; status?: string; vertical?: boolean; execution?: boolean }>
 >) {
   const { step } = data;
-  const outcomes =
-    step.kind === "branch"
-      ? ["true", "false"]
-      : ["success", "failure", "timeout"];
+  const ports = outcomePorts(step.kind, !!data.vertical);
   return (
     <div
       data-status={data.status}
-      className="workflow-step h-36 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
+      data-orientation={data.vertical ? "vertical" : "horizontal"}
+      className="workflow-step relative h-40 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
     >
       <Handle type="target" position={data.vertical ? Position.Top : Position.Left} />
       <strong
         title={step.name}
-        className={`block text-sm font-semibold ${data.execution ? "whitespace-normal line-clamp-2" : "truncate"}`}
+        className={`block text-sm font-semibold ${data.execution ? "line-clamp-2 whitespace-normal" : "truncate"}`}
       >
         {step.name}
       </strong>
@@ -105,15 +116,20 @@ function WorkflowNode({
         {step.kind} · {data.permission}
       </div>
       {data.status && <div>{data.status.replaceAll("-", " ")}</div>}
-      <div className="mt-2 flex flex-col gap-1">
-        {outcomes.map((outcome) => (
-          <div key={outcome} className="relative -mr-3 pr-3 text-right text-xs">
-            {outcome}
-            {!data.vertical && <Handle id={outcome} type="source" position={Position.Right} />}
+      <div
+        className={`workflow-step__outcomes ${data.vertical ? "workflow-step__outcomes--vertical" : "workflow-step__outcomes--horizontal"}`}
+      >
+        {ports.map(({ outcome, side }) => (
+          <div key={outcome} className="workflow-step__outcome" data-outcome={outcome}>
+            <span>{outcome}</span>
+            <Handle
+              id={outcome}
+              type="source"
+              position={side === "bottom" ? Position.Bottom : Position.Right}
+            />
           </div>
         ))}
       </div>
-      {data.vertical && outcomes.map((outcome, index) => <Handle key={outcome} id={outcome} type="source" position={Position.Bottom} style={{ left: `${(index + 1) * 100 / (outcomes.length + 1)}%` }} />)}
     </div>
   );
 }
@@ -136,6 +152,38 @@ export function WorkflowGraph({
 }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const canvas = useRef<HTMLDivElement>(null);
+  const flow = useRef<ReactFlowInstance<Node, Edge>>(null);
+  const fitted = useRef(false);
+  const fitting = useRef(false);
+  const fitOnceVisible = useCallback(() => {
+    const element = canvas.current;
+    const instance = flow.current;
+    if (
+      fitted.current ||
+      fitting.current ||
+      !element ||
+      !instance ||
+      !instance.getNodes().length ||
+      element.clientWidth === 0 ||
+      element.clientHeight === 0
+    ) return;
+    fitting.current = true;
+    requestAnimationFrame(() => {
+      void instance.fitView(FIT_VIEW_OPTIONS).then((didFit) => {
+        fitted.current ||= didFit;
+        fitting.current = false;
+      });
+    });
+  }, []);
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined" || !canvas.current) return;
+    const observer = new ResizeObserver(fitOnceVisible);
+    observer.observe(canvas.current);
+    fitOnceVisible();
+    return () => observer.disconnect();
+  }, [fitOnceVisible]);
+  useEffect(fitOnceVisible, [fitOnceVisible, nodes.length]);
   const controlledSelection = selectedStepId !== undefined;
   const selectionChanged = useCallback(
     ({ nodes }: { nodes: Node[] }) => {
@@ -148,7 +196,12 @@ export function WorkflowGraph({
   useEffect(() => {
     let layout: Node[];
     try {
-      layout = loopLayout(execution ? executionLayout(definition, orientation === "vertical") : definition);
+      layout = loopLayout(
+        execution
+          ? executionLayout(definition, orientation === "vertical")
+          : definition,
+        { orientation },
+      );
     } catch {
       layout = definition.steps.map((step, i) => ({
         id: step.id,
@@ -171,6 +224,7 @@ export function WorkflowGraph({
               title: definition.steps.find((step) => step.id === headerId)!
                 .name,
               maxTries,
+              orientation,
               progress: execution?.loops?.[headerId]
                 ? loopProgress(execution.loops[headerId], maxTries)
                 : undefined,
@@ -215,6 +269,7 @@ export function WorkflowGraph({
         sourceHandle: edge.outcome,
         label: edge.outcome,
         selected: previous.find((old) => old.id === edge.id)?.selected,
+        zIndex: 0,
       })),
     );
   }, [definition, execution, selectedStepId, JSON.stringify(awaitingSteps), orientation]);
@@ -234,11 +289,15 @@ export function WorkflowGraph({
       });
   };
   return (
-    <div className="workflow-canvas overflow-hidden rounded-lg border">
+    <div ref={canvas} className="workflow-canvas overflow-hidden rounded-lg border">
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        onInit={(instance) => {
+          flow.current = instance;
+          fitOnceVisible();
+        }}
         onNodesChange={(changes) =>
           setNodes((current) => applyNodeChanges(changes, current))
         }
@@ -288,10 +347,9 @@ export function WorkflowGraph({
         nodesDraggable={!!onChange}
         nodesConnectable={!!onChange}
         deleteKeyCode={onChange ? ["Backspace", "Delete"] : null}
-        fitView={!execution}
         defaultViewport={{ x: 32, y: definition.loopSettings && Object.keys(definition.loopSettings).length ? 120 : 24, zoom: 1 }}
-        minZoom={execution ? 0.8 : 0.1}
-        fitViewOptions={{ minZoom: execution ? 0.8 : 0.1, maxZoom: 1 }}
+        minZoom={execution ? EXECUTION_MIN_ZOOM : 0.1}
+        fitViewOptions={FIT_VIEW_OPTIONS}
       >
         <Background />
         <Controls />

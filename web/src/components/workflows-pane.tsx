@@ -366,16 +366,18 @@ export default function WorkflowsPane({
                 </>
               )}
             </TabsContent>
-            <TabsContent value="Flow" className="grid min-w-0 gap-3">
-              {!step && <WorkflowGraph
-                key={`${execution.id}/${placement}`}
-                definition={execution.definition}
-                execution={execution}
-                orientation={placement === "bottom" ? "horizontal" : "vertical"}
-                awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
-                selectedStepId={shownStepId}
-                onSelect={id => { showStep(id); setAttempt(undefined); }}
-              />}
+            <TabsContent value="Flow" keepMounted className="grid min-w-0 gap-3">
+              <div className={step ? "hidden" : "contents"} aria-hidden={step ? true : undefined}>
+                <WorkflowGraph
+                  key={`${execution.id}/${placement}`}
+                  definition={execution.definition}
+                  execution={execution}
+                  orientation={placement === "bottom" ? "horizontal" : "vertical"}
+                  awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
+                  selectedStepId={shownStepId}
+                  onSelect={id => { showStep(id); setAttempt(undefined); }}
+                />
+              </div>
               {step && (
                 <Button size="sm" variant="ghost" className="min-h-10 justify-self-start" onClick={showFlow}>
                   <ChevronLeft aria-hidden data-icon="inline-start" />

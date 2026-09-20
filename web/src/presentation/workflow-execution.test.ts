@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { attemptDuration, executionLayout } from './workflow-execution.ts';
+import { attemptDuration, executionLayout, outcomePorts } from './workflow-execution.ts';
 import type { WorkflowDefinition } from '../../../src/protocol/workflows.ts';
 
 it('truncates attempt durations, omits zero units and preserves unfinished attempts', () => {
   for (const [ms, expected] of [[0, '0s'], [999, '0s'], [1000, '1s'], [59999, '59s'], [60000, '1m'], [61999, '1m 1s'], [3599999, '59m 59s'], [3600000, '1h'], [3601000, '1h 1s']] as const) assert.equal(attemptDuration(123, 123 + ms), expected);
   assert.equal(attemptDuration(123), 'In progress');
+});
+
+it('keeps every outcome label paired with a right or bottom source port', () => {
+  assert.deepEqual(outcomePorts('branch', true), [
+    { outcome: 'true', side: 'bottom' },
+    { outcome: 'false', side: 'bottom' },
+  ]);
+  assert.deepEqual(outcomePorts('agent', true), [
+    { outcome: 'success', side: 'bottom' },
+    { outcome: 'failure', side: 'bottom' },
+    { outcome: 'timeout', side: 'bottom' },
+  ]);
+  assert.deepEqual(outcomePorts('join', false), [
+    { outcome: 'success', side: 'right' },
+    { outcome: 'failure', side: 'right' },
+    { outcome: 'timeout', side: 'right' },
+  ]);
 });
 
 it('lays out branches in either direction without altering the launch/editor snapshot', () => {
