@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { describe, it } from "node:test";
@@ -9,6 +9,15 @@ import { manifestOf, NoWebBuild } from "../src/web/manifest.ts";
 import { SHARED_MODULES, assertSharedModules } from "../scripts/shared-modules.mjs";
 
 const CONTENT_HASHED = /-[A-Za-z0-9_-]{8}\.[^.]+$/;
+const ICON_FILES = [
+  "favicon.svg",
+  "favicon-16x16.png",
+  "favicon-32x32.png",
+  "favicon.ico",
+  "safari-pinned-tab.svg",
+  "apple-touch-icon.png",
+] as const;
+const WEB_ROOT = fileURLToPath(new URL("../web/", import.meta.url));
 
 /** A directory of built assets, as scripts/build-binary.mjs would find one. */
 function distTree(): string {
@@ -55,6 +64,49 @@ describe("the embedded manifest", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("classifies every committed icon for the source, npm, and binary manifest pipeline", () => {
+    const dir = mkdtempSync(join(tmpdir(), "flow-icons-"));
+    writeFileSync(join(dir, "index.html"), "<!doctype html><html></html>");
+    try {
+      for (const file of ICON_FILES) copyFileSync(join(WEB_ROOT, "public", file), join(dir, file));
+      const manifest = manifestOf(dir);
+      const expectedTypes: Record<string, string> = {
+        "/favicon.svg": "image/svg+xml; charset=utf-8",
+        "/favicon-16x16.png": "image/png",
+        "/favicon-32x32.png": "image/png",
+        "/favicon.ico": "image/x-icon",
+        "/safari-pinned-tab.svg": "image/svg+xml; charset=utf-8",
+        "/apple-touch-icon.png": "image/png",
+      };
+      for (const [path, type] of Object.entries(expectedTypes)) {
+        assert.equal(manifest[path]?.type, type, path);
+        assert.equal(manifest[path]?.immutable, false, path);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the approved adaptive mark and every raster size linked from the Entry Document", () => {
+    const html = readFileSync(join(WEB_ROOT, "index.html"), "utf8");
+    for (const file of ICON_FILES) assert.match(html, new RegExp(`href="/${file.replace(".", "\\.")}"`), file);
+    assert.match(html, /rel="mask-icon"[^>]+color="#5f6368"/);
+
+    const adaptive = readFileSync(join(WEB_ROOT, "public", "favicon.svg"), "utf8");
+    assert.match(adaptive, /prefers-color-scheme:\s*dark/);
+    assert.match(adaptive, /#181817/);
+    assert.match(adaptive, /#f2f2ef/);
+    assert.doesNotMatch(adaptive, /<(?:rect|text|animate)|gradient/i, "the primary SVG stays transparent, static, and letter-free");
+
+    assert.deepEqual(pngDimensions(join(WEB_ROOT, "public", "favicon-16x16.png")), [16, 16]);
+    assert.deepEqual(pngDimensions(join(WEB_ROOT, "public", "favicon-32x32.png")), [32, 32]);
+    assert.deepEqual(pngDimensions(join(WEB_ROOT, "public", "apple-touch-icon.png")), [180, 180]);
+
+    const ico = readFileSync(join(WEB_ROOT, "public", "favicon.ico"));
+    assert.deepEqual([...ico.subarray(0, 6)], [0, 0, 1, 0, 3, 0]);
+    assert.deepEqual(Array.from({ length: 3 }, (_, index) => ico[6 + index * 16]), [16, 32, 48]);
   });
 
   it("refuses a tree with no Entry Document, rather than shipping an unopenable client", () => {
@@ -129,6 +181,7 @@ if (process.env["FLOW_ASSETS"] !== "1") {
         });
 
         const manifest = manifestOf(outDir);
+        for (const file of ICON_FILES) assert.ok(manifest[`/${file}`], `Vite omitted ${file}`);
         for (const [path, asset] of Object.entries(manifest)) {
           if (!asset) continue;
           assert.notEqual(
@@ -150,6 +203,12 @@ if (process.env["FLOW_ASSETS"] !== "1") {
  * reaches the program through src/web/embedded.ts and nowhere else (ADR 0017). Reintroducing an
  * import of a generated module under src/ is what this catches.
  */
+function pngDimensions(path: string): [number, number] {
+  const bytes = readFileSync(path);
+  assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
+}
+
 describe("src/ holds no build output", () => {
   it("keeps generated manifests out of the source tree", () => {
     const root = fileURLToPath(new URL("../src", import.meta.url));

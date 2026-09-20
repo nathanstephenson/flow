@@ -12,6 +12,7 @@ import {
 } from "../src/daemon/auth.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { serve, type RunningServer } from "../src/daemon/server.ts";
+import { FIXTURE_ASSETS, FIXTURE_ICON_PATHS } from "./assets-fixture.ts";
 import { startTestIssuer, type TestIssuer } from "./fixtures/oidc-issuer.ts";
 
 const roots: string[] = [];
@@ -52,6 +53,16 @@ describe("external OIDC browser gate", () => {
     const redirectPage = await document.text();
     assert.match(redirectPage, /location\.pathname\+location\.search\+location\.hash/);
     assert.match(redirectPage, /\/oauth\/login\?return_to=/);
+    assertIconLinks(redirectPage);
+    assert.match(document.headers.get("content-security-policy") ?? "", /img-src 'self'/);
+
+    for (const path of FIXTURE_ICON_PATHS) {
+      const icon = await fetch(`${context.server.url}${path}`);
+      assert.equal(icon.status, 200, path);
+      assert.equal(icon.headers.get("content-type"), FIXTURE_ASSETS[path]?.type, path);
+    }
+    assert.equal((await fetch(`${context.server.url}/assets/index-Ab12Cd34.js`)).status, 401);
+    assert.equal((await fetch(`${context.server.url}/favicon.svg`, { method: "POST" })).status, 401);
 
     const unauthorized = await fetch(`${context.server.url}/api/sessions`);
     assert.equal(unauthorized.status, 401);
@@ -71,7 +82,10 @@ describe("external OIDC browser gate", () => {
     })).status, 403, "OIDC does not weaken the origin gate for browser-shaped bearer requests");
     const staleCallback = await fetch(`${context.server.url}/oauth/callback?code=forged&state=forged`);
     assert.equal(staleCallback.status, 400);
-    assert.doesNotMatch(await staleCallback.text(), /code=forged|state=forged/);
+    const staleCallbackPage = await staleCallback.text();
+    assert.doesNotMatch(staleCallbackPage, /code=forged|state=forged/);
+    assertIconLinks(staleCallbackPage);
+    assert.match(staleCallback.headers.get("content-security-policy") ?? "", /img-src 'self'/);
 
     const login = await browserLogin(context, "/some/deep/path?tab=files#/s/agent-1");
     assert.equal(login.location, "/some/deep/path?tab=files#/s/agent-1");
@@ -227,7 +241,10 @@ describe("external OIDC browser gate", () => {
 
     const signedOut = await fetch(`${context.server.url}/oauth/signed-out`);
     assert.equal(signedOut.status, 200);
-    assert.match(await signedOut.text(), /You’re signed out/);
+    const signedOutPage = await signedOut.text();
+    assert.match(signedOutPage, /You’re signed out/);
+    assertIconLinks(signedOutPage);
+    assert.match(signedOut.headers.get("content-security-policy") ?? "", /img-src 'self'/);
 
     const crossOrigin = await fetch(`${context.server.url}/oauth/logout`, {
       method: "POST",
@@ -317,9 +334,15 @@ async function setup(options: {
   };
   const gate = await OidcGate.create(config, root);
   const host = new SessionHost();
-  const server = await serve({ host, token: "bearer-secret", oidc: gate, assets: {} });
+  const server = await serve({ host, token: "bearer-secret", oidc: gate, assets: FIXTURE_ASSETS });
   servers.push(server);
   return { root, issuer, config, gate, server, host };
+}
+
+function assertIconLinks(html: string): void {
+  for (const path of FIXTURE_ICON_PATHS) {
+    assert.match(html, new RegExp(`href="${path.replace(".", "\\.")}"`), path);
+  }
 }
 
 async function browserLogin(context: Context, returnTo: string): Promise<{ cookie: string; location: string }> {

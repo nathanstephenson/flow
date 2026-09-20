@@ -7,6 +7,7 @@
 // Vite is driven through its JS API rather than the CLI for one reason: the API returns the build
 // result, and result.output[].modules is the only place the module graph is visible. `vite build
 // --manifest` is not a substitute — the manifest lists entry chunks and their imports, not the graph.
+import { statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,3 +32,18 @@ const graph = new Set(
 );
 
 assertSharedModules(graph);
+
+// Browser-known icon URLs cannot carry Vite content hashes, so each required root asset has to be
+// present in the final tree that source/npm runs serve and the binary build embeds.
+for (const file of [
+  "favicon.svg",
+  "favicon-16x16.png",
+  "favicon-32x32.png",
+  "favicon.ico",
+  "safari-pinned-tab.svg",
+  "apple-touch-icon.png",
+]) {
+  if (!statSync(join(root, "web/dist", file), { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`Vite omitted required icon asset web/dist/${file}`);
+  }
+}
