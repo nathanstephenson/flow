@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { boundedCredentialJson } from "./credential-redaction.ts";
+import { credentialJsonSerializer } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
@@ -530,8 +530,9 @@ function boundedNameInput(whole: string): string {
  * giant instruction starving the resolved input beside it.
  */
 function boundedWorkflowContext(sections: Array<{ label: string; value: unknown; priority: number; cap?: number }>, credentials: readonly string[]): string {
+  const serialise = credentialJsonSerializer(credentials);
   const serialised = sections.map(section => {
-    const text = boundedCredentialJson(section.value, credentials, section.cap ?? MAX_INPUT_LENGTH);
+    const text = serialise(section.value, section.cap ?? MAX_INPUT_LENGTH);
     return { ...section, text };
   });
   const separators = Math.max(0, serialised.length - 1);

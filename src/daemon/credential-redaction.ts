@@ -1,22 +1,30 @@
 // Known credential values are replaced in keys as well as values, including common
 // escaped/URL-encoded spellings. Never persist transport configuration in a workflow.
 export function redactCredentials<T>(value: T, credentials: readonly string[]): T {
-  const text = credentialTextRedactor(credentials);
-  const visit = (item: unknown): unknown => typeof item === 'string' ? text(item) : Array.isArray(item) ? item.map(visit) : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, value]) => [text(key), visit(value)])) : item;
+  const { redact } = credentialTextRedactor(credentials);
+  const visit = (item: unknown): unknown => typeof item === 'string' ? redact(item) : Array.isArray(item) ? item.map(visit) : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, value]) => [redact(key), visit(value)])) : item;
   return visit(value) as T;
 }
 
-function credentialTextRedactor(credentials: readonly string[]): (value: string) => string {
-  const patterns = credentials.filter(Boolean).flatMap(secret => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1)]).sort((a, b) => b.length - a.length);
-  return value => patterns.reduce((result, secret) => result.split(secret).join('[REDACTED]'), value);
+function credentialTextRedactor(credentials: readonly string[]): { redact: (value: string) => string; lookahead: number } {
+  const patterns = [...new Set(credentials.filter(Boolean).flatMap(secret => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1), JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1)]))]
+    .sort((a, b) => b.length - a.length);
+  // A replacement must not itself contain a credential. This matters for credentials such as
+  // "REDACTED", which would otherwise survive inside the conventional marker.
+  const replacement = ["[REDACTED]", "[FILTERED]", "<hidden>", ""].find(candidate => patterns.every(pattern => !candidate.includes(pattern)))!;
+  return {
+    redact: value => patterns.reduce((result, secret) => result.split(secret).join(replacement), value),
+    lookahead: Math.max(0, ...patterns.map(pattern => pattern.length - 1)),
+  };
 }
 
 export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;
 const namingCredentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|token)/i;
 
-/** Serialise without first cloning an arbitrarily large execution history. */
-export function boundedCredentialJson(value: unknown, credentials: readonly string[], limit: number): string {
-  const redact = credentialTextRedactor(credentials);
+/** Compile credential spellings once for serialising several sections of one naming context. */
+export function credentialJsonSerializer(credentials: readonly string[]): (value: unknown, limit: number) => string {
+  const { redact, lookahead } = credentialTextRedactor(credentials);
+  return (value: unknown, limit: number): string => {
   let remaining = limit;
   // Output budget alone is insufficient: omitted fields emit nothing, and a single string can be
   // arbitrarily large before redaction or JSON encoding. Charge all inspected input separately.
@@ -35,9 +43,11 @@ export function boundedCredentialJson(value: unknown, credentials: readonly stri
   const visit = (item: unknown): string => {
     if (!remaining || work <= 0) return "";
     if (typeof item === "string") {
-      const bounded = item.slice(0, work);
-      consume(bounded.length);
-      return emit(JSON.stringify(redact(bounded)));
+      // Inspect beyond the work cutoff far enough to recognize a credential that starts before it.
+      // Only sanitized text is subsequently handed to the output truncator.
+      const inspected = item.slice(0, work + lookahead);
+      consume(Math.min(item.length, work));
+      return emit(JSON.stringify(redact(inspected)));
     }
     if (item === null || typeof item !== "object") {
       consume(1);
@@ -62,4 +72,10 @@ export function boundedCredentialJson(value: unknown, credentials: readonly stri
     return result + emit("}");
   };
   return visit(value);
+  };
+}
+
+/** Serialise without first cloning an arbitrarily large execution history. */
+export function boundedCredentialJson(value: unknown, credentials: readonly string[], limit: number): string {
+  return credentialJsonSerializer(credentials)(value, limit);
 }

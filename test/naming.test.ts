@@ -91,6 +91,18 @@ describe("workflow naming context", () => {
     assert.ok((context.match(/launch-/g) ?? []).length < 100, "launch input yields space to resolved work");
   });
 
+  it("does not leak a long credential prefix in Agent context", () => {
+    const secret = "agent-private-".repeat(1_500);
+    const context = workflowAgentNameInput({
+      workflowName: "Secure workflow",
+      workflowInput: {},
+      stepName: "Secure step",
+      instructions: secret,
+      input: {},
+    }, [secret]);
+    assert.doesNotMatch(context, /agent-private-/);
+  });
+
   it("keeps Agent work when workflow and step names are unbounded", () => {
     const context = workflowAgentNameInput({
       workflowName: "workflow-".repeat(2_000),
@@ -134,6 +146,23 @@ describe("workflow naming context", () => {
     assert.match(context, /\[REDACTED\]/);
     assert.doesNotMatch(context, /fallback-private-value|apiKey|shaped-result|authorization|shaped-error/i);
     assert.ok(context.length <= 4_000);
+  });
+
+  it("does not leak a long credential prefix in outcome context", () => {
+    const secret = "outcome-private-".repeat(1_200);
+    const context = workflowOutcomeNameInput({
+      workflowName: "Secure outcome",
+      workflowInput: {},
+      outcome: "failed",
+      results: secret,
+    }, [secret]);
+    assert.doesNotMatch(context, /outcome-private-/);
+  });
+
+  it("uses a replacement marker that does not retain a credential", () => {
+    const context = boundedCredentialJson("REDACTED", ["REDACTED"], 100);
+    assert.doesNotMatch(context, /REDACTED/);
+    assert.match(context, /FILTERED|hidden/);
   });
 
   it("bounds serialization work for large fallback histories", () => {
