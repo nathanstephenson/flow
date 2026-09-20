@@ -60,10 +60,10 @@ export function cleanLoopSettings(
   };
 }
 
-const LOOP_PADDING = 24;
-const LOOP_TOP_HEADER_HEIGHT = 112;
-const LOOP_SIDE_HEADER_WIDTH = 264;
-const LOOP_MIN_TOP_HEADER_WIDTH = 360;
+export const LOOP_PADDING = 24;
+export const LOOP_TOP_HEADER_HEIGHT = 112;
+export const LOOP_SIDE_HEADER_WIDTH = 264;
+export const LOOP_MIN_TOP_HEADER_WIDTH = 360;
 
 type LoopLayoutOptions = {
   orientation?: "horizontal" | "vertical";

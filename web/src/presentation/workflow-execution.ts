@@ -3,6 +3,11 @@ import type {
 } from '../../../src/protocol/workflows.ts';
 import { analyzeLoops } from '../../../src/workflows/loops.ts';
 import {
+  LOOP_PADDING,
+  LOOP_SIDE_HEADER_WIDTH,
+  LOOP_TOP_HEADER_HEIGHT,
+} from './workflow-loops.ts';
+import {
   WORKFLOW_CARD_HEIGHT,
   WORKFLOW_CARD_WIDTH,
   WORKFLOW_COLUMN_GAP,
@@ -38,6 +43,26 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
     }
     if (!progressed) break;
   }
+  // A loop's exit originates at its header, but visually follows the entire loop body.
+  // Treat each loop as a rank block and propagate the shifted exits through downstream steps.
+  let rankChanged = true;
+  while (rankChanged) {
+    rankChanged = false;
+    for (const edge of definition.edges) {
+      if (back.has(edge.id)) continue;
+      const sourceRank = ranks.get(edge.from);
+      const targetRank = ranks.get(edge.to);
+      if (sourceRank === undefined || targetRank === undefined) continue;
+      const containing = loops.loops.filter(loop =>
+        loop.headerId === edge.from && !loop.memberIds.includes(edge.to));
+      const required = Math.max(sourceRank, ...containing.flatMap(loop =>
+        loop.memberIds.map(id => ranks.get(id) ?? sourceRank))) + 1;
+      if (targetRank < required) {
+        ranks.set(edge.to, required);
+        rankChanged = true;
+      }
+    }
+  }
   const loopByHeader = new Map(loops.loops.map(loop => [loop.headerId, loop]));
   const loopDepth = (id: string) => {
     let depth = 0;
@@ -49,9 +74,14 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
     return depth;
   };
   const maxDepth = Math.max(0, ...definition.steps.map(step => loopDepth(step.id)));
+  // Each containing loop grows beyond its cards on both axes. Reserve that growth
+  // between lanes and ranks so sibling loop boxes cannot overlap.
   const laneStride = vertical
-    ? WORKFLOW_CARD_WIDTH + WORKFLOW_LANE_GAP + maxDepth * 288
-    : WORKFLOW_CARD_HEIGHT + WORKFLOW_ROW_GAP + maxDepth * 136;
+    ? WORKFLOW_CARD_WIDTH + WORKFLOW_LANE_GAP + maxDepth * (LOOP_SIDE_HEADER_WIDTH + LOOP_PADDING)
+    : WORKFLOW_CARD_HEIGHT + WORKFLOW_ROW_GAP + maxDepth * (LOOP_TOP_HEADER_HEIGHT + LOOP_PADDING);
+  const rankStride = vertical
+    ? WORKFLOW_CARD_HEIGHT + WORKFLOW_RANK_GAP + maxDepth * 2 * LOOP_PADDING
+    : WORKFLOW_CARD_WIDTH + WORKFLOW_COLUMN_GAP + maxDepth * 2 * LOOP_PADDING;
   const lanes = new Map<number, number>();
   return { ...definition, steps: definition.steps.map(step => {
     const rank = ranks.get(step.id) ?? 0;
@@ -62,10 +92,10 @@ export function executionLayout(definition: WorkflowDefinition, vertical: boolea
       position: vertical
         ? {
             x: lane * laneStride,
-            y: rank * (WORKFLOW_CARD_HEIGHT + WORKFLOW_RANK_GAP),
+            y: rank * rankStride,
           }
         : {
-            x: rank * (WORKFLOW_CARD_WIDTH + WORKFLOW_COLUMN_GAP),
+            x: rank * rankStride,
             y: lane * laneStride,
           },
     };

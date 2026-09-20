@@ -45,6 +45,7 @@ import {
 } from "./ui/select.tsx";
 
 const nodeTypes = { workflow: WorkflowNode, loop: LoopNode };
+const NO_AWAITING_STEPS: string[] = [];
 const FIT_VIEW_OPTIONS = {
   padding: 0.08,
   maxZoom: 1,
@@ -146,7 +147,7 @@ export function WorkflowGraph({
   onChange,
   onSelect,
   execution,
-  awaitingSteps = [],
+  awaitingSteps = NO_AWAITING_STEPS,
   selectedStepId,
   orientation = "horizontal",
 }: {
@@ -298,11 +299,13 @@ export function WorkflowGraph({
         };
       });
     });
+  }, [staticGraph, execution, selectedStepId, awaitingSteps, definition, onChange, orientation]);
+  useEffect(() => {
     setEdges((previous) => {
       const selected = new Set(previous.filter(edge => edge.selected).map(edge => edge.id));
       return staticGraph.edges.map(edge => ({ ...edge, selected: selected.has(edge.id) }));
     });
-  }, [staticGraph, execution, selectedStepId, awaitingSteps, definition, onChange, orientation]);
+  }, [staticGraph]);
   const connect = (connection: Connection) => {
     if (connection.source && connection.target)
       onChange?.({
