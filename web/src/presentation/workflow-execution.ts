@@ -1,7 +1,5 @@
 import type {
   WorkflowDefinition,
-  WorkflowOutcome,
-  WorkflowStep,
 } from '../../../src/protocol/workflows.ts';
 import { analyzeLoops } from '../../../src/workflows/loops.ts';
 
@@ -12,24 +10,8 @@ export function attemptDuration(startedAt: number, finishedAt?: number): string 
     .filter(([value]) => value !== 0).map(([value, unit]) => `${value}${unit}`).join(' ') || '0s';
 }
 
-export type OutcomePort = {
-  outcome: WorkflowOutcome;
-  side: "bottom" | "right";
-};
-
-/** Keep each visible outcome label and source port together, in protocol order. */
-export function outcomePorts(
-  kind: WorkflowStep["kind"],
-  vertical: boolean,
-): OutcomePort[] {
-  const outcomes: WorkflowOutcome[] = kind === "branch"
-    ? ["true", "false"]
-    : ["success", "failure", "timeout"];
-  return outcomes.map((outcome) => ({
-    outcome,
-    side: vertical ? "bottom" : "right",
-  }));
-}
+export const EDITOR_MIN_ZOOM = 0.1;
+export const EXECUTION_MIN_ZOOM = 0.05;
 
 /** Ignore editor coordinates, but keep the same loop grouping and every outcome edge. */
 export function executionLayout(definition: WorkflowDefinition, vertical: boolean): WorkflowDefinition {

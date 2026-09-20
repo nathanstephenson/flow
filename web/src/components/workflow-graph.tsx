@@ -14,8 +14,9 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
+  EDITOR_MIN_ZOOM,
+  EXECUTION_MIN_ZOOM,
   executionLayout,
-  outcomePorts,
 } from "../presentation/workflow-execution.ts";
 import "@xyflow/react/dist/style.css";
 import type {
@@ -39,12 +40,12 @@ import {
 } from "./ui/select.tsx";
 
 const nodeTypes = { workflow: WorkflowNode, loop: LoopNode };
-const EXECUTION_MIN_ZOOM = 0.05;
 const FIT_VIEW_OPTIONS = {
   padding: 0.08,
-  minZoom: EXECUTION_MIN_ZOOM,
   maxZoom: 1,
 };
+const BRANCH_OUTCOMES = ["true", "false", "failure", "timeout"] satisfies WorkflowOutcome[];
+const STEP_OUTCOMES = ["success", "failure", "timeout"] satisfies WorkflowOutcome[];
 function LoopNode({
   data,
 }: NodeProps<
@@ -98,12 +99,13 @@ function WorkflowNode({
   Node<{ step: WorkflowStep; permission: string; status?: string; vertical?: boolean; execution?: boolean }>
 >) {
   const { step } = data;
-  const ports = outcomePorts(step.kind, !!data.vertical);
+  const outcomes = step.kind === "branch" ? BRANCH_OUTCOMES : STEP_OUTCOMES;
+  const sourcePosition = data.vertical ? Position.Bottom : Position.Right;
   return (
     <div
       data-status={data.status}
       data-orientation={data.vertical ? "vertical" : "horizontal"}
-      className="workflow-step relative h-40 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
+      className="workflow-step relative h-44 w-52 rounded-lg border bg-card p-3 text-xs text-card-foreground"
     >
       <Handle type="target" position={data.vertical ? Position.Top : Position.Left} />
       <strong
@@ -119,13 +121,13 @@ function WorkflowNode({
       <div
         className={`workflow-step__outcomes ${data.vertical ? "workflow-step__outcomes--vertical" : "workflow-step__outcomes--horizontal"}`}
       >
-        {ports.map(({ outcome, side }) => (
+        {outcomes.map((outcome) => (
           <div key={outcome} className="workflow-step__outcome" data-outcome={outcome}>
             <span>{outcome}</span>
             <Handle
               id={outcome}
               type="source"
-              position={side === "bottom" ? Position.Bottom : Position.Right}
+              position={sourcePosition}
             />
           </div>
         ))}
@@ -348,7 +350,7 @@ export function WorkflowGraph({
         nodesConnectable={!!onChange}
         deleteKeyCode={onChange ? ["Backspace", "Delete"] : null}
         defaultViewport={{ x: 32, y: definition.loopSettings && Object.keys(definition.loopSettings).length ? 120 : 24, zoom: 1 }}
-        minZoom={execution ? EXECUTION_MIN_ZOOM : 0.1}
+        minZoom={execution ? EXECUTION_MIN_ZOOM : EDITOR_MIN_ZOOM}
         fitViewOptions={FIT_VIEW_OPTIONS}
       >
         <Background />
