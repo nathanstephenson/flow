@@ -815,8 +815,9 @@ export class WorkflowExecutionService {
     }
   }
 
-  /** Persist the request before starting fire-and-forget model work. Every failure stays cosmetic. */
+  /** A shutdown leaves the durable request pending so restart reconciliation can name it. */
   private requestNaming(sessionId: string, executionId: string, context: (record: WorkflowExecution) => string): void {
+    if (!this.host.workflowNamingAllowed(sessionId)) return;
     let record: WorkflowExecution | undefined;
     try { record = this.scheduler.claimNaming(sessionId, executionId); }
     catch { return; }
@@ -920,10 +921,10 @@ function safeError(error: unknown, values: string[]): Error {
 
 function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?: Json } {
   const stepNames = new Map(record.definition.steps.map(step => [step.id, step.name]));
-  const results = Object.entries(record.steps).flatMap(([id, state]) => state.output === undefined ? [] : [{
+  const results = record.result === undefined ? Object.entries(record.steps).flatMap(([id, state]) => state.output === undefined ? [] : [{
     step: stepNames.get(id) ?? id,
     output: state.output,
-  }]);
+  }]) : [];
   const errors = Object.entries(record.steps).flatMap(([id, state]) => state.attempts.flatMap(attempt => attempt.error === undefined ? [] : [{
     step: stepNames.get(id) ?? id,
     attempt: attempt.number,
@@ -931,7 +932,7 @@ function outcomeNamingData(record: WorkflowExecution): { results?: Json; errors?
     ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
   }]));
   return {
-    ...(record.result === undefined && !results.length ? {} : { results: { ...(record.result === undefined ? {} : { final: record.result }), ...(results.length ? { steps: results } : {}) } as Json }),
+    ...(record.result !== undefined ? { results: record.result } : results.length ? { results: results as unknown as Json } : {}),
     ...(errors.length ? { errors: errors as unknown as Json } : {}),
   };
 }

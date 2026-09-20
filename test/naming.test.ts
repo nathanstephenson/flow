@@ -54,6 +54,23 @@ describe("the name inside a model's answer", () => {
 });
 
 describe("workflow naming context", () => {
+  it("omits credential-shaped fields recursively", () => {
+    const keys = ["apiKey", "api_key", "accessToken", "access_token", "refreshToken", "authToken", "authorization", "cookie", "bearer", "password", "passphrase", "credential", "secret", "token", "privateKey", "private_key"];
+    const nested = Object.fromEntries(keys.map(key => [key, `value-for-${key}`]));
+    const context = workflowAgentNameInput({
+      workflowName: "Secure workflow",
+      workflowInput: { visible: "retained", nested },
+      stepName: "Secure step",
+      instructions: "Use safe context",
+      input: { deeper: nested },
+    });
+    assert.match(context, /retained/);
+    for (const key of keys) {
+      assert.doesNotMatch(context, new RegExp(key, "i"));
+      assert.doesNotMatch(context, new RegExp(`value-for-${key}`, "i"));
+    }
+  });
+
   it("prioritises resolved Agent work and redacts known values before truncating", () => {
     const secret = "private-value-at-the-truncation-boundary";
     const context = workflowAgentNameInput({
@@ -101,6 +118,13 @@ describe("workflow naming context", () => {
     assert.match(context, /deployment timed out/);
     assert.equal((context.match(/actual-result-/g) ?? []).length, 150, "outcome data is retained first");
     assert.ok((context.match(/launch-/g) ?? []).length < 2_000, "launch input yields space to outcome data");
+  });
+
+  it("bounds serialization work for large fallback histories", () => {
+    const results = Array.from({ length: 100_000 }, (_, index) => ({ index, output: "x".repeat(100) }));
+    const context = workflowOutcomeNameInput({ workflowName: "Large history", workflowInput: {}, outcome: "completed", results });
+    assert.ok(context.length <= 4_000);
+    assert.match(context, /Large history|completed/);
   });
 
   it("keeps outcome data when workflow names are unbounded", () => {

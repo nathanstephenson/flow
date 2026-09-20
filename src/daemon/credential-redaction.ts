@@ -25,5 +25,33 @@ function credentialTextRedactor(credentials: readonly string[]): (value: string)
   return value => patterns.reduce((result, secret) => result.split(secret).join('[REDACTED]'), value);
 }
 
-export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;
+export const credentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|bearer|auth[-_]?token)/i;
 const namingCredentialKey = /(?:authorization|cookie|password|passphrase|credential|secret|api[-_]?key|private[-_]?key|access[-_]?token|refresh[-_]?token|auth[-_]?token|bearer|token)/i;
+
+/** Serialise without first cloning an arbitrarily large execution history. */
+export function boundedCredentialJson(value: unknown, credentials: readonly string[], limit: number): string {
+  const redact = credentialTextRedactor(credentials);
+  let remaining = limit;
+  const emit = (text: string): string => {
+    if (text.length <= remaining) { remaining -= text.length; return text; }
+    const clipped = text.slice(0, Math.max(0, remaining - 1)) + (remaining ? "…" : "");
+    remaining = 0;
+    return clipped;
+  };
+  const visit = (item: unknown): string => {
+    if (!remaining) return "";
+    if (typeof item === "string") return emit(JSON.stringify(redact(item)));
+    if (item === null || typeof item !== "object") return emit(JSON.stringify(item) ?? "null");
+    const array = Array.isArray(item);
+    let result = emit(array ? "[" : "{");
+    const entries = array ? item.map((nested, index) => [String(index), nested] as const) : Object.entries(item).filter(([key]) => !namingCredentialKey.test(key));
+    for (let index = 0; index < entries.length && remaining; index += 1) {
+      const [key, nested] = entries[index]!;
+      result += emit(index ? "," : "");
+      if (!array) result += emit(JSON.stringify(redact(key)) + ":");
+      result += visit(nested);
+    }
+    return result + emit(array ? "]" : "}");
+  };
+  return visit(value);
+}

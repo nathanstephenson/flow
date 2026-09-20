@@ -1572,6 +1572,11 @@ export class SessionHost {
 
   authoriseWorkflowTool(tool: string): void { this.allowTool?.(tool); }
 
+  workflowNamingAllowed(sessionId: string): boolean {
+    const record = this.sessions.get(sessionId);
+    return !this.workflowShutdown && !this.workflowStopping.has(sessionId) && !!record && record.lifecycle !== "ended" && record.lifecycle !== "settled";
+  }
+
   async dispose(sessionId: string, reason = "disposed"): Promise<void> {
     const record = this.sessions.get(sessionId);
     if (!record) return;
@@ -1766,7 +1771,7 @@ export class SessionHost {
     input: string,
     expectedSource: "scope" | "first-line",
   ): Promise<void> {
-    if (record.titleSource !== expectedSource) return;
+    if (!this.workflowNamingAllowed(record.id) || record.titleSource !== expectedSource) return;
     const summary = this.summaryModel?.(record.backendName);
     if (!summary?.automatic) return;
 

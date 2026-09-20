@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { redactCredentialContext } from "./credential-redaction.ts";
+import { boundedCredentialJson } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
@@ -143,14 +143,13 @@ export function workflowAgentNameInput(options: {
   instructions: string;
   input: unknown;
 }, credentials: readonly string[] = []): string {
-  const safe = redactCredentialContext(options, credentials);
   return boundedWorkflowContext([
-    { label: "Resolved task instructions", value: safe.instructions, priority: 3 },
-    { label: "Resolved task input", value: safe.input, priority: 3 },
-    { label: "Workflow", value: safe.workflowName, priority: 3, cap: 200 },
-    { label: "Agent step", value: safe.stepName, priority: 3, cap: 200 },
-    { label: "Validated launch inputs", value: safe.workflowInput, priority: 1 },
-  ]);
+    { label: "Resolved task instructions", value: options.instructions, priority: 3 },
+    { label: "Resolved task input", value: options.input, priority: 3 },
+    { label: "Workflow", value: options.workflowName, priority: 3, cap: 200 },
+    { label: "Agent step", value: options.stepName, priority: 3, cap: 200 },
+    { label: "Validated launch inputs", value: options.workflowInput, priority: 1 },
+  ], credentials);
 }
 
 /**
@@ -164,14 +163,13 @@ export function workflowOutcomeNameInput(options: {
   results?: unknown;
   errors?: unknown;
 }, credentials: readonly string[] = []): string {
-  const safe = redactCredentialContext(options, credentials);
   return boundedWorkflowContext([
-    { label: "Outcome", value: safe.outcome, priority: 3 },
-    ...(safe.results === undefined ? [] : [{ label: "Available results", value: safe.results, priority: 3 }]),
-    ...(safe.errors === undefined ? [] : [{ label: "Available errors", value: safe.errors, priority: 3 }]),
-    { label: "Workflow", value: safe.workflowName, priority: 3, cap: 200 },
-    { label: "Validated launch inputs", value: safe.workflowInput, priority: 1 },
-  ]);
+    { label: "Outcome", value: options.outcome, priority: 3 },
+    ...(options.results === undefined ? [] : [{ label: "Available results", value: options.results, priority: 3 }]),
+    ...(options.errors === undefined ? [] : [{ label: "Available errors", value: options.errors, priority: 3 }]),
+    { label: "Workflow", value: options.workflowName, priority: 3, cap: 200 },
+    { label: "Validated launch inputs", value: options.workflowInput, priority: 1 },
+  ], credentials);
 }
 
 
@@ -531,10 +529,10 @@ function boundedNameInput(whole: string): string {
  * from data that lost the size contest. Sections at the same priority share space rather than one
  * giant instruction starving the resolved input beside it.
  */
-function boundedWorkflowContext(sections: Array<{ label: string; value: unknown; priority: number; cap?: number }>): string {
+function boundedWorkflowContext(sections: Array<{ label: string; value: unknown; priority: number; cap?: number }>, credentials: readonly string[]): string {
   const serialised = sections.map(section => {
-    const text = typeof section.value === "string" ? JSON.stringify(section.value) : JSON.stringify(section.value) ?? "null";
-    return { ...section, text: section.cap === undefined ? text : clipContext(text, section.cap) };
+    const text = boundedCredentialJson(section.value, credentials, section.cap ?? MAX_INPUT_LENGTH);
+    return { ...section, text };
   });
   const separators = Math.max(0, serialised.length - 1);
   const labels = serialised.reduce((length, section) => length + section.label.length + 2, 0);

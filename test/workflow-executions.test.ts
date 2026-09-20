@@ -153,9 +153,26 @@ for (const outcome of ['completed', 'completed-with-recovery', 'cancelled'] as c
       await until(() => f.summary.sessions.flatMap(session => session.prompts).length === 1);
       const prompt = f.summary.sessions.flatMap(session => session.prompts)[0]!;
       assert.match(prompt, new RegExp(outcome));
-      if (outcome === 'completed') assert.match(prompt, /Final result/);
+      if (outcome === 'completed') assert.match(prompt, /Available results: \{\}/);
       if (outcome === 'completed-with-recovery') assert.match(prompt, /Failed check|Shell exit code was not accepted/);
       assert.equal(f.service.view(f.id, started.execution.id).execution.naming, 'requested');
+    } finally { await f.close(); }
+  });
+}
+
+for (const stop of ['shutdown', 'settle', 'dispose'] as const) {
+  it(`leaves fallback naming pending when ${stop} interrupts execution`, async () => {
+    const f = await fixture({ naming: true });
+    try {
+      const graph: WorkflowDefinition = { ...definition, steps: [{ id: 'slow', name: 'Slow', kind: 'shell', command: 'sleep 5' }], edges: [] };
+      const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, nameSession: true });
+      await until(() => f.service.view(f.id, started.execution.id).execution.steps.slow?.status === 'running');
+      if (stop === 'shutdown') await f.host.shutdown();
+      else if (stop === 'settle') await f.host.settle(f.id);
+      else await f.host.dispose(f.id);
+      await until(() => f.service.view(f.id, started.execution.id).execution.status !== 'running');
+      assert.equal(f.service.view(f.id, started.execution.id).execution.naming, 'pending');
+      assert.equal(f.summary.sessions.flatMap(session => session.prompts).length, 0);
     } finally { await f.close(); }
   });
 }
