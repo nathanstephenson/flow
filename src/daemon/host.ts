@@ -137,6 +137,7 @@ type SessionRecord = {
   backendEpoch: number;
   /** Durable, machine-wide inbox state. Activity and Lifecycle never read these fields. */
   latestAttention: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
+  seenAttentionKeys: Set<string>;
   readAttentionVersion: number;
   /** Relevant ages for unresolved parent/Subagent requests, indexed independently of occupancy. */
   openPermissionAttention: Map<string, { at: string; version: number }>;
@@ -595,9 +596,10 @@ export class SessionHost {
     key: string,
     at = new Date().toISOString(),
   ): { at: string; version: number } {
-    if (record.latestAttention?.key === key) {
-      return { at: record.latestAttention.at, version: record.latestAttention.version };
+    if (record.seenAttentionKeys.has(key)) {
+      return { at: record.latestAttention?.at ?? at, version: record.latestAttention?.version ?? record.readAttentionVersion };
     }
+    record.seenAttentionKeys.add(key);
     const version = (record.latestAttention?.version ?? record.readAttentionVersion) + 1;
     record.latestAttention = {
       reason,
@@ -721,6 +723,7 @@ export class SessionHost {
         // No metadata means a legacy record starts read. Open requests are still indexed below and
         // therefore remain Needs input for as long as they are genuinely answerable.
         latestAttention: meta.latestAttention,
+        seenAttentionKeys: new Set(meta.latestAttention ? [meta.latestAttention.key] : []),
         readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
         openPermissionAttention: openInputAttention(entries, "permission"),
         openEnquiryAttention: openInputAttention(entries, "enquiry"),
@@ -805,6 +808,7 @@ export class SessionHost {
       settledAt: undefined,
       backendEpoch: 1,
       latestAttention: undefined,
+      seenAttentionKeys: new Set(),
       readAttentionVersion: 0,
       openPermissionAttention: new Map(),
       openEnquiryAttention: new Map(),
@@ -1454,32 +1458,21 @@ export class SessionHost {
   workflowWake(sessionId: string, executionId: string, revision: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowNotifications.set(sessionId, { executionId, revision });
-    const record = this.sessions.get(sessionId);
-    if (record) {
-      this.markAttention(record, "Failed", `workflow-failure:${executionId}:${revision}`);
-      this.persist(record);
-    }
     this.queueWorkflowDrain(sessionId);
   }
 
   workflowComplete(sessionId: string, executionId: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     const pending = this.workflowCompletions.get(sessionId) ?? [];
-    if (!pending.includes(executionId)) pending.push(executionId);
+    if (pending.includes(executionId)) return;
+    pending.push(executionId);
     this.workflowCompletions.set(sessionId, pending);
-    const record = this.sessions.get(sessionId);
-    if (record) {
-      this.markAttention(record, "Completed", `workflow-completion:${executionId}`);
-      this.persist(record);
-    }
     this.queueWorkflowDrain(sessionId);
   }
 
   private queueWorkflowDrain(sessionId: string): void {
-    queueMicrotask(() => {
-      const record = this.sessions.get(sessionId);
-      if (record) void this.drainWorkflowNotification(record).catch(() => {});
-    });
+    const record = this.sessions.get(sessionId);
+    if (record) void this.drainWorkflowNotification(record).catch(() => {});
   }
 
   /**
@@ -1505,16 +1498,16 @@ export class SessionHost {
     } else if (completion) {
       if (!completions!.length) this.workflowCompletions.delete(record.id);
       text = this.workflowOwner?.takeCompletion(record.id, completion);
-      kind = text ? 'completion' : undefined;
+      kind = 'completion';
     }
-    if (!kind || !text) {
+    if (!kind || (kind !== 'completion' && !text)) {
       // A request can be canceled, or a recovery can become stale, before the parent becomes free.
       // Continue to the next host-driven item rather than waiting for an unrelated future wake.
       if (this.workflowInputs.has(record.id) || this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) return this.drainWorkflowNotification(record);
       return false;
     }
     record.turnInFlight = true;
-    record.log.append({
+    const logged = record.log.append({
       type: 'notice',
       level: 'info',
       text: kind === 'input'
@@ -1523,6 +1516,17 @@ export class SessionHost {
           ? 'Workflow requires recovery. The parent is inspecting it.'
           : 'Workflow completed. The parent is preparing the result.',
     });
+    if (kind === 'recovery' && recovery) {
+      this.markAttention(record, 'Failed', `workflow-failure:${recovery.executionId}:${recovery.revision}`, logged.at);
+      this.persist(record);
+    } else if (kind === 'completion' && completion) {
+      this.markAttention(record, 'Completed', `workflow-completion:${completion}`, logged.at);
+      this.persist(record);
+    }
+    if (!text) {
+      record.turnInFlight = false;
+      return false;
+    }
     try {
       await record.session.prompt(text);
       return true;

@@ -62,6 +62,9 @@ export async function runTui(options: TuiOptions): Promise<void> {
   // focus reporting ignore the mode and retain the documented fallback; supporting ones stop a
   // background window from consuming attention.
   let focused = true;
+  let stopped = false;
+  let refreshGeneration = 0;
+  const acknowledged = new Map<string, number>();
 
   const draw = (): void => {
     const ui: UiState = {
@@ -94,8 +97,14 @@ export async function runTui(options: TuiOptions): Promise<void> {
     if (!focused || !selected || overlay.kind !== "none") return;
     const summary = sessions.find((session) => session.id === selected);
     const attention = summary?.attention;
-    if (!attention || view.lastSeq < attention.observedSeq) return;
-    await options.connection.command({ type: "acknowledge", sessionId: selected, throughVersion: attention.version });
+    if (!attention || view.lastSeq < attention.observedSeq || (acknowledged.get(selected) ?? -1) >= attention.version) return;
+    acknowledged.set(selected, attention.version);
+    try {
+      await options.connection.command({ type: "acknowledge", sessionId: selected, throughVersion: attention.version });
+    } catch (error) {
+      if (acknowledged.get(selected) === attention.version) acknowledged.delete(selected);
+      throw error;
+    }
   };
 
   const attach = (sessionId: string): void => {
@@ -185,18 +194,24 @@ export async function runTui(options: TuiOptions): Promise<void> {
   // mode, in which case `focused` deliberately remains true.
   if (stdin.isTTY) stdout.write("\u001b[?1004h");
   stdout.on("resize", draw);
-  // Poll while the terminal is running, preserving the selected identity above. This is also how a
-  // focus event learns the exact shared attention version rather than guessing from transcript data.
-  const refreshTimer = setInterval(() => {
-    void refreshSessions().then(() => {
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const poll = async (generation: number): Promise<void> => {
+    try {
+      await refreshSessions();
+      if (stopped || generation !== refreshGeneration) return;
       draw();
-      return acknowledgeVisible();
-    }).catch(() => {});
-  }, 2_000);
+      await acknowledgeVisible();
+    } catch {}
+    if (!stopped && generation === refreshGeneration) refreshTimer = setTimeout(() => void poll(generation), 2_000);
+  };
+  refreshTimer = setTimeout(() => void poll(refreshGeneration), 2_000);
 
   await new Promise<void>((resolve) => {
     const finish = (): void => {
-      clearInterval(refreshTimer);
+      if (stopped) return;
+      stopped = true;
+      refreshGeneration++;
+      if (refreshTimer) clearTimeout(refreshTimer);
       unsubscribe?.();
       if (stdin.isTTY) stdout.write("\u001b[?1004l");
       stdin.setRawMode?.(false);
