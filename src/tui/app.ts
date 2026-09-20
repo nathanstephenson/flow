@@ -83,10 +83,15 @@ export async function runTui(options: TuiOptions): Promise<void> {
   };
 
   const refreshSessions = async (): Promise<void> => {
+    const generation = ++refreshGeneration;
+    const next = await options.connection.listSessions();
+    // Polling, focus events, commands, and overlays may all refresh concurrently. Only the newest
+    // issued request may publish; otherwise a slow old response can restore stale inbox ordering.
+    if (generation !== refreshGeneration) return;
     // A list refresh may move the cursor into another attention group. Preserve what it addressed
     // by identity; headings never enter the selectable sessions array.
     const cursorId = overlay.kind === "sessions" ? sessions[overlay.index]?.id : undefined;
-    sessions = await options.connection.listSessions();
+    sessions = next;
     if (overlay.kind === "sessions" && cursorId) {
       const moved = sessions.findIndex((session) => session.id === cursorId);
       overlay = { kind: "sessions", index: moved < 0 ? Math.min(overlay.index, Math.max(0, sessions.length - 1)) : moved };

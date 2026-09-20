@@ -116,7 +116,7 @@ export function AppShell() {
    * Open the freshest Agent Session on arrival — but only when the URL did not already name one, and
    * not when the candidate is Settled.
    *
-   * The Session Host bands the list most alive first (`railBand`), so `sessions[0]` is the one most
+   * The Session Host groups the list by attention and activity (`railGroup`), so `sessions[0]` is the one most
    * worth landing on — whatever is awaiting a decision, else whatever is working, else the freshest
    * Idle one — and it is Settled only when every one of them is. Opening a Settled Agent Session
    * unasked would put a finished transcript in front of someone who came to start work.

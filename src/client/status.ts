@@ -40,25 +40,6 @@ export function occupied(status: SessionStatus): boolean {
   return status === "running" || status === "awaiting";
 }
 
-/**
- * Which band of the rail an Agent Session belongs to, most alive first.
- *
- * The rail is banded rather than ordered by one timestamp, because a single recency key put a
- * finished Agent Session above one that was still working — and the top of a list is where a reader
- * looks for what is happening. Banding fixes that without reintroducing churn: a row moves when its
- * band changes and at no other time, so a turn can stream for an hour without touching the order.
- *
- * Ended has no band of its own. An Ended Agent Session is not reaped and stays in the list, and it
- * is as finished as a Settled one, so it sits with them at the bottom.
- */
-export function railBand(of: WorkLoad): number {
-  if (of.status === "awaiting") return 0;
-  if (of.status === "running" || working(of)) return 1;
-  if (of.status === "idle") return 2;
-  if (of.status === "dormant") return 3;
-  return 4;
-}
-
 /** Stable group identities shared by the host and both clients. */
 export type RailGroup = "needs-input" | "unread" | "working" | "idle" | "dormant" | "filed-away";
 

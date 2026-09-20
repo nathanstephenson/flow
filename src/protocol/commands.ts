@@ -50,7 +50,7 @@ export type SessionSummary = {
   title: string;
   /**
    * When this Agent Session last came to rest — the time its row prints, and what orders the rail
-   * *within* a band. Which band it is in comes from `railBand`, not from here.
+   * within its inbox group. The group itself comes from `railGroup`, not from here.
    *
    * Stamped when the derived activity enters `idle`, and at no other time. Deliberately not
    * `updatedAt`, which every streamed token restamps and which therefore floated whichever Agent

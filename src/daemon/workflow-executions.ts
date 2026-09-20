@@ -546,9 +546,15 @@ export class WorkflowExecutionService {
       item.kind === request.kind && (item.kind === 'enquiry' && request.kind === 'enquiry' ? item.askId === request.askId : item.kind === 'permission' && request.kind === 'permission' && item.callId === request.callId));
     if (duplicate) return;
     const id = randomUUID();
-    const attention = this.host.workflowInput(request.sessionId, id) ?? { at: new Date().toISOString(), version: 0 };
-    const item = { ...request, id, order: ++this.relayOrder, attentionAt: attention.at, attentionVersion: attention.version, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
+    // Publish the relay before waking the host. The host may drain synchronously and takeInput must
+    // already be able to find this request when it does.
+    const item = { ...request, id, order: ++this.relayOrder, attentionAt: new Date().toISOString(), attentionVersion: 0, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
     this.relayRequests.set(item.id, item);
+    const attention = this.host.workflowInput(request.sessionId, id);
+    if (attention) {
+      item.attentionAt = attention.at;
+      item.attentionVersion = attention.version;
+    }
     const newest = this.newestRelayBySession.get(item.sessionId);
     if (!newest || item.attentionAt > newest.attentionAt) this.newestRelayBySession.set(item.sessionId, item);
   }

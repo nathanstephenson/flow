@@ -71,7 +71,18 @@ export function TranscriptView({
   const reportObservedRef = useRef(reportObserved);
   reportObservedRef.current = reportObserved;
 
-  useLayoutEffect(() => reportObservedRef.current());
+  useEffect(() => {
+    // A layout effect (and even the first animation-frame callback) runs before paint. Wait through
+    // a frame boundary so attention is acknowledged only after the committed rows were visible.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => reportObservedRef.current());
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  });
 
   useEffect(() => {
     const report = () => reportObservedRef.current();

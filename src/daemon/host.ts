@@ -117,11 +117,9 @@ type SessionRecord = {
    * closes torn prompts, a drift would leave a dangling `asked` on disk that replays into a
    * composer nobody can unlock.
    *
-   * Sets of ids rather than counters because snapshots repeat — a Subagent reports `running` many
-   * times, and counting arrivals rather than transitions would never come back down.
+   * Id-indexed collections rather than counters because snapshots repeat — a Subagent reports
+   * `running` many times, and counting arrivals rather than transitions would never come back down.
    */
-  openPermissionIds: Set<string>;
-  openEnquiryIds: Set<string>;
   /** Never affects occupancy: a backgrounded Subagent holds nothing (ADR 0016). */
   openSubagentIds: Set<string>;
   /** Never affects occupancy either: a Background Call holds nothing (ADR 0021). */
@@ -585,7 +583,7 @@ export class SessionHost {
     return deriveStatus({
       lifecycle: record.lifecycle,
       turnInFlight: record.turnInFlight,
-      awaiting: record.openPermissionIds.size > 0 || record.openEnquiryIds.size > 0,
+      awaiting: record.openPermissionAttention.size > 0 || record.openEnquiryAttention.size > 0,
     });
   }
 
@@ -712,8 +710,6 @@ export class SessionHost {
         reviving: undefined,
         lifecycle: lifecycleFrom(meta),
         turnInFlight: false,
-        openPermissionIds: new Set(openPermissions(entries).map((open) => open.callId)),
-        openEnquiryIds: new Set(openEnquiries(entries).map((open) => open.askId)),
         openSubagentIds: new Set(openSubagents(entries).map((open) => open.subagentId)),
         openBackgroundCallIds: new Set(openBackgroundCalls(entries).map((open) => open.callId)),
         // A meta written before the split has neither, and `updatedAt` is what both used to be.
@@ -798,8 +794,6 @@ export class SessionHost {
       reviving: undefined,
       lifecycle: "live",
       turnInFlight: false,
-      openPermissionIds: new Set(),
-      openEnquiryIds: new Set(),
       openSubagentIds: new Set(),
       openBackgroundCallIds: new Set(),
       // A brand new Agent Session is its owner's turn from the moment it exists, which is what puts
@@ -1458,6 +1452,12 @@ export class SessionHost {
   workflowWake(sessionId: string, executionId: string, revision: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowNotifications.set(sessionId, { executionId, revision });
+    const record = this.sessions.get(sessionId);
+    if (record) {
+      const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow requires recovery. The parent will inspect it when free.' });
+      this.markAttention(record, 'Failed', `workflow-failure:${executionId}:${revision}`, boundary.at);
+      this.persist(record);
+    }
     this.queueWorkflowDrain(sessionId);
   }
 
@@ -1467,12 +1467,22 @@ export class SessionHost {
     if (pending.includes(executionId)) return;
     pending.push(executionId);
     this.workflowCompletions.set(sessionId, pending);
+    const record = this.sessions.get(sessionId);
+    if (record) {
+      const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow completed. The parent will prepare the result when free.' });
+      this.markAttention(record, 'Completed', `workflow-completion:${executionId}`, boundary.at);
+      this.persist(record);
+    }
     this.queueWorkflowDrain(sessionId);
   }
 
   private queueWorkflowDrain(sessionId: string): void {
-    const record = this.sessions.get(sessionId);
-    if (record) void this.drainWorkflowNotification(record).catch(() => {});
+    // Relay registration and callers' current state transition must finish before takeInput can
+    // consume the wake. The drain still runs at the next microtask, ahead of unrelated timers.
+    queueMicrotask(() => {
+      const record = this.sessions.get(sessionId);
+      if (record) void this.drainWorkflowNotification(record).catch(() => {});
+    });
   }
 
   /**
@@ -1516,13 +1526,6 @@ export class SessionHost {
           ? 'Workflow requires recovery. The parent is inspecting it.'
           : 'Workflow completed. The parent is preparing the result.',
     });
-    if (kind === 'recovery' && recovery) {
-      this.markAttention(record, 'Failed', `workflow-failure:${recovery.executionId}:${recovery.revision}`, logged.at);
-      this.persist(record);
-    } else if (kind === 'completion' && completion) {
-      this.markAttention(record, 'Completed', `workflow-completion:${completion}`, logged.at);
-      this.persist(record);
-    }
     if (!text) {
       record.turnInFlight = false;
       return false;
@@ -2234,7 +2237,6 @@ export class SessionHost {
     for (const open of openEnquiries(entries)) {
       record.log.append({ type: "enquiry", ...open, state: "aborted" });
     }
-    record.openEnquiryIds.clear();
     record.openEnquiryAttention.clear();
   }
 
@@ -2252,7 +2254,6 @@ export class SessionHost {
     for (const open of openPermissions(entries)) {
       record.log.append({ type: "permission", ...open, state: "aborted" });
     }
-    record.openPermissionIds.clear();
     record.openPermissionAttention.clear();
   }
 
@@ -2337,8 +2338,8 @@ export class SessionHost {
     }
 
     const before = this.activityOf(record);
-    const permissionWasOpen = event.type === "permission" && record.openPermissionIds.has(event.callId);
-    const enquiryWasOpen = event.type === "enquiry" && record.openEnquiryIds.has(event.askId);
+    const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
+    const enquiryWasOpen = event.type === "enquiry" && record.openEnquiryAttention.has(event.askId);
     const subagentWasOpen = event.type === "subagent" && record.openSubagentIds.has(event.subagentId);
     const backgroundWasOpen = event.type === "background_call" && record.openBackgroundCallIds.has(event.callId);
     const logged = record.log.append(event);
@@ -2395,7 +2396,7 @@ export class SessionHost {
    * Keep the open-prompt and open-Subagent index in step with the transcript.
    *
    * Only ever called from `onBackendEvent`, which is the one path every adapter event takes. The
-   * host's own terminal snapshots go through `closeOpen*`, which clear these sets themselves.
+   * host's own terminal snapshots go through `closeOpen*`, which clear these indexes themselves.
    */
   private indexOpen(
     record: SessionRecord,
@@ -2404,7 +2405,6 @@ export class SessionHost {
     inputAttention?: { at: string; version: number },
   ): void {
     if (event.type === "permission") {
-      toggle(record.openPermissionIds, event.callId, event.state === "asked");
       if (event.state === "asked") {
         if (!record.openPermissionAttention.has(event.callId)) {
           record.openPermissionAttention.set(event.callId, inputAttention ?? { at, version: record.latestAttention?.version ?? 0 });
@@ -2412,7 +2412,6 @@ export class SessionHost {
       } else record.openPermissionAttention.delete(event.callId);
     }
     if (event.type === "enquiry") {
-      toggle(record.openEnquiryIds, event.askId, event.state === "asked");
       if (event.state === "asked") {
         if (!record.openEnquiryAttention.has(event.askId)) {
           record.openEnquiryAttention.set(event.askId, inputAttention ?? { at, version: record.latestAttention?.version ?? 0 });
@@ -2434,9 +2433,7 @@ export class SessionHost {
      * outlives the turn that started it and reports into a later one (ADR 0016, ADR 0021).
      */
     if (event.type === "turn_ended") {
-      record.openEnquiryIds.clear();
-      record.openPermissionIds.clear();
-      record.openEnquiryAttention.clear();
+          record.openEnquiryAttention.clear();
       record.openPermissionAttention.clear();
     }
   }
