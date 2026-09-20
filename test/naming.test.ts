@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
-import { boundedCredentialJson } from "../src/daemon/credential-redaction.ts";
+import { credentialJsonSerializer } from "../src/daemon/credential-redaction.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 import { nameFrom, nameInput, summariseToName, workflowAgentNameInput, workflowOutcomeNameInput } from "../src/daemon/summariser.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
@@ -160,9 +160,14 @@ describe("workflow naming context", () => {
   });
 
   it("uses a replacement marker that does not retain a credential", () => {
-    const context = boundedCredentialJson("REDACTED", ["REDACTED"], 100);
+    const context = credentialJsonSerializer(["REDACTED"])("REDACTED", 100);
     assert.doesNotMatch(context, /REDACTED/);
     assert.match(context, /FILTERED|hidden/);
+  });
+
+  it("redacts credentials represented by JSON primitives", () => {
+    const serialize = credentialJsonSerializer(["12345", "true", "null"]);
+    assert.doesNotMatch(serialize({ number: 12345, boolean: true, empty: null }, 1_000), /12345|true|null/);
   });
 
   it("bounds serialization work for large fallback histories", () => {
@@ -173,9 +178,14 @@ describe("workflow naming context", () => {
   });
 
   it("bounds redaction work for a huge string", () => {
-    const context = boundedCredentialJson("private ".repeat(1_000_000), ["private"], 1_000);
+    const context = credentialJsonSerializer(["private"])("private ".repeat(1_000_000), 1_000);
     assert.ok(context.length <= 1_000);
     assert.match(context, /\[REDACTED\]/);
+  });
+
+  it("bounds work on an arbitrarily large safe key", () => {
+    const context = credentialJsonSerializer([])({ ["safe".repeat(1_000_000)]: "value" }, 100);
+    assert.ok(context.length <= 100);
   });
 
   it("charges omitted credential keys against the traversal budget", () => {
@@ -185,7 +195,7 @@ describe("workflow naming context", () => {
       ownKeys: () => keys,
       getOwnPropertyDescriptor: () => { inspected += 1; return { enumerable: true, configurable: true }; },
     });
-    boundedCredentialJson(input, [], 100);
+    credentialJsonSerializer([])(input, 100);
     assert.ok(inspected < keys.length / 10, `inspected ${inspected} omitted properties`);
   });
 

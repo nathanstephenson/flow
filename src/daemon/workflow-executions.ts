@@ -65,7 +65,6 @@ export class WorkflowExecutionService {
   private code: WorkflowExecutors = {};
   private runtime!: WorkflowRuntimeStatus;
   private readonly snapshots = new Map<string, WorkflowExecutors>();
-  private readonly namingSnapshots = new Map<string, Pick<WorkflowExecution, 'definition' | 'input'>>();
   private readonly views = new Map<string, PrivateView>();
   private readonly directPermissions = new Map<string, { sessionId: string; executionId: string; callId: string; resolve: (allowed: boolean) => void }>();
   private readonly launches = new Map<string, Launch>();
@@ -424,7 +423,6 @@ export class WorkflowExecutionService {
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
     this.snapshots.set(record.id, this.code);
-    if (record.naming === 'pending') this.namingSnapshots.set(record.id, { definition: record.definition, input: record.input });
     this.watch(record);
     return this.view(sessionId, record.id);
   }
@@ -462,7 +460,6 @@ export class WorkflowExecutionService {
     catch (error) { if (error instanceof WorkflowLoopConflict) throw new WorkflowConflict(); throw error; }
     finally { this.checkingCode = undefined; }
     this.snapshots.set(executionId, code);
-    if (record.naming === 'pending') this.namingSnapshots.set(executionId, { definition: record.definition, input: record.input });
     this.watch(record);
     return this.view(sessionId, executionId);
   }
@@ -751,14 +748,14 @@ export class WorkflowExecutionService {
         if (event.type === 'spend' && view.spend) this.host.workflowSpend(context.sessionId, context.executionId, view.spend);
       },
     });
-    const namingSnapshot = this.namingSnapshots.get(context.executionId);
-    this.requestNaming(context.sessionId, context.executionId, namingSnapshot && (() => workflowAgentNameInput({
-      workflowName: namingSnapshot.definition.name,
-      workflowInput: namingSnapshot.input,
+    const execution = this.scheduler.get(context.sessionId, context.executionId);
+    this.requestNaming(context.sessionId, context.executionId, () => workflowAgentNameInput({
+      workflowName: execution.definition.name,
+      workflowInput: execution.input,
       stepName: context.step.name,
       instructions: resolvedInstructions,
       input: context.input,
-    }, values)));
+    }, values));
     if (context.permission === 'ask' && typeof handle.answerPermission !== 'function') {
       await handle.cancel();
       throw new Error('Workflow Agent permissions are unavailable');
@@ -794,7 +791,6 @@ export class WorkflowExecutionService {
       this.publishResult(result, credentials);
     }).catch(() => {}).finally(() => {
       this.snapshots.delete(record.id);
-      this.namingSnapshots.delete(record.id);
       this.secretValues.delete(record.id);
     });
   }
@@ -822,16 +818,12 @@ export class WorkflowExecutionService {
   private requestNaming(sessionId: string, executionId: string, context: (() => string) | undefined): void {
     if (!this.host.workflowNamingAllowed(sessionId) || !context) return;
     try {
-      if (!this.scheduler.claimNaming(sessionId, executionId)) {
-        this.namingSnapshots.delete(executionId);
-        return;
-      }
+      if (!this.scheduler.claimNaming(sessionId, executionId)) return;
     }
-    catch { this.namingSnapshots.delete(executionId); return; }
+    catch { return; }
     let input: string;
     try { input = context(); }
-    catch { this.namingSnapshots.delete(executionId); return; }
-    this.namingSnapshots.delete(executionId);
+    catch { return; }
     void this.host.nameWorkflow(sessionId, input).catch(() => {});
   }
 
