@@ -28,12 +28,13 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
+import { ConfiguredEffortSelect } from "@/components/effort-select.tsx";
 
 const UNSET = "__unset__";
 
 export function ProvidersSettings() {
   const { config } = useHost();
-  const { catalogue, loading, refresh } = useModelCatalogue();
+  const { catalogue, loading, problem, refresh } = useModelCatalogue();
   return (
     <>
       <DefaultBackendSettings
@@ -55,6 +56,7 @@ export function ProvidersSettings() {
             }
             listing={catalogue?.find((entry) => entry.backend === backend)}
             loading={loading}
+            discoveryProblem={problem}
           />
         ))}
       </div>
@@ -67,9 +69,8 @@ export function ProvidersSettings() {
         >
           {loading ? "Checking models…" : "Check again"}
         </Button>
-        <span>
-          Refresh after connecting a Provider. Pi lists only models with
-          authentication configured.
+        <span role={problem ? "alert" : undefined}>
+          {problem ?? "Refresh after connecting a Provider. Pi lists only models with authentication configured."}
         </span>
       </div>
     </>
@@ -149,12 +150,14 @@ function BackendSettings({
   listing,
   loading,
   isDefault,
+  discoveryProblem,
 }: {
   backend: string;
   providers: Settings["providers"];
   listing: BackendModels | undefined;
   loading: boolean;
   isDefault: boolean;
+  discoveryProblem: string | undefined;
 }) {
   const { save, saving } = useSaveSettings();
   const legacy = providers?.summary;
@@ -183,6 +186,12 @@ function BackendSettings({
   ]);
   const selected = listing?.models.find((entry) => entry.id === model);
   const levels = selected?.effortLevels ?? [];
+  const effortProblem = loading
+    ? "Checking model Effort support…"
+    : discoveryProblem ?? listing?.problem
+      ?? (!model ? "Choose a model to confirm its Effort levels." : !selected ? "This model is unavailable; Effort support cannot be confirmed." : undefined);
+  const noEffortControl = !!selected && levels.length === 0;
+  const invalidEffort = !!effort && (!selected || !levels.includes(effort));
   const dirty =
     model !== currentModel ||
     effort !== currentEffort ||
@@ -231,45 +240,39 @@ function BackendSettings({
               loading={loading}
               value={model}
               placeholder="Use backend default"
-              onChange={(value) => {
-                setModel(value);
-                setEffort("");
-              }}
+              onChange={setModel}
             />
-            <label className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1">
               <span className="text-sm font-medium">Default Effort</span>
-              <Select
-                value={effort || UNSET}
-                onValueChange={(value) => {
-                  if (typeof value === "string")
-                    setEffort(value === UNSET ? "" : (value as EffortLevel));
-                }}
-              >
-                <SelectTrigger
-                  className="w-full"
-                  size="sm"
-                  aria-label={`${backend} Default Effort`}
-                >
-                  <SelectValue>{effort || "Use backend default"}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={UNSET}>Use backend default</SelectItem>
-                  {effort && !levels.includes(effort) ? (
-                    <SelectItem value={effort}>{effort} (saved)</SelectItem>
-                  ) : null}
-                  {levels.map((level) => (
-                    <SelectItem key={level} value={level}>
-                      {level}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-muted-foreground">
-                {levels.length
-                  ? "For the main model only. Explicit session effort takes precedence."
-                  : "Choose a model with effort support to see its levels."}
+              {noEffortControl ? (
+                invalidEffort ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm" aria-invalid="true">{effort} (saved — unsupported)</span>
+                    <Button size="sm" variant="outline" onClick={() => setEffort("")}>Use backend default</Button>
+                  </div>
+                ) : null
+              ) : (
+                <ConfiguredEffortSelect
+                  value={effort}
+                  levels={levels}
+                  ariaLabel={`${backend} Default Effort`}
+                  allowUnset
+                  disabled={!!effortProblem}
+                  onChange={setEffort}
+                />
+              )}
+              <span className={invalidEffort ? "text-xs text-destructive" : "text-xs text-muted-foreground"} role={invalidEffort || effortProblem ? "status" : undefined}>
+                {invalidEffort
+                  ? noEffortControl
+                    ? `Saved Effort “${effort}” is invalid because this model has no Effort control. Use the backend default.`
+                    : `Saved Effort “${effort}” is not confirmed for this model. Choose a supported level or use the backend default.`
+                  : effortProblem
+                    ? effortProblem
+                    : noEffortControl
+                      ? "This model has no Effort control."
+                      : "For the main model only. Explicit session effort takes precedence."}
               </span>
-            </label>
+            </div>
           </div>
           <div className="flex min-w-0 flex-col gap-3">
             <ModelField
@@ -298,6 +301,7 @@ function BackendSettings({
         <SaveRow
           dirty={dirty}
           saving={saving}
+          saveDisabled={invalidEffort}
           onReset={reset}
           onSave={() =>
             void save(

@@ -40,6 +40,14 @@ function stubSession(): Stub {
       input: ["text", "image"],
     },
     { id: "m2", provider: "anthropic", name: "M2", reasoning: false, input: ["text"] },
+    {
+      id: "m3",
+      provider: "google",
+      name: "M3 restricted",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, low: null, medium: null, xhigh: "x", max: "max" },
+      input: ["text"],
+    },
   ];
   let current = models[0];
   let thinkingLevel: string | undefined = "medium";
@@ -133,8 +141,8 @@ it("keeps output from a revived Backend Session after the lifecycle markers", as
 it("offers only authenticated models with provider-qualified identity", () => {
   const stub = stubSession();
   const session = new PiSession(stub.session, () => {});
-  assert.deepEqual(session.capabilities.models.map((model) => model.id), ["anthropic/m1", "anthropic/m2"]);
-  assert.deepEqual(session.capabilities.providers, ["anthropic"]);
+  assert.deepEqual(session.capabilities.models.map((model) => model.id), ["anthropic/m1", "anthropic/m2", "google/m3"]);
+  assert.deepEqual(session.capabilities.providers, ["anthropic", "google"]);
 });
 
 it("selects the requested Provider and refuses ambiguous legacy ids", async () => {
@@ -277,13 +285,20 @@ describe("pi adapter mapping", () => {
   });
 
   it("declares every provider pi can reach", () => {
-    assert.deepEqual(session.capabilities.providers, ["anthropic"]);
+    assert.deepEqual(session.capabilities.providers, ["anthropic", "google"]);
     assert.equal(session.capabilities.models[0]?.label, "M1");
   });
 
-  it("declares pi's thinking levels as Effort, per model", () => {
-    assert.deepEqual(session.capabilities.models[0]?.effortLevels, ["low", "medium", "high"]);
-    assert.equal(session.capabilities.models[1]?.effortLevels, undefined, "a model that cannot reason offers none");
+  it("declares the SDK's complete Effort levels for selected and non-selected models", () => {
+    assert.deepEqual(session.capabilities.models[0]?.effortLevels, ["off", "minimal", "low", "medium", "high"]);
+    assert.equal(session.capabilities.models[1]?.effortLevels, undefined, "a model that cannot reason offers no control");
+    assert.deepEqual(
+      session.capabilities.models[2]?.effortLevels,
+      ["off", "high", "xhigh", "max"],
+      "a non-selected provider/model uses its own SDK restrictions rather than the selected model's list",
+    );
+    assert.equal(stub.session.model?.id, "m1", "capability discovery does not switch the active model");
+    assert.equal(stub.thinkingLevel, "medium", "capability discovery does not change active Effort");
   });
 
   it("sets Effort as a thinking level and reports what stuck", async () => {
@@ -306,10 +321,10 @@ describe("pi adapter mapping", () => {
 
     assert.equal(stub.thinkingLevel, undefined, "pi dropped the level; the adapter must not force it back");
     assert.deepEqual(effortEvents(), [], "a model with no effort control has no level to report");
-    assert.equal(
-      events.find((event) => event.type === "capabilities_changed")?.type,
-      "capabilities_changed",
-      "the levels on offer changed, so clients must be told",
+    assert.deepEqual(
+      events.slice(0, 2).map((event) => event.type),
+      ["capabilities_changed", "model_changed"],
+      "clients receive the new capability list before classifying the changed model",
     );
   });
 

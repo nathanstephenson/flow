@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WorkflowSubagentHandle } from '../backend/types.ts';
-import type { BackendEvent, Spend } from '../protocol/events.ts';
+import type { BackendEvent, ModelInfo, Spend } from '../protocol/events.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
 import type { Json, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
@@ -107,9 +107,16 @@ export class WorkflowExecutionService {
         check: (step, session) => {
           if (step.kind !== 'agent') throw new Error('Invalid Agent step');
           const backend = host.workflowSession(session.sessionId).session;
-          const model = backend?.capabilities.models.find(model => model.id === step.model);
-          if (!backend?.startWorkflowSubagent || !model) throw new Error('Agent model is unavailable');
-          if (model.effortLevels?.length ? !model.effortLevels.includes(step.effort) : step.effort !== 'off') throw new Error('Unsupported Effort');
+          if (!backend?.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
+          const model = backend.capabilities.models.find(model => model.id === step.model);
+          if (!model) throw new Error(`Agent model “${step.model}” is unavailable. Refresh models and select an available model.`);
+          const levels = model.effortLevels ?? [];
+          if (levels.length > 0 && !levels.includes(step.effort)) {
+            throw new Error(`Effort “${step.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.join(', ')}.`);
+          }
+          if (levels.length === 0 && step.effort !== 'off') {
+            throw new Error(`${model.label ?? model.id} has no Effort control. Re-select the model to use internal off.`);
+          }
         },
         execute: async context => {
           try { return await this.agent(context); } catch (error) { throw safeError(error, this.secretValues.get(context.executionId) ?? []); }
@@ -408,6 +415,12 @@ export class WorkflowExecutionService {
       session.projectId = definition.projectId;
     }
     this.host.assertWorkflowSession(sessionId, session.session);
+    const workflowBackend = session.session;
+    if (!workflowBackend) throw new Error('Workflow Backend Session is unavailable');
+    // Confirmed no-control is the sole automatic persisted-effort correction. Do it before the
+    // scheduler validates or records the definition, so old drafts and direct launches both run
+    // with the same internal sentinel the editor applies.
+    const preparedDefinition = withConfirmedNoControlOff(definition, workflowBackend.capabilities.models);
     const pinned = new Map<string, import('../protocol/workflows.ts').McpToolSnapshot[]>();
     for (const step of definition.steps) {
       if (step.kind !== 'mcp' || (stepId && step.id !== stepId)) continue;
@@ -425,7 +438,7 @@ export class WorkflowExecutionService {
       if (existing) return this.view(sessionId, existing.id);
     }
     if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    const record = this.scheduler.start(definition, session, input, stepId, launchId, nameSession && !stepId);
+    const record = this.scheduler.start(preparedDefinition, session, input, stepId, launchId, nameSession && !stepId);
     this.secretValues.set(record.id, values);
     this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));
     this.privateView(sessionId, record.id).historyComplete = true;
@@ -923,6 +936,18 @@ function redactEvent<T extends BackendEvent | { type: 'spend'; spend: Spend }>(e
     return item;
   };
   return visit(event) as T;
+}
+
+function withConfirmedNoControlOff(definition: WorkflowDefinition, models: readonly ModelInfo[]): WorkflowDefinition {
+  let changed = false;
+  const steps = definition.steps.map(step => {
+    if (step.kind !== 'agent') return step;
+    const model = models.find(candidate => candidate.id === step.model);
+    if (!model || (model.effortLevels?.length ?? 0) > 0 || step.effort === 'off') return step;
+    changed = true;
+    return { ...step, effort: 'off' as const };
+  });
+  return changed ? { ...definition, steps } : definition;
 }
 
 function publicDefinition(definition: WorkflowDefinition) {

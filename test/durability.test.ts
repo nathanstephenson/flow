@@ -50,6 +50,23 @@ describe("durability and revive", () => {
     );
   });
 
+  it("keeps an unconfirmed creation Default Effort blocked across restart and Revive", async () => {
+    const firstBackend = new FakeBackend();
+    const firstHost = new SessionHost({ store, defaultModel: () => "fake-1", defaultEffort: () => "max" });
+    firstHost.registerBackend(firstBackend);
+    await firstHost.load();
+    const id = await firstHost.create({ scope: "/tmp/scope", backend: "fake" });
+    await firstHost.shutdown();
+
+    const second = await freshHost();
+    await second.host.revive(id);
+    await assert.rejects(second.host.send(id, "still blocked", "now"), /Saved Default Effort “max”/);
+    assert.deepEqual(second.backend.latest.prompts, []);
+    await second.host.setEffort(id, "low");
+    await second.host.send(id, "corrected", "now");
+    assert.deepEqual(second.backend.latest.prompts, ["corrected"]);
+  });
+
   it("loads previously running sessions as Dormant, spending nothing", async () => {
     const first = await freshHost();
     const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });

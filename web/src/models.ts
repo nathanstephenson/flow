@@ -20,23 +20,24 @@ export function useModelCatalogue(): {
   catalogue: BackendModels[] | undefined;
   loading: boolean;
   refresh: () => Promise<void>;
+  problem: string | undefined;
 } {
   const [catalogue, setCatalogue] = useState<BackendModels[] | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [problem, setProblem] = useState<string | undefined>(undefined);
 
   const load = async (refresh: boolean): Promise<void> => {
     setLoading(true);
+    setProblem(undefined);
     try {
       const response = await authenticatedFetch(`/api/models${refresh ? "?refresh=1" : ""}`);
       if (!response.ok) {
-        setCatalogue([]);
+        setProblem(`Model capability discovery failed (${response.status}).`);
         return;
       }
       setCatalogue((await response.json()) as BackendModels[]);
     } catch {
-      // Every field falls back to a text input, which is a usable page. A toast here would be one
-      // more thing to dismiss on the way to typing the id you already knew.
-      setCatalogue([]);
+      setProblem("Could not reach the Session Host to confirm model Effort support.");
     } finally {
       setLoading(false);
     }
@@ -48,5 +49,5 @@ export function useModelCatalogue(): {
     // per keystroke for a list that cannot have moved. "Check again" is the way to re-ask.
   }, []);
 
-  return { catalogue, loading, refresh: () => load(true) };
+  return { catalogue, loading, problem, refresh: () => load(true) };
 }

@@ -15,6 +15,7 @@ import {
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
 import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
+import { piEffortLevels } from "./effort-capabilities.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -164,8 +165,10 @@ export class PiSession implements BackendSession {
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
     // on the way through, so both the list and the level in force are re-read here.
     this.capabilities = capabilitiesOf(this.session, this.enquiries !== undefined, this.capabilities.subagents);
-    this.emit({ type: "model_changed", model: describeModel(model) });
+    // Publish the new list first. A client that receives the model first would briefly classify its
+    // Effort support as unknown (or, worse, reuse the old model's list).
     this.emit({ type: "capabilities_changed", capabilities: this.capabilities });
+    this.emit({ type: "model_changed", model: describeModel(model) });
     this.reapplyEffort();
   }
 
@@ -533,10 +536,21 @@ export class PiBackend implements AgentBackend {
       const listed = piSession.capabilities.models.find((model) => model.id === described.id);
       options.emit({ type: "model_changed", model: listed ?? described });
     }
-    // Announced after the model, because which model is in force is what decides whether an effort
-    // level means anything at all.
-    if (options.effort) await piSession.setEffort(options.effort);
-    else piSession.noteStartingEffort();
+    // Announced after the model, because which model is in force decides whether an Effort level
+    // means anything. A persisted/default value is configuration, not a live model switch: reject
+    // an invalid one for explicit correction instead of silently clamping it. Live setEffort keeps
+    // the normal nearest-level clamp below.
+    if (options.effort) {
+      const levels = session.model ? piEffortLevels(session.model) : [];
+      const accepted = levels.length === 0 ? options.effort === "off" : levels.includes(options.effort);
+      if (!accepted) {
+        await piSession.dispose();
+        throw new Error(levels.length > 0
+          ? `Unsupported saved Effort “${options.effort}” for ${describeModel(session.model!).id}. Choose one of ${levels.join(", ")}.`
+          : `Unsupported saved Effort “${options.effort}” for a model with no Effort control. Clear it or use off.`);
+      }
+      await piSession.setEffort(options.effort);
+    } else piSession.noteStartingEffort();
     return piSession;
   }
 }
@@ -600,16 +614,9 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
 }
 
 function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: boolean): Capabilities {
-  const current = session.model ? describeModel(session.model).id : undefined;
-  // The SDK populates this auth-filtered snapshot before createAgentSession resolves.
-  const models = session.modelRuntime.getAvailableSnapshot().map((model) => {
-    const described = describeModel(model);
-    // pi will only answer for the model it has selected, and that answer is the authoritative one.
-    // Every other entry is inferred from the registry and firms up if you switch to it.
-    if (described.id !== current) return described;
-    const available = availableEffort(session);
-    return available.length > 0 ? { ...described, effortLevels: available } : omitEffort(described);
-  });
+  // The SDK populates this auth-filtered snapshot before createAgentSession resolves. Every model is
+  // described directly: effort discovery is observational and must never switch the active model.
+  const models = session.modelRuntime.getAvailableSnapshot().map(describeModel);
   const providers = [...new Set(models.map((model) => model.provider).filter(isString))];
   return {
     providers: providers.length > 0 ? providers : ["pi"],
@@ -623,8 +630,8 @@ function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: bo
   };
 }
 
-function describeModel(model: PiModel): ModelInfo {
-  const effortLevels = inferredEffort(model);
+export function describeModel(model: PiModel): ModelInfo {
+  const effortLevels = piEffortLevels(model);
   return {
     id: model.provider ? `${model.provider}/${model.id}` : model.id,
     ...(model.contextWindow !== undefined && Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
@@ -638,27 +645,9 @@ function describeModel(model: PiModel): ModelInfo {
   };
 }
 
-/** The levels pi will accept for the model it currently has selected. */
+/** The same per-model SDK answer used for non-selected catalogue entries. */
 function availableEffort(session: AgentSession): EffortLevel[] {
-  return session.supportsThinking() ? (session.getAvailableThinkingLevels() as EffortLevel[]) : [];
-}
-
-/**
- * What a model that is not currently selected probably offers. A model that cannot reason offers
- * nothing; otherwise its thinkingLevelMap names the levels it was configured with.
- */
-function inferredEffort(model: PiModel): EffortLevel[] {
-  if (model.reasoning === false) return [];
-  const map = model.thinkingLevelMap as Partial<Record<EffortLevel, unknown>> | undefined;
-  if (!map) return model.reasoning ? PI_EFFORT_LEVELS : [];
-  return PI_EFFORT_LEVELS.filter((level) => map[level] !== undefined && map[level] !== null);
-}
-
-const PI_EFFORT_LEVELS: EffortLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
-function omitEffort(model: ModelInfo): ModelInfo {
-  const { effortLevels: _dropped, ...rest } = model;
-  return rest;
+  return session.model ? piEffortLevels(session.model) : [];
 }
 
 function joinBlocks(content: unknown, kind: "text" | "thinking"): string {

@@ -1,6 +1,6 @@
 import type { SessionSummary } from "../protocol/commands.ts";
 import { contextUsageLabel } from "../client/context-usage.ts";
-import { effortChoices, modelChoices, type ModelChoice } from "../client/model-choices.ts";
+import { effortCapability, effortChoices, modelChoices, type ModelChoice } from "../client/model-choices.ts";
 import {
   answerLines,
   progressLabel,
@@ -423,8 +423,12 @@ function overlay(ui: UiState, width: number, height: number): string[] {
       const inForce = level === ui.view.effort ? "  (in force)" : "";
       return clip(`${index === cursor ? ">" : " "} ${level}${inForce}`, width);
     });
-    const title =
-      levels.length > 0 ? "effort  (enter to set, esc to close)" : "this model has no effort control";
+    const capability = effortCapability(ui.view.capabilities, ui.view.model);
+    const title = levels.length > 0
+      ? "effort  (enter to set, esc to close)"
+      : capability.status === "unknown"
+        ? capability.reason
+        : "this model has no effort control";
     return padTo([title, ...rows], height, width);
   }
 

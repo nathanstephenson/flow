@@ -240,6 +240,13 @@ describe("TUI rendering", () => {
       { columns: 60, rows: 12 },
     ).join("\n");
     assert.match(none, /no effort control/);
+
+    const unknown = renderFrame(
+      baseUi({ view: { ...initialState(), model: { id: "not-confirmed" } }, overlay: { kind: "effort", index: 0 } }),
+      { columns: 60, rows: 12 },
+    ).join("\n");
+    assert.match(unknown, /Effort support is still loading/);
+    assert.doesNotMatch(unknown, /no effort control/);
   });
 
   it("names the branch beside the identity, not beside the turn", () => {

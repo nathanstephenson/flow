@@ -10,6 +10,11 @@ import type { ViewState } from "./reduce.ts";
 
 export type ModelChoice = { provider: string; model: ModelInfo };
 
+export type EffortCapability =
+  | { status: "supported"; levels: EffortLevel[] }
+  | { status: "none"; levels: [] }
+  | { status: "unknown"; levels: []; reason: string };
+
 /** Models grouped by provider. Claude offers one group, pi offers dozens; the list is the same. */
 export function modelChoices(capabilities: Capabilities | undefined): ModelChoice[] {
   return modelChoicesOf(capabilities?.models);
@@ -36,10 +41,29 @@ export function modelChoicesOf(models: readonly ModelInfo[] | undefined): ModelC
 }
 
 /**
- * The Effort levels on offer, which belong to the model in force rather than to the session — a
- * model without an effort control returns none and the picker has nothing to show.
+ * Classify effort support without collapsing an absent/stale capability list into confirmed
+ * no-control. Only a model found in a confirmed list can produce `none`.
  */
+export function effortCapability(
+  capabilities: Capabilities | undefined,
+  model: ModelInfo | undefined,
+): EffortCapability {
+  if (!capabilities) return { status: "unknown", levels: [], reason: "Effort support is still loading." };
+  if (!model) return { status: "unknown", levels: [], reason: "Select a model to confirm Effort support." };
+  const current = capabilities.models.find((candidate) => candidate.id === model.id);
+  if (!current) return { status: "unknown", levels: [], reason: `Effort support for ${model.label ?? model.id} is unavailable.` };
+  const levels = current.effortLevels ?? [];
+  return levels.length > 0 ? { status: "supported", levels: [...levels] } : { status: "none", levels: [] };
+}
+
+/** The confirmed choices shared by the web and terminal pickers. */
 export function effortChoices(view: ViewState): EffortLevel[] {
-  const current = view.capabilities?.models.find((model) => model.id === view.model?.id);
-  return (current ?? view.model)?.effortLevels ?? [];
+  return effortCapability(view.capabilities, view.model).levels;
+}
+
+/** First-model workflow default; never manufactures an unverified `medium`. */
+export function initialWorkflowEffort(model: ModelInfo): EffortLevel {
+  const levels = model.effortLevels ?? [];
+  if (levels.length === 0) return "off";
+  return levels.includes("medium") ? "medium" : levels[0]!;
 }

@@ -1,7 +1,8 @@
 import { ChevronLeft } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useHost } from "../host.tsx";
 import { resolveDefaultBackend } from "../../../src/protocol/settings.ts";
+import { effortForWorkflowModelSelection, normalizeNoControlEffort } from "../../../src/client/workflow-effort.ts";
 import { cleanLoopSettings } from "../presentation/workflow-loops.ts";
 import { workflowIssue, nextStepName } from "../presentation/workflows.ts";
 import type {
@@ -23,6 +24,7 @@ import { WorkflowInstructions } from "./workflow-instructions.tsx";
 import { StepTest } from "./workflow-test.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { ModelPicker } from "./model-picker.tsx";
+import { ConfiguredEffortSelect } from "./effort-select.tsx";
 import { Button } from "./ui/button.tsx";
 import { useIsMobile } from "../lib/use-mobile.ts";
 import { Input } from "./ui/input.tsx";
@@ -35,12 +37,13 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import "./workflows.css";
+
 export default function WorkflowsSettings() {
   const list = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(
     "/api/workflows",
   );
   const secrets = useWorkflowResource<{ names: string[] }>("/api/secrets");
-  const { catalogue } = useModelCatalogue();
+  const { catalogue, loading: catalogueLoading, problem: catalogueProblem, refresh: refreshCatalogue } = useModelCatalogue();
   const { config } = useHost();
   const mutation = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -76,23 +79,29 @@ export default function WorkflowsSettings() {
   } catch (e) {
     invalid = workflowIssue(e);
   }
+  useEffect(() => {
+    if (!catalogue) return;
+    setDefinition((current) => normalizeNoControlEffort(current, catalogue));
+  }, [catalogue, definition?.id]);
   const step = definition?.steps.find((s) => s.id === selected);
   const listing = catalogue?.find((b) => b.backend === definition?.backend);
   const selectedModel =
     step?.kind === "agent"
       ? listing?.models.find((m) => m.id === step.model)
       : undefined;
-  const modelIssue =
-    step?.kind === "agent"
-      ? (listing?.problem ??
-        (!listing?.models.length
-          ? "Model catalogue unavailable. You can still edit and save definitions."
-          : !selectedModel
-            ? "Select an available model."
-            : !selectedModel.effortLevels?.includes(step.effort)
-              ? "The selected Effort is not listed for this model. The Session Host must confirm support before execution."
-              : ""))
-      : "";
+  const confirmedLevels = selectedModel?.effortLevels ?? [];
+  const effortDiscoveryProblem = catalogueLoading
+    ? "Checking model Effort support…"
+    : catalogueProblem ?? listing?.problem
+      ?? (!listing ? "Model capability discovery is unavailable." : !selectedModel ? "Select an available model to confirm Effort support." : undefined);
+  const noEffortControl = !!selectedModel && confirmedLevels.length === 0;
+  const invalidStepEffort = !!selectedModel && confirmedLevels.length > 0 && !confirmedLevels.includes(step?.kind === "agent" ? step.effort : "off");
+  const modelIssue = step?.kind !== "agent"
+    ? ""
+    : effortDiscoveryProblem
+      ?? (invalidStepEffort
+        ? `Effort “${step.effort}” is unsupported for ${selectedModel?.label ?? selectedModel?.id}. Choose a confirmed level before execution.`
+        : "");
   const update = (s: WorkflowStep) => {
     if (definition)
       setDefinition({
@@ -126,7 +135,9 @@ export default function WorkflowsSettings() {
             kind,
             instructions: "",
             model: "",
-            effort: "medium",
+            // `off` is an internal placeholder until the first model selection supplies a
+            // confirmed default. Never present an unverified medium as valid.
+            effort: "off",
             outputSchema,
           }
         : kind === "shell"
@@ -146,7 +157,7 @@ export default function WorkflowsSettings() {
           <Select
             value={definition?.id ?? ""}
             onValueChange={(value) => {
-              setDefinition(list.data?.workflows.find((d) => d.id === value));
+              setDefinition(normalizeNoControlEffort(list.data?.workflows.find((d) => d.id === value), catalogue));
               select("");
               setWorkspaceView("graph");
             }}
@@ -214,7 +225,7 @@ export default function WorkflowsSettings() {
                   value={definition.backend}
                   onValueChange={(value) => {
                     if (value !== null)
-                      setDefinition({ ...definition, backend: value });
+                      setDefinition(normalizeNoControlEffort({ ...definition, backend: value }, catalogue));
                   }}
                 >
                   <SelectTrigger
@@ -457,12 +468,19 @@ export default function WorkflowsSettings() {
                   {step.kind === "agent" && (
                     <>
                       {modelIssue && (
-                        <p
-                          className="text-xs text-muted-foreground"
-                          role="status"
-                        >
-                          {modelIssue}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p
+                            className={invalidStepEffort ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
+                            role={invalidStepEffort ? "alert" : "status"}
+                          >
+                            {modelIssue}
+                          </p>
+                          {(catalogueProblem || listing?.problem) ? (
+                            <Button size="sm" variant="ghost" disabled={catalogueLoading} onClick={() => void refreshCatalogue()}>
+                              Check again
+                            </Button>
+                          ) : null}
+                        </div>
                       )}
                       <div className="flex flex-col gap-1">
                         <span className="text-sm font-medium">Model</span>
@@ -484,38 +502,32 @@ export default function WorkflowsSettings() {
                               label: step.model || "Select model",
                             }
                           }
-                          onSelect={(model) => update({ ...step, model })}
+                          onSelect={(modelId) => {
+                            const nextModel = listing?.models.find((candidate) => candidate.id === modelId);
+                            if (!nextModel) return;
+                            const effort = effortForWorkflowModelSelection(step.model, step.effort, nextModel);
+                            update({ ...step, model: modelId, effort });
+                          }}
                         />
                       </div>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-sm font-medium">Effort</span>
-                        <Select
-                          value={step.effort}
-                          onValueChange={(value) => {
-                            if (value !== null)
-                              update({
-                                ...step,
-                                effort: value as typeof step.effort,
-                              });
-                          }}
-                        >
-                          <SelectTrigger className="w-full" aria-label="Effort">
-                            <SelectValue>{step.effort}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={step.effort}>
-                              {step.effort}
-                            </SelectItem>
-                            {selectedModel?.effortLevels
-                              ?.filter((v) => v !== step.effort)
-                              .map((v) => (
-                                <SelectItem key={v} value={v}>
-                                  {v}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      </label>
+                      {noEffortControl ? (
+                        <p className="text-xs text-muted-foreground" role="status">
+                          This model has no Effort control. The workflow uses internal off.
+                        </p>
+                      ) : (
+                        <label className="flex flex-col gap-1">
+                          <span className="text-sm font-medium">Effort</span>
+                          <ConfiguredEffortSelect
+                            value={step.effort}
+                            levels={confirmedLevels}
+                            ariaLabel="Effort"
+                            disabled={!!effortDiscoveryProblem}
+                            onChange={(effort) => {
+                              if (effort) update({ ...step, effort });
+                            }}
+                          />
+                        </label>
+                      )}
                       <WorkflowInstructions
                         value={step.instructions}
                         project={definition.projectId}

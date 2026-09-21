@@ -390,13 +390,40 @@ it('returns graph and capability reasons without submitted Zod values', async ()
   try {
     for (const [graph, message] of [
       [{ ...definition, edges: [{ id: 'bad', from: 'missing', to: 'agent', outcome: 'success' }] }, 'Unknown edge endpoint'],
-      [{ ...definition, steps: [{ ...definition.steps[0]!, model: 'missing' }] }, 'Agent model is unavailable'],
+      [{ ...definition, steps: [{ ...definition.steps[0]!, model: 'missing' }] }, 'Agent model “missing” is unavailable. Refresh models and select an available model.'],
       [{ ...definition, permission: 'submitted-credential' }, 'Invalid workflow request'],
     ] as const) {
       const response = await f.request('/api/workflows/test', 'POST', { definition: graph, sessionId: f.id, stepId: 'agent', input: {} });
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), { error: message });
     }
+  } finally { await f.close(); }
+});
+
+it('persists invalid Effort drafts but preflight-blocks before agent work, and accepts no-control off', async () => {
+  const f = await fixture();
+  try {
+    const agent = definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>;
+    const invalid: WorkflowDefinition = { ...definition, id: 'invalid-effort', steps: [{ ...agent, effort: 'max' }] };
+    f.workflows.saveDefinition(invalid);
+    assert.equal((f.workflows.getDefinition(invalid.id).steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>).effort, 'max');
+    await assert.rejects(
+      f.service.start({ sessionId: f.id, definition: invalid, input: {} }),
+      /Effort “max” is unsupported for Fake 1\. Choose one of low, medium, high\./,
+    );
+    assert.equal(f.backend.latest.workflowSubagents.length, 0, 'invalid preflight launched no agent work');
+
+    const wrongNoControl: WorkflowDefinition = { ...definition, id: 'plain-wrong', steps: [{ ...agent, model: 'fake-2', effort: 'high' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: wrongNoControl, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    assert.equal(
+      (started.execution.definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>).effort,
+      'off',
+      'confirmed no-control is the explicit automatic correction exception',
+    );
+    assert.equal(f.backend.latest.workflowSubagents[0]!.options.effort, 'off');
+    f.backend.latest.workflowSubagents[0]!.complete('done');
+    await f.service.scheduler.wait(f.id, started.execution.id);
   } finally { await f.close(); }
 });
 

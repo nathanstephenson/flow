@@ -210,6 +210,8 @@ type SessionRecord = {
   resumeToken: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
+  /** Creation-only configuration must be exact; live selections keep adapter clamping semantics. */
+  initialEffortUnconfirmed: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -753,6 +755,7 @@ export class SessionHost {
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
         effort: meta.effort,
+        initialEffortUnconfirmed: meta.initialEffortUnconfirmed ?? false,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
       };
@@ -792,6 +795,8 @@ export class SessionHost {
     const scope = worktree?.path ?? options.scope;
     const id = randomUUID();
     const now = new Date().toISOString();
+    const modelId = options.modelId ?? this.defaultModel?.(backend.name);
+    const effort = options.effort ?? this.defaultEffort?.(backend.name);
 
     const record: SessionRecord = {
       id,
@@ -838,8 +843,9 @@ export class SessionHost {
        * and persisting to `SessionMeta.modelId` is what makes the choice stick for this session's
        * life — the same shape as the Standing Authorisations snapshot in BackendCreateOptions.
        */
-      modelId: options.modelId ?? this.defaultModel?.(backend.name),
-      effort: options.effort ?? this.defaultEffort?.(backend.name),
+      modelId,
+      effort,
+      initialEffortUnconfirmed: effort !== undefined,
       createdAt: now,
       updatedAt: now,
     };
@@ -1083,6 +1089,7 @@ export class SessionHost {
     const record = this.record(sessionId);
     await record.session?.setModel(modelId);
     record.modelId = modelId;
+    record.initialEffortUnconfirmed = false;
     this.touch(record);
   }
 
@@ -1091,6 +1098,7 @@ export class SessionHost {
     await record.session?.setEffort(effort);
     // Remembered as asked for, not as clamped: a Revive onto a model that can serve it should.
     record.effort = effort;
+    record.initialEffortUnconfirmed = false;
     this.touch(record);
   }
 
@@ -2282,6 +2290,23 @@ export class SessionHost {
   private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
+    if (record.session.capabilities.models.length === 0) {
+      throw new CommandRefused("Model capabilities are unavailable. Retry after the Backend Session has discovered its models.");
+    }
+    if (record.initialEffortUnconfirmed && record.effort) {
+      const announced = record.log.since(0).findLast(({ event }) => event.type === "model_changed")?.event;
+      const modelId = announced?.type === "model_changed" ? announced.model.id : record.modelId;
+      const model = record.session.capabilities.models.find(candidate => candidate.id === modelId);
+      if (!model) throw new CommandRefused("The saved Default Effort cannot be checked because the model in force is unknown. Select a model and Effort explicitly.");
+      const levels = model.effortLevels ?? [];
+      const accepted = levels.length > 0 ? levels.includes(record.effort) : record.effort === "off";
+      if (!accepted) {
+        throw new CommandRefused(levels.length > 0
+          ? `Saved Default Effort “${record.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.join(", ")} before sending.`
+          : `Saved Default Effort “${record.effort}” is invalid because ${model.label ?? model.id} has no Effort control. Clear it before sending.`);
+      }
+      record.initialEffortUnconfirmed = false;
+    }
     const { text, attachments } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
@@ -2571,6 +2596,7 @@ export class SessionHost {
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      ...(record.initialEffortUnconfirmed ? { initialEffortUnconfirmed: true } : {}),
       ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
     };
     this.store.writeMeta(meta);

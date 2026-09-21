@@ -313,6 +313,11 @@ function AttachedPane({
         chrome={chrome}
         actions={actions}
         drafts={drafts}
+        unavailable={!chrome.capabilities
+          ? "Loading model capabilities before agent work can start…"
+          : chrome.capabilities.models.length === 0
+            ? "No confirmed model capabilities are available. Revive or restart the Backend Session to retry."
+            : undefined}
         /*
          * What an open Permission Prompt is actually asking about, read here rather than in the
          * Composer.

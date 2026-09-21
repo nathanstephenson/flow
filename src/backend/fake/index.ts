@@ -237,7 +237,10 @@ export class FakeSession implements BackendSession {
     this.wantedEffort = effort;
     const levels = FAKE_CAPABILITIES.models.find((model) => model.id === this.modelId)?.effortLevels;
     const level = clampEffort(effort, levels);
-    if (!level) return;
+    if (!level) {
+      this.effort = undefined;
+      return;
+    }
     this.effort = level;
     this.emit({ type: "effort_changed", effort: level });
   }
@@ -523,7 +526,7 @@ export class FakeSubagent {
  * is the case clients must hide a control for. A test that wants the other side asks for it.
  */
 export type FakeCapabilityOverrides = Partial<
-  Pick<Capabilities, "compaction" | "fork" | "enquiries" | "permissions">
+  Pick<Capabilities, "models" | "compaction" | "fork" | "enquiries" | "permissions">
 >;
 
 export class FakeBackend implements AgentBackend {
