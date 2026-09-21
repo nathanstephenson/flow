@@ -135,6 +135,8 @@ type SessionRecord = {
   backendEpoch: number;
   /** Durable, machine-wide inbox state. Activity and Lifecycle never read these fields. */
   latestAttention: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
+  /** Input requests may supersede the displayed group, but never erase an unread outcome. */
+  latestOutcome: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
   seenAttentionKeys: Set<string>;
   readAttentionVersion: number;
   outputPreview: string | undefined;
@@ -607,6 +609,7 @@ export class SessionHost {
       observedSeq: record.log.lastSeq,
       key,
     };
+    if (reason !== "Input needed") record.latestOutcome = record.latestAttention;
     return { at, version };
   }
 
@@ -640,7 +643,8 @@ export class SessionHost {
         // prompt snapshots while stopping; the Lifecycle guard also keeps a stale index from
         // lifting an Ended row back out of Filed away.
         const input = record.lifecycle === "live" ? newestAt(parentInput, workflowInput) : undefined;
-        const unread = record.latestAttention !== undefined && record.latestAttention.version > record.readAttentionVersion;
+        const outcome = record.latestOutcome;
+        const unread = outcome !== undefined && outcome.version > record.readAttentionVersion;
         const attention: SessionAttention | undefined = input
           ? {
               group: "needs-input",
@@ -649,13 +653,13 @@ export class SessionHost {
               version: record.latestAttention?.version ?? input.version,
               observedSeq: record.latestAttention?.observedSeq ?? record.log.lastSeq,
             }
-          : unread && record.latestAttention && record.latestAttention.reason !== "Input needed"
+          : unread && outcome
             ? {
                 group: "unread",
-                reason: record.latestAttention.reason,
-                at: record.latestAttention.at,
-                version: record.latestAttention.version,
-                observedSeq: record.latestAttention.observedSeq,
+                reason: outcome.reason,
+                at: outcome.at,
+                version: outcome.version,
+                observedSeq: outcome.observedSeq,
               }
             : undefined;
         return {
@@ -721,6 +725,7 @@ export class SessionHost {
         // No metadata means a legacy record starts read. Open requests are still indexed below and
         // therefore remain Needs input for as long as they are genuinely answerable.
         latestAttention: meta.latestAttention,
+        latestOutcome: meta.latestOutcome ?? (meta.latestAttention?.reason !== "Input needed" ? meta.latestAttention : undefined),
         seenAttentionKeys: new Set((meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])).slice(-256)),
         readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
         outputPreview: meta.outputPreview ?? latestParentOutputPreview(entries),
@@ -805,6 +810,7 @@ export class SessionHost {
       settledAt: undefined,
       backendEpoch: 1,
       latestAttention: undefined,
+      latestOutcome: undefined,
       seenAttentionKeys: new Set(),
       readAttentionVersion: 0,
       outputPreview: undefined,
@@ -2553,6 +2559,7 @@ export class SessionHost {
       restingAt: record.restingAt,
       ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
       ...(record.latestAttention === undefined ? {} : { latestAttention: record.latestAttention }),
+      ...(record.latestOutcome === undefined ? {} : { latestOutcome: record.latestOutcome }),
       seenAttentionKeys: [...record.seenAttentionKeys],
       readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],

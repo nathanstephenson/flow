@@ -375,7 +375,10 @@ export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
     status: deriveStatus({
       lifecycle: next.lifecycle,
       turnInFlight: next.turnInFlight,
-      awaiting: next.asking !== undefined || next.authorising !== undefined,
+      // Independent producers can still need input after the parent turn ends, but their
+      // requests do not occupy that turn.
+      awaiting: (next.asking !== undefined && next.asking.producer === undefined) ||
+        (next.authorising !== undefined && next.authorising.producer === undefined),
     }),
     lastSeq: entry.seq,
   };

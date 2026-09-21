@@ -233,6 +233,13 @@ export async function runTui(options: TuiOptions): Promise<void> {
     // mid-walk would interleave with the previous one and keys would be applied out of order.
     let pending: Promise<void> = Promise.resolve();
     const processKeys = (received: string[]): void => {
+      // Focus is terminal state, not a queued command. Record the whole received batch before
+      // awaiting any key: a slow refresh must see a subsequent focus-out immediately, and an
+      // older queued focus-in must never restore focus after it.
+      for (const key of received) {
+        if (key === KEY.focusOut) focused = false;
+        else if (key === KEY.focusIn) focused = true;
+      }
       pending = pending.then(async () => {
         try {
           for (const key of received) {
@@ -254,12 +261,8 @@ export async function runTui(options: TuiOptions): Promise<void> {
   /** Returns true when the app should exit. */
   async function handleKey(key: string): Promise<boolean> {
     if (key === KEY.ctrlC) return true;
-    if (key === KEY.focusOut) {
-      focused = false;
-      return false;
-    }
+    if (key === KEY.focusOut) return false;
     if (key === KEY.focusIn) {
-      focused = true;
       // Pull the shared boundary immediately. The stream may already have rendered output while the
       // terminal was unfocused, and waiting for the next interval would leave it falsely unread.
       await refreshSessions();

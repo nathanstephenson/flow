@@ -77,6 +77,8 @@ export type SessionMeta = {
    * existed start read rather than flooding the inbox after an upgrade.
    */
   latestAttention?: Omit<SessionAttention, "group"> & { key: string };
+  /** Newest qualifying outcome, retained independently of later input requests. */
+  latestOutcome?: Omit<SessionAttention, "group"> & { key: string };
   /** Recent qualifying keys retained across restart for bounded replay deduplication. */
   seenAttentionKeys?: string[];
   /** Highest attention version a client actually observed. Machine-wide, not per front-end. */

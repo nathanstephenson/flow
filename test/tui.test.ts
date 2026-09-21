@@ -442,6 +442,7 @@ describe("TUI branches over the wire", () => {
 });
 
 describe("TUI over the wire", () => {
+  let connection: ReturnType<typeof connect>;
   let running: RunningServer;
   let backend: FakeBackend;
   let host: SessionHost;
@@ -467,8 +468,9 @@ describe("TUI over the wire", () => {
       },
     });
 
+    connection = connect({ url: running.url, token: "test-token" });
     finished = runTui({
-      connection: connect({ url: running.url, token: "test-token" }),
+      connection,
       scope: "/tmp/scope",
       backend: "fake",
       stdin: stdin as unknown as NodeJS.ReadStream,
@@ -516,6 +518,48 @@ describe("TUI over the wire", () => {
     stdin.write(KEY.focusIn);
     await waitFor(() => host.list()[0]?.attention === undefined);
   });
+
+  for (const queuedFocusIn of [false, true]) {
+    it(`does not acknowledge after focus-out during a slow refresh${queuedFocusIn ? " with an older focus-in queued" : ""}`, async () => {
+      stdin.write("hi");
+      stdin.write(KEY.enter);
+      await waitFor(() => backend.latest.prompts.length === 1);
+      stdin.write(KEY.focusOut);
+      backend.latest.completeTurn();
+      await waitFor(() => host.list()[0]?.attention?.group === "unread");
+      await waitFor(() => output.at(-1)?.includes("idle") === true);
+
+      const command = connection.command.bind(connection);
+      let acknowledgements = 0;
+      connection.command = (request) => {
+        if (request.type === "acknowledge") acknowledgements++;
+        return command(request);
+      };
+      const listSessions = connection.listSessions.bind(connection);
+      let release!: () => void;
+      let refreshing = false;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      connection.listSessions = async () => {
+        refreshing = true;
+        await gate;
+        return listSessions();
+      };
+      stdin.write(KEY.focusIn);
+      await waitFor(() => refreshing);
+      // An older queued focus-in must not overwrite a newer focus-out, even in one chunk.
+      stdin.write((queuedFocusIn ? KEY.focusIn : "") + KEY.focusOut);
+      release();
+      connection.listSessions = listSessions;
+      stdin.write(KEY.ctrlP);
+      await waitFor(() => output.at(-1)?.includes("models  (") === true);
+      assert.equal(acknowledgements, 0);
+      assert.equal(host.list()[0]?.attention?.group, "unread");
+
+      stdin.write(KEY.escape);
+      stdin.write(KEY.focusIn);
+      await waitFor(() => host.list()[0]?.attention === undefined);
+    });
+  }
 
   it("queues a message typed while the agent is working", async () => {
     stdin.write("first");

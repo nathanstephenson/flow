@@ -235,7 +235,9 @@ parent/Workflow outcome or standalone independent-work failure has not been obse
 standalone completions, streaming snapshots and ordinary tool chatter do not qualify. Opening a
 visible transcript at its bottom acknowledges only the attention version actually observed; the
 request carries that version so a delayed client cannot consume a newer event. Reading never resolves
-an input request. Settle and End acknowledge without changing Resting or their Lifecycle effects.
+an input request. A later input request temporarily takes precedence over Unread; resolving or
+canceling it does not erase an unacknowledged outcome. Settle and End acknowledge without changing
+Resting or their Lifecycle effects.
 _Avoid_: activity, occupancy, per-client read state, notification
 
 **Band**:

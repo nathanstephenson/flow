@@ -73,6 +73,52 @@ describe("attention inbox", () => {
     assert.equal(host.list()[0]?.attention, undefined);
   });
 
+  it("restores an unread outcome after a later request resolves without acknowledgement", async () => {
+    const { backend, host, id } = await fixture();
+    await complete(host, backend, id, "error");
+    const failure = host.list()[0]!.attention!;
+    await host.send(id, "try again", "now");
+    const callId = backend.latest.askPermission("Bash");
+    assert.equal(host.list()[0]?.attention?.group, "needs-input");
+
+    await host.answerPermission(id, callId, "deny");
+    assert.deepEqual(host.list()[0]?.attention, failure);
+    backend.latest.completeTurn("aborted");
+    assert.deepEqual(host.list()[0]?.attention, failure);
+    host.acknowledge(id, failure.version);
+    assert.equal(host.list()[0]?.attention, undefined);
+  });
+
+  it("retains an unread outcome across restart with an unanswered newer request", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-attention-input-"));
+    roots.push(root);
+    const { backend, host, id } = await fixture(root);
+    await complete(host, backend, id, "error");
+    const failure = host.list()[0]!.attention!;
+    await host.send(id, "try again", "now");
+    backend.latest.askPermission("Bash");
+    await host.shutdown();
+
+    const restarted = new SessionHost({ store: new TranscriptStore(root) });
+    restarted.registerBackend(new FakeBackend());
+    await restarted.load();
+    assert.deepEqual(restarted.list()[0]?.attention, failure);
+    restarted.acknowledge(id, failure.version);
+    assert.equal(restarted.list()[0]?.attention, undefined);
+  });
+
+  it("acknowledges earlier outcomes when observing a newer pending request", async () => {
+    const { backend, host, id } = await fixture();
+    await complete(host, backend, id, "error");
+    await host.send(id, "try again", "now");
+    const callId = backend.latest.askPermission("Bash");
+    host.acknowledge(id, host.list()[0]!.attention!.version);
+    await host.answerPermission(id, callId, "deny");
+    assert.equal(host.list()[0]?.attention, undefined);
+    backend.latest.completeTurn("complete");
+    assert.equal(host.list()[0]?.attention?.reason, "Completed");
+  });
+
   it("ignores successful independent work and qualifies standalone failures", async () => {
     const { backend, host, id } = await fixture();
     const succeeded = backend.latest.beginSubagent("success");
@@ -159,6 +205,7 @@ describe("attention inbox", () => {
     const path = join(root, "sessions", id, "meta.json");
     const legacy = JSON.parse(readFileSync(path, "utf8"));
     delete legacy.latestAttention;
+    delete legacy.latestOutcome;
     delete legacy.readAttentionVersion;
     writeFileSync(path, JSON.stringify(legacy));
 
@@ -166,6 +213,24 @@ describe("attention inbox", () => {
     restarted.registerBackend(new FakeBackend());
     await restarted.load();
     assert.equal(restarted.list()[0]?.attention, undefined);
+  });
+
+  it("loads unread outcomes from metadata written before the separate outcome boundary", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-attention-outcome-"));
+    roots.push(root);
+    const { backend, host, id } = await fixture(root);
+    await complete(host, backend, id, "error");
+    const failure = host.list()[0]!.attention!;
+    await host.shutdown();
+    const path = join(root, "sessions", id, "meta.json");
+    const meta = JSON.parse(readFileSync(path, "utf8"));
+    delete meta.latestOutcome;
+    writeFileSync(path, JSON.stringify(meta));
+
+    const restarted = new SessionHost({ store: new TranscriptStore(root) });
+    restarted.registerBackend(new FakeBackend());
+    await restarted.load();
+    assert.deepEqual(restarted.list()[0]?.attention, failure);
   });
 
   it("orders Needs input then Unread by qualifying age, ahead of activity bands", async () => {

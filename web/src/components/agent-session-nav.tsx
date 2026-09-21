@@ -106,12 +106,12 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
   const [filedAwayOpen, setFiledAwayOpen] = useState(false);
 
   const list = useRef<HTMLDivElement>(null);
-  const restoreRailFocus = useRef(false);
+  const rowHasFocus = useRef(false);
 
   /**
-   * Focus follows the cursor, but only while the rail already has it. The cleanup remembers that
-   * fact before React moves a row between group subtrees; after that move `activeElement` is already
-   * the body, which is too late to discover that the now-unmounted row used to own focus.
+   * Focus follows the cursor, but only while a row already has it. Focus events remember ownership
+   * before React mutates the DOM: layout cleanups can run after the cursor attribute has changed or
+   * the focused row has been removed, so querying the cursor there loses the old focus owner.
    *
    * A layout effect keeps the roving tabindex and DOM focus in the same paint. Group identity is a
    * dependency because an attention transition can reparent the cursor row without changing it.
@@ -122,17 +122,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     const focused = document.activeElement;
     const cursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
     const cursorItem = cursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
-    const hadFocus = restoreRailFocus.current
-      || (focused instanceof HTMLElement && cursorItem?.contains(focused) === true);
-    restoreRailFocus.current = false;
-    if (hadFocus && cursor && !cursorItem?.contains(focused)) cursor.focus();
-    return () => {
-      const active = document.activeElement;
-      const currentCursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
-      const currentItem = currentCursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
-      restoreRailFocus.current = active instanceof HTMLElement
-        && currentItem?.contains(active) === true;
-    };
+    if (rowHasFocus.current && cursor && !cursorItem?.contains(focused)) cursor.focus();
   }, [props.cursorId, cursorGroupId]);
 
   return (
@@ -144,7 +134,19 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
        * they are the only keys this component handles — everything vertical is resolved centrally
        * so there is one cursor rather than two.
        */}
-      <SidebarContent ref={list} className="transcript-scroller gap-0" onKeyDown={moveWithinRow}>
+      <SidebarContent
+        ref={list}
+        className="transcript-scroller gap-0"
+        onKeyDown={moveWithinRow}
+        onFocusCapture={(event) => {
+          rowHasFocus.current = event.target.closest('[data-sidebar="menu-item"]') !== null;
+        }}
+        onBlurCapture={(event) => {
+          // Removing a focused row can leave focus on body without a blur event. If a browser does
+          // emit one for removal, it is not an intentional departure from the rail either.
+          if (event.target.isConnected) rowHasFocus.current = false;
+        }}
+      >
         {groups.filter(({ group }) => group !== "filed-away").map(({ group, sessions }) => (
           <SidebarGroup key={group} className="p-0">
             <SidebarGroupLabel className="select-none text-muted-foreground">
