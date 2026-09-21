@@ -100,9 +100,6 @@ export async function startRuntime(options: {
       ...(options.address === undefined ? {} : { address: options.address }),
     });
     const url = running.url.replace(`//${options.address ?? '127.0.0.1'}:`, '//127.0.0.1:');
-    // Port 0 is only a listen request. Persist the selected port so a guarded restart returns on the
-    // same browser origin instead of choosing a fresh ephemeral port the disconnected page cannot reach.
-    identity.settings.port = Number(new URL(running.url).port);
     identity.url = url;
     ownership.publish(identity);
     return { running, daemon: { url, token }, stop };

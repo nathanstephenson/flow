@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { installation } from '../src/cli/install-guard.ts';
+import { explainUnsupportedUpdate, installation, updateUnsupportedReason } from '../src/cli/install-guard.ts';
 import { finishWebUpdate, UpdateRefusal, WebUpdateController } from '../src/cli/web-update.ts';
 import { ReleaseChecker } from '../src/daemon/release-checker.ts';
 
-function fixture(active = false) {
+function fixture(active = false, checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) })) {
   const temp = mkdtempSync(join(tmpdir(), 'flow-web-update-'));
   const prefix = join(temp, 'prefix');
   const slot = join(prefix, 'lib/node_modules/@nathanstephenson/flow');
@@ -23,13 +23,12 @@ function fixture(active = false) {
   writeFileSync(npm, `#!${process.execPath}\nconst p=require('node:path'); if(process.argv[2]==='prefix') console.log(process.env.WEB_TEST_WRONG_PREFIX || process.env.WEB_TEST_PREFIX); else console.log(p.join(process.env.WEB_TEST_WRONG_PREFIX || process.env.WEB_TEST_PREFIX,'lib/node_modules'));`);
   chmodSync(npm, 0o700);
   const bootstrap = join(temp, 'helper.cjs');
-  writeFileSync(bootstrap, `require('node:fs').writeFileSync(${JSON.stringify(join(temp, 'helper-args'))}, JSON.stringify(process.argv.slice(2))); setTimeout(()=>{}, 10000);`);
+  writeFileSync(bootstrap, `require('node:fs').writeFileSync(${JSON.stringify(join(temp, 'helper-args'))}, JSON.stringify({ args: process.argv.slice(2), version: process.env.FLOW_WEB_UPDATE_VERSION })); setTimeout(()=>{}, 10000);`);
   const oldPath = process.env.PATH;
   const oldPrefix = process.env.WEB_TEST_PREFIX;
   process.env.PATH = `${bin}:${oldPath}`;
   process.env.WEB_TEST_PREFIX = prefix;
   const install = installation(slot);
-  const checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) });
   const controller = new WebUpdateController({ root, installedVersion: '1.0.0', mode: 'background', installation: install, bootstrapEntry: bootstrap, hasActiveWork: () => active, checker });
   return {
     temp, prefix, slot, root, controller,
@@ -46,19 +45,25 @@ function fixture(active = false) {
   };
 }
 
-test('web update eligibility explains unsupported hosts, active-work blockers, and npm prefix mismatch', async () => {
-  const unsupported = new WebUpdateController({
-    root: mkdtempSync(join(tmpdir(), 'flow-web-unsupported-')),
-    installedVersion: '1.0.0', mode: 'foreground', hasActiveWork: () => false,
-    checker: new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) }),
-  });
-  assert.equal((await unsupported.status()).eligibility.state, 'unsupported');
+test('web update eligibility explains foreground and embedded hosts, active-work blockers, and npm prefix mismatch', async () => {
+  for (const mode of ['foreground', 'embedded'] as const) {
+    const root = mkdtempSync(join(tmpdir(), 'flow-web-unsupported-'));
+    try {
+      const unsupported = new WebUpdateController({
+        root, installedVersion: '1.0.0', mode, hasActiveWork: () => false,
+        checker: new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) }),
+      });
+      const eligibility = (await unsupported.status()).eligibility;
+      assert.equal(eligibility.state, 'unsupported');
+      if (eligibility.state === 'unsupported') assert.match(eligibility.reason, /background Session Host/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
 
   const busy = fixture(true);
   try {
     const blocked = await busy.controller.status();
     assert.equal(blocked.eligibility.state, 'blocked');
-    await assert.rejects(busy.controller.start(), UpdateRefusal);
+    await assert.rejects(busy.controller.start('2.0.0'), UpdateRefusal);
 
     process.env.WEB_TEST_WRONG_PREFIX = join(busy.temp, 'wrong');
     const mismatched = await busy.controller.status(true);
@@ -67,15 +72,48 @@ test('web update eligibility explains unsupported hosts, active-work blockers, a
   } finally { busy.close(); }
 });
 
+test('web status truthfully distinguishes source, link, SEA, shared, system, and root installation guidance', async () => {
+  const f = fixture();
+  const linked = join(f.temp, 'linked-entry');
+  try {
+    mkdirSync(join(f.temp, 'source'));
+    symlinkSync(join(f.temp, 'source'), linked);
+    const uid = process.getuid?.();
+    assert.notEqual(uid, undefined);
+    const cases = [
+      explainUnsupportedUpdate(join(f.temp, 'source')),
+      explainUnsupportedUpdate(join(f.temp, 'source'), join(linked, 'bootstrap.js')),
+      updateUnsupportedReason('sea'),
+      (() => { chmodSync(f.prefix, 0o777); const reason = explainUnsupportedUpdate(f.slot); chmodSync(f.prefix, 0o755); return reason; })(),
+      explainUnsupportedUpdate(f.slot, undefined, uid! + 1),
+      explainUnsupportedUpdate(f.slot, undefined, 0),
+    ];
+    const patterns = [/source checkout/, /npm-linked/, /Single-executable/, /shared/, /system-owned|another user/, /root-owned|sudo-installed/];
+    for (let index = 0; index < cases.length; index++) {
+      const controller = new WebUpdateController({
+        root: f.root,
+        installedVersion: '1.0.0',
+        mode: 'background',
+        unsupportedReason: cases[index]!,
+        hasActiveWork: () => false,
+        checker: new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) }),
+      });
+      const eligibility = (await controller.status()).eligibility;
+      assert.equal(eligibility.state, 'unsupported');
+      if (eligibility.state === 'unsupported') assert.match(eligibility.reason, patterns[index]!);
+    }
+  } finally { f.close(); }
+});
+
 test('a fixed detached helper is single-flight and success is verified against the running installation', async () => {
   const f = fixture(false);
   try {
-    const first = f.controller.start();
-    await assert.rejects(f.controller.start(), /already starting/);
+    const first = f.controller.start('2.0.0');
+    await assert.rejects(f.controller.start('2.0.0'), /already starting/);
     const started = await first;
     assert.equal(started.operation?.state, 'updating');
-    assert.deepEqual(JSON.parse(readFileSync(join(f.temp, 'helper-args'), 'utf8')), ['update']);
-    await assert.rejects(f.controller.start(), /already in progress/);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.temp, 'helper-args'), 'utf8')), { args: ['update'], version: '2.0.0' });
+    await assert.rejects(f.controller.start('2.0.0'), /already in progress/);
 
     const id = started.operation!.id;
     finishWebUpdate(f.root, id, { previousVersion: '1.0.0', installedVersion: '2.0.0', changed: true });
@@ -86,11 +124,25 @@ test('a fixed detached helper is single-flight and success is verified against t
   } finally { f.close(); }
 });
 
+test('mutation refreshes latest and refuses a tag that changed after confirmation', async () => {
+  for (const changed of ['3.0.0', '1.0.0', '2.0.0-rc.1']) {
+    let calls = 0;
+    const checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: calls++ === 0 ? '2.0.0' : changed })) });
+    const f = fixture(false, checker);
+    try {
+      assert.equal((await f.controller.status()).latestVersion, '2.0.0');
+      await assert.rejects(f.controller.start('2.0.0'), /latest release changed|already up to date|stable semantic version/);
+      assert.equal(calls, 2, 'mutation bypasses the cached discovery result');
+      assert.throws(() => readFileSync(join(f.temp, 'helper-args')), { code: 'ENOENT' });
+    } finally { f.close(); }
+  }
+});
+
 test('unchanged npm results and recovered failures remain failures', async () => {
   for (const result of ['unchanged', 'failed'] as const) {
     const f = fixture(false);
     try {
-      const started = await f.controller.start();
+      const started = await f.controller.start('2.0.0');
       if (result === 'unchanged') finishWebUpdate(f.root, started.operation!.id, { previousVersion: '1.0.0', installedVersion: '1.0.0', changed: false });
       else finishWebUpdate(f.root, started.operation!.id, undefined, new Error('npm installation failed; token=do-not-expose'));
       const operation = (await f.controller.status()).operation;

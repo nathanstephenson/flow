@@ -331,12 +331,14 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     if (request.method === 'POST') {
       try {
         const body: unknown = JSON.parse(await readBody(request, 1024));
-        if (!body || typeof body !== 'object' || Array.isArray(body) ||
-            (body as { confirmed?: unknown }).confirmed !== true || Object.keys(body).some(key => key !== 'confirmed')) {
-          send(response, 400, { error: 'An explicit update confirmation is required' });
+        const confirmation = body as { confirmed?: unknown; version?: unknown };
+        if (!body || typeof body !== 'object' || Array.isArray(body) || confirmation.confirmed !== true ||
+            typeof confirmation.version !== 'string' || confirmation.version.length > 100 ||
+            Object.keys(body).some(key => key !== 'confirmed' && key !== 'version')) {
+          send(response, 400, { error: 'An explicit update confirmation for the displayed version is required' });
           return;
         }
-        send(response, 202, await options.updates.start());
+        send(response, 202, await options.updates.start(confirmation.version));
       } catch (error) {
         if (!(error instanceof UpdateRefusal)) throw error;
         send(response, 409, { error: error.message });

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Download, LoaderCircle, RotateCw } from "lucide-react";
 
 import { useUpdates } from "@/updates.tsx";
-import { updatePresentation } from "@/presentation/update.ts";
+import { canStartUpdate, updatePresentation } from "@/presentation/update.ts";
 import { SettingsFact, SettingsGroup } from "@/components/settings-parts.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -19,7 +19,7 @@ import {
 
 export function UpdateSettings() {
   const { status, view, transportError, check, begin } = useUpdates();
-  const [confirming, setConfirming] = useState(false);
+  const [confirmingVersion, setConfirmingVersion] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const presentation = updatePresentation(status, view, transportError ?? actionError);
 
@@ -43,11 +43,12 @@ export function UpdateSettings() {
   }, [actionError, presentation, status, transportError]);
 
   const working = ["checking", "updating", "reconnecting"].includes(presentation);
-  const canUpdate = status?.eligibility.state === "eligible" && status.updateAvailable && ["available", "failure"].includes(presentation);
-  const confirm = async () => {
-    setConfirming(false);
+  const canUpdate = canStartUpdate(status, presentation);
+  const updateVersion = canUpdate ? status?.latestVersion : undefined;
+  const confirm = async (version: string) => {
+    setConfirmingVersion(undefined);
     setActionError(undefined);
-    try { await begin(); }
+    try { await begin(version); }
     catch (error) { setActionError(error instanceof Error ? error.message : "Could not start the update"); }
   };
 
@@ -87,10 +88,10 @@ export function UpdateSettings() {
             <RotateCw aria-hidden />
             Check for updates
           </Button>
-          {canUpdate ? (
-            <Button size="sm" onClick={() => setConfirming(true)}>
+          {updateVersion ? (
+            <Button size="sm" onClick={() => setConfirmingVersion(updateVersion)}>
               <Download aria-hidden />
-              Update to {status.latestVersion}
+              Update to {updateVersion}
             </Button>
           ) : null}
           {presentation === "recovery-needed" ? (
@@ -102,17 +103,17 @@ export function UpdateSettings() {
         </p>
       </SettingsGroup>
 
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+      <AlertDialog open={confirmingVersion !== undefined} onOpenChange={open => { if (!open) setConfirmingVersion(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Update Flow to {status?.latestVersion}?</AlertDialogTitle>
+            <AlertDialogTitle>Update Flow to {confirmingVersion}?</AlertDialogTitle>
             <AlertDialogDescription>
               Flow will temporarily disconnect this browser and restart the background Session Host. Durable Agent Sessions and Presentation Transcripts stay on disk, but Agent Sessions return Dormant and are not Revived automatically. Ephemeral Shells are lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { void confirm(); }}>Update and restart</AlertDialogAction>
+            <AlertDialogAction onClick={() => { if (confirmingVersion) void confirm(confirmingVersion); }}>Update and restart</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

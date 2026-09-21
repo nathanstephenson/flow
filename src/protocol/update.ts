@@ -6,6 +6,7 @@ export type UpdateOperation = {
   id: string;
   state: 'updating' | 'succeeded' | 'failed' | 'unverified';
   previousVersion: string;
+  targetVersion?: string;
   installedVersion?: string;
   startedAt: string;
   finishedAt?: string;

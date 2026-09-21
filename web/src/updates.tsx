@@ -2,14 +2,21 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import type { WebUpdateStatus } from "../../src/protocol/update.ts";
 import { authenticatedFetch } from "@/authentication.ts";
-import { OPEN_BROWSER_UPDATE_CHECK_MS, UPDATE_RECONNECT_LIMIT_MS, type UpdateViewState } from "@/presentation/update.ts";
+import {
+  OPEN_BROWSER_UPDATE_CHECK_MS,
+  UPDATE_RECOVERY_POLL_MS,
+  UPDATE_RECONNECT_POLL_MS,
+  pollUpdateChecks,
+  reconnectView,
+  type UpdateViewState,
+} from "@/presentation/update.ts";
 
 type UpdatesValue = {
   status?: WebUpdateStatus;
   view: UpdateViewState;
   transportError?: string;
   check(refresh?: boolean): Promise<void>;
-  begin(): Promise<void>;
+  begin(confirmedVersion: string): Promise<void>;
 };
 
 const UpdatesContext = createContext<UpdatesValue | undefined>(undefined);
@@ -31,6 +38,7 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
     try {
       const response = await authenticatedFetch(`/api/update${refresh ? "?refresh=1" : ""}`, {
         cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
       });
       const body = (await response.json()) as WebUpdateStatus & { error?: string };
       if (!response.ok) throw new Error(body.error ?? `Could not check for updates (${response.status})`);
@@ -55,11 +63,11 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
         return;
       }
       reconnectingSince.current ??= Date.now();
-      setView(Date.now() - reconnectingSince.current >= UPDATE_RECONNECT_LIMIT_MS ? "recovery-needed" : "reconnecting");
+      setView(reconnectView(reconnectingSince.current, Date.now()));
     }
   }, [status?.operation?.state, view]);
 
-  const begin = useCallback(async (): Promise<void> => {
+  const begin = useCallback(async (confirmedVersion: string): Promise<void> => {
     setView("starting");
     setTransportError(undefined);
     let response: Response;
@@ -67,7 +75,7 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
       response = await authenticatedFetch("/api/update", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ confirmed: true }),
+        body: JSON.stringify({ confirmed: true, version: confirmedVersion }),
       });
     } catch {
       // The connection can disappear after the explicit request reached the host but before its 202
@@ -94,12 +102,30 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
     return () => window.clearInterval(timer);
   }, []); // The callback deliberately reads the first, empty operation state for this ambient poll.
 
+  const polling = status?.operation?.state === "updating" || view === "reconnecting" || view === "recovery-needed";
+  const pollingRef = useRef(polling);
+  const pollDelayRef = useRef(UPDATE_RECONNECT_POLL_MS);
+  pollingRef.current = polling;
+  pollDelayRef.current = view === "recovery-needed" ? UPDATE_RECOVERY_POLL_MS : UPDATE_RECONNECT_POLL_MS;
+
   useEffect(() => {
-    if (status?.operation?.state !== "updating" && view !== "reconnecting" && view !== "recovery-needed") return;
-    const delay = view === "recovery-needed" ? 10_000 : 2_000;
-    const timer = window.setTimeout(() => { void check(false); }, delay);
-    return () => window.clearTimeout(timer);
-  }, [check, status?.operation?.state, view]);
+    if (!polling) return;
+    let cancelled = false;
+    let cancelWait: (() => void) | undefined;
+    void pollUpdateChecks({
+      active: () => !cancelled && pollingRef.current,
+      delay: () => pollDelayRef.current,
+      wait: delayMs => new Promise(resolve => {
+        const timer = window.setTimeout(resolve, delayMs);
+        cancelWait = () => { window.clearTimeout(timer); resolve(); };
+      }),
+      check: () => check(false),
+    });
+    return () => {
+      cancelled = true;
+      cancelWait?.();
+    };
+  }, [check, polling]);
 
   return (
     <UpdatesContext.Provider value={{ status, view, ...(transportError ? { transportError } : {}), check, begin }}>

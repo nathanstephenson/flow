@@ -106,7 +106,7 @@ export class WebUpdateController {
     };
   }
 
-  async start(): Promise<WebUpdateStatus> {
+  async start(confirmedVersion: string): Promise<WebUpdateStatus> {
     if (this.launching) throw new UpdateRefusal('An update request is already starting.');
     this.launching = true;
     try {
@@ -114,14 +114,20 @@ export class WebUpdateController {
       if (existing?.state === 'updating') throw new UpdateRefusal('An update is already in progress.');
       const eligibility = this.eligibility();
       if (eligibility.state !== 'eligible') throw new UpdateRefusal(eligibility.reason);
-      const available = await this.status(false);
-      if (available.checkError) throw new UpdateRefusal(`${available.checkError} Check again before updating.`);
-      if (!available.latestVersion || !newerStableVersion(available.installedVersion, available.latestVersion)) {
-        throw new UpdateRefusal(`Flow ${available.installedVersion} is already up to date.`);
+      const installedVersion = this.installedVersion();
+      // Mutation never trusts the up-to-fifteen-minute discovery cache. The confirmed version must
+      // still be npm's stable latest tag, and the detached helper installs that exact version.
+      const release = await this.checker.check(true);
+      if ('error' in release) throw new UpdateRefusal(`${release.error} Check again before updating.`);
+      if (!newerStableVersion(installedVersion, release.latestVersion)) {
+        throw new UpdateRefusal(`Flow ${installedVersion} is already up to date.`);
+      }
+      if (release.latestVersion !== confirmedVersion) {
+        throw new UpdateRefusal(`The latest release changed from ${confirmedVersion} to ${release.latestVersion}. Check again and confirm the new version.`);
       }
 
       // Revalidate after the asynchronous release check and immediately before spawning. The helper
-      // repeats this yet again before beginning its installation transaction.
+      // repeats installation and target checks yet again before beginning its transaction.
       const finalEligibility = this.eligibility();
       if (finalEligibility.state !== 'eligible') throw new UpdateRefusal(finalEligibility.reason);
       const installation = this.options.installation;
@@ -131,7 +137,8 @@ export class WebUpdateController {
       const operation: StoredOperation = {
         id,
         state: 'updating',
-        previousVersion: available.installedVersion,
+        previousVersion: installedVersion,
+        targetVersion: confirmedVersion,
         startedAt: new Date().toISOString(),
         message: 'Starting the guarded npm update.',
       };
@@ -144,7 +151,12 @@ export class WebUpdateController {
           cwd: process.cwd(),
           detached: true,
           stdio: ['ignore', log, log],
-          env: { ...process.env, FLOW_STATE_DIR: this.options.root, FLOW_WEB_UPDATE_ID: id },
+          env: {
+            ...process.env,
+            FLOW_STATE_DIR: this.options.root,
+            FLOW_WEB_UPDATE_ID: id,
+            FLOW_WEB_UPDATE_VERSION: confirmedVersion,
+          },
         });
       } finally { closeSync(log); }
       await new Promise<void>((resolvePromise, reject) => {

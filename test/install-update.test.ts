@@ -69,18 +69,19 @@ if (args[0] === 'prefix') console.log(process.env.TEST_WRONG_PREFIX || prefix);
 else if (args[0] === 'root') console.log(p.join(process.env.TEST_WRONG_PREFIX || prefix, 'lib/node_modules'));
 else {
  fs.appendFileSync(p.join(prefix, 'npm-log'), JSON.stringify(args) + '\\n');
- const latest = args.at(-1).endsWith('@latest');
- if (latest && process.env.TEST_ORPHAN) {
+ const latest = args.at(-1).endsWith('@latest'), updating = latest || !args.at(-1).endsWith('@1.2.3');
+ if (updating && process.env.TEST_ORPHAN) {
   const child = require('node:child_process').spawn(process.execPath, ['-e', "setTimeout(() => require('node:fs').writeFileSync(process.argv[1], 'ORPHAN-CORRUPTED'), 2500)", p.join(slot, 'dist/build-id')], { stdio: 'ignore' });
   child.once('spawn', () => process.kill(process.pid, 'SIGTERM'));
   return;
  }
  const finish = () => {
-  const version = latest && !process.env.TEST_UNCHANGED ? '2.0.0' : '1.2.3';
+  const spec = args.at(-1), exact = spec.slice(spec.lastIndexOf('@') + 1);
+  const version = process.env.TEST_UNCHANGED ? '1.2.3' : latest ? (process.env.TEST_LATEST_VERSION || '2.0.0') : exact;
   fs.writeFileSync(p.join(slot, 'dist/build-id'), process.env.TEST_BAD_BUILD ? 'wrong-build' : 'test-build');
   fs.writeFileSync(p.join(slot, 'package.json'), JSON.stringify({ name: '@nathanstephenson/flow', version, type: 'module' }));
   fs.writeFileSync(p.join(prefix, 'npm-finished'), 'done');
-  if (process.env.TEST_FAIL === 'both' || (latest && process.env.TEST_FAIL === 'latest')) process.exit(1);
+  if (process.env.TEST_FAIL === 'both' || (updating && process.env.TEST_FAIL === 'latest')) process.exit(1);
  };
  if (process.env.TEST_SLOW) setTimeout(finish, 1500); else finish();
 }
@@ -136,7 +137,7 @@ test('npm-link startup uses the source entry without an installation lease', asy
     assert.equal(result.code, 0, result.output); assert.equal(result.output.trim(), '1.2.3');
     assert.equal(f.leases().length, 0);
     const refused = await f.start(['update']).done;
-    assert.equal(refused.code, 1); assert.match(refused.output, /source and npm link are unsupported/);
+    assert.equal(refused.code, 1); assert.match(refused.output, /source, npm link, root, shared, and system installations are unsupported/);
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
   } finally { await f.close(); }
 });
@@ -337,19 +338,63 @@ test('browser-launched helpers persist verified success, unchanged, and recovere
       writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({ id, state: 'updating', previousVersion: '1.2.3', startedAt: new Date().toISOString() }));
       const extra = {
         FLOW_WEB_UPDATE_ID: id,
+        FLOW_WEB_UPDATE_VERSION: '2.0.0',
         ...(outcome === 'unchanged' ? { TEST_UNCHANGED: '1' } : {}),
         ...(outcome === 'rollback' ? { TEST_FAIL: 'latest' } : {}),
       };
       const result = await f.start(['update'], extra).done;
-      assert.equal(result.code, outcome === 'rollback' ? 1 : 0, result.output);
+      assert.equal(result.code, outcome === 'success' ? 0 : 1, result.output);
       const record = json<{ state: string; installedVersion?: string; message?: string }>(join(f.root, 'web-update.json'))!;
       assert.equal(record.state, outcome === 'success' ? 'succeeded' : 'failed');
       if (outcome === 'success') assert.equal(record.installedVersion, '2.0.0');
-      if (outcome === 'unchanged') assert.match(record.message ?? '', /No update was installed/);
+      if (outcome === 'unchanged') assert.match(record.message ?? '', /Installed package verification failed/);
       if (outcome === 'rollback') assert.match(record.message ?? '', /Reinstalled and verified 1.2.3/);
       assert.equal(existsSync(f.install.barrierPath), false, 'verified recovery removes the startup barrier');
     } finally { await f.close(); }
   }
+});
+
+test('browser update binds the confirmed stable version even if the latest tag changes before npm runs', async () => {
+  const f = fixture();
+  try {
+    const id = 'web-bound-target';
+    writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({
+      id, state: 'updating', previousVersion: '1.2.3', targetVersion: '2.0.0', startedAt: new Date().toISOString(),
+    }));
+    const result = await f.start(['update'], {
+      FLOW_WEB_UPDATE_ID: id,
+      FLOW_WEB_UPDATE_VERSION: '2.0.0',
+      TEST_LATEST_VERSION: '0.5.0-beta.1',
+    }).done;
+    assert.equal(result.code, 0, result.output);
+    const calls = readFileSync(join(f.prefix, 'npm-log'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(calls, [['install', '--global', '--prefix', f.prefix, '@nathanstephenson/flow@2.0.0']]);
+    assert.equal(json<{ version: string }>(join(f.slot, 'package.json'))?.version, '2.0.0');
+    assert.equal(json<{ state: string }>(join(f.root, 'web-update.json'))?.state, 'succeeded');
+  } finally { await f.close(); }
+});
+
+test('browser update restores an ephemeral host on its selected concrete port', async () => {
+  const f = fixture();
+  try {
+    const host = f.start(['serve', '--background-host', '--port', '0', '--address', '127.0.0.1']);
+    await until(() => existsSync(join(f.root, 'daemon.json')));
+    const before = json<{ pid: number; url: string; settings: { port: number; address: string; cwd: string; oidc: string } }>(join(f.root, 'daemon.json'))!;
+    assert.equal(before.settings.port, 0);
+    const selectedPort = Number(new URL(before.url).port);
+    const id = 'web-port-restore';
+    writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({
+      id, state: 'updating', previousVersion: '1.2.3', targetVersion: '2.0.0', startedAt: new Date().toISOString(),
+    }));
+    const result = await f.start(['update'], { FLOW_WEB_UPDATE_ID: id, FLOW_WEB_UPDATE_VERSION: '2.0.0' }).done;
+    assert.equal(result.code, 0, result.output);
+    const after = json<{ pid: number; url: string; settings: { port: number; address: string; cwd: string; oidc: string } }>(join(f.root, 'daemon.json'))!;
+    assert.notEqual(after.pid, before.pid);
+    assert.equal(after.settings.port, selectedPort);
+    assert.equal(Number(new URL(after.url).port), selectedPort);
+    assert.deepEqual({ ...after.settings, port: 0 }, before.settings);
+    assert.equal((await host.done).code, 0);
+  } finally { await f.close(); }
 });
 
 test('unchanged versions and failed fresh-process verification are reported accurately', async () => {
