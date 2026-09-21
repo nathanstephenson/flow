@@ -19,7 +19,7 @@ const attemptValidator = z.object({
 
 export const workflowExecutionValidator = z.object({
   version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
-  input: z.json(), launchId: z.string().min(1).optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
+  input: z.json(), launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
   startedAt: z.number().nonnegative(), finishedAt: z.number().nonnegative().optional(), result: z.json().optional(),
   loops: z.record(z.string(), loopValidator).optional(),
   steps: z.record(z.string(), z.object({
@@ -33,6 +33,7 @@ export function parseExecution(value: unknown): WorkflowExecution {
   const graph = validateDefinition(record.definition);
   if (graph.order.length !== Object.keys(record.steps).length || graph.order.some(step => !Object.hasOwn(record.steps, step.id))) throw new Error('Execution steps do not match the definition');
   if (record.testStepId && !Object.hasOwn(record.steps, record.testStepId)) throw new Error('Unknown test step');
+  if (record.testStepId && record.naming) throw new Error('Step tests cannot name Agent Sessions');
   const loops = record.testStepId ? [] : graph.loops;
   if (loops.length !== Object.keys(record.loops ?? {}).length || loops.some(loop => !record.loops?.[loop.headerId])) throw new Error('Execution loops do not match the definition');
   for (const loop of loops) {

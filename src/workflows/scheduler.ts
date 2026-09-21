@@ -98,7 +98,7 @@ export class WorkflowScheduler {
     this.slots.delete(sessionId);
   }
 
-  start(definition: WorkflowDefinition, session: WorkflowSession, input: unknown, testStepId?: string, launchId?: string): WorkflowExecution {
+  start(definition: WorkflowDefinition, session: WorkflowSession, input: unknown, testStepId?: string, launchId?: string, namingEligible = false): WorkflowExecution {
     if (this.occupied(session.sessionId)) throw new Error('Agent Session workflow slot is occupied');
     const graph = validateDefinition(definition);
     if (graph.definition.backend !== session.backend) throw new Error('Backend Adapter mismatch');
@@ -111,6 +111,7 @@ export class WorkflowScheduler {
       version: 1, id: randomUUID(), sessionId: session.sessionId, scope: session.scope,
       definition: graph.definition, input: parsed, status: 'running', startedAt: Date.now(),
       ...(launchId ? { launchId } : {}),
+      ...(namingEligible && testStepId === undefined ? { naming: 'pending' as const } : {}),
       steps: Object.fromEntries(graph.order.map(step => [step.id, { status: testStep && step.id !== testStep.id ? 'skipped' : 'pending', attempts: [] }])),
       ...(testStepId === undefined ? { loops: Object.fromEntries(graph.loops.map(loop => [loop.headerId, { activation: 0, try: 0, phase: 'inactive', grants: [] }])) } : { testStepId }),
     };
@@ -124,6 +125,17 @@ export class WorkflowScheduler {
     const active = this.active.get(executionId);
     if (active?.record.sessionId === sessionId) return structuredClone(active.record);
     return this.store.getExecution(sessionId, executionId);
+  }
+
+  /** Atomically consume an automatic naming request before model work starts. */
+  claimNaming(sessionId: string, executionId: string): boolean {
+    const active = this.active.get(executionId);
+    const record = active?.record.sessionId === sessionId ? active.record : this.store.getExecution(sessionId, executionId);
+    if (record.naming !== 'pending' || record.testStepId) return false;
+    record.naming = 'requested';
+    if (active?.record === record) this.persist(active);
+    else this.store.saveExecution(record);
+    return true;
   }
 
   wait(sessionId: string, executionId: string): Promise<WorkflowExecution> {

@@ -54,7 +54,7 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
-import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare, workflowNameInput } from "./summariser.ts";
+import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -1572,6 +1572,11 @@ export class SessionHost {
 
   authoriseWorkflowTool(tool: string): void { this.allowTool?.(tool); }
 
+  workflowNamingAllowed(sessionId: string): boolean {
+    const record = this.sessions.get(sessionId);
+    return !this.workflowShutdown && !this.workflowStopping.has(sessionId) && !!record && record.lifecycle !== "ended" && record.lifecycle !== "settled";
+  }
+
   async dispose(sessionId: string, reason = "disposed"): Promise<void> {
     const record = this.sessions.get(sessionId);
     if (!record) return;
@@ -1749,15 +1754,15 @@ export class SessionHost {
   }
 
   /**
-   * Automatically name a newly-created Agent Session from a validated workflow launch.
+   * Automatically name an Agent Session from bounded, redacted Workflow Execution context.
    *
-   * Like first-message naming, this never blocks or fails the launch. Only the untouched Scope
-   * placeholder may yield: a manual/summary title, or even a first chat message that raced the
-   * workflow start, always wins.
+   * The execution owns when its durable one-shot request is consumed. The Session Host owns only
+   * the title race: like first-message naming, this never blocks or fails execution, and only the
+   * untouched Scope placeholder may yield. Chat, manual and summary titles always win.
    */
-  async nameWorkflow(sessionId: string, workflowName: string, input: unknown): Promise<void> {
+  async nameWorkflow(sessionId: string, input: string): Promise<void> {
     const record = this.sessions.get(sessionId);
-    if (record) await this.nameAutomatically(record, workflowNameInput(workflowName, input), "scope");
+    if (record) await this.nameAutomatically(record, input, "scope");
   }
 
   /** Generate and apply a convenience title only while the placeholder which requested it remains. */
@@ -1766,7 +1771,7 @@ export class SessionHost {
     input: string,
     expectedSource: "scope" | "first-line",
   ): Promise<void> {
-    if (record.titleSource !== expectedSource) return;
+    if (!this.workflowNamingAllowed(record.id) || record.titleSource !== expectedSource) return;
     const summary = this.summaryModel?.(record.backendName);
     if (!summary?.automatic) return;
 
@@ -1780,7 +1785,7 @@ export class SessionHost {
     if (name === undefined) return;
 
     const current = this.sessions.get(record.id);
-    if (!current || current !== record || current.lifecycle === "ended" || current.lifecycle === "settled") return;
+    if (!current || current !== record || !this.workflowNamingAllowed(record.id)) return;
     if (current.titleSource !== expectedSource || current.titleGeneration !== generation) return;
     current.title = name;
     current.titleSource = "summary";

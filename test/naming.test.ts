@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
+import { credentialJsonSerializer } from "../src/daemon/credential-redaction.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
-import { nameFrom, nameInput, summariseToName, workflowNameInput } from "../src/daemon/summariser.ts";
+import { nameFrom, nameInput, summariseToName, workflowAgentNameInput, workflowOutcomeNameInput } from "../src/daemon/summariser.ts";
 import type { LoggedEvent } from "../src/protocol/events.ts";
 
 /**
@@ -54,27 +55,164 @@ describe("the name inside a model's answer", () => {
 });
 
 describe("workflow naming context", () => {
-  it("includes the workflow and validated inputs but excludes credential-shaped fields recursively", () => {
-    const context = workflowNameInput("Ship release", {
-      project: "api",
-      apiKey: "private-key",
-      nested: { access_token: "private-token", count: 2 },
-      authorization: "private-auth",
-      cookie: "private-cookie",
-      refresh_token: "private-refresh",
-      bearer: "private-bearer",
+  it("omits credential-shaped fields recursively", () => {
+    const keys = ["apiKey", "api_key", "accessToken", "access_token", "refreshToken", "authToken", "authorization", "cookie", "bearer", "password", "passphrase", "credential", "secret", "token", "privateKey", "private_key"];
+    const nested = Object.fromEntries(keys.map(key => [key, `value-for-${key}`]));
+    const context = workflowAgentNameInput({
+      workflowName: "Secure workflow",
+      workflowInput: { visible: "retained", nested },
+      stepName: "Secure step",
+      instructions: "Use safe context",
+      input: { deeper: nested },
     });
-    assert.match(context, /Ship release/);
-    assert.match(context, /api/);
-    assert.match(context, /count/);
-    assert.doesNotMatch(context, /private-key|private-token|private-auth|private-cookie|private-refresh|private-bearer|apiKey|access_token|authorization|cookie|refresh_token|bearer/);
+    assert.match(context, /retained/);
+    for (const key of keys) {
+      assert.doesNotMatch(context, new RegExp(key, "i"));
+      assert.doesNotMatch(context, new RegExp(`value-for-${key}`, "i"));
+    }
   });
 
-  it("bounds arbitrarily large validated workflow inputs", () => {
-    const context = workflowNameInput("Large workflow", { value: "x".repeat(20_000) });
-    assert.ok(context.length <= 4_010);
-    assert.match(context, /Large workflow/);
-    assert.match(context, /…/);
+  it("prioritises resolved Agent work and redacts known values before truncating", () => {
+    const secret = "private-value-at-the-truncation-boundary";
+    const context = workflowAgentNameInput({
+      workflowName: "Deploy service",
+      workflowInput: { noisy: "launch-".repeat(2_000), password: "omitted" },
+      stepName: "Apply rollout",
+      instructions: `Perform the actual rollout ${"carefully ".repeat(200)} ${secret}`,
+      input: { artifact: "mapped-upstream-result", token: "omitted", detail: "resolved-".repeat(200) },
+    }, [secret]);
+
+    assert.ok(context.length <= 4_000);
+    assert.match(context, /Deploy service|Apply rollout/);
+    assert.match(context, /Perform the actual rollout/);
+    assert.match(context, /mapped-upstream-result/);
+    assert.match(context, /\[REDACTED\]/);
+    assert.doesNotMatch(context, /private-value|password|omitted|token/);
+    assert.ok((context.match(/launch-/g) ?? []).length < 100, "launch input yields space to resolved work");
+  });
+
+  it("does not leak a repeated long credential prefix in Agent context", () => {
+    const prefix = "agent-private-prefix-";
+    const secret = prefix + "x".repeat(5_000 - prefix.length);
+    const context = workflowAgentNameInput({
+      workflowName: "Secure workflow",
+      workflowInput: {},
+      stepName: "Secure step",
+      instructions: secret.repeat(5),
+      input: {},
+    }, [secret]);
+    assert.doesNotMatch(context, new RegExp(prefix));
+  });
+
+  it("keeps Agent work when workflow and step names are unbounded", () => {
+    const context = workflowAgentNameInput({
+      workflowName: "workflow-".repeat(2_000),
+      workflowInput: {},
+      stepName: "step-".repeat(2_000),
+      instructions: "Perform the actual deployment safely",
+      input: { artifact: "resolved-artifact" },
+    });
+    assert.match(context, /Perform the actual deployment safely/);
+    assert.match(context, /resolved-artifact/);
+    assert.ok(context.length <= 4_000);
+  });
+
+  it("prioritises fallback outcomes and results over launch inputs", () => {
+    const context = workflowOutcomeNameInput({
+      workflowName: "Verify release",
+      workflowInput: { noisy: "launch-".repeat(2_000) },
+      outcome: "recovery-required",
+      results: { checks: "actual-result-".repeat(150) },
+      errors: [{ message: "deployment timed out" }],
+    });
+
+    assert.ok(context.length <= 4_000);
+    assert.match(context, /recovery-required/);
+    assert.match(context, /actual-result/);
+    assert.match(context, /deployment timed out/);
+    assert.equal((context.match(/actual-result-/g) ?? []).length, 150, "outcome data is retained first");
+    assert.ok((context.match(/launch-/g) ?? []).length < 2_000, "launch input yields space to outcome data");
+  });
+
+  it("redacts fallback result and error credentials before truncating", () => {
+    const secret = "fallback-private-value";
+    const context = workflowOutcomeNameInput({
+      workflowName: "Failed deployment",
+      workflowInput: {},
+      outcome: "recovery-required",
+      results: { visible: secret, apiKey: "shaped-result", padding: "r".repeat(8_000) },
+      errors: [{ message: secret, authorization: "shaped-error", padding: "e".repeat(8_000) }],
+    }, [secret]);
+
+    assert.match(context, /\[REDACTED\]/);
+    assert.doesNotMatch(context, /fallback-private-value|apiKey|shaped-result|authorization|shaped-error/i);
+    assert.ok(context.length <= 4_000);
+  });
+
+  it("does not leak a repeated long credential prefix in outcome context", () => {
+    const prefix = "outcome-private-prefix-";
+    const secret = prefix + "x".repeat(5_000 - prefix.length);
+    const context = workflowOutcomeNameInput({
+      workflowName: "Secure outcome",
+      workflowInput: {},
+      outcome: "failed",
+      results: secret.repeat(5),
+    }, [secret]);
+    assert.doesNotMatch(context, new RegExp(prefix));
+  });
+
+  it("uses a replacement marker that does not retain a credential", () => {
+    const context = credentialJsonSerializer(["REDACTED"])("REDACTED", 100);
+    assert.doesNotMatch(context, /REDACTED/);
+    assert.match(context, /FILTERED|hidden/);
+  });
+
+  it("redacts credentials represented by JSON primitives", () => {
+    const serialize = credentialJsonSerializer(["12345", "true", "null"]);
+    assert.doesNotMatch(serialize({ number: 12345, boolean: true, empty: null }, 1_000), /12345|true|null/);
+  });
+
+  it("bounds serialization work for large fallback histories", () => {
+    const results = Array.from({ length: 100_000 }, (_, index) => ({ index, output: "x".repeat(100) }));
+    const context = workflowOutcomeNameInput({ workflowName: "Large history", workflowInput: {}, outcome: "completed", results });
+    assert.ok(context.length <= 4_000);
+    assert.match(context, /Large history|completed/);
+  });
+
+  it("bounds redaction work for a huge string", () => {
+    const context = credentialJsonSerializer(["private"])("private ".repeat(1_000_000), 1_000);
+    assert.ok(context.length <= 1_000);
+    assert.match(context, /\[REDACTED\]/);
+  });
+
+  it("bounds work on an arbitrarily large safe key", () => {
+    const context = credentialJsonSerializer([])({ ["safe".repeat(1_000_000)]: "value" }, 100);
+    assert.ok(context.length <= 100);
+  });
+
+  it("charges omitted credential keys against the traversal budget", () => {
+    let inspected = 0;
+    const keys = Array.from({ length: 100_000 }, (_, index) => `password${index}`);
+    const input = new Proxy({}, {
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor: () => { inspected += 1; return { enumerable: true, configurable: true }; },
+    });
+    credentialJsonSerializer([])(input, 100);
+    assert.ok(inspected < keys.length / 10, `inspected ${inspected} omitted properties`);
+  });
+
+  it("keeps outcome data when workflow names are unbounded", () => {
+    const context = workflowOutcomeNameInput({
+      workflowName: "workflow-".repeat(2_000),
+      workflowInput: {},
+      outcome: "recovery-required",
+      results: { artifact: "actual-result" },
+      errors: [{ message: "actual-error" }],
+    });
+    assert.match(context, /recovery-required|actual-result|actual-error/);
+    assert.match(context, /actual-result/);
+    assert.match(context, /actual-error/);
+    assert.ok(context.length <= 4_000);
   });
 });
 
@@ -437,6 +575,23 @@ describe("naming an Agent Session", () => {
     );
   });
 
+  it("does not persist an in-flight automatic name after shutdown", async () => {
+    summary.autoReply = undefined;
+    const id = await host.create({ scope: work, backend: "fake" });
+    await host.send(id, "fix the uploader", "after_turn");
+    await settled();
+    const naming = summary.sessions.find((session) => session.prompts.length > 0);
+    assert.ok(naming, "the Summary Model request is in flight");
+
+    await host.shutdown();
+    naming.say("Add retry to the uploader");
+    naming.completeTurn("complete");
+    await settled();
+
+    assert.equal(host.list().find((entry) => entry.id === id)?.status, "dormant");
+    assert.equal(titleOf(id), "fix the uploader");
+  });
+
   it("disposes a spare that was still booting when the host shut down", async () => {
     summary.holdCreate = true;
     await host.create({ scope: work, backend: "fake" });
@@ -494,7 +649,7 @@ describe("naming an Agent Session", () => {
   it("names a workflow launch without blocking it and never sends credential inputs", async () => {
     const id = await host.create({ scope: work, backend: "fake" });
     summary.autoReply = "Prepare production release safely";
-    await host.nameWorkflow(id, "Ship release", { project: "api", password: "private-password" });
+    await host.nameWorkflow(id, workflowAgentNameInput({ workflowName: "Ship release", workflowInput: { project: "api", password: "private-password" }, stepName: "Launch", instructions: "Ship the release", input: {} }));
     assert.equal(titleOf(id), "Prepare production release safely");
     const prompt = summary.sessions.find((session) => session.prompts.length)?.prompts[0] ?? "";
     assert.match(prompt, /Ship release/);
@@ -505,7 +660,7 @@ describe("naming an Agent Session", () => {
   it("honours disabled automatic naming for workflow launches", async () => {
     summaryModel = { backend: "summary", modelId: "fake-2", automatic: false };
     const id = await host.create({ scope: work, backend: "fake" });
-    await host.nameWorkflow(id, "Ship release", { project: "api" });
+    await host.nameWorkflow(id, workflowAgentNameInput({ workflowName: "Ship release", workflowInput: { project: "api" }, stepName: "Launch", instructions: "Ship the release", input: {} }));
     assert.equal(titleOf(id), work);
   });
 
@@ -514,7 +669,7 @@ describe("naming an Agent Session", () => {
     const id = await host.create({ scope: work, backend: "fake" });
     await host.send(id, "keep my chat title", "after_turn");
     summaryModel = { backend: "summary", modelId: "fake-2", automatic: true };
-    await host.nameWorkflow(id, "Ship release", { project: "api" });
+    await host.nameWorkflow(id, workflowAgentNameInput({ workflowName: "Ship release", workflowInput: { project: "api" }, stepName: "Launch", instructions: "Ship the release", input: {} }));
     assert.equal(titleOf(id), "keep my chat title");
   });
 

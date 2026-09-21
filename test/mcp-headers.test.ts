@@ -70,6 +70,14 @@ test("configured headers reach the server, resolved from Secrets", { timeout: 30
   }
 });
 
+test("non-secret token options are not discovered as MCP credentials", () => {
+  const host = new SessionHost({ mcpConnections: () => [{
+    id: "local", name: "Local", enabledByDefault: true, transport: "stdio",
+    command: "agent", args: ["--token-budget", "1000", "--token-count=20"],
+  }] });
+  assert.deepEqual(host.workflowMcpCredentials(), []);
+});
+
 test("a secret-backed header is always redacted, a literal one only when its name reads as a credential", () => {
   const connection: McpConnection = {
     id: "remote",
