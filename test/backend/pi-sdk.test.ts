@@ -36,6 +36,13 @@ it("boots the installed pi SDK and selects an authenticated model without infere
     assert.equal(selected.at(-1), "flow-sdk-test/test-model");
     await session.setModel("flow-sdk-test/test-model");
     assert.equal(selected.at(-1), "flow-sdk-test/test-model");
+    await assert.rejects(
+      backend.create({
+        scope, stateDir: join(root, "invalid-default"), modelId: "flow-sdk-test/test-model", effort: "high", tools: "none", emit: () => {},
+      }),
+      /Unsupported saved Effort “high”.*no Effort control/,
+      "an invalid persisted/default value is refused for explicit correction instead of clamped",
+    );
   } finally {
     await session?.dispose();
     if (oldAgentDir === undefined) delete process.env["PI_CODING_AGENT_DIR"];

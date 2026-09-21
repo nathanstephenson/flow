@@ -1,6 +1,5 @@
 import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol/events.ts";
-import { effortChoices, modelChoicesOf, type ModelChoice } from "@client/model-choices.ts";
-import { initialState } from "@client/reduce.ts";
+import { effortCapability, modelChoicesOf, type ModelChoice } from "@client/model-choices.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
 import {
@@ -194,29 +193,30 @@ export function EffortPicker({
   model,
   effort,
   disabled,
+  unavailableReason,
   onSelect,
 }: {
   capabilities: Capabilities | undefined;
   model: ModelInfo | undefined;
   effort: EffortLevel | undefined;
   disabled?: boolean | undefined;
+  unavailableReason?: string | undefined;
   onSelect: (effort: EffortLevel) => void;
 }) {
-  // effortChoices reads exactly two fields of ViewState, and Chrome is the projection that carries
-  // them. Rebuilding the shape it wants beats reimplementing the "levels belong to the model in
-  // force, not to the Agent Session" rule that both front-ends have to agree on.
-  const levels = effortChoices({ ...initialState(), capabilities, model });
-  if (levels.length === 0) return null;
+  const capability = effortCapability(capabilities, model);
+  if (capability.status === "none" && !unavailableReason) return null;
+  const levels: EffortLevel[] = capability.levels;
+  const unavailable = unavailableReason ?? (capability.status === "unknown" ? capability.reason : undefined);
 
   return (
     <Select
-      value={effort ?? null}
-      disabled={disabled}
+      value={effort && levels.includes(effort) ? effort : null}
+      disabled={disabled || !!unavailable}
       onValueChange={(value) => {
         if (typeof value === "string") onSelect(value as EffortLevel);
       }}
     >
-      <SelectTrigger aria-label="Effort" size="sm" className={QUIET_TRIGGER}>
+      <SelectTrigger aria-label="Effort" size="sm" className={QUIET_TRIGGER} title={unavailable}>
         {/*
           * "default" rather than the control's own name, which is what it used to show.
           *
@@ -225,7 +225,9 @@ export function EffortPicker({
           * Claude reports its level only in the init message that comes with the first turn, so on a
           * fresh Claude session this stands until you send something, and then fills itself in.
           */}
-        <SelectValue placeholder="default">{() => effort ?? "default"}</SelectValue>
+        <SelectValue placeholder={unavailable ? "effort unavailable" : "default"}>
+          {() => unavailable ? "effort unavailable" : effort ?? "default"}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {levels.map((level) => (

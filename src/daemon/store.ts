@@ -50,6 +50,8 @@ export type SessionMeta = {
   resumeToken?: string;
   modelId?: string;
   effort?: EffortLevel;
+  /** Creation-time configured Effort still needs exact capability validation before first work. */
+  initialEffortUnconfirmed?: boolean;
   /**
    * Lifecycle as of the last write; on load, `live` becomes Dormant (ADR 0003).
    *

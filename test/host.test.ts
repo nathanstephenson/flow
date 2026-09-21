@@ -44,6 +44,20 @@ describe("SessionHost", () => {
     ]);
   });
 
+  it("blocks agent turns while model capability discovery is unavailable", async () => {
+    const unavailableHost = new SessionHost();
+    const unavailable = new FakeBackend({ models: [] });
+    unavailableHost.registerBackend(unavailable);
+    const id = await unavailableHost.create({ scope: "/tmp/scope", backend: "fake" });
+    await assert.rejects(
+      unavailableHost.send(id, "must not launch", "now"),
+      /Model capabilities are unavailable.*Retry/,
+    );
+    assert.deepEqual(unavailable.latest.prompts, []);
+    assert.equal(events(unavailableHost, id).some((event) => event.type === "user_message"), false);
+    await unavailableHost.shutdown();
+  });
+
   it("uses the Default Backend for omitted choices, without changing existing sessions", async () => {
     let chosen: string | undefined = "second";
     const configured = new SessionHost({ defaultBackend: () => chosen });
@@ -83,6 +97,27 @@ describe("SessionHost", () => {
     await configured.create({ scope: "/tmp/scope", backend: "fake", effort: "medium" });
     assert.equal(fake.latest.effort, "medium");
     await configured.shutdown();
+  });
+
+  it("blocks an invalid saved Default Effort until explicit session correction", async () => {
+    const configured = new SessionHost({ defaultModel: () => "fake-1", defaultEffort: () => "max" });
+    const fake = new FakeBackend();
+    configured.registerBackend(fake);
+    const id = await configured.create({ scope: "/tmp/scope", backend: "fake" });
+    await assert.rejects(configured.send(id, "blocked", "now"), /Saved Default Effort “max”.*Choose one of low, medium, high/);
+    assert.deepEqual(fake.latest.prompts, []);
+    await configured.setEffort(id, "medium");
+    await configured.send(id, "corrected", "now");
+    assert.deepEqual(fake.latest.prompts, ["corrected"]);
+    await configured.shutdown();
+  });
+
+  it("preserves live model-switch clamping instead of treating it as invalid saved configuration", async () => {
+    await host.setEffort(sessionId, "high");
+    await host.setModel(sessionId, "fake-2");
+    await host.send(sessionId, "continue", "now");
+    assert.deepEqual(backend.latest.prompts, ["continue"]);
+    assert.equal(backend.latest.effort, undefined);
   });
 
   it("keeps the chosen Effort across a Revive", async () => {

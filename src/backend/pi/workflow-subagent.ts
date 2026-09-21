@@ -10,6 +10,7 @@ import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts"
 import type { ModelAutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { PiSession } from "./index.ts";
+import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
 import { PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
@@ -120,6 +121,13 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         throw error;
       }
       controller.signal.throwIfAborted();
+      // Validate against the registry model before creating a child. This is the same SDK-backed
+      // rule used by the catalogue and parent capabilities, and guarantees invalid workflow input
+      // cannot launch agent work first and fail afterwards.
+      if (!piAcceptsWorkflowEffort(model, options.effort)) {
+        const available = model.reasoning ? ` Choose one of ${piEffortLevels(model).join(", ")}.` : " This model has no Effort control; use off.";
+        throw new Error(`Unsupported workflow Effort “${options.effort}” for ${options.modelId}.${available}`);
+      }
       let prompt = JSON.stringify(options.input);
       if (options.skill) {
         const promptTemplate = resourceLoader.getPrompts().prompts.some(candidate => candidate.name === options.skill!.name);
@@ -146,9 +154,6 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       piAutoCompaction(settingsManager, this.autoCompaction)(model);
       this.child = session;
       controller.signal.throwIfAborted();
-      if (!session.getAvailableThinkingLevels().includes(options.effort as AgentSession["thinkingLevel"])) {
-        throw new Error(`Unsupported workflow Effort: ${options.effort}`);
-      }
       session.setThinkingLevel(options.effort as AgentSession["thinkingLevel"]);
       let output = "";
       let failure: string | undefined;

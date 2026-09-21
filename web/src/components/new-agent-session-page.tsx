@@ -108,11 +108,26 @@ export function NewAgentSessionPage({
   const checkedOut = head?.detached ? undefined : head?.name;
   const base = cutFrom ?? checkedOut ?? "";
 
-  const { catalogue: models } = useModelCatalogue();
+  const { catalogue: models, loading: modelsLoading, problem: modelsProblem, refresh: refreshModels } = useModelCatalogue();
   const backendModels = models?.find((entry) => entry.backend === backend);
   const model =
     backendModels?.models.find((candidate) => candidate.id === chosenModel) ??
     preselectedModel(models, config.providers?.defaults, backend);
+  const discoveryProblem = modelsLoading
+    ? "Checking model capabilities before starting agent work…"
+    : modelsProblem ?? backendModels?.problem
+      ?? (!backendModels ? `Model capabilities for ${backend || "this backend"} are unavailable.`
+        : !model ? `No confirmed model is available for ${backend}.` : undefined);
+  const savedDefaultEffort = config.providers?.efforts?.[backend];
+  const defaultLevels = model?.effortLevels ?? [];
+  const invalidSavedDefault = effort === undefined && savedDefaultEffort !== undefined && !!model
+    && (defaultLevels.length > 0 ? !defaultLevels.includes(savedDefaultEffort) : savedDefaultEffort !== "off");
+  const defaultEffortProblem = invalidSavedDefault
+    ? defaultLevels.length > 0
+      ? `Saved Default Effort “${savedDefaultEffort}” is unsupported for ${model?.label ?? model?.id}. Select a supported Effort here or correct Provider Settings.`
+      : `Saved Default Effort “${savedDefaultEffort}” is invalid because ${model?.label ?? model?.id} has no Effort control. Clear it in Provider Settings.`
+    : undefined;
+  const capabilityProblem = discoveryProblem ?? defaultEffortProblem;
   const command = createCommandFor({
     scope: scope ?? "",
     backend,
@@ -129,7 +144,7 @@ export function NewAgentSessionPage({
       status: "idle",
       backend,
       scope,
-      capabilities: backendModels
+      capabilities: backendModels && !discoveryProblem
         ? ({
             providers: [],
             models: backendModels.models,
@@ -155,7 +170,7 @@ export function NewAgentSessionPage({
       spoken: false,
       link: "live",
     }),
-    [backend, backendModels, effort, model, scope, shownBranch],
+    [backend, backendModels, discoveryProblem, effort, model, scope, shownBranch],
   );
 
   const create = useCallback(async (): Promise<string | undefined> => {
@@ -190,7 +205,11 @@ export function NewAgentSessionPage({
   const actions = useMemo<ComposerActions>(
     () => ({
       send,
-      setModel: setChosenModel,
+      setModel: (modelId) => {
+        setChosenModel(modelId);
+        const levels = backendModels?.models.find((candidate) => candidate.id === modelId)?.effortLevels ?? [];
+        setEffort((current) => current && levels.includes(current) ? current : undefined);
+      },
       setEffort,
       switchBranch: async (branch: string) => {
         if (inWorktree) {
@@ -204,7 +223,7 @@ export function NewAgentSessionPage({
       },
       listSkills,
     }),
-    [branches, inWorktree, listSkills, run, scope, send],
+    [backendModels, branches, inWorktree, listSkills, run, scope, send],
   );
 
   const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(tab === "workflow" ? "/api/workflows" : undefined, 10_000);
@@ -357,13 +376,21 @@ export function NewAgentSessionPage({
                 />
               </div>
 
+              {capabilityProblem ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground" role="status">
+                  <span>{capabilityProblem}</span>
+                  {!modelsLoading && discoveryProblem ? (
+                    <Button size="sm" variant="ghost" onClick={() => void refreshModels()}>Check again</Button>
+                  ) : null}
+                </div>
+              ) : null}
               <TabsContent value="chat" keepMounted className="grid gap-3">
                 <Composer
                   id={NEW_AGENT_SESSION_DRAFT}
                   chrome={chrome}
                   actions={actions}
                   floating={false}
-                  unavailable={backend === "" ? "This Session Host advertises no backend" : undefined}
+                  unavailable={backend === "" ? "This Session Host advertises no backend" : capabilityProblem}
                   placeholder="What should it work on? Enter starts the Agent Session."
                   drafts={drafts}
                   authorisingSummary={undefined}
@@ -422,7 +449,7 @@ export function NewAgentSessionPage({
                         )}
                         <Button
                           className="justify-self-start"
-                          disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue}
+                          disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue || !!capabilityProblem}
                           onClick={() => void launchWorkflow()}
                         >
                           {launching ? "Starting workflow…" : "Create Agent Session and start"}
