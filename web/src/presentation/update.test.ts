@@ -6,10 +6,9 @@ import {
   OPEN_BROWSER_UPDATE_CHECK_MS,
   UPDATE_RECONNECT_LIMIT_MS,
   canStartUpdate,
-  pollUpdateChecks,
   reconnectView,
+  updateDetail,
   updatePresentation,
-  type UpdateViewState,
 } from "./update.ts";
 
 const base: WebUpdateStatus = {
@@ -25,34 +24,6 @@ test("an open browser checks hourly and response loss progresses from reconnecti
   assert.equal(reconnectView(1_000, 1_000), "reconnecting");
   assert.equal(reconnectView(1_000, 30_999), "reconnecting");
   assert.equal(reconnectView(1_000, 31_000), "recovery-needed");
-});
-
-test("reconnect polling survives repeated failures, observes host return, and stops", async () => {
-  let active = true;
-  let checks = 0;
-  await pollUpdateChecks({
-    active: () => active,
-    delay: () => 2_000,
-    wait: async delay => { assert.equal(delay, 2_000); },
-    check: async () => {
-      checks++;
-      if (checks === 3) active = false;
-    },
-  });
-  assert.equal(checks, 3, "two failed responses do not disarm the poll before the host returns");
-});
-
-test("reconnect polling reaches recovery-needed after repeated unreachable responses", async () => {
-  let now = 0;
-  let view: UpdateViewState = "reconnecting";
-  await pollUpdateChecks({
-    active: () => view === "reconnecting",
-    delay: () => 10_000,
-    wait: async delay => { now += delay; },
-    check: async () => { view = reconnectView(0, now); },
-  });
-  assert.equal(now, UPDATE_RECONNECT_LIMIT_MS);
-  assert.equal(view, "recovery-needed");
 });
 
 test("update presentation distinguishes every discovery, eligibility, lifecycle, and recovery outcome", () => {
@@ -72,23 +43,64 @@ test("update presentation distinguishes every discovery, eligibility, lifecycle,
   assert.equal(updatePresentation({ ...base, checkError: "registry down" }, "ready"), "error");
 });
 
-test("a newer release supersedes a persisted successful outcome after reload", () => {
-  const successive: WebUpdateStatus = {
+const priorSuccess = {
+  id: "prior",
+  state: "succeeded" as const,
+  previousVersion: "1.0.0",
+  targetVersion: "2.0.0",
+  installedVersion: "2.0.0",
+  startedAt: "then",
+  finishedAt: "later",
+};
+
+function successive(eligibility: WebUpdateStatus["eligibility"]): WebUpdateStatus {
+  return {
     installedVersion: "2.0.0",
     latestVersion: "3.0.0",
     updateAvailable: true,
-    eligibility: { state: "eligible" },
+    eligibility,
+    operation: priorSuccess,
+  };
+}
+
+test("a newer eligible release supersedes a persisted successful outcome after reload", () => {
+  const status = successive({ state: "eligible" });
+  const presentation = updatePresentation(status, "ready");
+  assert.equal(presentation, "available");
+  assert.equal(canStartUpdate(status, presentation), true);
+});
+
+test("a successive release surfaces current blocked and unsupported eligibility before prior success", () => {
+  for (const [eligibility, expected, reason] of [
+    [{ state: "blocked", reason: "Active work is running." }, "blocked", "Active work is running."],
+    [{ state: "unsupported", reason: "Source installations update manually." }, "unsupported", "Source installations update manually."],
+  ] as const) {
+    const status = successive(eligibility);
+    const presentation = updatePresentation(status, "ready");
+    assert.equal(presentation, expected);
+    assert.equal(canStartUpdate(status, presentation), false);
+    const detail = updateDetail(presentation, status);
+    assert.match(detail, new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(detail, /previous update to Flow 2\.0\.0 was verified successfully/i);
+  }
+});
+
+test("locally timed-out recovery always renders reconnect and manual-repair guidance", () => {
+  const status: WebUpdateStatus = {
+    ...base,
     operation: {
-      id: "prior",
-      state: "succeeded",
+      id: "active",
+      state: "updating",
       previousVersion: "1.0.0",
       targetVersion: "2.0.0",
-      installedVersion: "2.0.0",
       startedAt: "then",
-      finishedAt: "later",
+      message: "Starting the guarded npm update.",
     },
   };
-  const presentation = updatePresentation(successive, "ready");
-  assert.equal(presentation, "available");
-  assert.equal(canStartUpdate(successive, presentation), true);
+  const presentation = updatePresentation(status, "recovery-needed", "Failed to fetch");
+  assert.equal(presentation, "recovery-needed");
+  const detail = updateDetail(presentation, status, { transportError: "Failed to fetch" });
+  assert.match(detail, /Reconnect below/);
+  assert.match(detail, /repair the private global npm installation manually and restart it/);
+  assert.match(detail, /Last known update status: Starting the guarded npm update/);
 });

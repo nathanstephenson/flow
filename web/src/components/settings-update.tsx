@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Download, LoaderCircle, RotateCw } from "lucide-react";
 
 import { useUpdates } from "@/updates.tsx";
-import { canStartUpdate, updatePresentation } from "@/presentation/update.ts";
+import { canStartUpdate, updateDetail, updatePresentation } from "@/presentation/update.ts";
 import { SettingsFact, SettingsGroup } from "@/components/settings-parts.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -22,25 +22,10 @@ export function UpdateSettings() {
   const [confirmingVersion, setConfirmingVersion] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const presentation = updatePresentation(status, view, transportError ?? actionError);
+  const detail = updateDetail(presentation, status, { actionError, transportError });
 
   // Opening General checks again, while still sharing the Session Host's 15-minute cache.
   useEffect(() => { void check(false); }, []);
-
-  const detail = useMemo(() => {
-    switch (presentation) {
-      case "checking": return "Checking the npm registry for the latest stable release…";
-      case "up-to-date": return `Flow ${status?.installedVersion ?? ""} is up to date.`;
-      case "available": return `Flow ${status?.latestVersion} is available and this installation can update safely.`;
-      case "unsupported": return status?.eligibility.state === "unsupported" ? status.eligibility.reason : "This installation cannot update itself.";
-      case "blocked": return status?.eligibility.state === "blocked" ? status.eligibility.reason : "Active work must finish before Flow can update.";
-      case "updating": return "The guarded npm update is running independently of this browser. The Session Host will restart shortly.";
-      case "reconnecting": return "The Session Host is restarting. Flow will reconnect and verify the running version automatically.";
-      case "success": return `${status?.operation?.message ?? "The update was verified."} Updated web assets are loaded; Agent Sessions remain Dormant until you Revive them.`;
-      case "failure": return `${status?.operation?.message ?? "The update failed."} The Session Host recovered, but this remains a failed update.`;
-      case "recovery-needed": return status?.operation?.message ?? "Flow could not verify recovery. Reconnect below; if the host remains unavailable, repair the private global npm installation manually and restart it.";
-      case "error": return actionError ?? status?.checkError ?? transportError ?? "Could not check for updates. Normal Flow use is unaffected.";
-    }
-  }, [actionError, presentation, status, transportError]);
 
   const working = ["checking", "updating", "reconnecting"].includes(presentation);
   const canUpdate = canStartUpdate(status, presentation);
