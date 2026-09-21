@@ -1,5 +1,6 @@
 import type { WebUpdateStatus } from "../../../src/protocol/update.ts";
 export const OPEN_BROWSER_UPDATE_CHECK_MS = 60 * 60 * 1000;
+export const UPDATE_MUTATION_TIMEOUT_MS = 10 * 1000;
 export const UPDATE_RECONNECT_LIMIT_MS = 30 * 1000;
 export const UPDATE_RECONNECT_POLL_MS = 2 * 1000;
 export const UPDATE_RECOVERY_POLL_MS = 10 * 1000;

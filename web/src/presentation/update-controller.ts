@@ -1,6 +1,7 @@
 import type { WebUpdateStatus } from "../../../src/protocol/update.ts";
 import {
   OPEN_BROWSER_UPDATE_CHECK_MS,
+  UPDATE_MUTATION_TIMEOUT_MS,
   UPDATE_RECOVERY_POLL_MS,
   UPDATE_RECONNECT_POLL_MS,
   reconnectView,
@@ -23,7 +24,7 @@ type TimerHandle = unknown;
 
 export type UpdateControllerOptions = {
   getStatus(refresh: boolean): Promise<UpdateResponse>;
-  beginUpdate(version: string): Promise<UpdateResponse>;
+  beginUpdate(version: string, signal: AbortSignal): Promise<UpdateResponse>;
   now(): number;
   setTimeout(callback: () => void, delayMs: number): TimerHandle;
   clearTimeout(handle: TimerHandle): void;
@@ -47,6 +48,8 @@ export class UpdateController {
   private pollDelay: number | undefined;
   private hourlyTimer: TimerHandle | undefined;
   private started = false;
+  private lifecycleRevision = 0;
+  private statusRequestSequence = 0;
   private readonly options: UpdateControllerOptions;
 
   constructor(options: UpdateControllerOptions) {
@@ -78,6 +81,13 @@ export class UpdateController {
   }
 
   async check(refresh = false): Promise<void> {
+    // An ambient check cannot prove that a POST still awaiting its response did not start. The POST
+    // has a bounded deadline; after that deadline reconnect polling becomes the only source of truth.
+    if (this.current.view === "starting") return;
+
+    const lifecycleRevision = this.lifecycleRevision;
+    const requestSequence = ++this.statusRequestSequence;
+
     // A registry refresh is discovery UI, not a lifecycle transition. Once a mutation might have
     // started, retain reconnect mode until a status response proves what happened.
     if (refresh && !this.operationMayBeRunning()) this.publish({ ...this.current, view: "checking" });
@@ -86,11 +96,14 @@ export class UpdateController {
       const response = await this.options.getStatus(refresh);
       const body = await response.json() as WebUpdateStatus & { error?: string };
       if (!response.ok) throw new Error(body.error ?? `Could not check for updates (${response.status})`);
+      if (!this.acceptStatusResponse(lifecycleRevision, requestSequence)) return;
 
       this.reconnectingSince = undefined;
       this.publish({ status: body, view: "ready" });
       if (body.operation?.state === "succeeded") this.options.onSucceeded?.(body.operation.id);
     } catch (error) {
+      if (!this.acceptStatusResponse(lifecycleRevision, requestSequence)) return;
+
       const transportError = errorMessage(error, "Could not reach the Session Host");
       if (!this.operationMayBeRunning()) {
         this.publish({ ...this.current, view: "ready", transportError });
@@ -107,15 +120,27 @@ export class UpdateController {
   }
 
   async begin(confirmedVersion: string): Promise<void> {
+    // Every status request already in flight describes the pre-mutation lifecycle. Invalidate those
+    // requests before exposing starting so that a late completion cannot disarm reconnect polling.
+    this.lifecycleRevision++;
     this.publish(withoutTransportError({ ...this.current, view: "starting" }));
+
+    const abort = new AbortController();
+    let timeout: TimerHandle | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timeout = this.options.setTimeout(() => {
+        reject(new Error("The update request timed out and may have started; reconnecting to verify it"));
+        abort.abort();
+      }, UPDATE_MUTATION_TIMEOUT_MS);
+    });
 
     let response: UpdateResponse;
     let body: WebUpdateStatus & { error?: string };
     try {
-      response = await this.options.beginUpdate(confirmedVersion);
-      // Losing an accepted response body is just as ambiguous as losing the response headers. Do
-      // not retry the POST; reconnect and inspect the durable operation instead.
-      body = await response.json() as WebUpdateStatus & { error?: string };
+      ({ response, body } = await Promise.race([
+        this.readMutationResponse(confirmedVersion, abort.signal),
+        timedOut,
+      ]));
     } catch (error) {
       this.reconnectingSince = this.options.now();
       this.publish({
@@ -124,6 +149,8 @@ export class UpdateController {
         transportError: errorMessage(error, "The update request may have started; reconnecting to verify it"),
       });
       return;
+    } finally {
+      if (timeout !== undefined) this.options.clearTimeout(timeout);
     }
 
     if (!response.ok) {
@@ -134,6 +161,21 @@ export class UpdateController {
 
     this.reconnectingSince = this.options.now();
     this.publish(withoutTransportError({ status: body, view: "reconnecting" }));
+  }
+
+  private async readMutationResponse(
+    confirmedVersion: string,
+    signal: AbortSignal,
+  ): Promise<{ response: UpdateResponse; body: WebUpdateStatus & { error?: string } }> {
+    const response = await this.options.beginUpdate(confirmedVersion, signal);
+    // Losing an accepted response body is just as ambiguous as losing the response headers. Do not
+    // retry the POST; reconnect and inspect the durable operation instead.
+    const body = await response.json() as WebUpdateStatus & { error?: string };
+    return { response, body };
+  }
+
+  private acceptStatusResponse(lifecycleRevision: number, requestSequence: number): boolean {
+    return lifecycleRevision === this.lifecycleRevision && requestSequence === this.statusRequestSequence;
   }
 
   private publish(snapshot: UpdatesSnapshot): void {

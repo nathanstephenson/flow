@@ -30,10 +30,11 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     }),
-    beginUpdate: confirmedVersion => authenticatedFetch("/api/update", {
+    beginUpdate: (confirmedVersion, signal) => authenticatedFetch("/api/update", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ confirmed: true, version: confirmedVersion }),
+      signal,
     }),
     now: () => Date.now(),
     setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),

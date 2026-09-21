@@ -4,7 +4,9 @@ import { test } from "node:test";
 import type { WebUpdateStatus } from "../../../src/protocol/update.ts";
 import {
   OPEN_BROWSER_UPDATE_CHECK_MS,
+  UPDATE_MUTATION_TIMEOUT_MS,
   UPDATE_RECOVERY_POLL_MS,
+  UPDATE_RECONNECT_LIMIT_MS,
   UPDATE_RECONNECT_POLL_MS,
   updateDetail,
   updatePresentation,
@@ -80,6 +82,102 @@ test("provider lifecycle treats an accepted POST with a lost body as ambiguous a
   assert.equal(controller.snapshot.view, "ready");
   assert.equal(controller.snapshot.status?.operation?.state, "succeeded");
   assert.deepEqual(succeededOperations, ["operation-1"]);
+  assert.equal(scheduler.nextTimeoutDelay(), undefined);
+  controller.stop();
+});
+
+test("a pre-mutation status completion cannot disarm polling before durable post-mutation status", async () => {
+  const scheduler = new ManualScheduler();
+  const connectionCheck = deferred<ReturnType<typeof response>>();
+  let gets = 0;
+  const controller = createController(scheduler, {
+    getStatus: async () => {
+      gets++;
+      if (gets === 1) return connectionCheck.promise;
+      return response(gets === 2 ? available : succeeded);
+    },
+    beginUpdate: async () => response(updating, 202),
+  });
+
+  controller.start();
+  assert.equal(gets, 1, "the connection-time status request remains in flight");
+  await controller.check(false);
+  assert.equal(controller.snapshot.view, "ready");
+  assert.equal(controller.snapshot.status?.updateAvailable, true);
+
+  await controller.begin("2.0.0");
+  assert.equal(controller.snapshot.view, "reconnecting");
+  assert.equal(controller.snapshot.status?.operation?.state, "updating");
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_RECONNECT_POLL_MS);
+
+  connectionCheck.resolve(response(available));
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "reconnecting", "the pre-mutation response is stale");
+  assert.equal(controller.snapshot.status?.operation?.state, "updating");
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_RECONNECT_POLL_MS, "polling remains armed");
+
+  scheduler.runNextTimeout();
+  await flushAsync();
+  assert.equal(gets, 3);
+  assert.equal(controller.snapshot.view, "ready");
+  assert.equal(controller.snapshot.status?.operation?.state, "succeeded");
+  assert.equal(scheduler.nextTimeoutDelay(), undefined);
+  controller.stop();
+});
+
+test("a stalled mutation times out ambiguously, reaches recovery guidance, and settles by GET", async () => {
+  const scheduler = new ManualScheduler();
+  let hostReachable = true;
+  let gets = 0;
+  let posts = 0;
+  let mutationSignal: AbortSignal | undefined;
+  const controller = createController(scheduler, {
+    getStatus: async () => {
+      gets++;
+      if (!hostReachable) throw new Error("host unavailable");
+      return response(gets === 1 ? available : succeeded);
+    },
+    beginUpdate: async (_version, signal) => {
+      posts++;
+      mutationSignal = signal;
+      return await new Promise<never>(() => {});
+    },
+  });
+
+  controller.start();
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "ready");
+
+  const beginning = controller.begin("2.0.0");
+  assert.equal(controller.snapshot.view, "starting");
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_MUTATION_TIMEOUT_MS);
+  await controller.check(false);
+  assert.equal(gets, 1, "ambient checks cannot settle a POST that is still awaiting its response");
+
+  scheduler.runNextTimeout();
+  await beginning;
+  assert.equal(mutationSignal?.aborted, true, "the timed-out transport is aborted");
+  assert.equal(controller.snapshot.view, "reconnecting");
+  assert.match(controller.snapshot.transportError ?? "", /timed out and may have started/);
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_RECONNECT_POLL_MS);
+
+  hostReachable = false;
+  scheduler.runNextTimeout();
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "reconnecting");
+
+  scheduler.nowMs += UPDATE_RECONNECT_LIMIT_MS;
+  scheduler.runNextTimeout();
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "recovery-needed");
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_RECOVERY_POLL_MS);
+
+  hostReachable = true;
+  scheduler.runNextTimeout();
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "ready");
+  assert.equal(controller.snapshot.status?.operation?.state, "succeeded");
+  assert.equal(posts, 1, "recovery polling never retries the mutation");
   assert.equal(scheduler.nextTimeoutDelay(), undefined);
   controller.stop();
 });
@@ -168,6 +266,12 @@ function response(body: WebUpdateStatus, status = 200) {
 
 async function flushAsync(): Promise<void> {
   await new Promise<void>(resolve => setImmediate(resolve));
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
 }
 
 class ManualScheduler {
