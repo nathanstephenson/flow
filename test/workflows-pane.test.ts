@@ -8,7 +8,7 @@ import { validateDefinition } from '../src/workflows/graph.ts';
 import { parseValue } from '../src/workflows/schema.ts';
 import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
 
-type Element = { type: string; props: Record<string, any> };
+type Element = { type: string; key?: string | null; props: Record<string, any> };
 const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample', backend: 'fake', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'join', name: 'Join', kind: 'join' }], edges: [] };
 
 function pane(status: string) {
@@ -44,7 +44,7 @@ function pane(status: string) {
     if (name === './workflow-editors.tsx') return { initialValue: () => ({}), ValueEditor: 'ValueEditor' };
     return new Proxy({}, { get: (_target, key) => key });
   } });
-  const render = () => { index = 0; return module.exports.default({ sessionId: 'session' }); };
+  const render = (props: Record<string, unknown> = {}) => { index = 0; return module.exports.default({ sessionId: 'session', ...props }); };
   const button = (label: string) => find(render(), 'Button', node => node.props.children === label);
   const select = () => find(render(), 'Select', node => !!node.props.onValueChange).props.onValueChange('sample');
   return { session, history, workflow, detail, calls, render, button, select };
@@ -122,16 +122,23 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   assert.equal(find(overview, 'TabsTrigger', node => node.props.value === 'Overview').props.children, 'Overview');
   assert.equal(find(overview, 'TabsTrigger', node => node.props.value === 'Flow').props.children, 'Flow');
   assert.equal(find(overview, 'TabsContent', node => node.props.value === 'Overview').props.keepMounted, undefined);
-  assert.equal(find(overview, 'TabsContent', node => node.props.value === 'Flow').props.keepMounted, undefined);
+  assert.equal(find(overview, 'TabsContent', node => node.props.value === 'Flow').props.keepMounted, true);
   assert.match(JSON.stringify(find(overview, 'TabsContent', node => node.props.value === 'Overview')), /Original launch snapshot/);
   assert.match(JSON.stringify(find(overview, 'TabsContent', node => node.props.value === 'Overview')), /Result/);
 
   tabs.props.onValueChange('Flow');
   const flow = p.render();
   assert.equal(find(flow, 'Tabs').props.value, 'Flow');
+  const rightGraph = find(flow, 'WorkflowGraph');
+  assert.equal(rightGraph.props.orientation, 'vertical');
+  assert.equal(rightGraph.key, 'execution/right');
+  const bottomGraph = find(p.render({ placement: 'bottom' }), 'WorkflowGraph');
+  assert.equal(bottomGraph.props.orientation, 'horizontal');
+  assert.equal(bottomGraph.key, 'execution/bottom');
   find(flow, 'WorkflowGraph').props.onSelect('join');
   const step = p.render();
   assert.equal(find(step, 'Tabs').props.value, 'Flow');
+  assert.ok(find(step, 'WorkflowGraph'));
   assert.ok(find(step, 'Select', node => node.props.value === 1));
   find(step, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
   assert.ok(find(p.render(), 'WorkflowGraph'));

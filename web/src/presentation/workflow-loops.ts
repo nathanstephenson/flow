@@ -6,6 +6,11 @@ import type {
 } from "../../../src/protocol/workflows.ts";
 import type { RecoverWorkflow } from "../../../src/protocol/workflow-executions.ts";
 import { analyzeLoops } from "../../../src/workflows/loops.ts";
+import {
+  WORKFLOW_CARD_HEIGHT,
+  WORKFLOW_CARD_WIDTH,
+  workflowFallbackPosition,
+} from "./workflow-dimensions.ts";
 
 export function cleanLoopSettings(
   definition: WorkflowDefinition,
@@ -55,12 +60,24 @@ export function cleanLoopSettings(
   };
 }
 
-export function loopLayout(definition: WorkflowDefinition): Node[] {
+export const LOOP_PADDING = 24;
+export const LOOP_TOP_HEADER_HEIGHT = 112;
+export const LOOP_SIDE_HEADER_WIDTH = 264;
+export const LOOP_MIN_TOP_HEADER_WIDTH = 360;
+
+type LoopLayoutOptions = {
+  orientation?: "horizontal" | "vertical";
+};
+
+export function loopLayout(
+  definition: WorkflowDefinition,
+  { orientation = "horizontal" }: LoopLayoutOptions = {},
+): Node[] {
   const loops = analyzeLoops(definition).loops;
   const positions = new Map(
     definition.steps.map((step, i) => [
       step.id,
-      step.position ?? { x: (i % 3) * 270, y: Math.floor(i / 3) * 180 },
+      step.position ?? workflowFallbackPosition(i),
     ]),
   );
   const boxes = new Map<
@@ -74,16 +91,34 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
     const contents = [
       ...loop.memberIds
         .filter((id) => !children.some((child) => child.memberIds.includes(id)))
-        .map((id) => ({ ...positions.get(id)!, width: 210, height: 150 })),
+        .map((id) => ({
+          ...positions.get(id)!,
+          width: WORKFLOW_CARD_WIDTH,
+          height: WORKFLOW_CARD_HEIGHT,
+        })),
       ...children.map((child) => boxes.get(child.headerId)!),
     ];
-    const x = Math.min(...contents.map((box) => box.x)) - 24;
-    const y = Math.min(...contents.map((box) => box.y)) - 100;
+    const contentLeft = Math.min(...contents.map((box) => box.x));
+    const contentTop = Math.min(...contents.map((box) => box.y));
+    const contentRight = Math.max(
+      ...contents.map((box) => box.x + box.width),
+    );
+    const contentBottom = Math.max(
+      ...contents.map((box) => box.y + box.height),
+    );
+    const vertical = orientation === "vertical";
+    const x = contentLeft - (vertical ? LOOP_SIDE_HEADER_WIDTH : LOOP_PADDING);
+    const y = contentTop - (vertical ? LOOP_PADDING : LOOP_TOP_HEADER_HEIGHT);
     boxes.set(loop.headerId, {
       x,
       y,
-      width: Math.max(...contents.map((box) => box.x + box.width)) + 24 - x,
-      height: Math.max(...contents.map((box) => box.y + box.height)) + 24 - y,
+      width: vertical
+        ? contentRight + LOOP_PADDING - x
+        : Math.max(
+            LOOP_MIN_TOP_HEADER_WIDTH,
+            contentRight + LOOP_PADDING - x,
+          ),
+      height: contentBottom + LOOP_PADDING - y,
     });
   }
   let prefix = "loop:";
@@ -110,7 +145,8 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
       deletable: false,
       draggable: false,
       connectable: false,
-      data: { headerId: loop.headerId },
+      zIndex: 1,
+      data: { headerId: loop.headerId, orientation },
     })),
     ...definition.steps.map((step) => {
       const parent = [...loops]
@@ -121,6 +157,7 @@ export function loopLayout(definition: WorkflowDefinition): Node[] {
         type: "workflow",
         ...(parent ? { parentId: groupId(parent.headerId) } : {}),
         position: relative(positions.get(step.id)!, parent?.headerId),
+        zIndex: 2,
         data: { step },
       };
     }),

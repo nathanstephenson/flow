@@ -12,7 +12,13 @@ import {
   loopLayout,
   loopProgress,
 } from "./workflow-loops.ts";
+import { WORKFLOW_CARD_HEIGHT, WORKFLOW_CARD_WIDTH, workflowFallbackPosition } from "./workflow-dimensions.ts";
 import { mappingChoices } from "./workflows.ts";
+
+test("fallback rows clear full-height workflow cards", () => {
+  const positions = Array.from({ length: 4 }, (_, index) => workflowFallbackPosition(index));
+  assert.ok(positions[3]!.y >= positions[0]!.y + WORKFLOW_CARD_HEIGHT);
+});
 
 const schema = {
   type: "object" as const,
@@ -72,6 +78,27 @@ test("nested groups precede children and do not act as steps", () => {
       step.position,
     );
 });
+test("vertical nested loops reserve side rails and contain the full-sized cards", () => {
+  const nodes = loopLayout(definition, { orientation: "vertical" });
+  const loopNodes = nodes.filter((node) => node.type === "loop");
+  assert.equal(loopNodes.length, 2);
+  for (const loop of loopNodes) {
+    assert.equal(loop.data.orientation, "vertical");
+    assert.ok(Number(loop.style?.width) >= 264 + WORKFLOW_CARD_WIDTH + 24);
+    assert.ok(Number(loop.style?.height) >= WORKFLOW_CARD_HEIGHT + 48);
+  }
+  for (const node of nodes.filter((node) => node.parentId)) {
+    // The dedicated rail keeps vertical incoming edges and their labels away from loop summaries.
+    assert.ok(node.position.x >= 264);
+    assert.ok(node.position.y >= 24);
+  }
+  for (const step of definition.steps)
+    assert.deepEqual(
+      absolutePosition(nodes.find((node) => node.id === step.id)!, nodes),
+      step.position,
+    );
+});
+
 test("drag coordinates remain absolute and nested containment is stable", () => {
   const nodes = loopLayout(definition);
   const work = nodes.find((node) => node.id === "work")!;
