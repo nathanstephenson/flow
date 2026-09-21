@@ -57,4 +57,4 @@ jobs:
         with:
           name: npm-package
           path: release
-      - run: npm publish release/package.tgz --access public --provenance --ignore-scripts
+      - run: npm publish ./release/package.tgz --access public --provenance --ignore-scripts
