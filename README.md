@@ -60,7 +60,12 @@ do not tag a version until its license and release contents are approved.
 ## Updating Flow
 
 Run `flow update` to install `@nathanstephenson/flow@latest` with the npm selected by PATH.
-Its global prefix must match this exact installation. Only user-owned prefixes without group or
+An authorised browser connected to a background Session Host can perform the same guarded operation
+from **Settings → General → Flow update** after explicit confirmation. The browser checks only npm's
+stable `latest` tag, cannot select a package/version/path or force active work to stop, and reconnects
+on the same address and port to verify the running version. Updates are never automatic.
+
+The global prefix must match this exact installation. Only user-owned prefixes without group or
 other write access are supported; their ancestor directories must also prevent replacement by other users. Source, npm-link, root/sudo, shared prefixes, and SEA self-update
 are not supported. Ordinary commands still work for these installations. Update shared or system
 installations manually with npm after stopping all Flow processes.

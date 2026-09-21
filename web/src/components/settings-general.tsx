@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { UpdateSettings } from "@/components/settings-update.tsx";
 
 /**
  * General: the retention window, and what this Session Host is.
@@ -38,9 +39,12 @@ export function GeneralSettings() {
 
   if (current === undefined) {
     return (
-      <SettingsGroup title="Retention">
-        <p className="text-sm text-muted-foreground">This Session Host serves no Settings.</p>
-      </SettingsGroup>
+      <>
+        <UpdateSettings />
+        <SettingsGroup title="Retention">
+          <p className="text-sm text-muted-foreground">This Session Host serves no Settings.</p>
+        </SettingsGroup>
+      </>
     );
   }
 
@@ -58,6 +62,7 @@ export function GeneralSettings() {
 
   return (
     <>
+      <UpdateSettings />
       <SettingsGroup
         title="Retention"
         description={

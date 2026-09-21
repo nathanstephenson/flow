@@ -6,7 +6,7 @@ import { readHost, type HostIdentity } from '../daemon/ownership.ts';
 import { backgroundHostArgs, getHostStatus, HostRefusal, launchBackground, processAlive, requestHostStop, requireRestartable, waitUntil } from './host-control.ts';
 import { InstallationProcessUncertain, replacePackage } from './install-process.ts';
 
-function npmExecutable(): string {
+export function npmExecutable(): string {
   for (const directory of (process.env.PATH ?? '').split(delimiter)) {
     const path = resolve(directory, 'npm');
     try { accessSync(path, constants.X_OK); return realpathSync(path); } catch {}
@@ -16,7 +16,7 @@ function npmExecutable(): string {
 function npmPath(npm: string, command: string): string {
   return realpathSync(execFileSync(npm, [command, '--global'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 }).trim());
 }
-function packageVersion(slot: string): string {
+export function packageVersion(slot: string): string {
   privatePath(slot);
   const metadata = JSON.parse(readFileSync(join(slot, 'package.json'), 'utf8'));
   if (metadata?.name !== packageName || typeof metadata.version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(metadata.version)) throw new Error('Installed package identity is invalid');
@@ -46,12 +46,22 @@ async function restore(install: Installation, transaction: UpdateTransaction, ro
   await transaction.assertAuthorizationConsumed();
 }
 
-export async function update(install: Installation, lease: Lease, args: string[]): Promise<void> {
-  if (args.length > 2 || args[0] !== 'update' || (args.length === 2 && args[1] !== '--force')) throw new Error('usage: flow update [--force]');
+export type UpdateResult = { previousVersion: string; installedVersion: string; changed: boolean };
+
+/** Reused by the web surface for an explanation; `update` repeats it immediately before mutation. */
+export function inspectUpdateInstallation(install: Installation): { npm: string; version: string } {
   const npm = npmExecutable();
   const prefix = npmPath(npm, 'prefix'), root = npmPath(npm, 'root');
   if (prefix !== install.prefix || root !== join(prefix, 'lib/node_modules') || realpathSync(join(root, packageName)) !== install.slot) throw new Error('npm selects a different installation. Put the matching npm in PATH and select its prefix.');
-  const previous = packageVersion(install.slot);
+  return { npm, version: packageVersion(install.slot) };
+}
+
+export async function update(install: Installation, lease: Lease, args: string[]): Promise<UpdateResult> {
+  if (args.length > 2 || args[0] !== 'update' || (args.length === 2 && args[1] !== '--force')) throw new Error('usage: flow update [--force]');
+  const inspected = inspectUpdateInstallation(install);
+  const npm = inspected.npm;
+  const prefix = install.prefix;
+  const previous = inspected.version;
   let host = readHost(lease.root);
   if (host && processAlive(host.pid)) {
     const status = await getHostStatus(host);
@@ -83,6 +93,7 @@ export async function update(install: Installation, lease: Lease, args: string[]
     }
     const version = await replace('latest');
     console.log(version === previous ? `Flow is already at ${version}.` : `Flow updated: ${previous} → ${version}`);
+    return { previousVersion: previous, installedVersion: version, changed: version !== previous };
   } catch (error) {
     if (error instanceof InstallationProcessUncertain) throw new Error(`${String(error)}. ${repair()}`);
     if (!replacing) {

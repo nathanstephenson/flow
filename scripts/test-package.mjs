@@ -144,7 +144,9 @@ try {
   assert.equal(background.mode, 'background');
   assert.equal(statSync(join(state, 'host.log')).mode & 0o777, 0o600);
   assert.match(readFileSync(join(state, 'host.log'), 'utf8'), /Session Host listening/);
-  assert.equal(background.settings.port, 0);
+  const selectedPort = Number(new URL(background.url).port);
+  assert.ok(selectedPort > 0);
+  assert.equal(background.settings.port, selectedPort);
   assert.equal(background.settings.cwd, cwd);
   const conflictRoot = join(temp, 'conflict');
   assert.throws(() => run(flow, ['serve', '--port', new URL(background.url).port], { env: { ...env, FLOW_STATE_DIR: conflictRoot } }), /EADDRINUSE/);
@@ -157,7 +159,8 @@ try {
   run(flow, ['serve', 'restart'], { cwd: temp, env: { ...env, FLOW_STATE_DIR: 'state' } });
   const restarted = JSON.parse(readFileSync(join(state, 'daemon.json'), 'utf8'));
   assert.notEqual(restarted.instanceId, background.instanceId);
-  assert.equal(restarted.settings.port, 0);
+  assert.equal(restarted.settings.port, selectedPort);
+  assert.equal(Number(new URL(restarted.url).port), selectedPort);
   assert.match(run(flow, ['list']), /dormant/);
   assert.throws(() => run(flow, ['--backend', 'fake', 'hello']), /already owns/);
   run(flow, ['serve', 'stop']);

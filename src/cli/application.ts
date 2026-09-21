@@ -20,6 +20,9 @@ import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import type { AssetManifest } from "../web/assets.ts";
 import { runTui } from "../tui/app.ts";
+import type { Installation } from './install-guard.ts';
+
+let webUpdateInstallation: { installation: Installation; bootstrapEntry: string } | undefined;
 
 const USAGE = `usage:
   flow --version                                        print the installed version
@@ -177,6 +180,11 @@ async function startHost(
 ): Promise<{ running: RunningServer; daemon: Daemon; stop: () => Promise<void> }> {
   const runtime = await startRuntime({
     root: defaultStateRoot(), version: installedVersion(), mode, assets: webClient,
+    ...(webUpdateInstallation === undefined
+      ? { updateUnsupportedReason: isSea()
+          ? 'Single-executable Flow builds cannot update themselves. Install the new binary manually.'
+          : 'A source checkout cannot update itself. Install or update Flow through a private global npm prefix.' }
+      : { updateInstallation: webUpdateInstallation }),
     workflowRuntime: () => isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)),
     ...(port === undefined ? {} : { port }), ...(address === undefined ? {} : { address }),
   });
@@ -412,7 +420,8 @@ async function reachable(daemon: Daemon): Promise<boolean> {
   }
 }
 
-export function runCli(): Promise<void> {
+export function runCli(updateInstallation?: { installation: Installation; bootstrapEntry: string }): Promise<void> {
+  webUpdateInstallation = updateInstallation;
   return main()
     .then((code) => process.exit(code))
     .catch((error: unknown) => {

@@ -329,6 +329,29 @@ test('an already-running host in another root blocks update', async () => {
   } finally { await f.close(); }
 });
 
+test('browser-launched helpers persist verified success, unchanged, and recovered failure outcomes', async () => {
+  for (const outcome of ['success', 'unchanged', 'rollback'] as const) {
+    const f = fixture();
+    try {
+      const id = `web-${outcome}`;
+      writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({ id, state: 'updating', previousVersion: '1.2.3', startedAt: new Date().toISOString() }));
+      const extra = {
+        FLOW_WEB_UPDATE_ID: id,
+        ...(outcome === 'unchanged' ? { TEST_UNCHANGED: '1' } : {}),
+        ...(outcome === 'rollback' ? { TEST_FAIL: 'latest' } : {}),
+      };
+      const result = await f.start(['update'], extra).done;
+      assert.equal(result.code, outcome === 'rollback' ? 1 : 0, result.output);
+      const record = json<{ state: string; installedVersion?: string; message?: string }>(join(f.root, 'web-update.json'))!;
+      assert.equal(record.state, outcome === 'success' ? 'succeeded' : 'failed');
+      if (outcome === 'success') assert.equal(record.installedVersion, '2.0.0');
+      if (outcome === 'unchanged') assert.match(record.message ?? '', /No update was installed/);
+      if (outcome === 'rollback') assert.match(record.message ?? '', /Reinstalled and verified 1.2.3/);
+      assert.equal(existsSync(f.install.barrierPath), false, 'verified recovery removes the startup barrier');
+    } finally { await f.close(); }
+  }
+});
+
 test('unchanged versions and failed fresh-process verification are reported accurately', async () => {
   for (const extra of [{ TEST_UNCHANGED: '1' }, { TEST_BAD_BUILD: '1' }] as Record<string, string>[]) {
     const f = fixture();

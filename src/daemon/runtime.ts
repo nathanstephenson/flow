@@ -11,6 +11,8 @@ import { ShellRegistry } from './shell.ts';
 import { TranscriptStore } from './store.ts';
 import { acquireHost, readHost, oidcFingerprint, type HostIdentity } from './ownership.ts';
 import type { AssetManifest } from '../web/assets.ts';
+import type { Installation } from '../cli/install-guard.ts';
+import { WebUpdateController } from '../cli/web-update.ts';
 
 export async function startRuntime(options: {
   root: string;
@@ -20,6 +22,8 @@ export async function startRuntime(options: {
   mode: HostIdentity['mode'];
   assets(): AssetManifest;
   workflowRuntime(): string;
+  updateInstallation?: { installation: Installation; bootstrapEntry: string };
+  updateUnsupportedReason?: string;
 }) {
   const ownership = acquireHost(options.root);
   const root = ownership.root;
@@ -77,11 +81,18 @@ export async function startRuntime(options: {
       instanceId: ownership.instanceId, pid: process.pid, version: options.version, url: '', token, mode: options.mode,
       settings: { port: options.port ?? 0, address: options.address ?? '127.0.0.1', cwd: process.cwd(), oidc: oidcFingerprint() },
     };
+    const hasActiveWork = () => host.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions.list(session.id).occupied);
+    const updates = new WebUpdateController({
+      root,
+      installedVersion: options.version,
+      mode: options.mode,
+      hasActiveWork,
+      ...(options.updateInstallation === undefined ? {} : options.updateInstallation),
+      ...(options.updateUnsupportedReason === undefined ? {} : { unsupportedReason: options.updateUnsupportedReason }),
+    });
     running = await serve({
-      control: {
-        identity, stop,
-        hasActiveWork: () => host.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions.list(session.id).occupied),
-      },
+      control: { identity, stop, hasActiveWork },
+      updates,
       host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions,
       assets: options.assets(), scope: process.cwd(),
       ...(oidc === undefined ? {} : { oidc }),
@@ -89,6 +100,9 @@ export async function startRuntime(options: {
       ...(options.address === undefined ? {} : { address: options.address }),
     });
     const url = running.url.replace(`//${options.address ?? '127.0.0.1'}:`, '//127.0.0.1:');
+    // Port 0 is only a listen request. Persist the selected port so a guarded restart returns on the
+    // same browser origin instead of choosing a fresh ephemeral port the disconnected page cannot reach.
+    identity.settings.port = Number(new URL(running.url).port);
     identity.url = url;
     ownership.publish(identity);
     return { running, daemon: { url, token }, stop };
