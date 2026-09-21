@@ -240,10 +240,7 @@ function BackendSettings({
               loading={loading}
               value={model}
               placeholder="Use backend default"
-              onChange={(value) => {
-                setModel(value);
-                setEffort("");
-              }}
+              onChange={setModel}
             />
             <div className="flex flex-col gap-1">
               <span className="text-sm font-medium">Default Effort</span>
@@ -304,6 +301,7 @@ function BackendSettings({
         <SaveRow
           dirty={dirty}
           saving={saving}
+          saveDisabled={invalidEffort}
           onReset={reset}
           onSave={() =>
             void save(

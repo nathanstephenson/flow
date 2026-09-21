@@ -85,17 +85,19 @@ export function useSaveSettings(): {
 export function SaveRow({
   dirty,
   saving,
+  saveDisabled = false,
   onSave,
   onReset,
 }: {
   dirty: boolean;
   saving: boolean;
+  saveDisabled?: boolean;
   onSave: () => void;
   onReset: () => void;
 }) {
   return (
     <div className="flex items-center gap-2">
-      <Button size="sm" disabled={!dirty || saving} onClick={onSave}>
+      <Button size="sm" disabled={!dirty || saving || saveDisabled} onClick={onSave}>
         {saving ? "Saving…" : "Save"}
       </Button>
       <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={onReset}>
