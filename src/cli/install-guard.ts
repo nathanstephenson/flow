@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { processAlive } from './host-control.ts';
 
 export const packageName = '@nathanstephenson/flow';
+export type UpdateUnsupportedKind = 'source' | 'npm-link' | 'sea' | 'shared' | 'system' | 'root';
 type Owner = { pid: number; id: string };
 export type Lease = Owner & { root: string; args: string[] };
 export type Barrier = Owner & { phase: 'preparing' | 'replacing' | 'restoring'; previous: string; capability?: { token: string; root: string; args: string[] } };
@@ -65,21 +66,55 @@ export function registryExists(slot: string): boolean {
     throw error;
   }
 }
-export function updateEligible(slot: string): boolean {
+function updateIneligibility(slot: string, uid = process.getuid?.()): Exclude<UpdateUnsupportedKind, 'sea'> | undefined {
   slot = resolve(slot);
   const prefix = resolve(slot, '../../../..');
-  const uid = process.getuid?.();
-  if (slot !== join(prefix, 'lib/node_modules', packageName) || uid === 0) return false;
+  if (slot !== join(prefix, 'lib/node_modules', packageName)) return 'source';
+  if (uid === undefined || uid === 0) return 'root';
   for (const path of [prefix, join(prefix, 'lib'), join(prefix, 'lib/node_modules'), join(prefix, 'lib/node_modules/@nathanstephenson'), slot]) {
     const stat = lstatSync(path);
-    if (stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) return false;
+    if (stat.isSymbolicLink()) return 'npm-link';
+    if (stat.uid !== uid) return 'system';
+    if ((stat.mode & 0o022) !== 0) return 'shared';
   }
   for (let path = dirname(prefix); ; path = dirname(path)) {
     const stat = lstatSync(path);
-    if (stat.isSymbolicLink() || (stat.uid !== 0 && stat.uid !== uid) || ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0)) return false;
+    if (stat.isSymbolicLink()) return 'npm-link';
+    if (stat.uid !== 0 && stat.uid !== uid) return 'system';
+    if ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) return 'shared';
     if (dirname(path) === path) break;
   }
-  return realpathSync(prefix) === prefix;
+  return realpathSync(prefix) === prefix ? undefined : 'npm-link';
+}
+
+function pathHasSymlink(path: string): boolean {
+  for (let current = resolve(path); ; current = dirname(current)) {
+    try { if (lstatSync(current).isSymbolicLink()) return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    if (dirname(current) === current) return false;
+  }
+}
+
+export function updateUnsupportedReason(kind: UpdateUnsupportedKind): string {
+  return {
+    source: 'A source checkout cannot update itself. Install or update Flow through a private global npm prefix.',
+    'npm-link': 'An npm-linked Flow checkout cannot update itself. Remove the link and install Flow in a private global npm prefix.',
+    sea: 'Single-executable Flow builds cannot update themselves. Install the new binary manually.',
+    shared: 'A shared or group/other-writable global npm installation cannot update itself. Use a private, user-owned npm prefix without sudo.',
+    system: 'A system-owned or another user\'s global npm installation cannot update itself. Install Flow in your own private npm prefix without sudo.',
+    root: 'A root-owned or sudo-installed Flow cannot update itself. Install Flow as your normal user in a private npm prefix.',
+  }[kind];
+}
+
+/** Explain why this process cannot expose web self-update without mislabelling global installs as source. */
+export function explainUnsupportedUpdate(slot: string, entry = process.argv[1], uid = process.getuid?.()): string {
+  let kind = updateIneligibility(slot, uid) ?? 'source';
+  if (kind === 'source' && entry && pathHasSymlink(entry)) kind = 'npm-link';
+  return updateUnsupportedReason(kind);
+}
+
+export function updateEligible(slot: string): boolean {
+  return updateIneligibility(slot) === undefined;
 }
 export function installation(slot: string) {
   slot = resolve(slot);

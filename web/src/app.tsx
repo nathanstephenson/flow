@@ -5,6 +5,7 @@ import { AppShell } from "@/components/app-shell.tsx";
 import { McpAuthResult } from "@/components/mcp-actions.ts";
 import { Toaster } from "@/components/ui/toaster.tsx";
 import { TooltipProvider } from "@/components/ui/tooltip.tsx";
+import { UpdatesProvider } from "@/updates.tsx";
 
 /**
  * The provider stack, in dependency order.
@@ -20,6 +21,7 @@ import { TooltipProvider } from "@/components/ui/tooltip.tsx";
 export function App() {
   return (
     <HostProvider>
+      <UpdatesProvider>
       <SessionsProvider>
         <AgentSessionViewProvider>
           <TooltipProvider>
@@ -29,6 +31,7 @@ export function App() {
           </TooltipProvider>
         </AgentSessionViewProvider>
       </SessionsProvider>
+      </UpdatesProvider>
     </HostProvider>
   );
 }

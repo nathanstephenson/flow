@@ -20,6 +20,14 @@ import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import type { AssetManifest } from "../web/assets.ts";
 import { runTui } from "../tui/app.ts";
+import { updateUnsupportedReason, type Installation } from './install-guard.ts';
+
+type WebUpdateSupport = {
+  installation?: Installation;
+  bootstrapEntry?: string;
+  unsupportedReason?: string;
+};
+let webUpdateSupport: WebUpdateSupport | undefined;
 
 const USAGE = `usage:
   flow --version                                        print the installed version
@@ -177,6 +185,11 @@ async function startHost(
 ): Promise<{ running: RunningServer; daemon: Daemon; stop: () => Promise<void> }> {
   const runtime = await startRuntime({
     root: defaultStateRoot(), version: installedVersion(), mode, assets: webClient,
+    ...(webUpdateSupport?.installation && webUpdateSupport.bootstrapEntry
+      ? { updateInstallation: { installation: webUpdateSupport.installation, bootstrapEntry: webUpdateSupport.bootstrapEntry } }
+      : { updateUnsupportedReason: isSea()
+          ? updateUnsupportedReason('sea')
+          : webUpdateSupport?.unsupportedReason ?? updateUnsupportedReason('source') }),
     workflowRuntime: () => isSea() ? embeddedWorkflowRuntime() : fileURLToPath(new URL('../../build/workflow-runtime.cjs', import.meta.url)),
     ...(port === undefined ? {} : { port }), ...(address === undefined ? {} : { address }),
   });
@@ -412,7 +425,8 @@ async function reachable(daemon: Daemon): Promise<boolean> {
   }
 }
 
-export function runCli(): Promise<void> {
+export function runCli(updateSupport?: WebUpdateSupport): Promise<void> {
+  webUpdateSupport = updateSupport;
   return main()
     .then((code) => process.exit(code))
     .catch((error: unknown) => {

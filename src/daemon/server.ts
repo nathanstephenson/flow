@@ -25,6 +25,7 @@ import { tokenMatches, type OidcGate } from "./auth.ts";
 import { CommandRefused, type SessionHost } from "./host.ts";
 import type { ShellRegistry } from "./shell.ts";
 import type { TranscriptStore } from "./store.ts";
+import { UpdateRefusal, type UpdateController } from './update-api.ts';
 
 const PUBLIC_ICON_PATHS = new Set([
   "/favicon.svg",
@@ -96,6 +97,8 @@ export type ServeOptions = {
    * deployment has no client, which is what a source run passes.
    */
   assets: AssetManifest;
+  /** Fixed self-update orchestration. Omitted only by narrow transport tests. */
+  updates?: UpdateController;
 };
 
 export type RunningServer = {
@@ -312,6 +315,37 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     } else {
       unauthorized(response, options.oidc ? "/oauth/login" : undefined);
     }
+    return;
+  }
+
+  if (url.pathname === '/api/update') {
+    response.setHeader('cache-control', 'no-store');
+    if (!options.updates) {
+      send(response, 404, { error: 'Update status is unavailable' });
+      return;
+    }
+    if (request.method === 'GET') {
+      send(response, 200, await options.updates.status(url.searchParams.get('refresh') === '1'));
+      return;
+    }
+    if (request.method === 'POST') {
+      try {
+        const body: unknown = JSON.parse(await readBody(request, 1024));
+        const confirmation = body as { confirmed?: unknown; version?: unknown };
+        if (!body || typeof body !== 'object' || Array.isArray(body) || confirmation.confirmed !== true ||
+            typeof confirmation.version !== 'string' || confirmation.version.length > 100 ||
+            Object.keys(body).some(key => key !== 'confirmed' && key !== 'version')) {
+          send(response, 400, { error: 'An explicit update confirmation for the displayed version is required' });
+          return;
+        }
+        send(response, 202, await options.updates.start(confirmation.version));
+      } catch (error) {
+        if (!(error instanceof UpdateRefusal)) throw error;
+        send(response, 409, { error: error.message });
+      }
+      return;
+    }
+    send(response, 405, { error: 'Method not allowed' });
     return;
   }
 

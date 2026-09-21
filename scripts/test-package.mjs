@@ -144,6 +144,8 @@ try {
   assert.equal(background.mode, 'background');
   assert.equal(statSync(join(state, 'host.log')).mode & 0o777, 0o600);
   assert.match(readFileSync(join(state, 'host.log'), 'utf8'), /Session Host listening/);
+  const selectedPort = Number(new URL(background.url).port);
+  assert.ok(selectedPort > 0);
   assert.equal(background.settings.port, 0);
   assert.equal(background.settings.cwd, cwd);
   const conflictRoot = join(temp, 'conflict');

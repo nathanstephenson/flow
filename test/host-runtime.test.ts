@@ -7,6 +7,16 @@ import { SessionHost } from '../src/daemon/host.ts';
 import { readHost } from '../src/daemon/ownership.ts';
 import { startRuntime } from '../src/daemon/runtime.ts';
 
+test('an ordinary ephemeral background host retains the dynamic-port restart request', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-runtime-port-'));
+  const runtime = await startRuntime({ root, version: '1.0.0', mode: 'background', port: 0, assets: () => ({}), workflowRuntime: () => '/unused' });
+  try {
+    const selected = Number(new URL(runtime.running.url).port);
+    assert.ok(selected > 0);
+    assert.equal(readHost(root)?.settings.port, 0);
+  } finally { await runtime.stop(); rmSync(root, { recursive: true, force: true }); }
+});
+
 for (const failure of ['rejection', 'timeout']) {
   test(`runtime shutdown ${failure} retains ownership without repeating partial shutdown`, async t => {
     const root = mkdtempSync(join(tmpdir(), 'flow-runtime-stop-'));

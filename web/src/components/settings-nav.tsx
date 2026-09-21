@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/sidebar.tsx";
 import { cn } from "@/lib/utils.ts";
 import { useHost } from "@/host.tsx";
+import { useUpdates } from "@/updates.tsx";
+import { Badge } from "@/components/ui/badge.tsx";
 
 /**
  * The rail, while the Settings are on screen: the same frame, a different list.
@@ -33,7 +35,7 @@ const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: Com
   workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Sliders },
   mcp: { label: "MCP", hint: "Local and remote tools", icon: Sliders },
   secrets: { label: "Secrets", hint: "Named secrets and code runtime", icon: ShieldCheck },
-  general: { label: "General", hint: "Retention, and this Session Host", icon: Sliders },
+  general: { label: "General", hint: "Updates, retention, and this host", icon: Sliders },
   projects: { label: "Projects", hint: "Where your repositories live", icon: FolderGit2 },
   permissions: { label: "Permissions", hint: "Tools allowed without asking", icon: ShieldCheck },
   providers: { label: "Providers", hint: "Which models to use", icon: Cpu },
@@ -51,6 +53,7 @@ export function SettingsNav({
   onLeave: () => void;
 }) {
   const { config } = useHost();
+  const { status: updateStatus } = useUpdates();
   const { isMobile, setOpenMobile } = useSidebar();
   const selected = (next: SettingsSection) => {
     onSelect(next);
@@ -92,6 +95,9 @@ export function SettingsNav({
                         <span className="block truncate text-sm">{label}</span>
                         <span className="block truncate text-xs text-muted-foreground">{hint}</span>
                       </span>
+                      {name === "general" && updateStatus?.updateAvailable ? (
+                        <Badge variant="secondary" className="px-1.5">Update</Badge>
+                      ) : null}
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );
