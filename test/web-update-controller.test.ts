@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { build } from 'esbuild';
 
 import { explainUnsupportedUpdate, installation, updateUnsupportedReason } from '../src/cli/install-guard.ts';
 import { finishWebUpdate, UpdateRefusal, WEB_UPDATE_LAUNCH_WINDOW_MS, WebUpdateController } from '../src/cli/web-update.ts';
@@ -44,6 +46,52 @@ function fixture(active = false, checker = new ReleaseChecker({ fetch: async () 
     },
   };
 }
+
+for (const denied of [false, true]) test(`systemd web submission preserves fixed command and ${denied ? 'uncertain' : 'queued'} status`, async () => {
+  const f = fixture();
+  const previousHost = process.env.FLOW_SYSTEMD_HOST;
+  process.env.FLOW_SYSTEMD_HOST = '1';
+  try {
+    const ctl = join(f.temp, 'systemctl');
+    writeFileSync(ctl, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(join(f.temp, 'manager-log'))}, JSON.stringify(args) + '\\n');
+if (args[2] === 'show') console.log('inactive');
+else if (${denied}) { console.error('synthetic authorization failure'); process.exit(1); }
+`);
+    chmodSync(ctl, 0o700);
+    const bundle = await build({ entryPoints: [resolve('src/cli/web-update.ts')], bundle: true, platform: 'node', format: 'esm', write: false,
+      plugins: [{ name: 'fake-systemctl', setup(builder) {
+        builder.onLoad({ filter: /systemd-update\.ts$/ }, ({ path }) => ({
+          contents: readFileSync(path, 'utf8').replace("'/usr/bin/systemctl'", JSON.stringify(ctl)), loader: 'ts',
+        }));
+      } }],
+    });
+    const entry = join(f.temp, 'controller.mjs');
+    writeFileSync(entry, bundle.outputFiles[0]!.text);
+    const { WebUpdateController: ManagedController } = await import(pathToFileURL(entry).href) as typeof import('../src/cli/web-update.ts');
+    writeFileSync(join(f.root, 'systemd-update.json'), JSON.stringify({ scope: 'system', service: 'flow.service', updater: 'flow-update.service', hostArgs: ['serve'] }));
+    const controller = new ManagedController({ root: f.root, installedVersion: '1.0.0', mode: 'foreground', installation: installation(f.slot), bootstrapEntry: join(f.temp, 'helper.cjs'), hasActiveWork: () => false,
+      checker: new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) }),
+    });
+    assert.equal((await controller.status()).eligibility.state, 'eligible');
+    if (denied) await assert.rejects(controller.start('2.0.0'), /Could not confirm systemd update submission/);
+    else assert.equal((await controller.start('2.0.0')).operation?.state, 'updating');
+    const state = await controller.status();
+    assert.equal(state.operation?.state, denied ? 'unverified' : 'updating');
+    const request = JSON.parse(readFileSync(join(f.root, 'systemd-update-request.json'), 'utf8'));
+    assert.deepEqual(request, { id: state.operation!.id, version: '2.0.0', force: false });
+    const commands = readFileSync(join(f.temp, 'manager-log'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(commands.at(-1), ['--system', '--no-ask-password', 'start', 'flow-update.service', '--no-block']);
+    assert.throws(() => readFileSync(join(f.temp, 'helper-args')), { code: 'ENOENT' }, 'no child updater is spawned in the host cgroup');
+    await assert.rejects(controller.start('2.0.0'), denied ? /unverified result/ : /already in progress/);
+  } finally {
+    if (previousHost === undefined) delete process.env.FLOW_SYSTEMD_HOST;
+    else process.env.FLOW_SYSTEMD_HOST = previousHost;
+    f.close();
+  }
+});
 
 test('web update eligibility explains foreground and embedded hosts, active-work blockers, and npm prefix mismatch', async () => {
   for (const mode of ['foreground', 'embedded'] as const) {
