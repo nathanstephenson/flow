@@ -40,7 +40,7 @@ test("update presentation distinguishes every discovery, eligibility, lifecycle,
   assert.equal(updatePresentation({ ...base, operation: { id: "1", state: "failed", previousVersion: "1.0.0", startedAt: "then" } }, "ready"), "failure");
   assert.equal(updatePresentation({ ...base, operation: { id: "1", state: "unverified", previousVersion: "1.0.0", startedAt: "then" } }, "ready"), "recovery-needed");
   assert.equal(updatePresentation(base, "recovery-needed"), "recovery-needed");
-  assert.equal(updatePresentation({ ...base, checkError: "registry down" }, "ready"), "error");
+  assert.equal(updatePresentation({ installedVersion: "1.0.0", updateAvailable: false, eligibility: { state: "eligible" }, checkError: "registry down" }, "ready"), "error");
 });
 
 const priorSuccess = {
@@ -68,6 +68,48 @@ test("a newer eligible release supersedes a persisted successful outcome after r
   const presentation = updatePresentation(status, "ready");
   assert.equal(presentation, "available");
   assert.equal(canStartUpdate(status, presentation), true);
+});
+
+test("a post-restart registry failure preserves verified success and remains visible and retryable", () => {
+  const status: WebUpdateStatus = {
+    installedVersion: "2.0.0",
+    updateAvailable: false,
+    eligibility: { state: "eligible" },
+    checkError: "registry down",
+    operation: priorSuccess,
+  };
+  const presentation = updatePresentation(status, "ready");
+  assert.equal(presentation, "success");
+  const detail = updateDetail(presentation, status);
+  assert.match(detail, /previous update|update was verified|updated web assets/i);
+  assert.match(detail, /registry down/);
+  assert.match(detail, /Check for updates to retry/);
+});
+
+test("a post-rollback registry failure preserves the failed update and remains visible and retryable", () => {
+  const status: WebUpdateStatus = {
+    installedVersion: "1.0.0",
+    updateAvailable: false,
+    eligibility: { state: "eligible" },
+    checkError: "registry down",
+    operation: {
+      id: "rollback",
+      state: "failed",
+      previousVersion: "1.0.0",
+      targetVersion: "2.0.0",
+      installedVersion: "1.0.0",
+      startedAt: "then",
+      finishedAt: "later",
+      message: "npm installation failed. Reinstalled and verified 1.0.0; the Session Host recovered.",
+    },
+  };
+  const presentation = updatePresentation(status, "ready");
+  assert.equal(presentation, "failure");
+  const detail = updateDetail(presentation, status);
+  assert.match(detail, /Reinstalled and verified 1\.0\.0/);
+  assert.match(detail, /remains a failed update/);
+  assert.match(detail, /registry down/);
+  assert.match(detail, /Check for updates to retry/);
 });
 
 test("a successive release surfaces current blocked and unsupported eligibility before prior success", () => {

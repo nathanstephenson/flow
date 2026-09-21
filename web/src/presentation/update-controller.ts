@@ -186,12 +186,12 @@ export class UpdateController {
 
   private operationMayBeRunning(): boolean {
     return this.reconnectingSince !== undefined
-      || this.current.status?.operation?.state === "updating"
+      || ["updating", "unverified"].includes(this.current.status?.operation?.state ?? "")
       || ["starting", "reconnecting", "recovery-needed"].includes(this.current.view);
   }
 
   private shouldPoll(): boolean {
-    return this.current.status?.operation?.state === "updating"
+    return ["updating", "unverified"].includes(this.current.status?.operation?.state ?? "")
       || this.current.view === "reconnecting"
       || this.current.view === "recovery-needed";
   }
@@ -202,7 +202,8 @@ export class UpdateController {
       return;
     }
 
-    const delay = this.current.view === "recovery-needed" ? UPDATE_RECOVERY_POLL_MS : UPDATE_RECONNECT_POLL_MS;
+    const recoveryNeeded = this.current.view === "recovery-needed" || this.current.status?.operation?.state === "unverified";
+    const delay = recoveryNeeded ? UPDATE_RECOVERY_POLL_MS : UPDATE_RECONNECT_POLL_MS;
     if (this.pollTimer !== undefined && this.pollDelay === delay) return;
     this.clearPoll();
     this.pollDelay = delay;

@@ -12,7 +12,8 @@ import { inspectUpdateInstallation, type UpdateResult } from './update.ts';
 import type { Installation } from './install-guard.ts';
 
 const STATUS_FILE = 'web-update.json';
-type StoredOperation = UpdateOperation & { pid?: number };
+export const WEB_UPDATE_LAUNCH_WINDOW_MS = 15_000;
+type StoredOperation = UpdateOperation & { pid?: number; launcherPid?: number };
 
 function statusPath(root: string): string { return join(root, STATUS_FILE); }
 
@@ -41,7 +42,10 @@ function publicError(error: unknown): string {
 /** Called by the detached `flow update` helper after restoration/recovery has settled. */
 export function finishWebUpdate(root: string, id: string, result: UpdateResult | undefined, error?: unknown): void {
   const current = readOperation(root);
-  if (!current || current.id !== id || current.state !== 'updating') return;
+  // A replacement host may have reconciled the launch to unverified when the old host exited before
+  // recording the helper PID. The ID still binds this completion to the authorized detached helper,
+  // so its eventual verified result may safely replace that provisional recovery-needed state.
+  if (!current || current.id !== id || !['updating', 'unverified'].includes(current.state)) return;
   const finishedAt = new Date().toISOString();
   if (error !== undefined) {
     writeOperation(root, { ...current, state: 'failed', finishedAt, message: publicError(error) });
@@ -79,6 +83,7 @@ type WebUpdateControllerOptions = {
   unsupportedReason?: string;
   hasActiveWork(): boolean;
   checker?: ReleaseChecker;
+  now?: () => number;
 };
 
 export class WebUpdateController {
@@ -109,6 +114,7 @@ export class WebUpdateController {
   async start(confirmedVersion: string): Promise<WebUpdateStatus> {
     if (this.launching) throw new UpdateRefusal('An update request is already starting.');
     this.launching = true;
+    let launchedOperationId: string | undefined;
     try {
       const existing = this.operation(this.installedVersion());
       if (existing?.state === 'updating') throw new UpdateRefusal('An update is already in progress.');
@@ -139,9 +145,11 @@ export class WebUpdateController {
         state: 'updating',
         previousVersion: installedVersion,
         targetVersion: confirmedVersion,
-        startedAt: new Date().toISOString(),
+        startedAt: new Date(this.now()).toISOString(),
         message: 'Starting the guarded npm update.',
+        launcherPid: process.pid,
       };
+      launchedOperationId = id;
       writeOperation(this.options.root, operation);
       const log = openSync(join(this.options.root, 'web-update.log'), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
       let child: ReturnType<typeof spawn>;
@@ -172,8 +180,9 @@ export class WebUpdateController {
       return await this.status(false);
     } catch (error) {
       const operation = readOperation(this.options.root);
-      if (operation?.state === 'updating' && operation.pid === undefined) {
-        writeOperation(this.options.root, { ...operation, state: 'failed', finishedAt: new Date().toISOString(), message: publicError(error) });
+      if (launchedOperationId !== undefined && operation?.id === launchedOperationId &&
+          ['updating', 'unverified'].includes(operation.state) && operation.pid === undefined) {
+        writeOperation(this.options.root, { ...operation, state: 'failed', finishedAt: new Date(this.now()).toISOString(), message: publicError(error) });
       }
       throw error;
     } finally { this.launching = false; }
@@ -209,20 +218,45 @@ export class WebUpdateController {
       const failed: StoredOperation = {
         ...stored,
         state: 'unverified',
-        finishedAt: new Date().toISOString(),
+        finishedAt: new Date(this.now()).toISOString(),
         message: 'The update helper stopped before it reported a verified result. Reconnect to the Session Host; if it remains unavailable, repair the installation manually with npm.',
       };
       writeOperation(this.options.root, failed);
-      return failed;
+      return this.publicOperation(failed);
+    }
+    if (stored.state === 'updating' && stored.pid === undefined && this.launchWasAbandoned(stored)) {
+      const unverified: StoredOperation = {
+        ...stored,
+        state: 'unverified',
+        finishedAt: new Date(this.now()).toISOString(),
+        message: 'The Session Host stopped or timed out before it recorded the update helper process. Flow cannot verify whether the update started. Reconnect; if the host remains unavailable, repair the private global npm installation manually and restart it.',
+      };
+      writeOperation(this.options.root, unverified);
+      return this.publicOperation(unverified);
     }
     if (stored.state === 'succeeded' && stored.installedVersion !== installedVersion) {
-      return {
+      return this.publicOperation({
         ...stored,
         state: 'unverified',
         message: `The update reported ${stored.installedVersion}, but the running Session Host is ${installedVersion}. Restart or repair Flow manually.`,
-      };
+      });
     }
-    const { pid: _pid, ...operation } = stored;
+    return this.publicOperation(stored);
+  }
+
+  private launchWasAbandoned(operation: StoredOperation): boolean {
+    const startedAt = Date.parse(operation.startedAt);
+    const now = this.now();
+    if (!Number.isFinite(startedAt) || startedAt > now || now - startedAt >= WEB_UPDATE_LAUNCH_WINDOW_MS) return true;
+    if (operation.launcherPid === undefined) return false;
+    if (!Number.isInteger(operation.launcherPid) || operation.launcherPid <= 0) return true;
+    return !processAlive(operation.launcherPid);
+  }
+
+  private publicOperation(stored: StoredOperation): UpdateOperation {
+    const { pid: _pid, launcherPid: _launcherPid, ...operation } = stored;
     return operation;
   }
+
+  private now(): number { return (this.options.now ?? Date.now)(); }
 }

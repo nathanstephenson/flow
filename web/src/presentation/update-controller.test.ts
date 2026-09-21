@@ -48,6 +48,22 @@ const succeeded: WebUpdateStatus = {
   },
 };
 
+const ownerlessLaunch: WebUpdateStatus = {
+  installedVersion: "1.0.0",
+  latestVersion: "2.0.0",
+  updateAvailable: true,
+  eligibility: { state: "eligible" },
+  operation: {
+    id: "ownerless-launch",
+    state: "unverified",
+    previousVersion: "1.0.0",
+    targetVersion: "2.0.0",
+    startedAt: "then",
+    finishedAt: "later",
+    message: "The Session Host stopped before it recorded the update helper process.",
+  },
+};
+
 test("provider lifecycle treats an accepted POST with a lost body as ambiguous and only polls GET", async () => {
   const scheduler = new ManualScheduler();
   let gets = 0;
@@ -178,6 +194,38 @@ test("a stalled mutation times out ambiguously, reaches recovery guidance, and s
   assert.equal(controller.snapshot.view, "ready");
   assert.equal(controller.snapshot.status?.operation?.state, "succeeded");
   assert.equal(posts, 1, "recovery polling never retries the mutation");
+  assert.equal(scheduler.nextTimeoutDelay(), undefined);
+  controller.stop();
+});
+
+test("reload from an ownerless launch shows recovery guidance and keeps checking for a durable result", async () => {
+  const scheduler = new ManualScheduler();
+  let gets = 0;
+  const recoveredFailure: WebUpdateStatus = {
+    ...ownerlessLaunch,
+    operation: {
+      ...ownerlessLaunch.operation!,
+      state: "failed",
+      message: "npm failed; exact rollback restored Flow 1.0.0.",
+    },
+  };
+  const controller = createController(scheduler, {
+    getStatus: async () => response(++gets === 1 ? ownerlessLaunch : recoveredFailure),
+    beginUpdate: async () => { throw new Error("mutation must not be retried"); },
+  });
+
+  controller.start();
+  await flushAsync();
+  assert.equal(controller.snapshot.view, "ready");
+  const presentation = updatePresentation(controller.snapshot.status, controller.snapshot.view);
+  assert.equal(presentation, "recovery-needed");
+  assert.match(updateDetail(presentation, controller.snapshot.status), /Reconnect below/);
+  assert.equal(scheduler.nextTimeoutDelay(), UPDATE_RECOVERY_POLL_MS);
+
+  scheduler.runNextTimeout();
+  await flushAsync();
+  assert.equal(controller.snapshot.status?.operation?.state, "failed");
+  assert.equal(updatePresentation(controller.snapshot.status, controller.snapshot.view), "failure");
   assert.equal(scheduler.nextTimeoutDelay(), undefined);
   controller.stop();
 });

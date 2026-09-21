@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { explainUnsupportedUpdate, installation, updateUnsupportedReason } from '../src/cli/install-guard.ts';
-import { finishWebUpdate, UpdateRefusal, WebUpdateController } from '../src/cli/web-update.ts';
+import { finishWebUpdate, UpdateRefusal, WEB_UPDATE_LAUNCH_WINDOW_MS, WebUpdateController } from '../src/cli/web-update.ts';
 import { ReleaseChecker } from '../src/daemon/release-checker.ts';
 
 function fixture(active = false, checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) })) {
@@ -150,4 +150,37 @@ test('unchanged npm results and recovered failures remain failures', async () =>
       assert.doesNotMatch(operation?.message ?? '', /do-not-expose/);
     } finally { f.close(); }
   }
+});
+
+test('an ownerless launch becomes recovery-needed after host restart or the bounded launch window', async () => {
+  const f = fixture(false);
+  const operationPath = join(f.root, 'web-update.json');
+  const operation = (id: string, startedAt: string, launcherPid?: number) => ({
+    id,
+    state: 'updating',
+    previousVersion: '1.0.0',
+    targetVersion: '2.0.0',
+    startedAt,
+    message: 'Starting the guarded npm update.',
+    ...(launcherPid === undefined ? {} : { launcherPid }),
+  });
+  try {
+    writeFileSync(operationPath, JSON.stringify(operation('within-window', new Date().toISOString(), process.pid)));
+    assert.equal((await f.controller.status()).operation?.state, 'updating', 'the launching host gets a safe window to record its helper');
+
+    writeFileSync(operationPath, JSON.stringify(operation('restarted-host', new Date().toISOString(), 2_147_483_647)));
+    const restarted = (await f.controller.status()).operation;
+    assert.equal(restarted?.state, 'unverified', 'a replacement host must not report an ownerless launch as active forever');
+    assert.match(restarted?.message ?? '', /cannot verify whether the update started/i);
+    assert.equal('launcherPid' in restarted!, false, 'internal process ownership is not exposed to the browser');
+
+    finishWebUpdate(f.root, 'restarted-host', undefined, new Error('npm failed and exact rollback restored Flow 1.0.0'));
+    const eventual = (await f.controller.status()).operation;
+    assert.equal(eventual?.state, 'failed', 'an authorized helper may still publish its durable result after provisional reconciliation');
+    assert.match(eventual?.message ?? '', /exact rollback restored Flow 1\.0\.0/);
+
+    const stale = new Date(Date.now() - WEB_UPDATE_LAUNCH_WINDOW_MS).toISOString();
+    writeFileSync(operationPath, JSON.stringify(operation('legacy-stale-launch', stale)));
+    assert.equal((await f.controller.status()).operation?.state, 'unverified', 'legacy ownerless records are bounded by age');
+  } finally { f.close(); }
 });

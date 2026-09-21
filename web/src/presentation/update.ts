@@ -31,7 +31,7 @@ export function updatePresentation(status: WebUpdateStatus | undefined, view: Up
   if (status?.operation?.state === "updating") return "updating";
   if (status?.operation?.state === "unverified") return "recovery-needed";
   if (view === "checking") return "checking";
-  if (transportError || status?.checkError) return "error";
+  if (transportError) return "error";
 
   // A settled operation is history when discovery finds a successive release. Eligibility for that
   // release is the current actionable state, including blockers and unsupported installations.
@@ -40,6 +40,9 @@ export function updatePresentation(status: WebUpdateStatus | undefined, view: Up
   if (status?.operation?.state === "failed") return "failure";
   if (status?.eligibility.state === "eligible" && status.updateAvailable) return "available";
   if (status?.operation?.state === "succeeded") return "success";
+  // Registry discovery and the durable update transaction are independent. A failed post-restart
+  // discovery check must remain visible, but must not replace a verified operation outcome.
+  if (status?.checkError) return "error";
   if (status?.eligibility.state === "unsupported") return "unsupported";
   if (status?.eligibility.state === "blocked") return "blocked";
   return status?.updateAvailable ? "available" : "up-to-date";
@@ -65,8 +68,14 @@ export function updateDetail(
     );
     case "updating": return "The guarded npm update is running independently of this browser. The Session Host will restart shortly.";
     case "reconnecting": return "The Session Host is restarting. Flow will reconnect and verify the running version automatically.";
-    case "success": return `${status?.operation?.message ?? "The update was verified."} Updated web assets are loaded; Agent Sessions remain Dormant until you Revive them.`;
-    case "failure": return `${status?.operation?.message ?? "The update failed."} The Session Host recovered, but this remains a failed update.`;
+    case "success": return appendDiscoveryError(
+      `${status?.operation?.message ?? "The update was verified."} Updated web assets are loaded; Agent Sessions remain Dormant until you Revive them.`,
+      status,
+    );
+    case "failure": return appendDiscoveryError(
+      `${status?.operation?.message ?? "The update failed."} The Session Host recovered, but this remains a failed update.`,
+      status,
+    );
     case "recovery-needed": {
       const lastKnown = status?.operation?.message ? ` Last known update status: ${status.operation.message}` : "";
       return `Flow could not verify recovery. Reconnect below; if the host remains unavailable, repair the private global npm installation manually and restart it.${lastKnown}`;
@@ -91,4 +100,10 @@ function historicalOutcome(status: WebUpdateStatus | undefined): string | undefi
 
 function appendHistorical(detail: string, historical: string | undefined): string {
   return historical ? `${detail} ${historical}` : detail;
+}
+
+function appendDiscoveryError(detail: string, status: WebUpdateStatus | undefined): string {
+  return status?.checkError
+    ? `${detail} The latest release check also failed: ${status.checkError} Use Check for updates to retry; normal Flow use is unaffected.`
+    : detail;
 }
