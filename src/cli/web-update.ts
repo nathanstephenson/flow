@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { closeSync, constants, fchmodSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -12,8 +14,12 @@ import { inspectUpdateInstallation, type UpdateResult } from './update.ts';
 import type { Installation } from './install-guard.ts';
 
 const STATUS_FILE = 'web-update.json';
+const STATUS_LOCK = 'web-update-lock';
+const STATUS_LOCK_ATTEMPTS = 100;
+const STATUS_LOCK_WAIT_MS = 25;
 export const WEB_UPDATE_LAUNCH_WINDOW_MS = 15_000;
 type StoredOperation = UpdateOperation & { pid?: number; launcherPid?: number };
+type LockOwner = { pid: number; id: string };
 
 function statusPath(root: string): string { return join(root, STATUS_FILE); }
 
@@ -31,6 +37,60 @@ function writeOperation(root: string, operation: StoredOperation): void {
   renameSync(temporary, statusPath(root));
 }
 
+function removeLockOwner(path: string, filename: string): void {
+  try { unlinkSync(join(path, filename)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  try { rmdirSync(path); }
+  catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+}
+
+function sleep(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+/** Serialize cross-process status transitions so reconciliation cannot replace a helper's result. */
+function transitionOperation(root: string, transition: (current: StoredOperation | undefined) => StoredOperation | undefined): StoredOperation | undefined {
+  const ownerId = randomUUID();
+  const filename = `${ownerId}.json`;
+  const candidate = join(root, `${STATUS_LOCK}-${ownerId}`);
+  const lock = join(root, STATUS_LOCK);
+  mkdirSync(candidate, { mode: 0o700 });
+  writeFileSync(join(candidate, filename), JSON.stringify({ pid: process.pid, id: ownerId }), { mode: 0o600 });
+  let acquired = false;
+  try {
+    for (let attempt = 0; !acquired; attempt++) {
+      try { renameSync(candidate, lock); acquired = true; }
+      catch (error) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        if (attempt >= STATUS_LOCK_ATTEMPTS) throw new Error('Web update status is busy');
+        let entries: string[];
+        try { entries = readdirSync(lock); }
+        catch (readError) {
+          if ((readError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw readError;
+        }
+        if (entries.length === 0) { sleep(STATUS_LOCK_WAIT_MS); continue; }
+        if (entries.length !== 1 || !/^[a-f0-9-]+\.json$/.test(entries[0]!)) throw new Error('Invalid web update status owner');
+        let owner: LockOwner;
+        try { owner = JSON.parse(readFileSync(join(lock, entries[0]!), 'utf8')) as LockOwner; }
+        catch (readError) {
+          if ((readError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw readError;
+        }
+        if (!owner || typeof owner !== 'object' || !Number.isInteger(owner.pid) || owner.pid <= 0 || owner.id !== entries[0]!.slice(0, -5)) {
+          throw new Error('Invalid web update status owner');
+        }
+        if (!processAlive(owner.pid)) removeLockOwner(lock, entries[0]!);
+        sleep(STATUS_LOCK_WAIT_MS);
+      }
+    }
+    const current = readOperation(root);
+    const next = transition(current);
+    if (next !== undefined && next !== current) writeOperation(root, next);
+    return next;
+  } finally { removeLockOwner(acquired ? lock : candidate, filename); }
+}
+
 function publicError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message
@@ -41,32 +101,29 @@ function publicError(error: unknown): string {
 
 /** Called by the detached `flow update` helper after restoration/recovery has settled. */
 export function finishWebUpdate(root: string, id: string, result: UpdateResult | undefined, error?: unknown): void {
-  const current = readOperation(root);
-  // A replacement host may have reconciled the launch to unverified when the old host exited before
-  // recording the helper PID. The ID still binds this completion to the authorized detached helper,
-  // so its eventual verified result may safely replace that provisional recovery-needed state.
-  if (!current || current.id !== id || !['updating', 'unverified'].includes(current.state)) return;
-  const finishedAt = new Date().toISOString();
-  if (error !== undefined) {
-    writeOperation(root, { ...current, state: 'failed', finishedAt, message: publicError(error) });
-    return;
-  }
-  if (!result?.changed) {
-    writeOperation(root, {
+  transitionOperation(root, current => {
+    // A replacement host may have reconciled the launch to unverified when the old host exited before
+    // recording the helper PID. The ID still binds this completion to the authorized detached helper,
+    // so its eventual verified result may safely replace that provisional recovery-needed state.
+    if (!current || current.id !== id || !['updating', 'unverified'].includes(current.state)) return current;
+    const finishedAt = new Date().toISOString();
+    if (error !== undefined) return { ...current, state: 'failed', finishedAt, message: publicError(error) };
+    if (!result?.changed) {
+      return {
+        ...current,
+        state: 'failed',
+        installedVersion: result?.installedVersion ?? current.previousVersion,
+        finishedAt,
+        message: `npm completed, but Flow remains at ${result?.installedVersion ?? current.previousVersion}. No update was installed.`,
+      };
+    }
+    return {
       ...current,
-      state: 'failed',
-      installedVersion: result?.installedVersion ?? current.previousVersion,
+      state: 'succeeded',
+      installedVersion: result.installedVersion,
       finishedAt,
-      message: `npm completed, but Flow remains at ${result?.installedVersion ?? current.previousVersion}. No update was installed.`,
-    });
-    return;
-  }
-  writeOperation(root, {
-    ...current,
-    state: 'succeeded',
-    installedVersion: result.installedVersion,
-    finishedAt,
-    message: `Flow updated from ${result.previousVersion} to ${result.installedVersion}.`,
+      message: `Flow updated from ${result.previousVersion} to ${result.installedVersion}.`,
+    };
   });
 }
 
@@ -115,9 +172,10 @@ export class WebUpdateController {
     if (this.launching) throw new UpdateRefusal('An update request is already starting.');
     this.launching = true;
     let launchedOperationId: string | undefined;
+    let helperStarted = false;
     try {
-      const existing = this.operation(this.installedVersion());
-      if (existing?.state === 'updating') throw new UpdateRefusal('An update is already in progress.');
+      const initiallyInstalledVersion = this.installedVersion();
+      this.refuseUnsettledOperation(this.operation(initiallyInstalledVersion), initiallyInstalledVersion);
       const eligibility = this.eligibility();
       if (eligibility.state !== 'eligible') throw new UpdateRefusal(eligibility.reason);
       const installedVersion = this.installedVersion();
@@ -149,8 +207,13 @@ export class WebUpdateController {
         message: 'Starting the guarded npm update.',
         launcherPid: process.pid,
       };
+      transitionOperation(this.options.root, current => {
+        // Discovery is asynchronous. Recheck under the cross-process status lock so an old helper
+        // cannot become provisional while this request replaces its operation ID.
+        this.refuseUnsettledOperation(current, installedVersion);
+        return operation;
+      });
       launchedOperationId = id;
-      writeOperation(this.options.root, operation);
       const log = openSync(join(this.options.root, 'web-update.log'), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
       let child: ReturnType<typeof spawn>;
       try {
@@ -172,17 +235,21 @@ export class WebUpdateController {
         child.once('error', reject);
       });
       child.unref();
-      if (!child.pid) throw new Error('The update helper did not start');
-      const current = readOperation(this.options.root);
-      // A fast refusal can finish before the parent observes `spawn`; never overwrite that durable
-      // failure with an older "updating" snapshot merely to add the helper pid.
-      if (current?.id === id && current.state === 'updating') writeOperation(this.options.root, { ...current, pid: child.pid });
+      const helperPid = child.pid;
+      if (!helperPid) throw new Error('The update helper did not start');
+      helperStarted = true;
+      // A fast refusal can finish before the parent observes `spawn`; the locked transition never
+      // overwrites that durable result merely to add the helper pid.
+      transitionOperation(this.options.root, current =>
+        current?.id === id && current.state === 'updating' ? { ...current, pid: helperPid } : current);
       return await this.status(false);
     } catch (error) {
-      const operation = readOperation(this.options.root);
-      if (launchedOperationId !== undefined && operation?.id === launchedOperationId &&
-          ['updating', 'unverified'].includes(operation.state) && operation.pid === undefined) {
-        writeOperation(this.options.root, { ...operation, state: 'failed', finishedAt: new Date(this.now()).toISOString(), message: publicError(error) });
+      if (launchedOperationId !== undefined && !helperStarted) {
+        const operationId = launchedOperationId;
+        transitionOperation(this.options.root, operation => {
+          if (!operation || operation.id !== operationId || !['updating', 'unverified'].includes(operation.state) || operation.pid !== undefined) return operation;
+          return { ...operation, state: 'failed', finishedAt: new Date(this.now()).toISOString(), message: publicError(error) };
+        });
       }
       throw error;
     } finally { this.launching = false; }
@@ -212,28 +279,27 @@ export class WebUpdateController {
   }
 
   private operation(installedVersion: string): UpdateOperation | undefined {
-    const stored = readOperation(this.options.root);
+    const observed = readOperation(this.options.root);
+    if (!observed) return undefined;
+    let recoveryMessage: string | undefined;
+    if (observed.state === 'updating' && observed.pid !== undefined && !processAlive(observed.pid)) {
+      recoveryMessage = 'The update helper stopped before it reported a verified result. Reconnect to the Session Host; if it remains unavailable, repair the installation manually with npm.';
+    } else if (observed.state === 'updating' && observed.pid === undefined && this.launchWasAbandoned(observed)) {
+      recoveryMessage = 'The Session Host stopped or timed out before it recorded the update helper process. Flow cannot verify whether the update started. Reconnect; if the host remains unavailable, repair the private global npm installation manually and restart it.';
+    }
+    const stored = recoveryMessage === undefined ? observed : transitionOperation(this.options.root, current => {
+      // `processAlive` and the abandonment checks happen outside the lock. Compare the launch fields
+      // again under the lock: a helper result or parent PID write that won meanwhile is authoritative.
+      if (current?.id !== observed.id || current.state !== 'updating' || current.startedAt !== observed.startedAt ||
+          current.pid !== observed.pid || current.launcherPid !== observed.launcherPid) return current;
+      return {
+        ...current,
+        state: 'unverified',
+        finishedAt: new Date(this.now()).toISOString(),
+        message: recoveryMessage,
+      };
+    });
     if (!stored) return undefined;
-    if (stored.state === 'updating' && stored.pid !== undefined && !processAlive(stored.pid)) {
-      const failed: StoredOperation = {
-        ...stored,
-        state: 'unverified',
-        finishedAt: new Date(this.now()).toISOString(),
-        message: 'The update helper stopped before it reported a verified result. Reconnect to the Session Host; if it remains unavailable, repair the installation manually with npm.',
-      };
-      writeOperation(this.options.root, failed);
-      return this.publicOperation(failed);
-    }
-    if (stored.state === 'updating' && stored.pid === undefined && this.launchWasAbandoned(stored)) {
-      const unverified: StoredOperation = {
-        ...stored,
-        state: 'unverified',
-        finishedAt: new Date(this.now()).toISOString(),
-        message: 'The Session Host stopped or timed out before it recorded the update helper process. Flow cannot verify whether the update started. Reconnect; if the host remains unavailable, repair the private global npm installation manually and restart it.',
-      };
-      writeOperation(this.options.root, unverified);
-      return this.publicOperation(unverified);
-    }
     if (stored.state === 'succeeded' && stored.installedVersion !== installedVersion) {
       return this.publicOperation({
         ...stored,
@@ -242,6 +308,14 @@ export class WebUpdateController {
       });
     }
     return this.publicOperation(stored);
+  }
+
+  private refuseUnsettledOperation(operation: UpdateOperation | undefined, installedVersion: string): void {
+    if (operation?.state === 'updating') throw new UpdateRefusal('An update is already in progress.');
+    if (operation?.state === 'unverified' ||
+        (operation?.state === 'succeeded' && operation.installedVersion !== installedVersion)) {
+      throw new UpdateRefusal('The previous update still has an unverified result. Reconnect and verify or repair the Session Host before starting another update.');
+    }
   }
 
   private launchWasAbandoned(operation: StoredOperation): boolean {

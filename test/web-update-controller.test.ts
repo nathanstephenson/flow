@@ -152,6 +152,72 @@ test('unchanged npm results and recovered failures remain failures', async () =>
   }
 });
 
+test('reconciliation cannot overwrite a terminal helper result from a forced interleaving', async t => {
+  const f = fixture(false);
+  const operationPath = join(f.root, 'web-update.json');
+  const deadLauncherPid = 2_147_483_647;
+  const kill = process.kill.bind(process);
+  let interleaved = false;
+  try {
+    writeFileSync(operationPath, JSON.stringify({
+      id: 'terminal-wins',
+      state: 'updating',
+      previousVersion: '1.0.0',
+      targetVersion: '2.0.0',
+      startedAt: new Date().toISOString(),
+      message: 'Starting the guarded npm update.',
+      launcherPid: deadLauncherPid,
+    }));
+    t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === deadLauncherPid && signal === 0 && !interleaved) {
+        interleaved = true;
+        finishWebUpdate(f.root, 'terminal-wins', undefined, new Error('npm failed; exact rollback restored Flow 1.0.0'));
+        throw Object.assign(new Error('process exited'), { code: 'ESRCH' });
+      }
+      return kill(pid, signal);
+    });
+
+    const status = await f.controller.status();
+    assert.equal(interleaved, true, 'the helper finishes after reconciliation reads the updating record');
+    assert.equal(status.operation?.state, 'failed', 'the concurrent terminal result is authoritative');
+    const stored = JSON.parse(readFileSync(operationPath, 'utf8')) as { id: string; state: string; message?: string };
+    assert.deepEqual({ id: stored.id, state: stored.state }, { id: 'terminal-wins', state: 'failed' });
+    assert.match(stored.message ?? '', /exact rollback restored Flow 1\.0\.0/);
+  } finally { f.close(); }
+});
+
+test('a repeated start cannot replace an ownerless provisional operation', async () => {
+  let checks = 0;
+  const checker = new ReleaseChecker({ fetch: async () => {
+    checks++;
+    return new Response(JSON.stringify({ version: '2.0.0' }));
+  } });
+  const f = fixture(false, checker);
+  const operationPath = join(f.root, 'web-update.json');
+  try {
+    writeFileSync(operationPath, JSON.stringify({
+      id: 'original-helper',
+      state: 'updating',
+      previousVersion: '1.0.0',
+      targetVersion: '2.0.0',
+      startedAt: new Date().toISOString(),
+      message: 'Starting the guarded npm update.',
+      launcherPid: 2_147_483_647,
+    }));
+
+    await assert.rejects(f.controller.start('2.0.0'), /previous update still has an unverified result/i);
+    assert.equal(checks, 0, 'the repeated request is refused before another registry check or launch');
+    const provisional = JSON.parse(readFileSync(operationPath, 'utf8')) as { id: string; state: string };
+    assert.deepEqual({ id: provisional.id, state: provisional.state }, { id: 'original-helper', state: 'unverified' });
+    assert.throws(() => readFileSync(join(f.temp, 'helper-args')), { code: 'ENOENT' });
+
+    finishWebUpdate(f.root, 'original-helper', undefined, new Error('the original helper eventually reported recovery'));
+    const settled = JSON.parse(readFileSync(operationPath, 'utf8')) as { id: string; state: string; message?: string };
+    assert.deepEqual({ id: settled.id, state: settled.state }, { id: 'original-helper', state: 'failed' });
+    assert.match(settled.message ?? '', /original helper eventually reported recovery/);
+  } finally { f.close(); }
+});
+
 test('an ownerless launch becomes recovery-needed after host restart or the bounded launch window', async () => {
   const f = fixture(false);
   const operationPath = join(f.root, 'web-update.json');
