@@ -52,6 +52,19 @@ const branch: WorkflowStep = {
   condition: { operator: "equals", path: ["ready"], value: true },
 };
 
+it("delegates one-shot initial fitting to React Flow without update or resize refits", () => {
+  const source = readFileSync(new URL("./workflow-graph.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ReactFlow[\s\S]*?\sfitView\s+fitViewOptions=\{FIT_VIEW_OPTIONS\}/);
+  assert.match(source, /<Controls fitViewOptions=\{FIT_VIEW_OPTIONS\} \/>/);
+  assert.doesNotMatch(source, /\.fitView\(|ResizeObserver|onInit=/);
+});
+
+it("uses manual graph layering so loop-connected edges stay below containers and cards", () => {
+  const source = readFileSync(new URL("./workflow-graph.tsx", import.meta.url), "utf8");
+  assert.match(source, /zIndexMode="manual"/);
+  assert.match(source, /sourceHandle: edge\.outcome, label: edge\.outcome, zIndex: 0/);
+});
+
 for (const [vertical, position, orientation] of [
   [true, "bottom", "vertical"],
   [false, "right", "horizontal"],

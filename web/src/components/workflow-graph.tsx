@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,6 @@ import {
   type NodeProps,
   type Node,
   type Connection,
-  type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   EDITOR_MIN_ZOOM,
@@ -161,58 +160,6 @@ export function WorkflowGraph({
 }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const canvas = useRef<HTMLDivElement>(null);
-  const flow = useRef<ReactFlowInstance<Node, Edge>>(null);
-  const fitted = useRef(false);
-  const fitting = useRef(false);
-  const mounted = useRef(true);
-  const fitGeneration = useRef(0);
-  const fitOnceVisible = useCallback(() => {
-    const element = canvas.current;
-    const instance = flow.current;
-    if (
-      fitted.current ||
-      fitting.current ||
-      !element ||
-      !instance ||
-      !instance.getNodes().length ||
-      element.clientWidth === 0 ||
-      element.clientHeight === 0
-    ) return;
-    fitting.current = true;
-    const generation = fitGeneration.current;
-    void instance.fitView(FIT_VIEW_OPTIONS).then((didFit) => {
-      const current = canvas.current;
-      if (
-        mounted.current &&
-        generation === fitGeneration.current &&
-        current &&
-        current.clientWidth > 0 &&
-        current.clientHeight > 0
-      ) fitted.current ||= didFit;
-      fitting.current = false;
-    });
-  }, []);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      fitGeneration.current++;
-    };
-  }, []);
-  useEffect(() => {
-    fitted.current = false;
-    fitting.current = false;
-    fitGeneration.current++;
-  }, [execution?.id, orientation]);
-  useEffect(() => {
-    if (typeof ResizeObserver === "undefined" || !canvas.current) return;
-    const observer = new ResizeObserver(fitOnceVisible);
-    observer.observe(canvas.current);
-    fitOnceVisible();
-    return () => observer.disconnect();
-  }, [fitOnceVisible]);
-  useEffect(fitOnceVisible, [fitOnceVisible, nodes.length, execution?.id, orientation]);
   const controlledSelection = selectedStepId !== undefined;
   const selectionChanged = useCallback(
     ({ nodes }: { nodes: Node[] }) => {
@@ -322,15 +269,11 @@ export function WorkflowGraph({
       });
   };
   return (
-    <div ref={canvas} className="workflow-canvas overflow-hidden rounded-lg border">
+    <div className="workflow-canvas overflow-hidden rounded-lg border">
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        onInit={(instance) => {
-          flow.current = instance;
-          fitOnceVisible();
-        }}
         onNodesChange={(changes) =>
           setNodes((current) => applyNodeChanges(changes, current))
         }
@@ -382,10 +325,12 @@ export function WorkflowGraph({
         deleteKeyCode={onChange ? ["Backspace", "Delete"] : null}
         defaultViewport={{ x: 32, y: definition.loopSettings && Object.keys(definition.loopSettings).length ? 120 : 24, zoom: 1 }}
         minZoom={execution ? EXECUTION_MIN_ZOOM : EDITOR_MIN_ZOOM}
+        fitView
         fitViewOptions={FIT_VIEW_OPTIONS}
+        zIndexMode="manual"
       >
         <Background />
-        <Controls />
+        <Controls fitViewOptions={FIT_VIEW_OPTIONS} />
       </ReactFlow>
     </div>
   );
