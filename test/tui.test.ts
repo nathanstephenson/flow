@@ -80,7 +80,7 @@ describe("TUI rendering", () => {
     );
   });
 
-  it("groups Settled Agent Sessions under their own divider, with last-updated badges", () => {
+  it("shows nonselectable group headings with counts and relevant ages", () => {
     const now = Date.parse("2026-09-01T12:00:00.000Z");
     const at = (ms: number): string => new Date(now - ms).toISOString();
     const ui = baseUi({
@@ -96,10 +96,56 @@ describe("TUI rendering", () => {
     const frame = renderFrame(ui, { columns: 80, rows: 14 }).join("\n");
     assert.match(frame, /just now.*Live one/);
     assert.match(frame, /3h.*Older/);
-    // The divider sits above the Settled group and below the live ones.
-    const dividerAt = frame.indexOf("── settled ──");
-    assert.ok(dividerAt > frame.indexOf("Live one"), "divider comes after the live sessions");
-    assert.ok(dividerAt < frame.indexOf("Filed away"), "divider comes before the settled ones");
+    // Headings sit above their rows and include counts without entering the session cursor.
+    const idleHeading = frame.indexOf("── Idle (1) ──");
+    const filedHeading = frame.indexOf("── Filed away (1) ──");
+    assert.ok(idleHeading < frame.lastIndexOf("Live one"), "Idle heading comes before its session");
+    assert.ok(filedHeading > frame.indexOf("Older"), "Filed away follows the live groups");
+    assert.ok(filedHeading < frame.indexOf("Filed away", filedHeading + 1), "heading comes before the filed row");
+  });
+
+  it("keeps the cursor visible after headings consume terminal rows", () => {
+    const sessions = Array.from({ length: 8 }, (_, index) => ({
+      id: `s${index}`,
+      scope: "/tmp",
+      backend: "fake",
+      status: "idle" as const,
+      title: `Session ${index}`,
+      restingAt: "2026-09-01T12:00:00.000Z",
+      activeSubagents: 0,
+      activeBackgroundCalls: 0,
+      activeWorkflows: 0,
+      lastSeq: 0,
+    }));
+    const frame = renderFrame(baseUi({
+      sessions,
+      overlay: { kind: "sessions", index: 7 },
+      now: Date.parse("2026-09-01T12:00:00.000Z"),
+    }), { columns: 80, rows: 6 }).join("\n");
+
+    assert.match(frame, /── Idle \(8\) ──/, "the current group's counted heading stays visible");
+    assert.match(frame, /> .*Session 7/, "the selected identity stays in the visible window");
+  });
+
+  it("keeps the session identity readable on a narrow terminal", () => {
+    const frame = renderFrame(baseUi({
+      overlay: { kind: "sessions", index: 0 },
+      now: Date.parse("2026-09-01T12:00:00.000Z"),
+      sessions: [{
+        id: "s1",
+        scope: "/tmp",
+        backend: "fake",
+        status: "idle",
+        title: "Narrow title",
+        restingAt: "2026-09-01T12:00:00.000Z",
+        activeSubagents: 0,
+        activeBackgroundCalls: 0,
+        activeWorkflows: 0,
+        lastSeq: 0,
+      }],
+    }), { columns: 36, rows: 6 }).join("\n");
+
+    assert.match(frame, /idle just now Narrow title/);
   });
 
   it("names an Agent Session by its id while it has no title yet", () => {
@@ -114,7 +160,7 @@ describe("TUI rendering", () => {
     });
     const frame = renderFrame(ui, { columns: 80, rows: 12 });
     assert.match(frame[0] ?? "", /fake · s1/, "the header must name the Agent Session");
-    assert.match(frame.join("\n"), /idle {5}fake {4}.*s1/, "so must the list row");
+    assert.match(frame.join("\n"), /idle\s+fake\s+.*s1/, "so must the list row");
   });
 
   it("renders a structural marker as a rule rather than as one more notice line", () => {
@@ -396,15 +442,17 @@ describe("TUI branches over the wire", () => {
 });
 
 describe("TUI over the wire", () => {
+  let connection: ReturnType<typeof connect>;
   let running: RunningServer;
   let backend: FakeBackend;
+  let host: SessionHost;
   let stdin: PassThrough;
   let output: string[];
   let finished: Promise<void>;
 
   beforeEach(async () => {
     backend = new FakeBackend();
-    const host = new SessionHost();
+    host = new SessionHost();
     host.registerBackend(backend);
     running = await serve({ host, token: "test-token", assets: {} });
 
@@ -420,8 +468,9 @@ describe("TUI over the wire", () => {
       },
     });
 
+    connection = connect({ url: running.url, token: "test-token" });
     finished = runTui({
-      connection: connect({ url: running.url, token: "test-token" }),
+      connection,
       scope: "/tmp/scope",
       backend: "fake",
       stdin: stdin as unknown as NodeJS.ReadStream,
@@ -452,6 +501,65 @@ describe("TUI over the wire", () => {
     backend.latest.completeTurn();
     await waitFor(() => output.join("").includes("the answer"));
   });
+
+  it("does not acknowledge while a reporting terminal is unfocused", async () => {
+    stdin.write("hi");
+    stdin.write(KEY.enter);
+    await waitFor(() => backend.latest.prompts.length === 1);
+
+    stdin.write(KEY.focusOut);
+    backend.latest.completeTurn();
+    await waitFor(() => host.list()[0]?.attention?.group === "unread");
+    // Let at least one list poll observe the attention boundary. If focus were only assumed rather
+    // than tracked, that poll would acknowledge it.
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+    assert.equal(host.list()[0]?.attention?.group, "unread");
+
+    stdin.write(KEY.focusIn);
+    await waitFor(() => host.list()[0]?.attention === undefined);
+  });
+
+  for (const queuedFocusIn of [false, true]) {
+    it(`does not acknowledge after focus-out during a slow refresh${queuedFocusIn ? " with an older focus-in queued" : ""}`, async () => {
+      stdin.write("hi");
+      stdin.write(KEY.enter);
+      await waitFor(() => backend.latest.prompts.length === 1);
+      stdin.write(KEY.focusOut);
+      backend.latest.completeTurn();
+      await waitFor(() => host.list()[0]?.attention?.group === "unread");
+      await waitFor(() => output.at(-1)?.includes("idle") === true);
+
+      const command = connection.command.bind(connection);
+      let acknowledgements = 0;
+      connection.command = (request) => {
+        if (request.type === "acknowledge") acknowledgements++;
+        return command(request);
+      };
+      const listSessions = connection.listSessions.bind(connection);
+      let release!: () => void;
+      let refreshing = false;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      connection.listSessions = async () => {
+        refreshing = true;
+        await gate;
+        return listSessions();
+      };
+      stdin.write(KEY.focusIn);
+      await waitFor(() => refreshing);
+      // An older queued focus-in must not overwrite a newer focus-out, even in one chunk.
+      stdin.write((queuedFocusIn ? KEY.focusIn : "") + KEY.focusOut);
+      release();
+      connection.listSessions = listSessions;
+      stdin.write(KEY.ctrlP);
+      await waitFor(() => output.at(-1)?.includes("models  (") === true);
+      assert.equal(acknowledgements, 0);
+      assert.equal(host.list()[0]?.attention?.group, "unread");
+
+      stdin.write(KEY.escape);
+      stdin.write(KEY.focusIn);
+      await waitFor(() => host.list()[0]?.attention === undefined);
+    });
+  }
 
   it("queues a message typed while the agent is working", async () => {
     stdin.write("first");

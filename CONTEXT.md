@@ -94,8 +94,11 @@ _Avoid_: blocked, paused, idle
 **Resting**: The time an Agent Session last became Idle, used to order rows within a Band. Streaming and Awaiting do not update it.
 _Avoid_: last activity, updated, touched
 
-**Band**: Rail ordering tier: Awaiting, working, Idle, Dormant, then Settled and Ended together. Working includes Idle Agent Sessions with background work or a running full Workflow Execution.
+**Band**: Rail ordering tier beneath attention: working, Idle, Dormant, then Settled and Ended together. Working includes Idle Agent Sessions with background work or a running full Workflow Execution.
 _Avoid_: group, tier, section, bucket
+
+**Attention**: Durable machine-wide inbox state, separate from activity and Lifecycle. Needs input contains unresolved Enquiries and Permission Prompts; Unread contains qualifying unseen outcomes. An acknowledgement names the version actually observed so a delayed client cannot consume newer output. The rail orders Needs input, Unread, then the existing Bands.
+_Avoid_: activity, occupancy, per-client read state
 
 **Dormant**: No Backend Session is running; the Presentation Transcript is readable and the Agent Session can be Revived.
 _Avoid_: idle, stopped, dead

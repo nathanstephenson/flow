@@ -13,6 +13,7 @@ import { toolSummary } from "../client/tool-summary.ts";
 import { relativeTime } from "../client/relative-time.ts";
 import { scopeKindLabel } from "../client/scope-kind.ts";
 import { sessionLabel } from "../client/session-label.ts";
+import { railGroup, railGroupLabel, RAIL_GROUPS } from "../client/status.ts";
 
 /**
  * Frame rendering, kept pure so it can be tested without a terminal.
@@ -329,29 +330,65 @@ function overlay(ui: UiState, width: number, height: number): string[] {
   if (ui.overlay.kind === "sessions") {
     const cursor = (ui.overlay as { index: number }).index;
     const now = ui.now ?? Date.now();
-    const rows: string[] = [];
-    let openedSettled = false;
+    type SessionRow =
+      | { type: "heading"; line: string }
+      | { type: "session"; line: string; sessionIndex: number }
+      | { type: "preview"; line: string };
+    const rows: SessionRow[] = [];
+    const counts = new Map(RAIL_GROUPS.map((group) => [group, 0]));
+    for (const session of ui.sessions) {
+      const group = railGroup(session);
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
+    let opened: ReturnType<typeof railGroup> | undefined;
 
-    // list() sorts Settled last, so one divider separates the two groups. It is a label rather than
-    // a row: the cursor indexes into ui.sessions, and a selectable heading would shift every index.
+    // Headings are inserted into the rendered rows but never into ui.sessions, so the numeric
+    // cursor cannot land on one. The host already sorts by this same shared group identity.
     for (const [index, session] of ui.sessions.entries()) {
-      if (session.status === "settled" && !openedSettled) {
-        openedSettled = true;
-        rows.push(clip("  ── settled ──", width));
+      const group = railGroup(session);
+      if (group !== opened) {
+        opened = group;
+        rows.push({ type: "heading", line: clip(`  ── ${railGroupLabel(group)} (${counts.get(group) ?? 0}) ──`, width) });
       }
-      // `restingAt`, which is also what the list is ordered by — a column showing one time while
-      // the rows are sorted by another reads as broken the first time they disagree.
-      const updated = relativeTime(session.restingAt, now);
-      rows.push(
-        clip(
-          `${index === cursor ? ">" : " "} ${session.status.padEnd(8)} ${session.backend.padEnd(7)} ${updated.padEnd(10)} ${sessionLabel(session)}`,
-          width,
-        ),
-      );
+      const ageAt = session.attention?.at ?? session.restingAt;
+      const age = relativeTime(ageAt, now);
+      const attention = session.attention
+        ? `${session.attention.group === "needs-input" ? "!" : "●"} ${session.attention.reason.toLowerCase()}`
+        : session.status;
+      // Backend and fixed columns earn their width. On a narrow terminal the reason, age, and title
+      // are the actionable parts; dropping metadata is better than clipping the identity away.
+      const detail = width >= 64
+        ? `${attention.padEnd(16)} ${session.backend.padEnd(7)} ${age.padEnd(10)}`
+        : width >= 44
+          ? `${attention.padEnd(16)} ${age.padEnd(10)}`
+          : `${attention} ${age}`;
+      rows.push({
+        type: "session",
+        sessionIndex: index,
+        line: clip(`${index === cursor ? ">" : " "} ${detail} ${sessionLabel(session)}`, width),
+      });
+      if (session.outputPreview) rows.push({ type: "preview", line: ellipsised(`    ${session.outputPreview}`, width) });
     }
 
+    // Group headings consume rows but not cursor positions. Window the rendered rows around the
+    // selected identity so adding headings never makes keyboard navigation walk off-screen.
+    const room = Math.max(1, height - 1);
+    const cursorRow = rows.findIndex((row) => row.type === "session" && row.sessionIndex === cursor);
+    const start = Math.max(0, Math.min(cursorRow - Math.floor(room / 2), rows.length - room));
+    let visibleRows = rows.slice(start, start + room);
+    // When the window starts halfway through a large group, keep its heading as a sticky first row.
+    // There is always still room for the cursor because a centered/clamped cursor is not first.
+    if (room > 1 && start > 0 && visibleRows[0]?.type !== "heading") {
+      let heading = start - 1;
+      while (heading > 0 && rows[heading]?.type !== "heading") heading -= 1;
+      const groupHeading = rows[heading];
+      if (groupHeading?.type === "heading") {
+        visibleRows = [groupHeading, ...visibleRows.slice(1)];
+      }
+    }
+    const visible = visibleRows.map((row) => row.line);
     return padTo(
-      ["sessions  (enter to switch, n for new, w for new in a worktree, s to settle, esc to close)", ...rows],
+      ["sessions  (enter to switch, n for new, w for new in a worktree, s to settle, esc to close)", ...visible],
       height,
       width,
     );

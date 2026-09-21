@@ -1,5 +1,5 @@
 import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Plus, Settings } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
 import type { LinkState } from "@client/connection.ts";
@@ -7,7 +7,7 @@ import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { scopeKindLabel } from "@client/scope-kind.ts";
 import { projectName } from "@client/project-name.ts";
-import { canSettle, working } from "@client/status.ts";
+import { canSettle, railGroup, railGroupLabel, RAIL_GROUPS, working } from "@client/status.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
 import { StatusDot } from "@/components/status-indicator.tsx";
@@ -95,29 +95,35 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
       closeMobile();
     },
   };
-  // Settled is the Session Host's bottom band, so this partition costs nothing and cannot reorder.
-  const active = props.sessions.filter((session) => session.status !== "settled");
-  const settled = props.sessions.filter((session) => session.status === "settled");
-
-  const cursorInSettled = settled.some((session) => session.id === props.cursorId);
-  const [settledOpen, setSettledOpen] = useState(false);
+  const grouped = new Map(RAIL_GROUPS.map((group) => [group, [] as SessionSummary[]]));
+  for (const session of props.sessions) grouped.get(railGroup(session))?.push(session);
+  const groups = RAIL_GROUPS.map((group) => ({ group, sessions: grouped.get(group)! }))
+    .filter(({ sessions }) => sessions.length > 0);
+  const filedAway = groups.find(({ group }) => group === "filed-away");
+  const cursorGroup = props.sessions.find((session) => session.id === props.cursorId);
+  const cursorGroupId = cursorGroup ? railGroup(cursorGroup) : undefined;
+  const cursorInFiledAway = cursorGroupId === "filed-away";
+  const [filedAwayOpen, setFiledAwayOpen] = useState(false);
 
   const list = useRef<HTMLDivElement>(null);
+  const rowHasFocus = useRef(false);
 
   /**
-   * Focus follows the cursor, but only while the rail already has it. Moving focus on a cursor change
-   * the reader made from a pane would yank the keyboard out from under them; not moving it while they
-   * are *in* the rail would leave `tabIndex={0}` on a row that is not focused, which is the roving
-   * tabindex bug rather than the pattern.
+   * Focus follows the cursor, but only while a row already has it. Focus events remember ownership
+   * before React mutates the DOM: layout cleanups can run after the cursor attribute has changed or
+   * the focused row has been removed, so querying the cursor there loses the old focus owner.
+   *
+   * A layout effect keeps the roving tabindex and DOM focus in the same paint. Group identity is a
+   * dependency because an attention transition can reparent the cursor row without changing it.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     const container = list.current;
     if (!container) return;
     const focused = document.activeElement;
-    if (!(focused instanceof HTMLElement) || !container.contains(focused)) return;
-    const row = container.querySelector<HTMLElement>('[data-cursor="true"]');
-    if (row && row !== focused) row.focus();
-  }, [props.cursorId]);
+    const cursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
+    const cursorItem = cursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
+    if (rowHasFocus.current && cursor && !cursorItem?.contains(focused)) cursor.focus();
+  }, [props.cursorId, cursorGroupId]);
 
   return (
     <>
@@ -128,25 +134,47 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
        * they are the only keys this component handles — everything vertical is resolved centrally
        * so there is one cursor rather than two.
        */}
-      <SidebarContent ref={list} className="transcript-scroller gap-0" onKeyDown={moveWithinRow}>
-        <SidebarGroup className="p-0">
-          <SidebarGroupContent>
-            <AgentSessionMenu {...navigationProps} label="Active Agent Sessions" sessions={active} now={now} />
-          </SidebarGroupContent>
-        </SidebarGroup>
+      <SidebarContent
+        ref={list}
+        className="transcript-scroller gap-0"
+        onKeyDown={moveWithinRow}
+        onFocusCapture={(event) => {
+          rowHasFocus.current = event.target.closest('[data-sidebar="menu-item"]') !== null;
+        }}
+        onBlurCapture={(event) => {
+          // Removing a focused row can leave focus on body without a blur event. If a browser does
+          // emit one for removal, it is not an intentional departure from the rail either.
+          if (event.target.isConnected) rowHasFocus.current = false;
+        }}
+      >
+        {groups.filter(({ group }) => group !== "filed-away").map(({ group, sessions }) => (
+          <SidebarGroup key={group} className="p-0">
+            <SidebarGroupLabel className="select-none text-muted-foreground">
+              {railGroupLabel(group)} · {sessions.length}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <AgentSessionMenu
+                {...navigationProps}
+                label={`${railGroupLabel(group)} Agent Sessions`}
+                sessions={sessions}
+                now={now}
+              />
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
 
-        {settled.length > 0 ? (
+        {filedAway ? (
           <>
             <SidebarSeparator className="mx-0" />
-            <SettledGroup
-              count={settled.length}
+            <FiledAwayGroup
+              count={filedAway.sessions.length}
               // The group cannot be collapsed while the keyboard cursor is inside it: collapsing
               // would strand focus on a row the browser will not focus.
-              open={settledOpen || cursorInSettled}
-              onOpenChange={setSettledOpen}
+              open={filedAwayOpen || cursorInFiledAway}
+              onOpenChange={setFiledAwayOpen}
             >
-              <AgentSessionMenu {...navigationProps} label="Settled Agent Sessions" sessions={settled} now={now} />
-            </SettledGroup>
+              <AgentSessionMenu {...navigationProps} label="Filed away Agent Sessions" sessions={filedAway.sessions} now={now} />
+            </FiledAwayGroup>
           </>
         ) : null}
 
@@ -166,10 +194,6 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
  * than as "focus the settle button" — that is the same amount of code and does not have to be
  * rewritten the day a row grows a second action. Delegated from the list rather than bound per row,
  * so the number of listeners does not grow with the number of Agent Sessions.
- *
- * The action is `visibility: hidden` until the row is hovered or holds focus, and a hidden element is
- * not focusable — which is fine and in fact required: focus is on the row button by the time this
- * runs, so `group-focus-within` has already revealed it.
  */
 function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
   const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -296,8 +320,24 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             last deliberately: the live one beats the polled one the summary carries. */}
         <StatusDot status={status} working={working({ ...summary, status })} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm">{sessionLabel(summary)}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className={cn("min-w-0 flex-1 truncate text-sm", summary.attention && "font-semibold")}>
+              {sessionLabel(summary)}
+            </span>
+          </span>
+          {summary.outputPreview ? (
+            <span className="block truncate text-xs text-muted-foreground">{summary.outputPreview}</span>
+          ) : null}
           <ScopeLine summary={summary} />
+          {summary.attention ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium">
+              <span aria-hidden>{summary.attention.group === "needs-input" ? "!" : "●"}</span>
+              <span>{summary.attention.reason}</span>
+              <span className="ml-auto shrink-0 text-muted-foreground">
+                {relativeTime(summary.attention.at, now)}
+              </span>
+            </span>
+          ) : null}
           {/*
            * Backend at one end, age at the other, and no status word between them: the dot's hue and
            * shape say the state now, and a row that spelled it out as well was spending a third of
@@ -318,12 +358,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
             <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
-            {/*
-             * `restingAt`, which is what the Session Host orders this list by. Showing `updatedAt`
-             * here instead would print one time while sorting by another, and the first row whose
-             * age disagreed with its position would read as a bug.
-             */}
-            <span className="ml-auto shrink-0">{relativeTime(summary.restingAt, now)}</span>
+            {/* Attention rows show the qualifying event's age above. Ordinary rows keep Resting,
+                the same timestamp that orders their group. */}
+            {!summary.attention ? (
+              <span className="ml-auto shrink-0">{relativeTime(summary.restingAt, now)}</span>
+            ) : null}
           </span>
         </span>
       </SidebarMenuButton>
@@ -409,7 +448,7 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
  * cost does not grow with the list, and it is not an Agent Session, so it has no place in the row
  * cursor. Because a flex `<summary>` loses its native marker, the chevron is drawn.
  */
-function SettledGroup({
+function FiledAwayGroup({
   count,
   open,
   onOpenChange,
@@ -427,7 +466,7 @@ function SettledGroup({
           render={<summary className="cursor-default gap-1 text-muted-foreground select-none" />}
         >
           <ChevronDown aria-hidden className={cn("transition-transform", !open && "-rotate-90")} />
-          Settled · {count}
+          Filed away · {count}
         </SidebarGroupLabel>
         {/* Reduced contrast here; full contrast once one of them is focused in a pane. */}
         <SidebarGroupContent className="opacity-60">{children}</SidebarGroupContent>

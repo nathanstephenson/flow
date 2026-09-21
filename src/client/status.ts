@@ -1,4 +1,4 @@
-import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
+import type { SessionLifecycle, SessionStatus, SessionSummary } from "../protocol/commands.ts";
 
 /**
  * The rules both front-ends need for turning a status into affordances. Shared because they are
@@ -40,23 +40,42 @@ export function occupied(status: SessionStatus): boolean {
   return status === "running" || status === "awaiting";
 }
 
-/**
- * Which band of the rail an Agent Session belongs to, most alive first.
- *
- * The rail is banded rather than ordered by one timestamp, because a single recency key put a
- * finished Agent Session above one that was still working — and the top of a list is where a reader
- * looks for what is happening. Banding fixes that without reintroducing churn: a row moves when its
- * band changes and at no other time, so a turn can stream for an hour without touching the order.
- *
- * Ended has no band of its own. An Ended Agent Session is not reaped and stays in the list, and it
- * is as finished as a Settled one, so it sits with them at the bottom.
- */
-export function railBand(of: WorkLoad): number {
-  if (of.status === "awaiting") return 0;
-  if (of.status === "running" || working(of)) return 1;
-  if (of.status === "idle") return 2;
-  if (of.status === "dormant") return 3;
-  return 4;
+/** Stable group identities shared by the host and both clients. */
+export type RailGroup = "needs-input" | "unread" | "working" | "idle" | "dormant" | "filed-away";
+
+export const RAIL_GROUPS: readonly RailGroup[] = [
+  "needs-input",
+  "unread",
+  "working",
+  "idle",
+  "dormant",
+  "filed-away",
+];
+
+export function railGroup(of: WorkLoad & Pick<SessionSummary, "attention">): RailGroup {
+  // Terminal Lifecycle wins over stale independent-work/request indexes. Settle and End file a row
+  // away; nothing belonging to a stopped Backend Session can remain answerable above that boundary.
+  if (of.status === "settled" || of.status === "ended") return "filed-away";
+  if (of.attention?.group === "needs-input") return "needs-input";
+  if (of.attention?.group === "unread") return "unread";
+  if (of.status === "running" || of.status === "awaiting" || working(of)) return "working";
+  if (of.status === "idle") return "idle";
+  return "dormant";
+}
+
+export function railGroupLabel(group: RailGroup): string {
+  switch (group) {
+    case "needs-input": return "Needs input";
+    case "unread": return "Unread";
+    case "working": return "Working";
+    case "idle": return "Idle";
+    case "dormant": return "Dormant";
+    case "filed-away": return "Filed away";
+  }
+}
+
+export function railGroupRank(of: WorkLoad & Pick<SessionSummary, "attention">): number {
+  return RAIL_GROUPS.indexOf(railGroup(of));
 }
 
 /**

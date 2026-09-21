@@ -25,7 +25,19 @@ import { ownKeys } from "@/presentation/subagent-rows.ts";
  */
 const TAIL_WINDOW = 400;
 
-export function TranscriptView({ view, query }: { view: AgentSessionView; query: string }) {
+export function TranscriptView({
+  view,
+  query,
+  visible = true,
+  onObserved,
+}: {
+  view: AgentSessionView;
+  query: string;
+  /** False when mobile is showing a Dock over the still-mounted transcript. */
+  visible?: boolean;
+  /** Called only once the transcript is painted, focused, visible, and pinned to its newest row. */
+  onObserved?: (throughSeq: number) => void;
+}) {
   const keys = useTranscriptKeys(view);
   const matching = useFilteredKeys(view, keys, query);
 
@@ -52,6 +64,39 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
   const scroller = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
   const [atBottom, setAtBottom] = useState(true);
+  const reportObserved = useCallback((throughSeq: number) => {
+    if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
+    onObserved?.(throughSeq);
+  }, [onObserved, visible]);
+  const reportObservedRef = useRef(reportObserved);
+  reportObservedRef.current = reportObserved;
+  const paintFrames = useRef<[number, number]>([0, 0]);
+  const scheduleObserved = useCallback((throughSeq = view.getLastSeq()) => {
+    cancelAnimationFrame(paintFrames.current[0]);
+    cancelAnimationFrame(paintFrames.current[1]);
+    paintFrames.current[0] = requestAnimationFrame(() => {
+      paintFrames.current[1] = requestAnimationFrame(() => reportObservedRef.current(throughSeq));
+    });
+  }, [view]);
+
+  useEffect(() => scheduleObserved());
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(paintFrames.current[0]);
+      cancelAnimationFrame(paintFrames.current[1]);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const observeCurrent = () => scheduleObserved();
+    window.addEventListener("focus", observeCurrent);
+    document.addEventListener("visibilitychange", observeCurrent);
+    return () => {
+      window.removeEventListener("focus", observeCurrent);
+      document.removeEventListener("visibilitychange", observeCurrent);
+    };
+  }, [scheduleObserved]);
 
   /**
    * The pin is derived from the reader's own scrolling rather than measured before a commit and
@@ -73,6 +118,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
       throttle = setTimeout(() => {
         throttle = undefined;
         setAtBottom(pinned.current);
+        if (pinned.current) scheduleObserved();
       }, 150);
     };
 
@@ -81,7 +127,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
       element.removeEventListener("scroll", onScroll);
       if (throttle) clearTimeout(throttle);
     };
-  }, []);
+  }, [scheduleObserved]);
 
   /**
    * Hold the pin while the Composer changes height.
@@ -126,7 +172,8 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
     element.scrollTop = element.scrollHeight;
     pinned.current = true;
     setAtBottom(true);
-  }, []);
+    scheduleObserved();
+  }, [scheduleObserved]);
 
   return (
     <div className="relative min-h-0 min-w-0">
@@ -172,7 +219,7 @@ export function TranscriptView({ view, query }: { view: AgentSessionView; query:
             </p>
           ) : null}
 
-          <StickToBottom view={view} scroller={scroller} pinned={pinned} />
+          <StickToBottom view={view} scroller={scroller} pinned={pinned} scheduleObserved={scheduleObserved} />
         </div>
       </div>
 
@@ -213,10 +260,12 @@ function StickToBottom({
   view,
   scroller,
   pinned,
+  scheduleObserved,
 }: {
   view: AgentSessionView;
   scroller: RefObject<HTMLDivElement | null>;
   pinned: RefObject<boolean>;
+  scheduleObserved: (throughSeq?: number) => void;
 }) {
   const [, setTick] = useState(0);
 
@@ -225,6 +274,7 @@ function StickToBottom({
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    scheduleObserved(view.getLastSeq());
   });
 
   return null;

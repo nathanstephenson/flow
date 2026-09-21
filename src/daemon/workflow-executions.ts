@@ -40,6 +40,8 @@ type RelayRequestBase = {
   attempt: number;
   subagentId: string;
   context: string;
+  attentionAt: string;
+  attentionVersion: number;
   announced: boolean;
   deliveryAttempts: number;
   relaying: boolean;
@@ -50,8 +52,8 @@ type RelayRequest = RelayRequestBase & (
   | { kind: 'permission'; callId: string; tool: string; direct: boolean; details?: unknown; scope: string }
 );
 type NewRelayRequest =
-  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>
-  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>;
+  | Omit<Extract<RelayRequest, { kind: 'enquiry' }>, 'id' | 'order' | 'attentionAt' | 'attentionVersion' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>
+  | Omit<Extract<RelayRequest, { kind: 'permission' }>, 'id' | 'order' | 'attentionAt' | 'attentionVersion' | 'announced' | 'deliveryAttempts' | 'relaying' | 'abort'>;
 
 export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
@@ -70,6 +72,7 @@ export class WorkflowExecutionService {
   private readonly launches = new Map<string, Launch>();
   /** Pending Workflow input, ordered independently of polling clients and addressed by opaque IDs. */
   private readonly relayRequests = new Map<string, RelayRequest>();
+  private readonly newestRelayBySession = new Map<string, RelayRequest>();
   private relayOrder = 0;
   private readonly secretValues = new Map<string, string[]>();
   private readonly runtimeSnapshots = new Map<string, ReturnType<typeof workflowRuntimeOptions>>();
@@ -153,6 +156,11 @@ export class WorkflowExecutionService {
   /** Full executions doing work; step tests and recovery-required slots are not working activity. */
   active(sessionId: string): number {
     return this.scheduler.activeFull(sessionId) ? 1 : 0;
+  }
+
+  pendingInput(sessionId: string): { at: string; version: number } | undefined {
+    const newest = this.newestRelayBySession.get(sessionId);
+    return newest ? { at: newest.attentionAt, version: newest.attentionVersion } : undefined;
   }
 
   list(sessionId: string) {
@@ -537,9 +545,18 @@ export class WorkflowExecutionService {
       item.sessionId === request.sessionId && item.executionId === request.executionId && item.subagentId === request.subagentId &&
       item.kind === request.kind && (item.kind === 'enquiry' && request.kind === 'enquiry' ? item.askId === request.askId : item.kind === 'permission' && request.kind === 'permission' && item.callId === request.callId));
     if (duplicate) return;
-    const item = { ...request, id: randomUUID(), order: ++this.relayOrder, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
+    const id = randomUUID();
+    // Publish the relay before waking the host. The host may drain synchronously and takeInput must
+    // already be able to find this request when it does.
+    const item = { ...request, id, order: ++this.relayOrder, attentionAt: new Date().toISOString(), attentionVersion: 0, announced: false, deliveryAttempts: 0, relaying: false, abort: new AbortController() } as RelayRequest;
     this.relayRequests.set(item.id, item);
-    this.host.workflowInput(item.sessionId);
+    const attention = this.host.workflowInput(request.sessionId, id);
+    if (attention) {
+      item.attentionAt = attention.at;
+      item.attentionVersion = attention.version;
+    }
+    const newest = this.newestRelayBySession.get(item.sessionId);
+    if (!newest || item.attentionAt > newest.attentionAt) this.newestRelayBySession.set(item.sessionId, item);
   }
 
   private dropRelays(match: (request: RelayRequest) => boolean, abort = true): void {
@@ -550,7 +567,15 @@ export class WorkflowExecutionService {
       if (abort) request.abort.abort();
       sessions.add(request.sessionId);
     }
-    for (const sessionId of sessions) this.wakeNextRelay(sessionId);
+    for (const sessionId of sessions) {
+      let newest: RelayRequest | undefined;
+      for (const request of this.relayRequests.values()) {
+        if (request.sessionId === sessionId && (!newest || request.attentionAt > newest.attentionAt)) newest = request;
+      }
+      if (newest) this.newestRelayBySession.set(sessionId, newest);
+      else this.newestRelayBySession.delete(sessionId);
+      this.wakeNextRelay(sessionId);
+    }
   }
 
   private oldestRelay(sessionId: string): RelayRequest | undefined {

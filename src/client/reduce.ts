@@ -47,7 +47,7 @@ export type BackgroundCallStatus = "running" | "complete" | "aborted" | "error";
  * rebuilt per tick, which could never compare equal to the one before it; this is the opposite, and
  * it holds the same contract `model` and `capabilities` already do.
  */
-export type OpenEnquiry = { askId: string; questions: Question[]; context?: string };
+export type OpenEnquiry = { askId: string; questions: Question[]; context?: string; producer?: Producer };
 
 /** Flattened from PermissionState, for the reason EnquiryStatus is flattened from EnquiryState. */
 export type Authorisation = "asked" | "allowed" | "always" | "denied";
@@ -63,7 +63,7 @@ export type Authorisation = "asked" | "allowed" | "always" | "denied";
  * first raised and then held by reference, so a repeated `asked` snapshot cannot republish a
  * shallow-compared chrome.
  */
-export type OpenPermission = { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string };
+export type OpenPermission = { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer };
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
@@ -375,7 +375,10 @@ export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
     status: deriveStatus({
       lifecycle: next.lifecycle,
       turnInFlight: next.turnInFlight,
-      awaiting: next.asking !== undefined || next.authorising !== undefined,
+      // Independent producers can still need input after the parent turn ends, but their
+      // requests do not occupy that turn.
+      awaiting: (next.asking !== undefined && next.asking.producer === undefined) ||
+        (next.authorising !== undefined && next.authorising.producer === undefined),
     }),
     lastSeq: entry.seq,
   };
@@ -528,7 +531,12 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         open && state.asking?.askId === event.askId
           ? state.asking
           : open
-            ? { askId: event.askId, questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) }
+            ? {
+                askId: event.askId,
+                questions: event.questions,
+                ...(event.context === undefined ? {} : { context: event.context }),
+                ...(event.producer === undefined ? {} : { producer: event.producer }),
+              }
             : state.asking?.askId === event.askId
               ? undefined
               : state.asking;
@@ -567,6 +575,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
             ...(event.context === undefined ? {} : { context: event.context }),
             ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
             ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
+            ...(event.producer === undefined ? {} : { producer: event.producer }),
           })
         : state.authorising?.callId === event.callId
           ? nextAwaiting(state.entries, event.callId)
@@ -586,10 +595,12 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     }
 
     case "turn_ended":
-      // `asking` and `authorising` cleared here as well as on their own terminal snapshots. A backend
-      // that tore down without emitting one would otherwise leave the composer locked out for good —
-      // see ViewState.asking. Clearing twice costs nothing; clearing never is unrecoverable.
-      return { ...state, turnInFlight: false, asking: undefined, authorising: undefined };
+      return {
+        ...state,
+        turnInFlight: false,
+        asking: state.asking?.producer === undefined ? undefined : state.asking,
+        authorising: state.authorising?.producer === undefined ? undefined : state.authorising,
+      };
 
     case "queue_changed":
       return {
@@ -778,6 +789,7 @@ function nextAwaiting(entries: Entry[], except: string): OpenPermission | undefi
     ...(next.permissionContext === undefined ? {} : { context: next.permissionContext }),
     ...(next.allowAlways === undefined ? {} : { allowAlways: next.allowAlways }),
     ...(next.authorizationScope === undefined ? {} : { authorizationScope: next.authorizationScope }),
+    ...(next.producer === undefined ? {} : { producer: next.producer }),
   } : undefined;
 }
 

@@ -30,15 +30,29 @@ export type SessionStatus = "idle" | "running" | "awaiting" | "dormant" | "settl
  */
 export type SessionLifecycle = "live" | "dormant" | "settled" | "ended";
 
+/** Why an Agent Session is above the ordinary activity bands in the inbox-style rail. */
+export type SessionAttention = {
+  group: "needs-input" | "unread";
+  reason: "Input needed" | "Completed" | "Failed";
+  /** The qualifying event whose age the row shows. */
+  at: string;
+  /** Opaque per-session boundary used by acknowledgements. */
+  version: number;
+  /** Transcript boundary visible when this attention was raised. */
+  observedSeq: number;
+};
+
 export type SessionSummary = {
   id: string;
   scope: string;
   backend: string;
   status: SessionStatus;
   title: string;
+  /** Latest assistant output, updated as its streamed snapshot grows. */
+  outputPreview?: string;
   /**
    * When this Agent Session last came to rest — the time its row prints, and what orders the rail
-   * *within* a band. Which band it is in comes from `railBand`, not from here.
+   * within its inbox group. The group itself comes from `railGroup`, not from here.
    *
    * Stamped when the derived activity enters `idle`, and at no other time. Deliberately not
    * `updatedAt`, which every streamed token restamps and which therefore floated whichever Agent
@@ -85,6 +99,8 @@ export type SessionSummary = {
    * another full window.
    */
   settledAt?: string;
+  /** Absent when this Agent Session needs no attention. Independent from activity and Lifecycle. */
+  attention?: SessionAttention;
   lastSeq: number;
   capabilities?: Capabilities;
   /**
@@ -163,6 +179,12 @@ export type Command =
   | { type: "revive"; sessionId: string }
   | { type: "dispose"; sessionId: string }
   | { type: "settle"; sessionId: string }
+  /**
+   * Acknowledge only the attention version the client actually observed. The host deliberately does
+   * not interpret this as "mark whatever is newest read": a response delayed behind newer output
+   * must leave that newer output unread.
+   */
+  | { type: "acknowledge"; sessionId: string; throughVersion: number }
   | { type: "set_model"; sessionId: string; modelId: string }
   | { type: "set_effort"; sessionId: string; effort: EffortLevel }
   /**

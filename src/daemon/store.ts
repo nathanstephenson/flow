@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { ATTACHMENT_MEDIA_TYPES, type AttachmentMediaType } from "../protocol/attachments.ts";
 import type { EffortLevel, LoggedEvent } from "../protocol/events.ts";
-import type { SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
+import type { SessionAttention, SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
 
 /**
  * On-disk home of Presentation Transcripts.
@@ -43,6 +43,7 @@ export type SessionMeta = {
    * `SessionHost.load` infers it from the title for those, so nothing has to be migrated.
    */
   titleSource?: TitleSource;
+  outputPreview?: string;
   createdAt: string;
   updatedAt: string;
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */
@@ -71,6 +72,17 @@ export type SessionMeta = {
   restingAt?: string;
   /** When this Agent Session was Settled, and so what ADR 0006's retention window runs from. */
   settledAt?: string;
+  /**
+   * The newest qualifying inbox event. Optional is the migration: records written before attention
+   * existed start read rather than flooding the inbox after an upgrade.
+   */
+  latestAttention?: Omit<SessionAttention, "group"> & { key: string };
+  /** Newest qualifying outcome, retained independently of later input requests. */
+  latestOutcome?: Omit<SessionAttention, "group"> & { key: string };
+  /** Recent qualifying keys retained across restart for bounded replay deduplication. */
+  seenAttentionKeys?: string[];
+  /** Highest attention version a client actually observed. Machine-wide, not per front-end. */
+  readAttentionVersion?: number;
   /**
    * The worktree this Agent Session's Scope *is*, when the Session Host made it. Absent for a Scope
    * its owner named, which is every session before worktrees existed and most sessions after.

@@ -19,6 +19,7 @@ function fakeView(sessionId: string): FakeView {
     subscribeTranscript: () => () => {},
     getKeys: () => [],
     getEntry: () => undefined,
+    getLastSeq: () => 0,
     start() {
       view.starts += 1;
     },

@@ -558,6 +558,22 @@ describe("an Enquiry in the transcript", () => {
     assert.deepEqual(rows[0]?.kind === "enquiry" ? rows[0].answers : [], [["zod"]]);
   });
 
+  it("keeps independent Permission Prompts without occupying the parent turn", () => {
+    const producer = { subagentId: "subagent-1" };
+    const request: AgentEvent[] = [
+      { type: "tool_started", callId: "c1", name: "Bash", input: {}, producer },
+      { type: "permission", callId: "c1", tool: "Bash", state: "asked", producer },
+    ];
+    const idle = reduceAll(transcript(...request).since(0));
+    assert.equal(idle.status, "idle");
+    assert.deepEqual(idle.authorising?.producer, producer);
+    const running = reduceAll(transcript({ type: "turn_started", turnId: "t1" }, ...request).since(0));
+    assert.equal(running.status, "running");
+    const ended = reduceAll(transcript({ type: "turn_ended", turnId: "t1", reason: "complete" }).since(0), running);
+    assert.equal(ended.status, "idle");
+    assert.equal(ended.authorising, running.authorising);
+  });
+
   it("holds the same `asking` reference across repeated snapshots", () => {
     /*
      * The property the whole web chrome rests on. `asking` reaches a shallow-compared snapshot, so a
@@ -571,6 +587,32 @@ describe("an Enquiry in the transcript", () => {
 
     assert.ok(once.asking !== undefined);
     assert.equal(once.asking, twice.asking, "the same object, not an equal one");
+  });
+
+  it("preserves attribution while open and across terminal snapshots", () => {
+    const producer = { subagentId: "subagent-1" };
+    const attributed: AgentEvent = { ...asked, producer };
+    const open = reduceAll(transcript(attributed).since(0));
+    assert.deepEqual(open.asking?.producer, producer);
+    assert.equal(open.status, "idle", "an independent Enquiry does not occupy the parent");
+    const running = reduceAll(transcript({ type: "turn_started", turnId: "t1" }, attributed).since(0));
+    assert.equal(running.status, "running", "an independent Enquiry does not block a running parent");
+
+    const afterParentTurn = reduceAll(transcript(attributed, {
+      type: "turn_ended", turnId: "t1", reason: "aborted",
+    }).since(0));
+    assert.deepEqual(afterParentTurn.asking?.producer, producer, "an independent request outlives the parent turn");
+    assert.equal(afterParentTurn.status, "idle");
+
+    for (const closing of [
+      { type: "enquiry", askId: "a1", questions: QUESTIONS, state: "aborted", producer },
+      { type: "session_ended", reason: "disposed" },
+    ] as AgentEvent[]) {
+      const closed = reduceAll(transcript(attributed, closing).since(0));
+      const row = closed.entries.find((entry) => entry.kind === "enquiry");
+      assert.deepEqual(row?.producer, producer);
+      assert.equal(closed.asking, undefined);
+    }
   });
 
   it("carries the answers on the Entry rather than leaving them to the tool result", () => {

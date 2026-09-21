@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { canSettle, occupied } from "@client/status.ts";
+import { canSettle, occupied, railGroup } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
@@ -8,6 +8,7 @@ import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
+import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
 import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
@@ -59,7 +60,8 @@ export function AppShell() {
   } = useRoute();
   const run = useCommand();
 
-  const [cursor, setCursor] = useState(0);
+  // Identity, not an index: attention events may reorder the rail while the keyboard is in it.
+  const [cursorId, setCursorId] = useState<string | undefined>(undefined);
   const [railOpen, setRailOpen] = useState(true);
   /**
    * Whether the pane's transcript search field is on screen.
@@ -112,12 +114,12 @@ export function AppShell() {
 
   /**
    * Open the freshest Agent Session on arrival — but only when the URL did not already name one, and
-   * not when the candidate is Settled.
+   * not when the candidate is Filed away.
    *
-   * The Session Host bands the list most alive first (`railBand`), so `sessions[0]` is the one most
+   * The Session Host groups the list by attention and activity (`railGroup`), so `sessions[0]` is the one most
    * worth landing on — whatever is awaiting a decision, else whatever is working, else the freshest
-   * Idle one — and it is Settled only when every one of them is. Opening a Settled Agent Session
-   * unasked would put a finished transcript in front of someone who came to start work.
+   * Idle one. Opening a Filed away Agent Session unasked would put a finished transcript in front
+   * of someone who came to start work.
    *
    * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold
    * load into `#/settings` must not be answered by silently navigating away from them.
@@ -144,17 +146,20 @@ export function AppShell() {
     if (!loaded) return;
     setLanded(true);
     const candidate = sessions[0];
-    // Nothing worth opening, so the New Agent Session view stands: either there are none, or every
-    // one of them is Settled and putting a finished transcript in front of somebody who came to
-    // start work is not an improvement on offering them the form.
-    if (!candidate || candidate.status === "settled") return;
+    // Nothing worth opening when there are none or every Agent Session is Filed away.
+    if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
   }, [landed, loaded, sessions, focusedId, focus, route.view]);
 
-  // The cursor addresses the rail as it is rendered, so it cannot point past the end of it.
+  // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
+  // that identity was Reaped, never merely because it moved to another group.
   useEffect(() => {
-    setCursor((current) => Math.max(0, Math.min(current, sessions.length - 1)));
-  }, [sessions.length]);
+    setCursorId((current) => retainSessionCursor(sessions, current));
+  }, [sessions]);
+
+  const moveCursor = useCallback((step: number) => {
+    setCursorId((current) => moveSessionCursor(sessions, current, step));
+  }, [sessions]);
 
   useEffect(() => {
     setSearchOpen(false);
@@ -184,13 +189,12 @@ export function AppShell() {
   const handlers = useMemo<KeyboardHandlers>(
     () => ({
       "new-agent-session": openNewAgentSession,
-      "sidebar-next": () => setCursor((current) => Math.min(current + 1, sessions.length - 1)),
-      "sidebar-previous": () => setCursor((current) => Math.max(current - 1, 0)),
-      "sidebar-first": () => setCursor(0),
-      "sidebar-last": () => setCursor(Math.max(sessions.length - 1, 0)),
+      "sidebar-next": () => moveCursor(1),
+      "sidebar-previous": () => moveCursor(-1),
+      "sidebar-first": () => setCursorId(sessions[0]?.id),
+      "sidebar-last": () => setCursorId(sessions.at(-1)?.id),
       "focus-pane": () => {
-        const candidate = sessions[cursor];
-        if (candidate) focus(candidate.id);
+        if (cursorId) focus(cursorId);
         // The Composer's input, whatever element it is made of. It was a `textarea` until it became
         // a CodeMirror editor, which renders a contenteditable div — a selector naming the tag would
         // have stopped working with nothing to say so.
@@ -239,7 +243,7 @@ export function AppShell() {
     [
       chrome,
       config.shell,
-      cursor,
+      cursorId,
       docks,
       focus,
       focusInPane,
@@ -247,6 +251,7 @@ export function AppShell() {
       leaveSettings,
       openNewAgentSession,
       openSettings,
+      moveCursor,
       run,
       sessions,
       settle,
@@ -289,7 +294,7 @@ export function AppShell() {
               sessions={sessions}
               focusedId={focusedId}
               focusedStatus={chrome?.status}
-              cursorId={sessions[cursor]?.id}
+              cursorId={cursorId}
               link={chrome?.link}
               onFocus={focus}
               onSettle={settle}

@@ -18,10 +18,11 @@ import {
   MAX_ATTACHMENT_BASE64_BYTES,
   type IncomingAttachment,
 } from "../protocol/attachments.ts";
-import { deriveStatus, railBand } from "../client/status.ts";
+import { deriveStatus, railGroupRank } from "../client/status.ts";
 import type {
   Command,
   SendWhen,
+  SessionAttention,
   SessionLifecycle,
   SessionStatus,
   SessionSummary,
@@ -116,11 +117,9 @@ type SessionRecord = {
    * closes torn prompts, a drift would leave a dangling `asked` on disk that replays into a
    * composer nobody can unlock.
    *
-   * Sets of ids rather than counters because snapshots repeat — a Subagent reports `running` many
-   * times, and counting arrivals rather than transitions would never come back down.
+   * Id-indexed collections rather than counters because snapshots repeat — a Subagent reports
+   * `running` many times, and counting arrivals rather than transitions would never come back down.
    */
-  openPermissionIds: Set<string>;
-  openEnquiryIds: Set<string>;
   /** Never affects occupancy: a backgrounded Subagent holds nothing (ADR 0016). */
   openSubagentIds: Set<string>;
   /** Never affects occupancy either: a Background Call holds nothing (ADR 0021). */
@@ -132,6 +131,18 @@ type SessionRecord = {
   restingAt: string;
   /** Set while Settled. What ADR 0006's retention window is measured from. */
   settledAt: string | undefined;
+  /** Backend-session generation namespaces adapter IDs that may restart from one after a Revive. */
+  backendEpoch: number;
+  /** Durable, machine-wide inbox state. Activity and Lifecycle never read these fields. */
+  latestAttention: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
+  /** Input requests may supersede the displayed group, but never erase an unread outcome. */
+  latestOutcome: (Omit<SessionAttention, "group"> & { key: string }) | undefined;
+  seenAttentionKeys: Set<string>;
+  readAttentionVersion: number;
+  outputPreview: string | undefined;
+  /** Relevant ages for unresolved parent/Subagent requests, indexed independently of occupancy. */
+  openPermissionAttention: Map<string, { at: string; version: number; independent: boolean }>;
+  openEnquiryAttention: Map<string, { at: string; version: number; independent: boolean }>;
   /**
    * Events an adapter emits while its Backend Session is still being created, held back so the
    * transcript opens with session_started (or revived) rather than with whatever the adapter
@@ -566,58 +577,122 @@ export class SessionHost {
     return this.activityOf(this.record(sessionId));
   }
 
-  /**
-   * Three `Set.size` reads and a comparison, because this runs for every Agent Session on every
-   * `GET /api/sessions` — the same budget `branch` is held on the record to stay inside. Independent
-   * workflow activity is a separate scheduler-map lookup when summaries are assembled below.
-   */
   private activityOf(record: SessionRecord): SessionStatus {
     return deriveStatus({
       lifecycle: record.lifecycle,
       turnInFlight: record.turnInFlight,
-      awaiting: record.openPermissionIds.size > 0 || record.openEnquiryIds.size > 0,
+      awaiting: hasParentRequest(record.openPermissionAttention)
+        || hasParentRequest(record.openEnquiryAttention),
     });
+  }
+
+  /** Record a qualifying event without changing activity, Resting, or Lifecycle. */
+  private markAttention(
+    record: SessionRecord,
+    reason: SessionAttention["reason"],
+    key: string,
+    at = new Date().toISOString(),
+  ): { at: string; version: number } {
+    if (record.seenAttentionKeys.has(key)) {
+      return { at: record.latestAttention?.at ?? at, version: record.latestAttention?.version ?? record.readAttentionVersion };
+    }
+    record.seenAttentionKeys.add(key);
+    while (record.seenAttentionKeys.size > 256) {
+      const oldest = record.seenAttentionKeys.values().next().value;
+      if (oldest !== undefined) record.seenAttentionKeys.delete(oldest);
+    }
+    const version = (record.latestAttention?.version ?? record.readAttentionVersion) + 1;
+    record.latestAttention = {
+      reason,
+      at,
+      version,
+      observedSeq: record.log.lastSeq,
+      key,
+    };
+    if (reason !== "Input needed") record.latestOutcome = record.latestAttention;
+    return { at, version };
+  }
+
+  /**
+   * Machine-wide acknowledgement with a compare-through boundary. Clamping to the version currently
+   * known means neither a buggy client nor a delayed request can pre-consume a future event.
+   */
+  acknowledge(sessionId: string, throughVersion: number): true {
+    const record = this.record(sessionId);
+    if (!Number.isSafeInteger(throughVersion) || throughVersion < 0) {
+      throw new CommandRefused("Invalid attention boundary");
+    }
+    const latest = record.latestAttention?.version ?? 0;
+    const next = Math.max(record.readAttentionVersion, Math.min(throughVersion, latest));
+    if (next !== record.readAttentionVersion) {
+      record.readAttentionVersion = next;
+      this.persist(record);
+    }
+    // An explicit result lets clients distinguish idempotent success from a refused/networked void
+    // command and retry the latter without turning repeated observations into a command storm.
+    return true;
   }
 
   list(): SessionSummary[] {
     return [...this.sessions.values()]
-      .map((record) => ({
-        id: record.id,
-        scope: record.scope,
-        backend: record.backendName,
-        status: this.activityOf(record),
-        title: record.title,
-        restingAt: record.restingAt,
-        activeSubagents: record.openSubagentIds.size,
-        activeBackgroundCalls: record.openBackgroundCallIds.size,
-        activeWorkflows: this.workflowOwner?.active(record.id) ?? 0,
-        ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
-        lastSeq: record.log.lastSeq,
-        ...(record.capabilities ? { capabilities: record.capabilities } : {}),
-        ...(record.branch ? { branch: record.branch } : {}),
-        ...(record.worktree ? { worktree: true as const } : {}),
-      }))
-      /*
-       * Banded by how alive an Agent Session is, then by recency inside each band.
-       *
-       * One recency key alone put an Agent Session that finished ten minutes ago above one still
-       * working, which is backwards: the top of a list is where a reader looks for what is
-       * happening. Bands fix the order without giving back the stability they were introduced for —
-       * a row moves when its band changes and at no other time, so a turn streams for an hour
-       * without touching the list.
-       *
-       * Settled and Ended sort by when they were filed away rather than by `restingAt`, which for
-       * them is whenever they happened to go idle beforehand — ordering them by something their
-       * owner never did.
-       */
+      .map((record) => {
+        const status = this.activityOf(record);
+        const workflowInput = this.workflowOwner?.pendingInput?.(record.id);
+        const parentInput = newestInput(record);
+        // A stopped Backend Session has no live callback to answer. Adapters normally emit terminal
+        // prompt snapshots while stopping; the Lifecycle guard also keeps a stale index from
+        // lifting an Ended row back out of Filed away.
+        const input = record.lifecycle === "live" ? newestAt(parentInput, workflowInput) : undefined;
+        const outcome = record.latestOutcome;
+        const unread = outcome !== undefined && outcome.version > record.readAttentionVersion;
+        const attention: SessionAttention | undefined = input
+          ? {
+              group: "needs-input",
+              reason: "Input needed",
+              at: input.at,
+              version: record.latestAttention?.version ?? input.version,
+              observedSeq: record.latestAttention?.observedSeq ?? record.log.lastSeq,
+            }
+          : unread && outcome
+            ? {
+                group: "unread",
+                reason: outcome.reason,
+                at: outcome.at,
+                version: outcome.version,
+                observedSeq: outcome.observedSeq,
+              }
+            : undefined;
+        return {
+          id: record.id,
+          scope: record.scope,
+          backend: record.backendName,
+          status,
+          title: record.title,
+          ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
+          restingAt: record.restingAt,
+          activeSubagents: record.openSubagentIds.size,
+          activeBackgroundCalls: record.openBackgroundCallIds.size,
+          activeWorkflows: this.workflowOwner?.active(record.id) ?? 0,
+          ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
+          ...(attention === undefined ? {} : { attention }),
+          lastSeq: record.log.lastSeq,
+          ...(record.capabilities ? { capabilities: record.capabilities } : {}),
+          ...(record.branch ? { branch: record.branch } : {}),
+          ...(record.worktree ? { worktree: true as const } : {}),
+        };
+      })
+      /* Attention groups are newest qualifying event first. Ordinary groups retain Resting/filed
+       * ordering, so streaming still cannot move a row. Identity is the deterministic final tie. */
       .sort((left, right) => {
-        const band = railBand(left) - railBand(right);
+        const band = railGroupRank(left) - railGroupRank(right);
         if (band !== 0) return band;
-        // `?? restingAt` on both sides rather than a branch on whether each has been Settled: the
-        // bottom band holds Settled and Ended together and only one of them carries `settledAt`, so
-        // comparing different fields per row would make this comparator non-transitive.
+        const attentionAt = left.attention && right.attention
+          ? right.attention.at.localeCompare(left.attention.at)
+          : 0;
+        if (attentionAt !== 0) return attentionAt;
         const by = (summary: SessionSummary): string => summary.settledAt ?? summary.restingAt;
-        return by(right).localeCompare(by(left));
+        const recency = by(right).localeCompare(by(left));
+        return recency !== 0 ? recency : left.id.localeCompare(right.id);
       });
   }
 
@@ -641,13 +716,21 @@ export class SessionHost {
         reviving: undefined,
         lifecycle: lifecycleFrom(meta),
         turnInFlight: false,
-        openPermissionIds: new Set(openPermissions(entries).map((open) => open.callId)),
-        openEnquiryIds: new Set(openEnquiries(entries).map((open) => open.askId)),
         openSubagentIds: new Set(openSubagents(entries).map((open) => open.subagentId)),
         openBackgroundCallIds: new Set(openBackgroundCalls(entries).map((open) => open.callId)),
         // A meta written before the split has neither, and `updatedAt` is what both used to be.
         restingAt: meta.restingAt ?? meta.updatedAt,
         settledAt: meta.settledAt ?? (lifecycleFrom(meta) === "settled" ? meta.updatedAt : undefined),
+        backendEpoch: backendEpoch(entries),
+        // No metadata means a legacy record starts read. Open requests are still indexed below and
+        // therefore remain Needs input for as long as they are genuinely answerable.
+        latestAttention: meta.latestAttention,
+        latestOutcome: meta.latestOutcome ?? (meta.latestAttention?.reason !== "Input needed" ? meta.latestAttention : undefined),
+        seenAttentionKeys: new Set((meta.seenAttentionKeys ?? (meta.latestAttention ? [meta.latestAttention.key] : [])).slice(-256)),
+        readAttentionVersion: meta.readAttentionVersion ?? meta.latestAttention?.version ?? 0,
+        outputPreview: meta.outputPreview ?? latestParentOutputPreview(entries),
+        openPermissionAttention: openInputAttention(entries, "permission"),
+        openEnquiryAttention: openInputAttention(entries, "enquiry"),
         buffered: undefined,
         queue: [],
         title: meta.title,
@@ -719,14 +802,20 @@ export class SessionHost {
       reviving: undefined,
       lifecycle: "live",
       turnInFlight: false,
-      openPermissionIds: new Set(),
-      openEnquiryIds: new Set(),
       openSubagentIds: new Set(),
       openBackgroundCallIds: new Set(),
       // A brand new Agent Session is its owner's turn from the moment it exists, which is what puts
       // it at the top of the rail.
       restingAt: now,
       settledAt: undefined,
+      backendEpoch: 1,
+      latestAttention: undefined,
+      latestOutcome: undefined,
+      seenAttentionKeys: new Set(),
+      readAttentionVersion: 0,
+      outputPreview: undefined,
+      openPermissionAttention: new Map(),
+      openEnquiryAttention: new Map(),
       buffered: undefined,
       queue: [],
       title: scope,
@@ -871,6 +960,7 @@ export class SessionHost {
     this.closeOpenPermissions(record, record.log.since(0));
     this.closeOpenSubagents(record, record.log.since(0));
     this.closeOpenBackgroundCalls(record, record.log.since(0));
+    record.backendEpoch += 1;
     await this.startBackendSession(record);
     record.lifecycle = "live";
     // Un-settled, so the retention window starts again from the next Settle rather than from the
@@ -909,7 +999,12 @@ export class SessionHost {
       this.touch(record);
       return;
     }
-    await this.dispatch(record, { text, attachments: ids });
+    try {
+      await this.dispatch(record, { text, attachments: ids });
+    } catch (error) {
+      this.recordDispatchFailure(record, error);
+      throw error;
+    }
   }
 
   /**
@@ -1339,6 +1434,8 @@ export class SessionHost {
     takeCompletion(sessionId: string, executionId: string): string | undefined;
     takeInput?(sessionId: string): string | undefined;
     rearmInput?(sessionId: string): void;
+    /** Newest unresolved Workflow request, independent from parent occupancy. */
+    pendingInput?(sessionId: string): { at: string; version: number } | undefined;
   };
   private readonly workflowNotifications = new Map<string, { executionId: string; revision: string }>();
   /** Sessions with an unannounced Workflow request. A Set is only a wake signal; ordering is owned
@@ -1355,27 +1452,50 @@ export class SessionHost {
     for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
   }
 
-  workflowInput(sessionId: string): void {
+  workflowInput(sessionId: string, requestId?: string): { at: string; version: number } | undefined {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowInputs.add(sessionId);
+    const record = this.sessions.get(sessionId);
+    const attention = record && requestId
+      ? this.markAttention(record, "Input needed", `workflow-input:${requestId}`)
+      : undefined;
+    if (record && attention) this.persist(record);
     this.queueWorkflowDrain(sessionId);
+    return attention;
   }
 
   workflowWake(sessionId: string, executionId: string, revision: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     this.workflowNotifications.set(sessionId, { executionId, revision });
+    const record = this.sessions.get(sessionId);
+    const key = `workflow-failure:${executionId}:${revision}`;
+    if (record && !record.seenAttentionKeys.has(key)) {
+      const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow requires recovery. The parent will inspect it when free.' });
+      this.markAttention(record, 'Failed', key, boundary.at);
+      this.persist(record);
+    }
     this.queueWorkflowDrain(sessionId);
   }
 
   workflowComplete(sessionId: string, executionId: string): void {
     if (this.workflowShutdown || this.workflowStopping.has(sessionId)) return;
     const pending = this.workflowCompletions.get(sessionId) ?? [];
-    if (!pending.includes(executionId)) pending.push(executionId);
+    if (pending.includes(executionId)) return;
+    pending.push(executionId);
     this.workflowCompletions.set(sessionId, pending);
+    const record = this.sessions.get(sessionId);
+    const key = `workflow-completion:${executionId}`;
+    if (record && !record.seenAttentionKeys.has(key)) {
+      const boundary = record.log.append({ type: 'notice', level: 'info', text: 'Workflow completed. The parent will prepare the result when free.' });
+      this.markAttention(record, 'Completed', key, boundary.at);
+      this.persist(record);
+    }
     this.queueWorkflowDrain(sessionId);
   }
 
   private queueWorkflowDrain(sessionId: string): void {
+    // Relay registration and callers' current state transition must finish before takeInput can
+    // consume the wake. The drain still runs at the next microtask, ahead of unrelated timers.
     queueMicrotask(() => {
       const record = this.sessions.get(sessionId);
       if (record) void this.drainWorkflowNotification(record).catch(() => {});
@@ -1405,9 +1525,9 @@ export class SessionHost {
     } else if (completion) {
       if (!completions!.length) this.workflowCompletions.delete(record.id);
       text = this.workflowOwner?.takeCompletion(record.id, completion);
-      kind = text ? 'completion' : undefined;
+      kind = 'completion';
     }
-    if (!kind || !text) {
+    if (!kind || (kind !== 'completion' && !text)) {
       // A request can be canceled, or a recovery can become stale, before the parent becomes free.
       // Continue to the next host-driven item rather than waiting for an unrelated future wake.
       if (this.workflowInputs.has(record.id) || this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) return this.drainWorkflowNotification(record);
@@ -1423,6 +1543,10 @@ export class SessionHost {
           ? 'Workflow requires recovery. The parent is inspecting it.'
           : 'Workflow completed. The parent is preparing the result.',
     });
+    if (!text) {
+      record.turnInFlight = false;
+      return false;
+    }
     try {
       await record.session.prompt(text);
       return true;
@@ -1588,6 +1712,7 @@ export class SessionHost {
     record.queue.length = 0;
     await this.stopBackendSession(record.scope, session, sessionId);
     record.log.append({ type: "session_ended", reason });
+    record.readAttentionVersion = record.latestAttention?.version ?? record.readAttentionVersion;
     this.touch(record);
     this.announceClosed(sessionId);
   }
@@ -1629,6 +1754,7 @@ export class SessionHost {
     const openTurn = openTurnId(record.log.since(0));
     if (openTurn) record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
     record.log.append({ type: "session_settled" });
+    record.readAttentionVersion = record.latestAttention?.version ?? record.readAttentionVersion;
     // Stamps updatedAt, which is what starts the retention clock: a Settled Agent Session runs
     // nothing and so records no further activity, and it always gets a full window.
     this.touch(record);
@@ -1847,6 +1973,8 @@ export class SessionHost {
         return await this.dispose(command.sessionId);
       case "settle":
         return await this.settle(command.sessionId);
+      case "acknowledge":
+        return this.acknowledge(command.sessionId, command.throughVersion);
       case "set_model":
         return await this.setModel(command.sessionId, command.modelId);
       case "set_effort":
@@ -2131,7 +2259,7 @@ export class SessionHost {
     for (const open of openEnquiries(entries)) {
       record.log.append({ type: "enquiry", ...open, state: "aborted" });
     }
-    record.openEnquiryIds.clear();
+    record.openEnquiryAttention.clear();
   }
 
   /**
@@ -2148,7 +2276,7 @@ export class SessionHost {
     for (const open of openPermissions(entries)) {
       record.log.append({ type: "permission", ...open, state: "aborted" });
     }
-    record.openPermissionIds.clear();
+    record.openPermissionAttention.clear();
   }
 
   private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
@@ -2232,9 +2360,31 @@ export class SessionHost {
     }
 
     const before = this.activityOf(record);
-    record.log.append(event);
+    const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
+    const enquiryWasOpen = event.type === "enquiry" && record.openEnquiryAttention.has(event.askId);
+    const subagentWasOpen = event.type === "subagent" && record.openSubagentIds.has(event.subagentId);
+    const backgroundWasOpen = event.type === "background_call" && record.openBackgroundCallIds.has(event.callId);
+    const logged = record.log.append(event);
+    if (event.type === "message" && event.producer === undefined) {
+      const preview = event.text.replace(/\s+/g, " ").trim();
+      record.outputPreview = preview ? preview.slice(0, 500) : undefined;
+    }
+
+    let inputAttention: { at: string; version: number } | undefined;
+    if (event.type === "permission" && event.state === "asked" && !permissionWasOpen) {
+      inputAttention = this.markAttention(record, "Input needed", `backend:${record.backendEpoch}:permission:${event.callId}`, logged.at);
+    } else if (event.type === "enquiry" && event.state === "asked" && !enquiryWasOpen) {
+      inputAttention = this.markAttention(record, "Input needed", `backend:${record.backendEpoch}:enquiry:${event.askId}`, logged.at);
+    } else if (event.type === "turn_ended" && event.reason !== "aborted") {
+      this.markAttention(record, event.reason === "error" ? "Failed" : "Completed", `backend:${record.backendEpoch}:turn:${event.turnId}`, logged.at);
+    } else if (event.type === "subagent" && event.state === "error" && subagentWasOpen) {
+      this.markAttention(record, "Failed", `backend:${record.backendEpoch}:subagent:${event.subagentId}`, logged.at);
+    } else if (event.type === "background_call" && event.state === "error" && backgroundWasOpen) {
+      this.markAttention(record, "Failed", `backend:${record.backendEpoch}:background:${event.callId}`, logged.at);
+    }
+
+    this.indexOpen(record, event, logged.at, inputAttention);
     this.touch(record);
-    this.indexOpen(record, event);
     if (event.type === 'notice' && event.level === 'error') void this.workflowOwner?.stop(sessionId).catch(() => {});
 
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
@@ -2272,14 +2422,33 @@ export class SessionHost {
    * Keep the open-prompt and open-Subagent index in step with the transcript.
    *
    * Only ever called from `onBackendEvent`, which is the one path every adapter event takes. The
-   * host's own terminal snapshots go through `closeOpen*`, which clear these sets themselves.
+   * host's own terminal snapshots go through `closeOpen*`, which clear these indexes themselves.
    */
-  private indexOpen(record: SessionRecord, event: BackendEvent): void {
+  private indexOpen(
+    record: SessionRecord,
+    event: BackendEvent,
+    at: string,
+    inputAttention?: { at: string; version: number },
+  ): void {
     if (event.type === "permission") {
-      toggle(record.openPermissionIds, event.callId, event.state === "asked");
+      if (event.state === "asked") {
+        if (!record.openPermissionAttention.has(event.callId)) {
+          record.openPermissionAttention.set(event.callId, {
+            ...(inputAttention ?? { at, version: record.latestAttention?.version ?? 0 }),
+            independent: event.producer !== undefined,
+          });
+        }
+      } else record.openPermissionAttention.delete(event.callId);
     }
     if (event.type === "enquiry") {
-      toggle(record.openEnquiryIds, event.askId, event.state === "asked");
+      if (event.state === "asked") {
+        if (!record.openEnquiryAttention.has(event.askId)) {
+          record.openEnquiryAttention.set(event.askId, {
+            ...(inputAttention ?? { at, version: record.latestAttention?.version ?? 0 }),
+            independent: event.producer !== undefined,
+          });
+        }
+      } else record.openEnquiryAttention.delete(event.askId);
     }
     if (event.type === "subagent") {
       toggle(record.openSubagentIds, event.subagentId, event.state === "running" || event.state === "waiting");
@@ -2296,8 +2465,8 @@ export class SessionHost {
      * outlives the turn that started it and reports into a later one (ADR 0016, ADR 0021).
      */
     if (event.type === "turn_ended") {
-      record.openEnquiryIds.clear();
-      record.openPermissionIds.clear();
+      for (const [id, request] of record.openEnquiryAttention) if (!request.independent) record.openEnquiryAttention.delete(id);
+      for (const [id, request] of record.openPermissionAttention) if (!request.independent) record.openPermissionAttention.delete(id);
     }
   }
 
@@ -2328,6 +2497,15 @@ export class SessionHost {
     }
   }
 
+  private recordDispatchFailure(record: SessionRecord, error: unknown): void {
+    const before = this.activityOf(record);
+    const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+    record.turnInFlight = false;
+    this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
+    this.noteResting(record, before);
+    this.touch(record);
+  }
+
   private async drain(record: SessionRecord): Promise<void> {
     // Avoid an `await` at all when there is no workflow notification. Yielding here lets a backend
     // mint a new turn between the check and the queue shift, which would dispatch into that turn.
@@ -2339,7 +2517,7 @@ export class SessionHost {
     try {
       await this.dispatch(record, next);
     } catch (error) {
-      record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+      this.recordDispatchFailure(record, error);
     }
   }
 
@@ -2376,6 +2554,7 @@ export class SessionHost {
       backend: record.backendName,
       title: record.title,
       titleSource: record.titleSource,
+      ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       lifecycle: record.lifecycle,
@@ -2384,6 +2563,10 @@ export class SessionHost {
       status: record.lifecycle === "live" ? "idle" : record.lifecycle,
       restingAt: record.restingAt,
       ...(record.settledAt === undefined ? {} : { settledAt: record.settledAt }),
+      ...(record.latestAttention === undefined ? {} : { latestAttention: record.latestAttention }),
+      ...(record.latestOutcome === undefined ? {} : { latestOutcome: record.latestOutcome }),
+      seenAttentionKeys: [...record.seenAttentionKeys],
+      readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
@@ -2435,6 +2618,59 @@ function branchFrom(entries: LoggedEvent[]): Branch | undefined {
  * The whole `questions` array comes back with it, because a snapshot carries the whole state and the
  * terminal one the host is about to append needs it again.
  */
+function backendEpoch(entries: LoggedEvent[]): number {
+  // Adapter-owned IDs are unique only within one Backend Session. Creation contributes the first
+  // epoch and every Revive another, so the same `turn-1` after a restart is still a new outcome.
+  return Math.max(1, entries.filter(({ event }) => event.type === "session_started" || event.type === "revived").length);
+}
+
+function newestAt<T extends { at: string; version: number }>(
+  left: T | undefined,
+  right: T | undefined,
+): T | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return right.at > left.at ? right : left;
+}
+
+function hasParentRequest(
+  requests: Map<string, { independent: boolean }>,
+): boolean {
+  for (const request of requests.values()) if (!request.independent) return true;
+  return false;
+}
+
+function newestInput(record: SessionRecord): { at: string; version: number } | undefined {
+  let newest: { at: string; version: number } | undefined;
+  for (const input of record.openPermissionAttention.values()) newest = newestAt(newest, input);
+  for (const input of record.openEnquiryAttention.values()) newest = newestAt(newest, input);
+  return newest;
+}
+
+/** Rebuild unresolved request ages for a lenient legacy load. The restart path closes torn ones. */
+function openInputAttention(
+  entries: LoggedEvent[],
+  type: "permission" | "enquiry",
+): Map<string, { at: string; version: number; independent: boolean }> {
+  const open = new Map<string, { at: string; version: number; independent: boolean }>();
+  const clearParent = (): void => {
+    for (const [id, request] of open) if (!request.independent) open.delete(id);
+  };
+  for (const entry of entries) {
+    const event = entry.event;
+    if (type === "permission" && event.type === "permission") {
+      if (event.state === "asked") open.set(event.callId, { at: entry.at, version: 0, independent: event.producer !== undefined });
+      else open.delete(event.callId);
+    }
+    if (type === "enquiry" && event.type === "enquiry") {
+      if (event.state === "asked") open.set(event.askId, { at: entry.at, version: 0, independent: event.producer !== undefined });
+      else open.delete(event.askId);
+    }
+    if (event.type === "turn_ended") clearParent();
+  }
+  return open;
+}
+
 function toggle(ids: Set<string>, id: string, open: boolean): void {
   if (open) ids.add(id);
   else ids.delete(id);
@@ -2453,12 +2689,24 @@ function lifecycleFrom(meta: SessionMeta): SessionLifecycle {
   return stored === "ended" || stored === "settled" || stored === "dormant" ? stored : "dormant";
 }
 
-function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[]; context?: string }[] {
-  const open = new Map<string, { questions: Question[]; context?: string }>();
+/** Backfill the rail preview for metadata written before outputPreview existed. */
+function latestParentOutputPreview(entries: LoggedEvent[]): string | undefined {
+  const message = entries.findLast(({ event }) => event.type === "message" && event.producer === undefined)?.event;
+  if (message?.type !== "message") return undefined;
+  const preview = message.text.replace(/\s+/g, " ").trim();
+  return preview ? preview.slice(0, 500) : undefined;
+}
+
+function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Question[]; context?: string; producer?: Producer }[] {
+  const open = new Map<string, { questions: Question[]; context?: string; producer?: Producer }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "enquiry") continue;
-    if (event.state === "asked") open.set(event.askId, { questions: event.questions, ...(event.context === undefined ? {} : { context: event.context }) });
+    if (event.state === "asked") open.set(event.askId, {
+      questions: event.questions,
+      ...(event.context === undefined ? {} : { context: event.context }),
+      ...(event.producer === undefined ? {} : { producer: event.producer }),
+    });
     else open.delete(event.askId);
   }
   return [...open].map(([askId, value]) => ({ askId, ...value }));
@@ -2474,8 +2722,8 @@ function openEnquiries(entries: LoggedEvent[]): { askId: string; questions: Ques
  * The tool name comes back with it, because a snapshot carries the whole state and the terminal one
  * the host is about to append needs it again.
  */
-function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }[] {
-  const open = new Map<string, { tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string }>();
+function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer }[] {
+  const open = new Map<string, { tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "permission") continue;
@@ -2484,6 +2732,7 @@ function openPermissions(entries: LoggedEvent[]): { callId: string; tool: string
       ...(event.context === undefined ? {} : { context: event.context }),
       ...(event.allowAlways === undefined ? {} : { allowAlways: event.allowAlways }),
       ...(event.authorizationScope === undefined ? {} : { authorizationScope: event.authorizationScope }),
+      ...(event.producer === undefined ? {} : { producer: event.producer }),
     });
     else open.delete(event.callId);
   }
