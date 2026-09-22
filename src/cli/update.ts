@@ -5,6 +5,7 @@ import { packageName, privatePath, type Installation, type Lease, type UpdateTra
 import { readHost, type HostIdentity } from '../daemon/ownership.ts';
 import { backgroundHostArgs, getHostStatus, HostRefusal, launchBackground, processAlive, requestHostStop, requireRestartable, waitUntil } from './host-control.ts';
 import { InstallationProcessUncertain, replacePackage } from './install-process.ts';
+import { assertSystemdOwner, restoreSystemd, resumeSystemdAdmission, systemctl, SystemdCommandFailed, type SystemdUpdate } from './systemd-update.ts';
 import { newerStableVersion } from '../daemon/release-checker.ts';
 
 export function npmExecutable(): string {
@@ -71,7 +72,7 @@ export async function update(
   install: Installation,
   lease: Lease,
   args: string[],
-  options: { expectedVersion?: string; preserveConcreteHostPort?: boolean } = {},
+  options: { expectedVersion?: string; preserveConcreteHostPort?: boolean; systemd?: SystemdUpdate } = {},
 ): Promise<UpdateResult> {
   if (args.length > 2 || args[0] !== 'update' || (args.length === 2 && args[1] !== '--force')) throw new Error('usage: flow update [--force]');
   const inspected = inspectUpdateInstallation(install);
@@ -83,13 +84,23 @@ export async function update(
   }
   const target = options.expectedVersion ?? 'latest';
   const preserveConcretePort = options.preserveConcreteHostPort === true;
+  const managed = options.systemd;
+  if (managed) await assertSystemdOwner(managed, managed.updater, process.pid);
   let host = readHost(lease.root);
   if (host && processAlive(host.pid)) {
     const status = await getHostStatus(host);
-    requireRestartable(status);
+    if (managed) {
+      if (status.mode !== 'foreground') throw new Error('systemd updates require a foreground Session Host');
+      if (preserveConcretePort && status.settings.port === 0) throw new Error('Systemd web updates require a fixed service port for browser reconnection');
+      await assertSystemdOwner(managed, managed.service, host.pid);
+    } else requireRestartable(status);
     host = { ...host, ...status };
   } else host = undefined;
-  const transaction = await install.beginUpdate(lease, previous, host);
+  if (managed && !host) throw new Error('Start the configured systemd Session Host before updating');
+  const transaction = await install.beginUpdate(lease, previous, host, managed?.hostArgs);
+  const restoreHost = (host: HostIdentity, version: string) => managed
+    ? restoreSystemd(lease.root, managed, transaction, host, version)
+    : restore(install, transaction, lease.root, host, version, preserveConcretePort);
   let needsRestoration = false, replacing = false;
   const repair = () => `Flow startup remains blocked by ${install.barrierPath}. Stop all Flow and npm processes for this prefix. Reinstall ${packageName}@${previous} with the matching npm and prefix ${JSON.stringify(prefix)}. Verify the package files manually, then remove ${install.barrierPath} and start the Session Host again.`;
   async function replace(version: string, expected?: string): Promise<string> {
@@ -98,7 +109,7 @@ export async function update(
     await replacePackage(npm, prefix, `${packageName}@${version}`);
     const installed = await verify(install, transaction, expected);
     if (host && needsRestoration) {
-      await restore(install, transaction, lease.root, host, installed, preserveConcretePort);
+      await restoreHost(host, installed);
       needsRestoration = false;
     }
     await transaction.complete();
@@ -107,7 +118,10 @@ export async function update(
   try {
     if (host) {
       needsRestoration = true;
-      try { await requestHostStop(host, args.includes('--force')); }
+      try {
+        await requestHostStop(host, args.includes('--force'), !!managed);
+        if (managed) await systemctl(managed, 'stop', managed.service);
+      }
       catch (error) { if (error instanceof HostRefusal) needsRestoration = false; throw error; }
       const pid = host.pid;
       await waitUntil(async () => !processAlive(pid), 'Session Host process did not exit; installation was not changed');
@@ -118,9 +132,17 @@ export async function update(
   } catch (error) {
     if (error instanceof InstallationProcessUncertain) throw new Error(`${String(error)}. ${repair()}`);
     if (!replacing) {
-      if (needsRestoration && host && processAlive(host.pid)) throw new Error(`${String(error)}. No package files were changed; wait for the stopping host to exit. ${repair()}`);
+      if (needsRestoration && host && processAlive(host.pid)) {
+        if (managed && error instanceof SystemdCommandFailed && error.completed) {
+          try { await resumeSystemdAdmission(managed, host); }
+          catch (failure) { throw new Error(`${String(error)}; could not resume admission: ${String(failure)}. No package files were changed. ${repair()}`); }
+          await transaction.complete();
+          throw new Error(`${String(error)}. No package files were changed; the original Session Host is accepting requests again.`);
+        }
+        throw new Error(`${String(error)}. No package files were changed; wait for the stopping host to exit. ${repair()}`);
+      }
       if (needsRestoration && host) {
-        try { await restore(install, transaction, lease.root, host, previous, preserveConcretePort); }
+        try { await restoreHost(host, previous); }
         catch (failure) { throw new Error(`${String(error)}; restoration failed: ${String(failure)}. ${repair()}`); }
       }
       await transaction.complete();

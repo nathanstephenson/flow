@@ -25,10 +25,10 @@ export async function getHostStatus(host: HostIdentity): Promise<HostStatus> {
   return status;
 }
 
-export async function requestHostStop(host: HostIdentity, force: boolean): Promise<void> {
+export async function requestHostStop(host: HostIdentity, force: boolean, quiesce = false): Promise<void> {
   const response = await fetch(`${host.url}/api/host/stop`, {
     method: 'POST', headers: { authorization: `Bearer ${host.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ instanceId: host.instanceId, force }), signal: AbortSignal.timeout(5000),
+    body: JSON.stringify({ instanceId: host.instanceId, force, quiesce }), signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new HostRefusal(`Session Host refused: ${await response.text()}`);
 }

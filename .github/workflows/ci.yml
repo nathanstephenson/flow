@@ -37,6 +37,47 @@ jobs:
       - run: npm run build:binary
       - run: test "$(build/flow --version)" = "$(node -p 'require("./package.json").version')"
 
+  # Real service-manager coverage: this job is a disposable VM, never a user's Session Host.
+  systemd-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "26.4.0"]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Prepare the VM's policy service
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends polkitd dbus
+          sudo systemctl start polkit.service
+      - name: Prepare the browser probe
+        run: |
+          npm install --prefix "$RUNNER_TEMP/flow-browser" --package-lock=false --ignore-scripts playwright@1.63.0
+          echo "FLOW_TEST_PLAYWRIGHT=$RUNNER_TEMP/flow-browser/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+          echo "FLOW_TEST_CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: Exercise systemd-owned updates
+        run: node scripts/test-systemd-update.mjs
+        env:
+          FLOW_SYSTEMD_VM_TEST: "1"
+          FLOW_SYSTEMD_TEST_ARTIFACTS: ${{ github.workspace }}/build/systemd-update-test
+      - name: Preserve update diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: systemd-update-diagnostics-node-${{ matrix.node }}
+          retention-days: 7
+          path: build/systemd-update-test/
+          if-no-files-found: warn
+
   package:
     strategy:
       matrix:

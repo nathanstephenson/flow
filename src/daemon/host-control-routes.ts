@@ -13,7 +13,7 @@ export async function hostControlRoute(
   response: ServerResponse,
   path: string,
   control: HostControl,
-  admission: { isStopping(): boolean; hasPending(): boolean; stop(): void },
+  admission: { isStopping(): boolean; hasPending(): boolean; stop(): void; quiesce(): void; resume(): boolean },
 ): Promise<void> {
   if (path === '/api/host' && request.method === 'GET') {
     const { token: _token, ...status } = control.identity;
@@ -30,13 +30,26 @@ export async function hostControlRoute(
       send(response, 409, { error: 'Session Host instance changed' });
       return;
     }
+    if (body.resume === true) {
+      if (process.env.FLOW_SYSTEMD_HOST !== '1' || !admission.resume()) {
+        send(response, 409, { error: 'Only a quiesced systemd Session Host can resume admission' });
+        return;
+      }
+      send(response, 202, { stopping: false });
+      return;
+    }
     if (!admission.isStopping() && (admission.hasPending() || control.hasActiveWork()) && body.force !== true) {
       send(response, 409, { error: 'Session Host has active work; use --force to interrupt it' });
       return;
     }
-    admission.stop();
+    if (body.quiesce === true && process.env.FLOW_SYSTEMD_HOST !== '1') {
+      send(response, 409, { error: 'Session Host is not configured for systemd updates' });
+      return;
+    }
+    if (body.quiesce === true) admission.quiesce();
+    else admission.stop();
     send(response, 202, { stopping: true });
-    setImmediate(() => { void control.stop().catch(error => console.error(error)); });
+    if (body.quiesce !== true) setImmediate(() => { void control.stop().catch(error => console.error(error)); });
   } catch (error) {
     send(response, 400, { error: String(error) });
   }

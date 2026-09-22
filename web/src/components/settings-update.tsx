@@ -93,7 +93,7 @@ export function UpdateSettings() {
           <AlertDialogHeader>
             <AlertDialogTitle>Update Flow to {confirmingVersion}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Flow will temporarily disconnect this browser and restart the background Session Host. Durable Agent Sessions and Presentation Transcripts stay on disk, but Agent Sessions return Dormant and are not Revived automatically. Ephemeral Shells are lost.
+              Flow will temporarily disconnect this browser and restart the Session Host. Durable Agent Sessions and Presentation Transcripts stay on disk, but Agent Sessions return Dormant and are not Revived automatically. Ephemeral Shells are lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

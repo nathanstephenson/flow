@@ -1,3 +1,4 @@
+import { systemdUpdate, launchSystemdUpdate, SystemdLaunchUncertain } from './systemd-update.ts';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync, constants, fchmodSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
@@ -97,6 +98,11 @@ function publicError(error: unknown): string {
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/((?:token|secret|password)[=:]\s*)[^\s;,]+/gi, '$1[redacted]')
     .slice(0, 2000);
+}
+
+export function claimWebUpdate(root: string, id: string): void {
+  transitionOperation(root, current => current?.id === id && ['updating', 'unverified'].includes(current.state)
+    ? { ...current, state: 'updating', pid: process.pid } : current);
 }
 
 /** Called by the detached `flow update` helper after restoration/recovery has settled. */
@@ -214,6 +220,12 @@ export class WebUpdateController {
         return operation;
       });
       launchedOperationId = id;
+      const managed = systemdUpdate(this.options.root);
+      if (managed) {
+        await launchSystemdUpdate(this.options.root, managed, { id, version: confirmedVersion, force: false });
+        helperStarted = true;
+        return await this.status(false);
+      }
       const log = openSync(join(this.options.root, 'web-update.log'), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
       let child: ReturnType<typeof spawn>;
       try {
@@ -248,7 +260,7 @@ export class WebUpdateController {
         const operationId = launchedOperationId;
         transitionOperation(this.options.root, operation => {
           if (!operation || operation.id !== operationId || !['updating', 'unverified'].includes(operation.state) || operation.pid !== undefined) return operation;
-          return { ...operation, state: 'failed', finishedAt: new Date(this.now()).toISOString(), message: publicError(error) };
+          return { ...operation, state: error instanceof SystemdLaunchUncertain ? 'unverified' : 'failed', finishedAt: new Date(this.now()).toISOString(), message: publicError(error) };
         });
       }
       throw error;
@@ -261,8 +273,12 @@ export class WebUpdateController {
   }
 
   private eligibility(): UpdateEligibility {
-    if (this.options.mode !== 'background') {
-      return { state: 'unsupported', reason: 'Web updates require a background Session Host. Start Flow with `flow serve start`.' };
+    let managed;
+    try { managed = systemdUpdate(this.options.root); }
+    catch (error) { return { state: 'unsupported', reason: publicError(error) }; }
+    if ((managed && (this.options.mode !== 'foreground' || process.env.FLOW_SYSTEMD_HOST !== '1')) ||
+        (!managed && this.options.mode !== 'background')) {
+      return { state: 'unsupported', reason: 'Web updates require a background Session Host or configured systemd updater. Start Flow with `flow serve start`, or follow docs/systemd-updates.md.' };
     }
     if (!this.options.installation || !this.options.bootstrapEntry) {
       return { state: 'unsupported', reason: this.options.unsupportedReason ?? 'This installation cannot update itself. Use npm to update Flow manually.' };

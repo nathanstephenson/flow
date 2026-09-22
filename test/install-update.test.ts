@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonicalRoot, installation, updateEligible, type Barrier, type Lease } from '../src/cli/install-guard.ts';
 import { processAlive as alive } from '../src/cli/host-control.ts';
+import { parseSystemdUpdate, readSystemdRequest } from '../src/cli/systemd-update.ts';
 
 function json<T>(path: string): T | undefined {
   try { return JSON.parse(readFileSync(path, 'utf8')) as T; }
@@ -22,7 +23,11 @@ const bootstrap = readFileSync(resolve('src/cli/bootstrap.ts'), 'utf8').replace(
       while (fs.existsSync(process.env.TEST_PAUSE)) await new Promise(resolve => setTimeout(resolve, 10));
     }
     const lease = await install.register`);
-const bundle = await build({ stdin: { contents: bootstrap, resolveDir: resolve('src/cli'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false, define: { FLOW_BUILD_ID: '"test-build"' } });
+const bundle = await build({ stdin: { contents: bootstrap, resolveDir: resolve('src/cli'), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false, define: { FLOW_BUILD_ID: '"test-build"' }, plugins: [{ name: 'fake-systemctl', setup(build) {
+  build.onLoad({ filter: /systemd-update\.ts$/ }, async ({ path }) => ({
+    contents: readFileSync(path, 'utf8').replace("'/usr/bin/systemctl'", 'process.env.TEST_SYSTEMCTL!'), loader: 'ts',
+  }));
+} }] });
 const hostCode = `
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
@@ -43,9 +48,13 @@ else {
   if (req.url === '/api/host') { const { token, ...status } = identity; res.end(JSON.stringify(status)); return; }
   let body = ''; req.on('data', data => body += data); req.on('end', () => {
    if (process.env.TEST_BUSY && !JSON.parse(body).force) { res.writeHead(409); res.end('active work'); return; }
-   res.end('{}'); server.close(() => { unlinkSync(join(root, 'daemon.json')); process.exit(0); });
+   res.end('{}');
+   if (JSON.parse(body).resume) { writeFileSync(join(root, 'admission-resumed'), 'yes'); return; }
+   if (JSON.parse(body).quiesce) return;
+   server.close(() => { unlinkSync(join(root, 'daemon.json')); process.exit(0); });
   });
  });
+ process.on('SIGTERM', () => server.close(() => { try { unlinkSync(join(root, 'daemon.json')); } catch {} process.exit(0); }));
  server.listen(settings.port, settings.address, () => {
   identity = { pid: process.pid, instanceId: randomUUID(), version, url: 'http://127.0.0.1:' + server.address().port, token: 'test', mode: process.env.TEST_MODE ?? 'background', settings };
   writeFileSync(join(root, 'daemon.json'), JSON.stringify(identity));
@@ -528,4 +537,132 @@ test('foreground and embedded hosts are never stopped', async () => {
       assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
     } finally { await f.close(); }
   }
+});
+
+
+test('systemd configuration rejects arbitrary units, templates and background commands', () => {
+  const valid = { scope: 'system', service: 'flow.service', updater: 'flow-update.service', hostArgs: ['serve'] };
+  assert.deepEqual(parseSystemdUpdate(valid), valid);
+  for (const patch of [{ scope: 'root' }, { service: '--all' }, { service: 'flow@x.service' }, { updater: 'flow.service' }, { hostArgs: ['serve', 'start'] }, { hostArgs: ['serve', '--background-host'] }]) {
+    assert.throws(() => parseSystemdUpdate({ ...valid, ...patch }), /Invalid systemd/);
+  }
+});
+
+test('systemd requests accept stable build metadata and reject incomplete or invalid confirmation', () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-systemd-request-'));
+  const id = '00000000-0000-0000-0000-000000000001';
+  try {
+    for (const version of ['2.0.0', '2.0.0+build.1']) {
+      const request = { id, version, force: false };
+      writeFileSync(join(root, 'systemd-update-request.json'), JSON.stringify(request));
+      assert.deepEqual(readSystemdRequest(root), request);
+    }
+    for (const request of [{ id, force: false }, { version: '2.0.0', force: false }, { id, version: '2.0.0-rc.1', force: false }, { id, version: '02.0.0', force: false }, { id, version: 2, force: false }]) {
+      writeFileSync(join(root, 'systemd-update-request.json'), JSON.stringify(request));
+      assert.throws(() => readSystemdRequest(root), /Invalid systemd update request/);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const scenario of ['success', 'user', 'web', 'rollback', 'restore-failure', 'busy', 'wrong-owner', 'wrong-args', 'ephemeral-web', 'active-updater', 'stop-denied'] as const) test(`systemd updater: ${scenario}, foreground ownership retained`, async () => {
+  const f = fixture();
+  const ctl = join(f.temp, 'systemctl');
+  const listener = (await import('node:net')).createServer();
+  listener.listen(0, '127.0.0.1');
+  await once(listener, 'listening');
+  const port = (listener.address() as import('node:net').AddressInfo).port;
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const hostArgs = ['serve', '--port', scenario === 'ephemeral-web' ? '0' : String(port), '--address', '127.0.0.1'];
+  writeFileSync(join(f.root, 'systemd-update.json'), JSON.stringify({ scope: scenario === 'user' ? 'user' : 'system', service: 'flow.service', updater: 'flow-update.service', hostArgs: scenario === 'wrong-args' ? ['serve'] : hostArgs }));
+  // A fake service manager launches both units. No real systemctl or live services are touched.
+  writeFileSync(ctl, `#!${process.execPath}
+const fs = require('node:fs'), p = require('node:path'), cp = require('node:child_process');
+const args = process.argv.slice(2), root = process.env.FLOW_STATE_DIR, unit = args[3], action = args[2];
+if (args[0] !== ${JSON.stringify(scenario === 'user' ? '--user' : '--system')} || args[1] !== '--no-ask-password') throw new Error('Unexpected manager arguments');
+const pidfile = p.join(root, unit + '.pid');
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+(async () => {
+ fs.appendFileSync(p.join(root, 'manager.log'), JSON.stringify(args) + '\\n');
+ if (action === 'show') {
+  console.log(args.includes('--property=Job') ? '' : args.includes('--property=ActiveState') ? (unit === 'flow.service' ? 'active' : process.env.TEST_ACTIVE_UPDATER ? 'activating' : 'inactive') : fs.existsSync(pidfile) ? fs.readFileSync(pidfile, 'utf8') : '0'); return;
+ }
+ if (action === 'stop') {
+  if (process.env.TEST_STOP_DENIED) { console.error('synthetic stop permission denied'); process.exit(1); }
+  const pid = Number(fs.readFileSync(pidfile, 'utf8'));
+  if (alive(pid)) process.kill(pid, 'SIGTERM');
+  for (let n = 0; n < 200 && alive(pid); n++) await new Promise(r => setTimeout(r, 10));
+  return;
+ }
+ const worker = unit === 'flow-update.service';
+ const slot = p.join(process.env.TEST_PREFIX, 'lib/node_modules/@nathanstephenson/flow');
+ const entry = p.join(slot, 'dist/cli/bootstrap.js');
+ if (!worker && process.env.TEST_START_FAILURE && JSON.parse(fs.readFileSync(p.join(slot, 'package.json'))).version !== '1.2.3') { console.error('synthetic service start failure'); process.exit(1); }
+ const env = { ...process.env, FLOW_SYSTEMD_HOST: worker ? '' : '1', FLOW_SYSTEMD_WORKER: worker ? '1' : '', TEST_MODE: 'foreground' };
+ const log = fs.openSync(p.join(root, worker ? 'worker.log' : 'service.log'), 'a');
+ const child = cp.spawn(process.execPath, [entry, ...(worker ? ['update'] : ${JSON.stringify(hostArgs)})], { env, cwd: process.cwd(), detached: true, stdio: ['ignore', log, log] });
+ fs.writeFileSync(pidfile, String(child.pid)); child.unref(); fs.closeSync(log);
+})();
+`);
+  chmodSync(ctl, 0o700);
+  f.env.TEST_SYSTEMCTL = ctl;
+  if (scenario === 'rollback') f.env.TEST_FAIL = 'latest';
+  if (scenario === 'busy') f.env.TEST_BUSY = '1';
+  if (scenario === 'restore-failure') f.env.TEST_START_FAILURE = '1';
+  if (scenario === 'active-updater') f.env.TEST_ACTIVE_UPDATER = '1';
+  if (scenario === 'stop-denied') f.env.TEST_STOP_DENIED = '1';
+  try {
+    const host = f.start(hostArgs, { FLOW_SYSTEMD_HOST: '1', TEST_MODE: 'foreground' });
+    await until(() => existsSync(join(f.root, 'daemon.json')));
+    writeFileSync(join(f.root, 'flow.service.pid'), scenario === 'wrong-owner' ? '1' : String(host.child.pid));
+    const original = json<{ pid: number; url: string }>(join(f.root, 'daemon.json'))!;
+    if (scenario === 'web' || scenario === 'ephemeral-web') {
+      const id = '00000000-0000-0000-0000-000000000001';
+      writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({ id, state: 'updating', previousVersion: '1.2.3', targetVersion: '2.1.0', startedAt: new Date().toISOString() }));
+      writeFileSync(join(f.root, 'systemd-update-request.json'), JSON.stringify({ id, version: '2.1.0', force: false }));
+      const child = spawn(ctl, ['--system', '--no-ask-password', 'start', 'flow-update.service', '--no-block'], { env: f.env, cwd: f.temp });
+      await once(child, 'close');
+    } else {
+      const result = await f.start(['update']).done;
+      if (scenario === 'active-updater') {
+        assert.equal(result.code, 1, result.output);
+        assert.match(result.output, /activating/);
+        assert.equal(existsSync(join(f.root, 'systemd-update-request.json')), false);
+        assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
+        assert.equal(json<{ pid: number }>(join(f.root, 'daemon.json'))!.pid, original.pid);
+        return;
+      }
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /queued/);
+    }
+    await until(() => !existsSync(join(f.root, 'systemd-update-request.json')));
+    // Request cleanup runs in finally before bootstrap prints a failure. Wait for the diagnostic
+    // rather than racing the final stderr write (particularly visible on macOS runners).
+    await until(() => readFileSync(join(f.root, 'worker.log'), 'utf8').trim().length > 0);
+    const output = readFileSync(join(f.root, 'worker.log'), 'utf8');
+    if (scenario === 'busy' || scenario === 'wrong-owner' || scenario === 'wrong-args' || scenario === 'ephemeral-web' || scenario === 'stop-denied') {
+      const reason = scenario === 'busy' ? /active work/ : scenario === 'wrong-owner' ? /does not own/ : scenario === 'wrong-args' ? /Configured systemd hostArgs do not match/ : scenario === 'stop-denied' ? /accepting requests again/ : /fixed service port/;
+      assert.match(output, reason);
+      if (scenario === 'stop-denied') assert.equal(readFileSync(join(f.root, 'admission-resumed'), 'utf8'), 'yes');
+      else assert.doesNotMatch(readFileSync(join(f.root, 'manager.log'), 'utf8'), /"stop"/);
+      assert.equal(json<{ pid: number }>(join(f.root, 'daemon.json'))!.pid, original.pid);
+      assert.equal(existsSync(join(f.prefix, 'npm-log')), false);
+    } else {
+      const recovered = scenario === 'rollback' || scenario === 'restore-failure';
+      assert.match(output, recovered ? /Reinstalled and verified/ : /Flow updated/);
+      const restored = json<{ pid: number; mode: string; version: string; url: string }>(join(f.root, 'daemon.json'))!;
+      assert.notEqual(restored.pid, original.pid);
+      assert.equal(restored.mode, 'foreground');
+      assert.equal(restored.version, recovered ? '1.2.3' : scenario === 'web' ? '2.1.0' : '2.0.0');
+      assert.equal(restored.url, original.url);
+      if (scenario === 'web') {
+        const operation = json<{ state: string; installedVersion: string; pid: number }>(join(f.root, 'web-update.json'))!;
+        assert.equal(operation.state, 'succeeded');
+        assert.equal(operation.installedVersion, '2.1.0');
+        assert.equal(String(operation.pid), readFileSync(join(f.root, 'flow-update.service.pid'), 'utf8'));
+      }
+      assert.equal(String(restored.pid), readFileSync(join(f.root, 'flow.service.pid'), 'utf8'));
+    }
+    assert.equal(existsSync(f.install.barrierPath), false);
+    assert.equal(existsSync(join(f.root, 'systemd-update-capability')), false);
+  } finally { await f.close(); }
 });

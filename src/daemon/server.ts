@@ -113,6 +113,7 @@ export type RunningServer = {
 export async function serve(options: ServeOptions): Promise<RunningServer> {
   const address = options.address ?? "127.0.0.1";
   let stopping = false;
+  let quiesced = false;
   const pending = new Set<Promise<unknown>>();
   const sockets = new Set<Duplex>();
   const track = (work: Promise<unknown>) => { pending.add(work); void work.finally(() => pending.delete(work)); };
@@ -124,7 +125,14 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       if (!originAllowed(request, options.oidc?.config.publicAppUrl)) { send(response, 403, {}); return; }
       if (!tokenMatches(options.token, presentedBearer(request))) { unauthorized(response); return; }
       void hostControlRoute(request, response, path, options.control, {
-        isStopping: () => stopping, hasPending: () => pending.size > 0, stop: () => { stopping = true; },
+        isStopping: () => stopping, hasPending: () => pending.size > 0,
+        stop: () => { stopping = true; quiesced = false; },
+        quiesce: () => { if (!stopping) { stopping = true; quiesced = true; } },
+        resume: () => {
+          if (!quiesced) return false;
+          stopping = false; quiesced = false;
+          return true;
+        },
       });
       return;
     }
@@ -156,6 +164,7 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
     ...(options.oidc === undefined ? {} : { oidc: options.oidc }),
     stopAdmission: async (interrupt, timeoutMs = 10000) => {
       stopping = true;
+      quiesced = false;
       for (const socket of sockets) socket.destroy();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -166,6 +175,8 @@ export async function serve(options: ServeOptions): Promise<RunningServer> {
       } finally { clearTimeout(timer); }
     },
     close: () => {
+      stopping = true;
+      quiesced = false;
       for (const socket of sockets) socket.destroy();
       options.mcpAuth?.dispose();
       options.oidc?.dispose();

@@ -60,7 +60,7 @@ do not tag a version until its license and release contents are approved.
 ## Updating Flow
 
 Run `flow update` to install `@nathanstephenson/flow@latest` with the npm selected by PATH.
-An authorised browser connected to a background Session Host can perform the same guarded operation
+An authorised browser connected to a background or configured systemd-owned Session Host can perform the same guarded operation
 from **Settings → General → Flow update** after explicit confirmation. The browser checks only npm's
 stable `latest` tag, cannot select a package/version/path or force active work to stop, and reconnects
 on the same address and port to verify the running version. Updates are never automatic.
@@ -73,7 +73,10 @@ installations manually with npm after stopping all Flow processes.
 Close all CLI/TUI clients and stop other Session Hosts that use this installation, including those
 under other `FLOW_STATE_DIR` roots. The selected root's background Session Host can stay running:
 Flow stops it, updates, and restores its saved address, port, working directory and OIDC settings
-with a new process. Use `--force` to interrupt active work. Foreground and embedded hosts are refused.
+with a new process. Use `--force` to interrupt active work. Unmanaged foreground and embedded hosts are refused.
+For foreground systemd services (including system units with `User=agent`), see
+[systemd update setup](docs/systemd-updates.md): a separate non-root updater unit retains service ownership
+and needs only narrowly scoped start/stop authority configured once by an administrator.
 The same OIDC configuration must be present when you update. No version argument is accepted.
 
 Before first adopting this release, stop **all** older Flow processes. Old processes have no
