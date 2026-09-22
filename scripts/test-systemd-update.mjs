@@ -121,13 +121,19 @@ async function run(command, args, options = {}) {
   return result;
 }
 const sudo = (args, options) => run('/usr/bin/sudo', ['-n', '--', ...args], options);
-const asUser = (command, args = [], options) => run('/usr/bin/sudo', [
-  '-n', '-u', user, '--', '/usr/bin/env', '-i', `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`,
-  `PATH=${path}`, `FLOW_STATE_DIR=${state}`, `npm_config_prefix=${prefix}`,
-  `npm_config_userconfig=${home}/.npmrc`, `npm_config_cache=${home}/npm-cache`,
-  'npm_config_audit=false', 'npm_config_fund=false', 'npm_config_fetch_retries=0',
-  'npm_config_fetch_timeout=60000', command, ...args,
-], options);
+const asUser = (command, args = [], options = {}) => {
+  const { cwd = work, ...rest } = options;
+  // The runner cannot chdir into the private service home before sudo executes. Change directory
+  // only after dropping to the service account; all command/argument values stay positional.
+  return run('/usr/bin/sudo', [
+    '-n', '-u', user, '--', '/usr/bin/env', '-i', `HOME=${home}`, `USER=${user}`, `LOGNAME=${user}`,
+    `PATH=${path}`, `FLOW_STATE_DIR=${state}`, `npm_config_prefix=${prefix}`,
+    `npm_config_userconfig=${home}/.npmrc`, `npm_config_cache=${home}/npm-cache`,
+    'npm_config_audit=false', 'npm_config_fund=false', 'npm_config_fetch_retries=0',
+    'npm_config_fetch_timeout=60000', '/bin/sh', '-c', 'cd "$1" && shift && exec "$@"',
+    'flow-it-cwd', cwd, command, ...args,
+  ], { ...rest, cwd: work });
+};
 const userJS = (code, args = [], options = {}) => asUser(node, ['--input-type=commonjs', '-e', code, ...args], { quiet: true, ...options });
 const userFile = (file, options) => userJS('process.stdout.write(require("node:fs").readFileSync(process.argv[1], "utf8"))', [file], options);
 const userJSON = async file => JSON.parse(await userFile(file));
