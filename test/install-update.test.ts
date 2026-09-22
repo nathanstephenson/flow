@@ -635,6 +635,9 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
       assert.match(result.output, /queued/);
     }
     await until(() => !existsSync(join(f.root, 'systemd-update-request.json')));
+    // Request cleanup runs in finally before bootstrap prints a failure. Wait for the diagnostic
+    // rather than racing the final stderr write (particularly visible on macOS runners).
+    await until(() => readFileSync(join(f.root, 'worker.log'), 'utf8').trim().length > 0);
     const output = readFileSync(join(f.root, 'worker.log'), 'utf8');
     if (scenario === 'busy' || scenario === 'wrong-owner' || scenario === 'wrong-args' || scenario === 'ephemeral-web' || scenario === 'stop-denied') {
       const reason = scenario === 'busy' ? /active work/ : scenario === 'wrong-owner' ? /does not own/ : scenario === 'wrong-args' ? /Configured systemd hostArgs do not match/ : scenario === 'stop-denied' ? /accepting requests again/ : /fixed service port/;

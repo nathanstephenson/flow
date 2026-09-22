@@ -57,7 +57,8 @@ jobs:
           sudo systemctl start polkit.service
       - name: Prepare the browser probe
         run: |
-          npm install --no-save --package-lock=false --ignore-scripts playwright@1.63.0
+          npm install --prefix "$RUNNER_TEMP/flow-browser" --package-lock=false --ignore-scripts playwright@1.63.0
+          echo "FLOW_TEST_PLAYWRIGHT=$RUNNER_TEMP/flow-browser/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
           echo "FLOW_TEST_CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
       - name: Exercise systemd-owned updates
         run: node scripts/test-systemd-update.mjs

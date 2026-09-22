@@ -4,6 +4,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 async function loadPlaywright() {
+  // Keep the probe's dependencies outside Flow's locked install in CI.
+  if (process.env.FLOW_TEST_PLAYWRIGHT) return import(pathToFileURL(resolve(process.env.FLOW_TEST_PLAYWRIGHT)).href);
   try {
     return await import("playwright");
   } catch (error) {
