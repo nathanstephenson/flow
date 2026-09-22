@@ -256,9 +256,15 @@ async function setPolicy(allowStop) {
   await poll(`polkit has reloaded (stop allowed=${allowStop})`, async () => {
     const check = async verb => {
       try {
-        await asUser('/bin/sh', ['-c',
-          'exec /usr/bin/pkcheck --action-id org.freedesktop.systemd1.manage-units --process $$ --detail unit "$1" --detail verb "$2"',
-          'flow-it-pkcheck', service, verb], { quiet: true, timeout: 5000 });
+        // Modern polkit accepts action details only from trusted callers. Ask as root ABOUT
+        // the unprivileged host process; real systemctl calls below still run as the test user.
+        const pid = Number(await property(service, 'MainPID'));
+        assert.ok(pid > 0);
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const started = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+        await sudo(['/usr/bin/pkcheck', '--action-id', 'org.freedesktop.systemd1.manage-units',
+          '--process', `${pid},${started},${uid}`, '--detail', 'unit', service, '--detail', 'verb', verb],
+        { quiet: true, timeout: 5000 });
         return true;
       } catch (error) { if (error.code === 1 || error.code === 2) return false; throw error; }
     };
@@ -453,8 +459,10 @@ if (process.argv[2] === 'serve') {
     await sudo(['install', '-o', 'root', '-g', 'root', '-m', '0644', source, `/etc/systemd/system/${unit}`]);
   }
   await sudo(['systemctl', 'daemon-reload']);
+  // One-time administrator startup, as documented. All update service-control remains non-root.
+  await sudo(['systemctl', 'start', service]);
   await setPolicy(true);
-  log('Starting baseline through REAL non-root systemctl and narrow polkit authority');
+  log('Verifying baseline control through REAL non-root systemctl and narrow polkit authority');
   await asUser('/usr/bin/systemctl', ['--system', '--no-ask-password', 'start', service]);
   await poll('baseline daemon identity', async () => {
     const identity = await userJSON(join(state, 'daemon.json'));
