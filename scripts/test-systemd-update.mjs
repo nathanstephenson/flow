@@ -2,7 +2,7 @@
 /**
  * REAL systemd updater integration test. Never run against a workstation or the live Flow host.
  *
- * Usage (disposable GitHub-hosted ubuntu-24.04 VM, setup-node Node 22, npm ci already done):
+ * Usage (disposable GitHub-hosted ubuntu-24.04 VM, setup-node Node 22 or 26, npm ci already done):
  *   FLOW_SYSTEMD_VM_TEST=1 node scripts/test-systemd-update.mjs
  * Optional: FLOW_SYSTEMD_TEST_ARTIFACTS=/absolute/artifact/directory
  * Upload build/systemd-update-test/ with actions/upload-artifact using `if: always()`.
@@ -52,7 +52,7 @@ if (process.env.FLOW_SYSTEMD_VM_TEST !== '1' || process.env.GITHUB_ACTIONS !== '
 assert.match(readFileSync('/etc/os-release', 'utf8'), /^ID=ubuntu$/m, 'Only disposable Ubuntu runners are supported');
 assert.match(readFileSync('/etc/os-release', 'utf8'), /^VERSION_ID="24\.04"$/m, 'Use ubuntu-24.04');
 assert.equal(readFileSync('/proc/1/comm', 'utf8').trim(), 'systemd', 'Must exercise real systemd, not a container shim');
-assert.equal(Number(process.versions.node.split('.')[0]), 22, 'Use setup-node Node 22');
+assert.ok([22, 26].includes(Number(process.versions.node.split('.')[0])), 'Use setup-node Node 22 or 26');
 
 const repo = resolve(import.meta.dirname, '..');
 const metadata = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));

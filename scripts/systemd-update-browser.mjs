@@ -106,7 +106,18 @@ export async function beginBrowserUpdate({ url, token, version, artifactDir }) {
     await update.getByRole("button", { name: `Update to ${version}`, exact: true }).click();
     const confirmation = page.getByRole("alertdialog");
     await confirmation.getByRole("heading", { name: `Update Flow to ${version}?`, exact: true }).waitFor();
-    await page.screenshot({ path: join(directory, "browser-update-confirm.png"), fullPage: true });
+    const originalDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => {
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      }, dark);
+      await page.screenshot({ path: join(directory, `browser-update-confirm-${dark ? "dark" : "light"}.png`), fullPage: true, animations: "disabled" });
+    }
+    await page.evaluate(dark => {
+      document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    }, originalDark);
     log("probe", `Confirming update to ${version}`);
     await confirmation.getByRole("button", { name: "Update and restart", exact: true }).click();
   } catch (error) {
@@ -150,7 +161,7 @@ export async function beginBrowserUpdate({ url, token, version, artifactDir }) {
             // Avoid accepting the fleeting success render immediately before reload.
             // Require two observations in the same document, half a second apart.
             if (previousSuccessNavigation === navigation) {
-              await page.screenshot({ path: join(directory, "browser-update-success.png"), fullPage: true, timeout: 10_000 });
+              await page.screenshot({ path: join(directory, "browser-update-success.png"), fullPage: true, animations: "disabled", timeout: 10_000 });
               log("probe", `Verified rendered success and Installed ${version}`);
               return snapshot;
             }
