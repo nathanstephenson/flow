@@ -130,7 +130,7 @@ const asUser = (command, args = [], options = {}) => {
     `PATH=${path}`, `FLOW_STATE_DIR=${state}`, `npm_config_prefix=${prefix}`,
     `npm_config_userconfig=${home}/.npmrc`, `npm_config_cache=${home}/npm-cache`,
     'npm_config_audit=false', 'npm_config_fund=false', 'npm_config_fetch_retries=0',
-    'npm_config_fetch_timeout=60000', '/bin/sh', '-c', 'cd "$1" && shift && exec "$@"',
+    'npm_config_fetch_timeout=60000', '/bin/sh', '-c', 'umask 077; cd "$1" && shift && exec "$@"',
     'flow-it-cwd', cwd, command, ...args,
   ], { ...rest, cwd: work });
 };
@@ -170,6 +170,9 @@ async function snapshot(label) {
       save(`${label}-${unit}.journal.txt`, await sudo(['journalctl', '--no-pager', '-o', 'short-precise', '-u', unit], { cleanup: true, timeout: 20_000 }));
       save(`${label}-${unit}.show.txt`, await run('/usr/bin/systemctl', ['show', unit], { cleanup: true, timeout: 20_000 }));
     } catch (error) { log(`Diagnostic ${unit}: ${error.message}`); }
+  }
+  if (endpoint && cookie) {
+    try { save(`${label}-update-status.json`, await api('/api/update')); } catch { /* Host may be intentionally down. */ }
   }
   if (accountCreated) {
     for (const file of ['daemon.json', 'web-update.json', 'systemd-update-request.json', 'npm-probes.jsonl', 'startup-failures.jsonl']) {
@@ -428,6 +431,12 @@ if (process.argv[2] === 'serve') {
 
   log('Installing baseline with real non-root npm through the private registry');
   await asUser(npm, ['install', '--global', '--omit=dev', `${metadata.name}@${versions.base}`], { cwd: '/', timeout: 600_000 });
+  save('installation-paths.json', JSON.parse(await userJS(`
+    const fs = require('node:fs'), p = require('node:path');
+    const paths = []; let current = process.argv[1];
+    for (;;) { const s = fs.lstatSync(current); paths.push({ path: current, uid: s.uid, mode: (s.mode & 0o7777).toString(8), symlink: s.isSymbolicLink() }); if (p.dirname(current) === current) break; current = p.dirname(current); }
+    console.log(JSON.stringify({ uid: process.getuid(), paths }));
+  `, [slot])));
   assert.equal(await asUser(node, [entry, '--version'], { cwd: scope }), versions.base);
   assert.equal(JSON.parse(await userJS('console.log(JSON.stringify(require("node:fs").statSync(process.argv[1]).uid))', [slot])), uid);
 
@@ -480,7 +489,10 @@ if (process.argv[2] === 'serve') {
   assert.match(html, /<html/);
   const asset = /src="([^"]+\.js)"/.exec(html)?.[1]; assert.ok(asset);
   assert.match((await http(asset)).response.headers.get('content-type'), /javascript/);
-  assert.equal((await api('/api/update?refresh=1')).latestVersion, versions.good);
+  const baselineUpdate = await api('/api/update?refresh=1');
+  save('01-baseline-update-status.json', baselineUpdate);
+  assert.equal(baselineUpdate.latestVersion, versions.good);
+  assert.equal(baselineUpdate.eligibility.state, 'eligible', JSON.stringify(baselineUpdate));
   // No restart privilege: a regression in this rule can only restart this disposable host.
   await assert.rejects(asUser('/usr/bin/systemctl', ['--system', '--no-ask-password', 'restart', service]), /Command failed/);
   assert.equal((await api('/api/host')).pid, baseline.pid);
