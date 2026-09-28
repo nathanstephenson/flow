@@ -853,7 +853,22 @@ export class SessionHost {
     this.persist(record);
 
     record.buffered = [];
-    const session = await this.startBackendSession(record);
+    let session: BackendSession;
+    try {
+      session = await this.startBackendSession(record);
+      if (session.capabilities.models.length === 0) {
+        throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
+      }
+    } catch (error) {
+      // Creation never returns an Agent Session without confirmed models. In particular, do not
+      // leave a persisted, empty Agent Session (or a newly cut worktree) after a failed probe.
+      await record.session?.dispose().catch(() => {});
+      await this.releaseWorktree(record);
+      record.log.closeSubscribers();
+      this.sessions.delete(id);
+      this.store?.deleteSession(id);
+      throw error;
+    }
     record.log.append({
       type: "session_started",
       backend: backend.name,

@@ -174,12 +174,12 @@ export function NewAgentSessionPage({
   );
 
   const create = useCallback(async (): Promise<string | undefined> => {
-    if (!command) return;
+    if (!command || capabilityProblem || !model) return;
     setFailure(undefined);
     const created = await run<string>({ ...command, mcpConnectionIds });
     if (!created) setFailure("The Session Host refused this. Check the Project and branch to cut from.");
     return created;
-  }, [command, mcpConnectionIds, run]);
+  }, [capabilityProblem, command, mcpConnectionIds, model, run]);
 
   const send = useCallback(
     async (text: string, attachments: IncomingAttachment[]): Promise<unknown | undefined> => {
@@ -195,6 +195,10 @@ export function NewAgentSessionPage({
               ...(attachments.length ? { attachments } : {}),
               when: "after_turn",
             });
+      if (queued === undefined) {
+        setFailure("The Agent Session was created, but the message was not sent. Your Draft is still here.");
+        return;
+      }
       drafts.write(NEW_AGENT_SESSION_DRAFT, { text: "", attachments: [] });
       onCreated(created);
       return queued;

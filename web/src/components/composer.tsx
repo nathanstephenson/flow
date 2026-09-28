@@ -96,13 +96,9 @@ export function Composer({
   /**
    * Why nothing can be typed, where something outside this component makes that so.
    *
-   * Set on the New Agent Session view when the host advertises no Backend Adapter, which is the one
-   * state there in which no Agent Session could be created at all. It is *not* set merely because
-   * the model catalogue has not answered: a send with no `modelId` is a send the host resolves
-   * against the machine-wide Default Model (ADR 0020), so the box works, and locking it for the
-   * seconds `/api/models` takes on a cold daemon would buy nothing. The Attachment guard is
-   * independent and stands on its own — an unresolved model refuses a paste (ADR 0014) whether the
-   * box is locked or not.
+   * Set on the New Agent Session view until model capabilities are confirmed for the chosen
+   * backend. A send before discovery finishes could create an Agent Session whose first turn is
+   * refused, so leave the Draft intact until it can be sent.
    */
   unavailable?: string | undefined;
   /**
