@@ -246,6 +246,41 @@ it("keeps the backend-open snapshot stable for child attempts and refreshes it o
   await reopened.dispose();
 });
 
+it("waits for supported models before a new Claude Backend Session can accept its first turn", { timeout: 5000 }, async () => {
+  const listed = gate();
+  const messages = new AsyncQueue<SDKMessage>();
+  const backend = new ClaudeBackend({ query: (() => ({
+    [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+    supportedModels: async () => { await listed.promise; return [{ value: "sonnet", supportedEffortLevels: ["high"] }]; },
+    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+    close: () => messages.close(),
+  } as unknown as Query)) as typeof query });
+  let created = false;
+  const opening = backend.create({ scope: "/tmp", emit: () => {} }).then((session) => {
+    created = true;
+    return session;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(created, false);
+  listed.resolve();
+  const session = await opening;
+  assert.deepEqual(session.capabilities.models.map((model) => model.id), ["sonnet"]);
+  await session.dispose();
+});
+
+it("refuses a Claude Backend Session when model discovery fails", async () => {
+  const messages = new AsyncQueue<SDKMessage>();
+  let closed = false;
+  const backend = new ClaudeBackend({ query: (() => ({
+    [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+    supportedModels: async () => { throw new Error("CLI unavailable"); },
+    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+    close: () => { closed = true; messages.close(); },
+  } as unknown as Query)) as typeof query });
+  await assert.rejects(backend.create({ scope: "/tmp", emit: () => {} }), /model capabilities are unavailable/);
+  assert.equal(closed, true);
+});
+
 it("registers handles before startup, leaves parent abort independent, and awaits starting handles on repeated disposal", { timeout: 5000 }, async () => {
   const release = gate();
   const started = gate();

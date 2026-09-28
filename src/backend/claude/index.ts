@@ -223,6 +223,7 @@ class ClaudeSession implements BackendSession {
   private readonly emit: (event: BackendEvent) => void;
   private readonly stream: Query;
   private readonly pump: Promise<void>;
+  readonly modelsReady: Promise<void>;
 
   private sdkSessionId = "";
   private turnId: string | undefined;
@@ -343,7 +344,7 @@ class ClaudeSession implements BackendSession {
 
     this.stream = (backendOptions.query ?? query)({ prompt: this.inbox, options: queryOptions });
     this.pump = this.consume();
-    void this.loadModels();
+    this.modelsReady = this.loadModels();
     // A meter that only fills once a turn ends reads as "no window" when it is really just early.
     // Occupancy is already meaningful here: system prompt, tools and memory files are loaded
     // before anything is sent.
@@ -1044,10 +1045,28 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
-    // Deliberately not awaiting init: in streaming-input mode the SDK emits nothing until the
-    // input stream yields, so waiting for the init message before returning would deadlock. The
-    // session starts with provisional capabilities and emits capabilities_changed once known.
-    return new ClaudeSession(options, this.options);
+    // Do not await the init message: streaming input yields none until the first prompt. The
+    // supportedModels control request does answer before that prompt, however. Returning while it
+    // is still in flight lets the first send race the empty provisional capabilities.
+    const session = new ClaudeSession(options, this.options);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        session.modelsReady,
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Model capability discovery timed out")), 45_000);
+        }),
+      ]);
+      if (session.capabilities.models.length === 0) {
+        throw new Error("Claude model capabilities are unavailable; check the CLI and try again");
+      }
+      return session;
+    } catch (error) {
+      await session.dispose();
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 

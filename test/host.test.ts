@@ -44,17 +44,16 @@ describe("SessionHost", () => {
     ]);
   });
 
-  it("blocks agent turns while model capability discovery is unavailable", async () => {
+  it("refuses creation without model capabilities instead of leaving an empty Agent Session", async () => {
     const unavailableHost = new SessionHost();
     const unavailable = new FakeBackend({ models: [] });
     unavailableHost.registerBackend(unavailable);
-    const id = await unavailableHost.create({ scope: "/tmp/scope", backend: "fake" });
     await assert.rejects(
-      unavailableHost.send(id, "must not launch", "now"),
-      /Model capabilities are unavailable.*Retry/,
+      unavailableHost.create({ scope: "/tmp/scope", backend: "fake" }),
+      /Model capabilities are unavailable/,
     );
+    assert.deepEqual(unavailableHost.list(), []);
     assert.deepEqual(unavailable.latest.prompts, []);
-    assert.equal(events(unavailableHost, id).some((event) => event.type === "user_message"), false);
     await unavailableHost.shutdown();
   });
 
