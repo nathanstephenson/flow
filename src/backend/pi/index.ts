@@ -26,6 +26,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
+import { compactionModelExtension } from "./compaction-model.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
@@ -85,6 +86,7 @@ export class PiSession implements BackendSession {
   private readonly session: AgentSession;
   private readonly applyAutoCompaction: ((model: PiModel | undefined) => void) | undefined;
   private readonly workflowAutoCompaction: AutoCompaction | undefined;
+  private readonly workflowCompactionModelId: string | undefined;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
   private readonly sessionDir: string | undefined;
@@ -104,12 +106,13 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction } = {}) {
+    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string } = {}) {
     this.mcp = support.mcp;
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
     this.workflowAutoCompaction = support.workflowAutoCompaction;
+    this.workflowCompactionModelId = support.workflowCompactionModelId;
     this.applyAutoCompaction?.(session.model);
     this.emit = emit;
     this.sessionDir = sessionDir;
@@ -125,7 +128,7 @@ export class PiSession implements BackendSession {
     if (this.disposed) throw new Error("Backend Session stopped");
     if (this.workflows.has(options.id)) throw new Error(`Duplicate workflow Subagent: ${options.id}`);
     const handle = new PiWorkflowSubagent(this.session, options, this.standingAuthorisations, this.mcp,
-      this.workflowAutoCompaction);
+      this.workflowAutoCompaction, this.workflowCompactionModelId);
     this.workflows.set(options.id, handle);
     void handle.done.finally(() => this.workflows.delete(options.id)).catch(() => {});
     return handle;
@@ -476,6 +479,8 @@ export class PiBackend implements AgentBackend {
       agentDir,
       settingsManager,
       noExtensions: true,
+      ...(options.compactionModelId ? { extensionFactories: [compactionModelExtension(options.compactionModelId,
+        (text) => options.emit({ type: "notice", level: "error", text }))] } : {}),
     });
     await resourceLoader.reload();
 
@@ -505,7 +510,7 @@ export class PiBackend implements AgentBackend {
       ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
       ...(enquiries ? [enquiries.tool] : []),
       ...(subagents ? [subagentTool(work, (id, input, signal) =>
-        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp))] : []),
+        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp, options.compactionModelId))] : []),
     ];
     const { session } = await createAgentSession({
       cwd: options.scope,
@@ -519,7 +524,7 @@ export class PiBackend implements AgentBackend {
     });
 
     const autoCompaction = structuredClone(options.autoCompaction);
-    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(enquiries ? { enquiries } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
@@ -556,7 +561,7 @@ export class PiBackend implements AgentBackend {
 }
 
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
-  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession): Promise<ToolResult> {
+  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession, compactionModelId?: string): Promise<ToolResult> {
   const available = parent.modelRuntime.getAvailableSnapshot();
   const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
   if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
@@ -564,6 +569,8 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
+    ...(compactionModelId ? { extensionFactories: [compactionModelExtension(compactionModelId,
+      (text) => emit({ type: "notice", level: "error", text }))] } : {}),
     appendSystemPrompt: ["You are a Subagent. Complete the delegated work and return the result. If human input is needed, return that request to the parent. You cannot ask the human or create further Subagents."] });
   await resourceLoader.reload();
   signal.throwIfAborted();

@@ -265,6 +265,7 @@ export type SessionHostOptions = {
   defaultBackend?: () => string | undefined;
   defaultModel?: (backend: string) => string | undefined;
   autoCompaction?: (backend: string) => AutoCompaction | undefined;
+  compactionModel?: (backend: string) => string | undefined;
   defaultEffort?: (backend: string) => EffortLevel | undefined;
   /**
    * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
@@ -442,6 +443,7 @@ export class SessionHost {
   private readonly defaultBackend: (() => string | undefined) | undefined;
   private readonly defaultModel: ((backend: string) => string | undefined) | undefined;
   private readonly autoCompaction: SessionHostOptions["autoCompaction"];
+  private readonly compactionModel: SessionHostOptions["compactionModel"];
   private readonly defaultEffort: ((backend: string) => EffortLevel | undefined) | undefined;
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
@@ -466,6 +468,7 @@ export class SessionHost {
     this.defaultBackend = options.defaultBackend;
     this.defaultModel = options.defaultModel;
     this.autoCompaction = options.autoCompaction;
+    this.compactionModel = options.compactionModel;
     this.defaultEffort = options.defaultEffort;
     this.summaryModel = options.summaryModel;
   }
@@ -2116,6 +2119,7 @@ export class SessionHost {
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);
+    const compactionModelId = this.compactionModel?.(backend.name);
     const session = await backend.create({
       mcp,
       workflow: {
@@ -2127,6 +2131,7 @@ export class SessionHost {
       scope: record.scope,
       emit: (event) => this.onBackendEvent(record.id, event),
       ...(autoCompaction === undefined ? {} : { autoCompaction }),
+      ...(compactionModelId === undefined ? {} : { compactionModelId }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),

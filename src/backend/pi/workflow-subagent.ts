@@ -12,6 +12,7 @@ import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.t
 import { PiSession } from "./index.ts";
 import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
+import { compactionModelExtension } from "./compaction-model.ts";
 import { PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { PiWork } from "./work.ts";
@@ -26,13 +27,15 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private readonly permissions = new Map<string, (decision?: PermissionDecision) => void>();
   private readonly options: WorkflowSubagentOptions;
   private readonly autoCompaction: AutoCompaction | undefined;
+  private readonly compactionModelId: string | undefined;
 
   private readonly mcp: McpSession | undefined;
   constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession,
-    autoCompaction?: AutoCompaction) {
+    autoCompaction?: AutoCompaction, compactionModelId?: string) {
     this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
     this.autoCompaction = autoCompaction;
+    this.compactionModelId = compactionModelId;
     this.grants = new Set(grants);
     this.enquiries = new PiEnquiries((event) => this.emit(event));
     this.work = new PiWork((event) => this.emit(event), () => {});
@@ -106,6 +109,8 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       }).resolve(async () => "skip") : undefined;
       const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir: getAgentDir(), settingsManager,
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+        ...(this.compactionModelId ? { extensionFactories: [compactionModelExtension(this.compactionModelId,
+          (text) => this.emit({ type: "notice", level: "error", text }))] } : {}),
         additionalSkillPaths: resources?.skills.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
         additionalPromptTemplatePaths: resources?.prompts.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
         ...(options.skill ? {

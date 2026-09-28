@@ -48,6 +48,8 @@ describe("per-backend auto-compaction settings", () => {
         saved.providers.autoCompaction = patch.providers.autoCompaction.pi === null
           ? undefined
           : { pi: patch.providers.autoCompaction.pi };
+        saved.providers.compactionModels = patch.providers.compactionModels?.pi
+          ? { pi: patch.providers.compactionModels.pi } : undefined;
         await route.fulfill({ contentType: "application/json", body: JSON.stringify({ providers: saved.providers }) });
       } else if (path === "/api/models") {
         await route.fulfill({ contentType: "application/json", body: JSON.stringify([{
@@ -69,16 +71,23 @@ describe("per-backend auto-compaction settings", () => {
     await mode.click();
     await page.getByRole("option", { name: "Enabled with target" }).click();
     await page.getByRole("spinbutton", { name: "pi Auto-compaction target percentage" }).fill("75");
+    await page.getByRole("combobox", { name: "pi Compaction Model" }).click();
+    await page.getByRole("option", { name: "p/one" }).click();
     await page.getByRole("button", { name: "Save", exact: true }).last().click();
-    assert.deepEqual(patches.at(-1), { providers: { autoCompaction: { pi: { mode: "enabled", targetPercent: 75 } } } });
+    assert.deepEqual(patches.at(-1), { providers: { autoCompaction: { pi: { mode: "enabled", targetPercent: 75 } }, compactionModels: { pi: "p/one" } } });
     await page.reload();
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     await page.locator("details summary").click();
     assert.match(await page.getByRole("combobox", { name: "pi Auto-compaction mode" }).textContent(), /Enabled with target/);
     assert.equal(await page.getByRole("spinbutton", { name: "pi Auto-compaction target percentage" }).inputValue(), "75");
+    assert.match(await page.getByRole("combobox", { name: "pi Compaction Model" }).textContent(), /p\/one/);
     await page.getByRole("combobox", { name: "pi Auto-compaction mode" }).click();
     await page.getByRole("option", { name: "Use backend default" }).click();
     await page.getByRole("button", { name: "Save", exact: true }).last().click();
-    assert.deepEqual(patches.at(-1), { providers: { autoCompaction: { pi: null } } });
+    assert.deepEqual(patches.at(-1), { providers: { autoCompaction: { pi: null }, compactionModels: { pi: "p/one" } } });
+    await page.getByRole("combobox", { name: "pi Compaction Model" }).click();
+    await page.getByRole("option", { name: "Use current model" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).last().click();
+    assert.deepEqual(patches.at(-1), { providers: { autoCompaction: { pi: null }, compactionModels: { pi: "" } } });
   });
 });

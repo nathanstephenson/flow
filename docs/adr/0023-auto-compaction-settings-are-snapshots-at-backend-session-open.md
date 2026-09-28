@@ -14,6 +14,16 @@ ConfigStore owns these Settings. The Session Host reads a snapshot each time a B
 opens, including Revive. Saving does not change running Backend Sessions. Backend Adapters do not
 read Flow's settings file. This follows ADR 0009 without a second owner or change subscription.
 
+Pi also supports a separate Compaction Model per backend for both manual and automatic compactions.
+The setting is independent of auto-compaction mode and never changes the conversation model. Pi
+exposes an inline `session_before_compact` hook, used with its exported `compact()` function to
+preserve its native preparation, split-turn summaries, file tracking, and usage accounting while
+sending the summary request to the selected model. Flow keeps external Pi extensions disabled.
+An unavailable or failing configured model cancels compaction and reports an error rather than
+silently using the conversation model. Workflow Subagents and ordinary Subagents inherit the
+Backend Session snapshot. Claude's SDK exposes no equivalent model-selection control, so the
+option is offered only for Pi.
+
 Pi applies its snapshot to the selected model at open and after a model change. It converts the
 target using each model's actual context window:
 

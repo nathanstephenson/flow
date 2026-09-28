@@ -107,6 +107,8 @@ export class ConfigStore {
 
   readonly autoCompaction = (backend: string) => structuredClone(this.config.providers?.autoCompaction?.[backend]);
 
+  readonly compactionModel = (backend: string): string | undefined => this.config.providers?.compactionModels?.[backend];
+
   readonly defaultBackend = (): string | undefined => this.config.providers?.defaultBackend;
 
   /** The Summary Model, asked fresh. Undefined means no Agent Session is named by a model. */

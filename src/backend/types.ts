@@ -27,6 +27,8 @@ export type BackendCreateOptions = {
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: AutoCompaction;
+  /** Optional model for compaction summaries, independent of the main model. */
+  compactionModelId?: string;
   modelId?: string;
   effort?: EffortLevel;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */

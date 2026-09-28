@@ -98,6 +98,8 @@ export type Settings = {
     defaults?: Record<string, string>;
     /** One auto-compaction policy per Backend Adapter; absent uses its own defaults. */
     autoCompaction?: Record<string, AutoCompaction>;
+    /** Pi-only model for manual and automatic compaction summaries; absent uses the current model. */
+    compactionModels?: Record<string, string>;
     /** Creation-only main-model effort per Backend Adapter; never used for naming. */
     efforts?: Record<string, EffortLevel>;
     /** Naming stays within the Agent Session's Backend Adapter. Absent means keep the first line. */
@@ -158,6 +160,8 @@ export type SettingsPatch = {
     defaults?: Record<string, string>;
     /** Merges per backend; null restores that backend's default. */
     autoCompaction?: Record<string, AutoCompaction | null>;
+    /** Pi only. Empty string restores use of the current model. */
+    compactionModels?: Record<string, string>;
     /** Merges per backend; an empty string clears its Default Effort. */
     efforts?: Record<string, EffortLevel | "">;
     /** Merges per backend; null clears one summary, including its legacy singleton value. */

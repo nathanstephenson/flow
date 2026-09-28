@@ -215,7 +215,7 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -266,7 +266,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries", "autoCompaction"] as const) {
+  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -529,10 +529,11 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels"], "providers");
 
   const next: Providers = {
     ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
+    ...(current?.compactionModels === undefined ? {} : { compactionModels: { ...current.compactionModels } }),
     ...(current?.defaultBackend === undefined ? {} : { defaultBackend: current.defaultBackend }),
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
@@ -571,6 +572,27 @@ function patchProviders(
     }
     if (Object.keys(merged).length) next.autoCompaction = merged;
     else delete next.autoCompaction;
+  }
+
+  if (patch.compactionModels !== undefined) {
+    const entries: unknown = patch.compactionModels;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+      throw new ConfigError("providers.compactionModels must map a backend to a model id");
+    }
+    const merged = { ...next.compactionModels };
+    for (const [backend, modelId] of Object.entries(entries)) {
+      const field = `providers.compactionModels.${backend}`;
+      if (backend !== "pi") throw new ConfigError(`${field} is supported only by Pi`);
+      if (modelId === "") {
+        delete merged[backend];
+        continue;
+      }
+      const problem = checkModelId(modelId, field);
+      if (problem || modelId !== (modelId as string).trim()) throw new ConfigError(problem ?? `${field} must name a model without surrounding whitespace`);
+      merged[backend] = modelId as string;
+    }
+    if (Object.keys(merged).length) next.compactionModels = merged;
+    else delete next.compactionModels;
   }
 
   const defaults: unknown = patch.defaults;

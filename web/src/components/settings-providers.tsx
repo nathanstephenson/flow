@@ -320,19 +320,21 @@ function BackendSettings({
           }
         />
         {listing?.autoCompaction ? (
-          <AutoCompactionSettings backend={backend} listing={listing} current={providers?.autoCompaction?.[backend]} />
+          <AutoCompactionSettings backend={backend} listing={listing} current={providers?.autoCompaction?.[backend]} currentModel={providers?.compactionModels?.[backend] ?? ""} />
         ) : null}
       </div>
     </details>
   );
 }
 
-function AutoCompactionSettings({ backend, listing, current }: {
+function AutoCompactionSettings({ backend, listing, current, currentModel }: {
   backend: string;
   listing: BackendModels;
   current: AutoCompaction | undefined;
+  currentModel: string;
 }) {
   const { save, saving } = useSaveSettings();
+  const [compactionModel, setCompactionModel] = useState(currentModel);
   const [mode, setMode] = useState<"default" | AutoCompaction["mode"]>(current?.mode ?? "default");
   const [percent, setPercent] = useState(current?.mode === "enabled" ? String(current.targetPercent) : "80");
   const savedMode = current?.mode ?? "default";
@@ -340,17 +342,25 @@ function AutoCompactionSettings({ backend, listing, current }: {
   function reset() {
     setMode(savedMode);
     setPercent(savedPercent);
+    setCompactionModel(currentModel);
   }
-  useEffect(reset, [savedMode, savedPercent]);
+  useEffect(reset, [savedMode, savedPercent, currentModel]);
   const targetPercent = Number(percent);
   const valid = mode !== "enabled" || (percent.trim() !== "" && Number.isInteger(targetPercent) && targetPercent >= 1 && targetPercent <= 99);
-  const dirty = mode !== savedMode || (mode === "enabled" && percent !== savedPercent);
+  const dirty = mode !== savedMode || (mode === "enabled" && percent !== savedPercent) || (backend === "pi" && compactionModel !== currentModel);
   return (
     <div className="flex flex-col gap-3 border-t pt-4">
-      <h3 className="text-sm font-semibold">Auto-compaction</h3>
+      <h3 className="text-sm font-semibold">Compaction</h3>
       <p className="text-xs text-muted-foreground">
-        Applies to all models on this backend when a Backend Session opens or is Revived. Saving does not change running Backend Sessions. Manual compaction stays available.
+        These settings apply to new and Revived Backend Sessions. Saving does not change running Backend Sessions. Manual compaction stays available even when auto-compaction is disabled.
       </p>
+      {backend === "pi" ? (
+        <>
+          <ModelField label="Compaction Model" backend={backend} listing={listing} loading={false}
+            value={compactionModel} placeholder="Use current model" onChange={setCompactionModel} />
+          <p className="text-xs text-muted-foreground">Used to summarize manual and automatic compactions. Does not change the model for normal turns. Applies to new and Revived Backend Sessions.</p>
+        </>
+      ) : null}
       <label className="flex flex-col gap-1">
         <span className="text-sm font-medium">Auto-compaction mode</span>
         <Select value={mode} onValueChange={(value) => {
@@ -382,7 +392,7 @@ function AutoCompactionSettings({ backend, listing, current }: {
         <Button size="sm" disabled={!dirty || !valid || saving} onClick={() => {
           if (!valid) return;
           const value: AutoCompaction | null = mode === "default" ? null : mode === "disabled" ? { mode } : { mode, targetPercent };
-          void save({ providers: { autoCompaction: { [backend]: value } } }, "Auto-compaction saved.");
+          void save({ providers: { autoCompaction: { [backend]: value }, ...(backend === "pi" ? { compactionModels: { [backend]: compactionModel } } : {}) } }, "Compaction settings saved.");
         }}>{saving ? "Saving…" : "Save"}</Button>
         <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={reset}>Discard</Button>
       </div>
