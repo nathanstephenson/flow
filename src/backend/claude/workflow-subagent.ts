@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { query, type Options, type Query, type SDKUserMessage, type SpawnedProcess, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts";
-import type { ModelAutoCompaction } from "../../protocol/settings.ts";
+import type { AutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { PendingEnquiries, ASK_TOOL, questionsOf } from "./enquiries.ts";
@@ -30,11 +30,11 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
 
   private readonly launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">;
   private readonly dependencies: WorkflowQueryDependencies;
-  private readonly autoCompaction: ModelAutoCompaction;
+  private readonly autoCompaction: AutoCompaction | undefined;
 
   constructor(launch: Pick<Options, "cwd" | "pathToClaudeCodeExecutable" | "disallowedTools" | "mcpServers">,
     options: WorkflowSubagentOptions, grants: Set<string>,
-    dependencies: WorkflowQueryDependencies = {}, autoCompaction: ModelAutoCompaction = {}) {
+    dependencies: WorkflowQueryDependencies = {}, autoCompaction?: AutoCompaction) {
     this.launch = launch;
     this.dependencies = dependencies;
     this.options = { ...options, input: structuredClone(options.input) };
@@ -111,7 +111,7 @@ export class ClaudeWorkflowSubagent implements WorkflowSubagentHandle {
       const skillContext = options.skill
         ? `You are workflow Subagent ${options.name}. The leading Skill invocation is expanded as the user prompt. Follow it together with the mapped workflow input below.\n\nMapped workflow input (JSON):\n${JSON.stringify(options.input)}\n\nWorkflow constraints:${options.instructions.slice(options.skill.invocation.length)}`
         : options.instructions;
-      const compactionEnv = claudeAutoCompactionEnv(this.autoCompaction[options.modelId]) ?? process.env;
+      const compactionEnv = claudeAutoCompactionEnv(this.autoCompaction) ?? process.env;
       const stream = (this.dependencies.query ?? query)({ prompt: this.inbox, options: {
         ...this.launch, model: options.modelId,
         ...(options.effort === "off" ? {} : { effort: options.effort }),

@@ -1,4 +1,4 @@
-import type { ModelAutoCompaction } from "../protocol/settings.ts";
+import type { AutoCompaction } from "../protocol/settings.ts";
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
 import type {
   BackendEvent,
@@ -26,7 +26,7 @@ export type BackendCreateOptions = {
   workflow?: import("./workflow-tools.ts").WorkflowParent;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
-  autoCompaction?: ModelAutoCompaction;
+  autoCompaction?: AutoCompaction;
   modelId?: string;
   effort?: EffortLevel;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */

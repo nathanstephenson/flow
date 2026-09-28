@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
-import type { ModelAutoCompaction } from "../../protocol/settings.ts";
+import type { AutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import { piEffortLevels } from "./effort-capabilities.ts";
 import type {
@@ -84,7 +84,7 @@ export class PiSession implements BackendSession {
   private turnReason: TurnEndReason = "complete";
   private readonly session: AgentSession;
   private readonly applyAutoCompaction: ((model: PiModel | undefined) => void) | undefined;
-  private readonly workflowAutoCompaction: ModelAutoCompaction;
+  private readonly workflowAutoCompaction: AutoCompaction | undefined;
   private readonly emit: (event: BackendEvent) => void;
   private readonly unsubscribe: () => void;
   private readonly sessionDir: string | undefined;
@@ -104,12 +104,12 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: ModelAutoCompaction } = {}) {
+    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction } = {}) {
     this.mcp = support.mcp;
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
-    this.workflowAutoCompaction = support.workflowAutoCompaction ?? {};
+    this.workflowAutoCompaction = support.workflowAutoCompaction;
     this.applyAutoCompaction?.(session.model);
     this.emit = emit;
     this.sessionDir = sessionDir;
@@ -518,8 +518,8 @@ export class PiBackend implements AgentBackend {
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
 
-    const autoCompaction = structuredClone(options.autoCompaction ?? {});
-    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), workflowAutoCompaction: autoCompaction, ...(enquiries ? { enquiries } : {}) });
+    const autoCompaction = structuredClone(options.autoCompaction);
+    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(enquiries ? { enquiries } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);

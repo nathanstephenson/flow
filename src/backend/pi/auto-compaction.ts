@@ -1,11 +1,9 @@
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { ModelAutoCompaction } from "../../protocol/settings.ts";
+import type { AutoCompaction } from "../../protocol/settings.ts";
 
-export function piAutoCompaction(settings: SettingsManager, snapshot: ModelAutoCompaction) {
+export function piAutoCompaction(settings: SettingsManager, setting: AutoCompaction | undefined) {
   const defaults = settings.getCompactionSettings();
-  return (model: { id: string; provider?: string; contextWindow?: number } | undefined): void => {
-    const id = model?.provider ? `${model.provider}/${model.id}` : model?.id;
-    const setting = id ? snapshot[id] : undefined;
+  return (model: { contextWindow?: number } | undefined): void => {
     const window = model?.contextWindow;
     const compaction = { ...defaults };
     if (setting?.mode === "disabled") compaction.enabled = false;

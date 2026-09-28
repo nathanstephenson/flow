@@ -9,7 +9,6 @@ import {
   resolveDefaultBackend,
   type Settings,
   type AutoCompaction,
-  type ModelAutoCompaction,
 } from "../../../src/protocol/settings.ts";
 import { useHost } from "@/host.tsx";
 import { useModelCatalogue } from "@/models.ts";
@@ -331,36 +330,30 @@ function BackendSettings({
 function AutoCompactionSettings({ backend, listing, current }: {
   backend: string;
   listing: BackendModels;
-  current: ModelAutoCompaction | undefined;
+  current: AutoCompaction | undefined;
 }) {
   const { save, saving } = useSaveSettings();
-  const [model, setModel] = useState("");
-  const saved = current?.[model];
-  const [mode, setMode] = useState<"default" | AutoCompaction["mode"]>("default");
-  const [percent, setPercent] = useState("80");
-  const savedMode = saved?.mode ?? "default";
-  const savedPercent = saved?.mode === "enabled" ? String(saved.targetPercent) : "80";
+  const [mode, setMode] = useState<"default" | AutoCompaction["mode"]>(current?.mode ?? "default");
+  const [percent, setPercent] = useState(current?.mode === "enabled" ? String(current.targetPercent) : "80");
+  const savedMode = current?.mode ?? "default";
+  const savedPercent = current?.mode === "enabled" ? String(current.targetPercent) : "80";
   function reset() {
     setMode(savedMode);
     setPercent(savedPercent);
   }
-  useEffect(reset, [model, savedMode, savedPercent]);
-  const models = [...listing.models, ...Object.keys(current ?? {}).filter((id) => !listing.models.some((entry) => entry.id === id)).map((id) => ({ id }))];
-  const selected = listing.models.find((entry) => entry.id === model);
-  const unknownWindow = listing.autoCompaction === "model-change" && !selected?.contextWindow;
+  useEffect(reset, [savedMode, savedPercent]);
   const targetPercent = Number(percent);
-  const valid = mode !== "enabled" || (!unknownWindow && Number.isInteger(targetPercent) && targetPercent >= 1 && targetPercent <= 99);
+  const valid = mode !== "enabled" || (percent.trim() !== "" && Number.isInteger(targetPercent) && targetPercent >= 1 && targetPercent <= 99);
   const dirty = mode !== savedMode || (mode === "enabled" && percent !== savedPercent);
   return (
     <div className="flex flex-col gap-3 border-t pt-4">
       <h3 className="text-sm font-semibold">Auto-compaction</h3>
       <p className="text-xs text-muted-foreground">
-        Applies when a Backend Session opens or is Revived. Saving does not change running Backend Sessions. Manual compaction stays available.
+        Applies to all models on this backend when a Backend Session opens or is Revived. Saving does not change running Backend Sessions. Manual compaction stays available.
       </p>
-      <ModelField label="Auto-compaction model" backend={backend} listing={{ ...listing, models }} loading={false} value={model} placeholder="Choose a model" onChange={setModel} />
       <label className="flex flex-col gap-1">
         <span className="text-sm font-medium">Auto-compaction mode</span>
-        <Select value={mode} disabled={!model} onValueChange={(value) => {
+        <Select value={mode} onValueChange={(value) => {
           if (value === "default" || value === "disabled" || value === "enabled") setMode(value);
         }}>
           <SelectTrigger aria-label={`${backend} Auto-compaction mode`}>
@@ -369,30 +362,29 @@ function AutoCompactionSettings({ backend, listing, current }: {
           <SelectContent>
             <SelectItem value="default">Use backend default</SelectItem>
             <SelectItem value="disabled">Disabled</SelectItem>
-            <SelectItem value="enabled" disabled={unknownWindow}>Enabled with target</SelectItem>
+            <SelectItem value="enabled">Enabled with target</SelectItem>
           </SelectContent>
         </Select>
       </label>
       {mode === "enabled" ? (
         <label className="flex flex-col gap-1">
           <span className="text-sm font-medium">Target percentage</span>
-          <Input aria-label={`${backend} Auto-compaction target percentage`} type="number" min={1} max={99} step={1} disabled={unknownWindow} value={percent} onChange={(event) => setPercent(event.target.value)} />
-          {!valid && !unknownWindow ? <span className="text-xs text-destructive">Enter an integer from 1 to 99.</span> : null}
+          <Input aria-label={`${backend} Auto-compaction target percentage`} type="number" min={1} max={99} step={1} value={percent} onChange={(event) => setPercent(event.target.value)} />
+          {!valid ? <span className="text-xs text-destructive">Enter an integer from 1 to 99.</span> : null}
         </label>
       ) : null}
-      {unknownWindow && model ? <p className="text-xs text-muted-foreground">The model context window is unknown. Percentage control is unavailable.</p> : null}
       <p className="text-xs text-muted-foreground">
         The percentage is a target, not a guarantee. {listing.autoCompaction === "startup"
-          ? "Claude may compact earlier. Backend restrictions still apply. Model changes in a running Backend Session do not change its startup threshold. If no model is selected at startup, Claude uses its own defaults."
-          : "Pi uses the model context window to set reserved tokens. This also changes the summary token budget. Model changes use the Settings snapshot from when the Backend Session opened."}
+          ? "Claude may compact earlier. Backend restrictions still apply. Model changes in a running Backend Session do not change its startup threshold."
+          : "Pi uses each model’s context window to set reserved tokens. This also changes the summary token budget. If the context window is unknown, Pi keeps its SDK defaults. Model changes use the Settings snapshot from when the Backend Session opened."}
       </p>
       <div className="flex items-center gap-2">
-      <Button size="sm" disabled={!model || !dirty || !valid || saving} onClick={() => {
-        if (!model || !valid) return;
-        const value: AutoCompaction | null = mode === "default" ? null : mode === "disabled" ? { mode } : { mode, targetPercent };
-        void save({ providers: { autoCompaction: { [backend]: { [model]: value } } } }, "Auto-compaction saved.");
-      }}>{saving ? "Saving…" : "Save"}</Button>
-      <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={reset}>Discard</Button>
+        <Button size="sm" disabled={!dirty || !valid || saving} onClick={() => {
+          if (!valid) return;
+          const value: AutoCompaction | null = mode === "default" ? null : mode === "disabled" ? { mode } : { mode, targetPercent };
+          void save({ providers: { autoCompaction: { [backend]: value } } }, "Auto-compaction saved.");
+        }}>{saving ? "Saving…" : "Save"}</Button>
+        <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={reset}>Discard</Button>
       </div>
     </div>
   );

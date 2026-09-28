@@ -7,7 +7,7 @@ import {
   type AgentSession, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts";
-import type { ModelAutoCompaction } from "../../protocol/settings.ts";
+import type { AutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { PiSession } from "./index.ts";
 import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
@@ -25,11 +25,11 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private readonly grants: Set<string>;
   private readonly permissions = new Map<string, (decision?: PermissionDecision) => void>();
   private readonly options: WorkflowSubagentOptions;
-  private readonly autoCompaction: ModelAutoCompaction;
+  private readonly autoCompaction: AutoCompaction | undefined;
 
   private readonly mcp: McpSession | undefined;
   constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession,
-    autoCompaction: ModelAutoCompaction = {}) {
+    autoCompaction?: AutoCompaction) {
     this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
     this.autoCompaction = autoCompaction;
