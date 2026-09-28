@@ -12,7 +12,7 @@ import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.t
 import { PiSession } from "./index.ts";
 import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
-import { compactionModelExtension } from "./compaction-model.ts";
+import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { PiWork } from "./work.ts";
@@ -150,10 +150,15 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         ...backgroundTools(scope, settingsManager, this.work, undefined, false, true)];
       const customTools = definitions.filter((tool) => names.includes(tool.name)).map((tool) => this.wrap(tool as ToolDefinition));
       customTools.push(this.enquiries.tool);
-      const { session } = await createAgentSession({ cwd: scope, model, modelRuntime: parent.modelRuntime,
+      const { session, extensionsResult } = await createAgentSession({ cwd: scope, model, modelRuntime: parent.modelRuntime,
         resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope),
         tools: customTools.map((tool) => tool.name), customTools,
       });
+      const extensionError = this.compactionModelId && compactionExtensionError(extensionsResult.errors);
+      if (extensionError) {
+        session.dispose();
+        throw new Error(`Could not load the Pi compaction model hook: ${extensionError}`);
+      }
       // Session creation initializes SDK settings after resource loading, so apply the immutable
       // Flow policy at the same boundary PiSession uses for a parent model selection.
       piAutoCompaction(settingsManager, this.autoCompaction)(model);

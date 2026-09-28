@@ -26,7 +26,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
-import { compactionModelExtension } from "./compaction-model.ts";
+import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
@@ -512,7 +512,7 @@ export class PiBackend implements AgentBackend {
       ...(subagents ? [subagentTool(work, (id, input, signal) =>
         runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp, options.compactionModelId))] : []),
     ];
-    const { session } = await createAgentSession({
+    const { session, extensionsResult } = await createAgentSession({
       cwd: options.scope,
       agentDir,
       resourceLoader,
@@ -522,6 +522,12 @@ export class PiBackend implements AgentBackend {
       ...(sessionManager ? { sessionManager } : {}),
       ...(tools.length === 0 ? { noTools: "all" as const } : {}),
     });
+
+    const extensionError = options.compactionModelId && compactionExtensionError(extensionsResult.errors);
+    if (extensionError) {
+      session.dispose();
+      throw new Error(`Could not load the Pi compaction model hook: ${extensionError}`);
+    }
 
     const autoCompaction = structuredClone(options.autoCompaction);
     const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}) });
@@ -575,10 +581,15 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   await resourceLoader.reload();
   signal.throwIfAborted();
   const producer = { subagentId: id };
-  const { session: child } = await createAgentSession({ cwd: scope, agentDir, model, modelRuntime: parent.modelRuntime,
+  const { session: child, extensionsResult } = await createAgentSession({ cwd: scope, agentDir, model, modelRuntime: parent.modelRuntime,
     resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope), tools,
     customTools: [...piMcpTools(mcp), ...backgroundTools(scope, settingsManager, work, producer, input.run_in_background === false).filter((tool) => tools.includes(tool.name))],
   });
+  const extensionError = compactionModelId && compactionExtensionError(extensionsResult.errors);
+  if (extensionError) {
+    child.dispose();
+    throw new Error(`Could not load the Pi compaction model hook: ${extensionError}`);
+  }
   let output = "";
   let failure: string | undefined;
   let reason: TurnEndReason = "complete";

@@ -41,6 +41,16 @@ it("Pi cancels a failed compaction instead of falling back to the main model", {
   assert.equal(fixture.events.some((event) => event.type === "compacted"), false);
 });
 
+it("Pi rejects an empty compaction summary rather than losing Conversation Context", { timeout: 15_000 }, async (t) => {
+  const fixture = await piFixture(t, (request) => ({ text: request.model === "child" ? "" : "A normal response" }), { tools: [] });
+  const session = await fixture.create({ compactionModelId: "flow-test/child" });
+  await session.prompt("First request");
+  await session.prompt("Second request");
+  await session.compact?.();
+  await until(() => fixture.events.some((event) => event.type === "notice" && event.text.includes("empty summary")));
+  assert.equal(fixture.events.some((event) => event.type === "compacted"), false);
+});
+
 it("Pi does not silently use the main model when the configured compaction model is unavailable", { timeout: 15_000 }, async (t) => {
   const fixture = await piFixture(t, () => ({ text: "A normal response" }), { tools: [] });
   const session = await fixture.create({ compactionModelId: "flow-test/missing" });
