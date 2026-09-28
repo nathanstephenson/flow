@@ -9,7 +9,7 @@ import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { query, type Options, type Query, type SDKMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
-import type { ModelAutoCompaction } from "../../src/protocol/settings.ts";
+import type { AutoCompaction } from "../../src/protocol/settings.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "../../src/backend/claude/workflow-subagent.ts";
 import { WorkflowProcesses } from "../../src/backend/claude/workflow-processes.ts";
@@ -24,7 +24,7 @@ const result = (text = "{}") => ({ type: "result", subtype: "success", result: t
   sonnet: { inputTokens: 2, outputTokens: 3, cacheReadInputTokens: 4, cacheCreationInputTokens: 1, costUSD: 0.1 },
 } } as unknown as SDKMessage);
 
-function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true, autoCompaction: ModelAutoCompaction = {}) {
+function fixture(extra: Partial<WorkflowSubagentOptions> = {}, effort = true, autoCompaction?: AutoCompaction) {
   const messages = new AsyncQueue<SDKMessage>();
   const started = gate();
   const stopped = gate();
@@ -83,7 +83,7 @@ it("expands a selected Skill as the user prompt while retaining mapped input and
     instructions: invocation + "\nReturn only JSON matching the schema",
     skill: { name: "review", invocation },
     input: { mapped: true },
-  }, true, { sonnet: { mode: "enabled", targetPercent: 82 } });
+  }, true, { mode: "enabled", targetPercent: 82 });
   await f.started.promise;
   assert.equal(f.launch().env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "82");
   assert.equal(f.launch().env?.DISABLE_AUTO_COMPACT, "0");
@@ -104,9 +104,9 @@ it("expands a selected Skill as the user prompt while retaining mapped input and
   await assert.rejects(missing.handle.done, /Skill \/deleted is unavailable in the execution Scope/);
 });
 
-it("applies each workflow model's opening compaction policy without losing isolation flags", { timeout: 5000 }, async () => {
-  const enabled = fixture({}, true, { sonnet: { mode: "enabled", targetPercent: 82 } });
-  const disabled = fixture({}, true, { sonnet: { mode: "disabled" } });
+it("applies the backend's opening compaction policy without losing isolation flags", { timeout: 5000 }, async () => {
+  const enabled = fixture({}, true, { mode: "enabled", targetPercent: 82 });
+  const disabled = fixture({}, true, { mode: "disabled" });
   const defaults = fixture();
   await Promise.all([enabled.started.promise, disabled.started.promise, defaults.started.promise]);
 
@@ -215,14 +215,12 @@ it("keeps the backend-open snapshot stable for child attempts and refreshes it o
       close: () => messages.close(),
     } as unknown as Query;
   }) as typeof query });
-  const snapshot: ModelAutoCompaction = {
-    opus: { mode: "disabled" }, sonnet: { mode: "enabled", targetPercent: 77 },
-  };
+  const snapshot: AutoCompaction = { mode: "enabled", targetPercent: 77 };
   const parent = await backend.create({ scope: "/tmp", modelId: "opus", autoCompaction: snapshot, emit: () => {} });
-  snapshot.sonnet = { mode: "disabled" };
+  snapshot.targetPercent = 80;
   const first = parent.startWorkflowSubagent!(options());
   while (runs.length < 2) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(runs[0]!.launch.env?.DISABLE_AUTO_COMPACT, "1", "parent model keeps its own policy");
+  assert.equal(runs[0]!.launch.env?.DISABLE_AUTO_COMPACT, "0", "parent uses the backend policy");
   assert.equal(runs[1]!.launch.env?.DISABLE_AUTO_COMPACT, "0");
   assert.equal(runs[1]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "77");
   runs[1]!.messages.push(result());
@@ -239,8 +237,8 @@ it("keeps the backend-open snapshot stable for child attempts and refreshes it o
   const reopened = await backend.create({ scope: "/tmp", modelId: "opus", autoCompaction: snapshot, emit: () => {} });
   const refreshed = reopened.startWorkflowSubagent!(options());
   while (runs.length < 5) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(runs[4]!.launch.env?.DISABLE_AUTO_COMPACT, "1");
-  assert.equal(runs[4]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, undefined);
+  assert.equal(runs[4]!.launch.env?.DISABLE_AUTO_COMPACT, "0");
+  assert.equal(runs[4]!.launch.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "80");
   runs[4]!.messages.push(result());
   assert.equal(await refreshed.done, "{}");
   await reopened.dispose();

@@ -7,11 +7,12 @@ import {
   type AgentSession, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { BackendEvent, PermissionDecision } from "../../protocol/events.ts";
-import type { ModelAutoCompaction } from "../../protocol/settings.ts";
+import type { AutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { PiSession } from "./index.ts";
 import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
+import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { PiWork } from "./work.ts";
@@ -25,14 +26,16 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
   private readonly grants: Set<string>;
   private readonly permissions = new Map<string, (decision?: PermissionDecision) => void>();
   private readonly options: WorkflowSubagentOptions;
-  private readonly autoCompaction: ModelAutoCompaction;
+  private readonly autoCompaction: AutoCompaction | undefined;
+  private readonly compactionModelId: string | undefined;
 
   private readonly mcp: McpSession | undefined;
   constructor(parent: AgentSession, options: WorkflowSubagentOptions, grants: readonly string[], mcp?: McpSession,
-    autoCompaction: ModelAutoCompaction = {}) {
+    autoCompaction?: AutoCompaction, compactionModelId?: string) {
     this.mcp = mcp;
     this.options = { ...options, input: structuredClone(options.input) };
     this.autoCompaction = autoCompaction;
+    this.compactionModelId = compactionModelId;
     this.grants = new Set(grants);
     this.enquiries = new PiEnquiries((event) => this.emit(event));
     this.work = new PiWork((event) => this.emit(event), () => {});
@@ -106,6 +109,8 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
       }).resolve(async () => "skip") : undefined;
       const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir: getAgentDir(), settingsManager,
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+        ...(this.compactionModelId ? { extensionFactories: [compactionModelExtension(this.compactionModelId,
+          (text) => this.emit({ type: "notice", level: "error", text }))] } : {}),
         additionalSkillPaths: resources?.skills.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
         additionalPromptTemplatePaths: resources?.prompts.filter(resource => resource.enabled).map(resource => resource.path) ?? [],
         ...(options.skill ? {
@@ -145,10 +150,15 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
         ...backgroundTools(scope, settingsManager, this.work, undefined, false, true)];
       const customTools = definitions.filter((tool) => names.includes(tool.name)).map((tool) => this.wrap(tool as ToolDefinition));
       customTools.push(this.enquiries.tool);
-      const { session } = await createAgentSession({ cwd: scope, model, modelRuntime: parent.modelRuntime,
+      const { session, extensionsResult } = await createAgentSession({ cwd: scope, model, modelRuntime: parent.modelRuntime,
         resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope),
         tools: customTools.map((tool) => tool.name), customTools,
       });
+      const extensionError = this.compactionModelId && compactionExtensionError(extensionsResult.errors);
+      if (extensionError) {
+        session.dispose();
+        throw new Error(`Could not load the Pi compaction model hook: ${extensionError}`);
+      }
       // Session creation initializes SDK settings after resource loading, so apply the immutable
       // Flow policy at the same boundary PiSession uses for a parent model selection.
       piAutoCompaction(settingsManager, this.autoCompaction)(model);

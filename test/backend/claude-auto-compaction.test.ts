@@ -29,9 +29,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `);
   const backend = new ClaudeBackend({ pathToClaudeCodeExecutable: executable, allowedTools: [] });
-  const session = await backend.create({ scope: root, modelId: "opus", emit: () => {}, autoCompaction: {
-    opus: { mode: "enabled", targetPercent: 80 }, sonnet: { mode: "disabled" },
-  } });
+  const session = await backend.create({ scope: root, modelId: "opus", emit: () => {}, autoCompaction: { mode: "enabled", targetPercent: 80 } });
   t.after(() => session.dispose());
   await until(() => { try { return Boolean(readFileSync(output)); } catch { return false; } });
   const opened = JSON.parse(readFileSync(output, "utf8"));
@@ -42,9 +40,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), opened);
   await session.dispose();
   rmSync(output);
-  const revived = await backend.create({ scope: root, modelId: "sonnet", resume: "previous-backend-session", emit: () => {}, autoCompaction: {
-    sonnet: { mode: "disabled" },
-  } });
+  const revived = await backend.create({ scope: root, modelId: "sonnet", resume: "previous-backend-session", emit: () => {}, autoCompaction: { mode: "disabled" } });
   t.after(() => revived.dispose());
   await until(() => { try { return Boolean(readFileSync(output)); } catch { return false; } });
   const restarted = JSON.parse(readFileSync(output, "utf8"));
@@ -53,10 +49,18 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   assert.ok(restarted.args.includes("--resume=previous-backend-session"));
   await revived.dispose();
   rmSync(output);
-  const reset = await backend.create({ scope: root, modelId: "sonnet", emit: () => {}, autoCompaction: {} });
+  const reset = await backend.create({ scope: root, modelId: "sonnet", emit: () => {} });
   t.after(() => reset.dispose());
   await until(() => { try { return Boolean(readFileSync(output)); } catch { return false; } });
   const defaults = JSON.parse(readFileSync(output, "utf8"));
   assert.equal(defaults.disabled, process.env.DISABLE_AUTO_COMPACT);
   assert.equal(defaults.percent, process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE);
+  await reset.dispose();
+  rmSync(output);
+  const automaticModel = await backend.create({ scope: root, emit: () => {}, autoCompaction: { mode: "enabled", targetPercent: 70 } });
+  t.after(() => automaticModel.dispose());
+  await until(() => { try { return Boolean(readFileSync(output)); } catch { return false; } });
+  const automatic = JSON.parse(readFileSync(output, "utf8"));
+  assert.equal(automatic.disabled, "0");
+  assert.equal(automatic.percent, "70");
 });

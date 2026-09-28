@@ -46,7 +46,7 @@ export async function startRuntime(options: {
       mcpConnections: config.mcpConnections, mcpAuth,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
-      defaultEffort: config.defaultEffort, autoCompaction: config.autoCompaction, summaryModel: config.summaryModel,
+      defaultEffort: config.defaultEffort, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
     });
     const shells = new ShellRegistry();
     let running: RunningServer | undefined;

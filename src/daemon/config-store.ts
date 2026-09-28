@@ -105,7 +105,9 @@ export class ConfigStore {
    */
   readonly defaultModel = (backend: string): string | undefined => this.config.providers?.defaults?.[backend];
 
-  readonly autoCompaction = (backend: string) => structuredClone(this.config.providers?.autoCompaction?.[backend] ?? {});
+  readonly autoCompaction = (backend: string) => structuredClone(this.config.providers?.autoCompaction?.[backend]);
+
+  readonly compactionModel = (backend: string): string | undefined => this.config.providers?.compactionModels?.[backend];
 
   readonly defaultBackend = (): string | undefined => this.config.providers?.defaultBackend;
 

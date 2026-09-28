@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import type { AgentSession, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
-import type { ModelAutoCompaction } from "../../src/protocol/settings.ts";
+import type { AutoCompaction } from "../../src/protocol/settings.ts";
 import { gate, piFixture, until, userText } from "./pi-fixture.ts";
 
 const options = (id: string, extra: Partial<WorkflowSubagentOptions> = {}): WorkflowSubagentOptions => ({
@@ -15,17 +15,14 @@ const options = (id: string, extra: Partial<WorkflowSubagentOptions> = {}): Work
 const childSettings = (handle: unknown): SettingsManager =>
   (handle as { child: AgentSession }).child.settingsManager;
 
-it("applies the workflow model's opening compaction snapshot and isolates attempts", { timeout: 15_000 }, async (t) => {
+it("applies the backend's opening compaction snapshot and isolates attempts", { timeout: 15_000 }, async (t) => {
   const release = gate();
   const fixture = await piFixture(t, async () => { await release.promise; return { text: "{}" }; });
-  const snapshot: ModelAutoCompaction = {
-    "flow-test/parent": { mode: "disabled" },
-    "flow-test/child": { mode: "enabled", targetPercent: 75 },
-  };
+  const snapshot: AutoCompaction = { mode: "enabled", targetPercent: 75 };
   mkdirSync(join(fixture.scope, ".pi", "prompts"), { recursive: true });
   writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), "Review: $ARGUMENTS");
   const session = await fixture.create({ autoCompaction: snapshot });
-  snapshot["flow-test/child"] = { mode: "disabled" };
+  snapshot.targetPercent = 80;
   const first = session.startWorkflowSubagent!(options("policy-a", {
     instructions: "/review changes",
     skill: { name: "review", invocation: "/review changes" },
@@ -43,7 +40,7 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
   assert.equal(childSettings(second).getCompactionEnabled(), true);
   assert.equal(childSettings(second).getCompactionReserveTokens(), 4096);
   const parent = (session as unknown as { session: AgentSession }).session.settingsManager;
-  assert.equal(parent.getCompactionEnabled(), false, "the parent uses its own model policy");
+  assert.equal(parent.getCompactionReserveTokens(), 4096, "the parent uses the same backend policy");
 
   release.release();
   await Promise.all([first.done, second.done]);
@@ -51,14 +48,14 @@ it("applies the workflow model's opening compaction snapshot and isolates attemp
   const reopened = await fixture.create({ autoCompaction: snapshot });
   const retry = reopened.startWorkflowSubagent!(options("policy-retry"));
   await until(() => fixture.requests.length === 3);
-  assert.equal(childSettings(retry).getCompactionEnabled(), false);
+  assert.equal(childSettings(retry).getCompactionReserveTokens(), 3276);
   await retry.cancel();
 });
 
-it("keeps Pi backend defaults when the workflow model has no override", { timeout: 15_000 }, async (t) => {
+it("keeps Pi backend defaults when there is no auto-compaction setting", { timeout: 15_000 }, async (t) => {
   const release = gate();
   const fixture = await piFixture(t, async () => { await release.promise; return { text: "{}" }; });
-  const session = await fixture.create({ autoCompaction: {} });
+  const session = await fixture.create({});
   const handle = session.startWorkflowSubagent!(options("default"));
   await until(() => fixture.requests.length === 1);
   assert.equal(childSettings(handle).getCompactionEnabled(), true);
@@ -70,9 +67,7 @@ it("keeps Pi backend defaults when the workflow model has no override", { timeou
 it("clears observable compaction progress when a workflow attempt is cancelled", { timeout: 15_000 }, async (t) => {
   const release = gate();
   const fixture = await piFixture(t, async () => { await release.promise; return { text: "{}" }; });
-  const session = await fixture.create({ autoCompaction: {
-    "flow-test/child": { mode: "enabled", targetPercent: 75 },
-  } });
+  const session = await fixture.create({ autoCompaction: { mode: "enabled", targetPercent: 75 } });
   const activity: Parameters<WorkflowSubagentOptions["emit"]>[0][] = [];
   const handle = session.startWorkflowSubagent!(options("compacting", { emit: (event) => activity.push(event) }));
   await until(() => fixture.requests.length === 1);

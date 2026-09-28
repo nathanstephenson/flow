@@ -215,7 +215,7 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -266,7 +266,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries", "autoCompaction"] as const) {
+  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -275,14 +275,23 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
     for (const [backend, value] of Object.entries(entries)) {
       try {
-        if (field === "autoCompaction" && typeof value === "object" && value !== null && !Array.isArray(value)) {
-          for (const [model, setting] of Object.entries(value)) {
-            try {
-              providers = patchProviders(providers, { autoCompaction: { [backend]: { [model]: setting } } } as SettingsPatch["providers"]) ?? {};
-            } catch (error) {
-              warnings.push(String(error));
+        if (field === "autoCompaction" && typeof value === "object" && value !== null && !Array.isArray(value) && !("mode" in value)) {
+          // Older files mapped each backend to models. Only promote identical entries: choosing
+          // one of several conflicting policies would silently impose it on other models.
+          const legacy = Object.entries(value);
+          if (!legacy.length) continue;
+          const validated = legacy.map(([model, setting]) => {
+            const entry = patchProviders(undefined, { autoCompaction: { [backend]: setting } } as SettingsPatch["providers"])?.autoCompaction?.[backend];
+            if (checkModelId(model, `providers.autoCompaction.${backend}.${model}`) || model !== model.trim() || !entry) {
+              throw new ConfigError(`Invalid legacy auto-compaction setting for ${backend}/${model}; using backend default`);
             }
+            return entry;
+          });
+          if (!validated.every((setting) => JSON.stringify(setting) === JSON.stringify(validated[0]))) {
+            warnings.push(`Conflicting legacy auto-compaction settings for ${backend}; using backend default`);
+            continue;
           }
+          providers = patchProviders(providers, { autoCompaction: { [backend]: validated[0]! } }) ?? {};
         } else providers = patchProviders(providers, { [field]: { [backend]: value } }) ?? {};
       } catch (error) {
         warnings.push(String(error));
@@ -520,10 +529,11 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels"], "providers");
 
   const next: Providers = {
     ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
+    ...(current?.compactionModels === undefined ? {} : { compactionModels: { ...current.compactionModels } }),
     ...(current?.defaultBackend === undefined ? {} : { defaultBackend: current.defaultBackend }),
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
@@ -546,31 +556,43 @@ function patchProviders(
       throw new ConfigError("providers.autoCompaction must be an object");
     }
     const merged = { ...next.autoCompaction };
-    for (const [backend, models] of Object.entries(entries)) {
-      const path = `providers.autoCompaction.${backend}`;
-      if (backend !== backend.trim() || checkModelId(backend, path) || typeof models !== "object" || models === null || Array.isArray(models)) {
-        throw new ConfigError(`${path} must map model ids to auto-compaction settings`);
+    for (const [backend, value] of Object.entries(entries)) {
+      const field = `providers.autoCompaction.${backend}`;
+      if (backend !== backend.trim() || checkModelId(backend, field)) throw new ConfigError(`${field} must name a backend without surrounding whitespace`);
+      if (value === null) {
+        delete merged[backend];
+        continue;
       }
-      const values = { ...merged[backend] };
-      for (const [model, value] of Object.entries(models)) {
-        const field = `${path}.${model}`;
-        if (model !== model.trim() || checkModelId(model, field)) throw new ConfigError(`${field} must name a model without surrounding whitespace`);
-        if (value === null) {
-          delete values[model];
-          continue;
-        }
-        if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`${field} must be an auto-compaction setting`);
-        refuseUnknownKeys(value, value.mode === "disabled" ? ["mode"] : ["mode", "targetPercent"], field);
-        if (value.mode === "disabled") values[model] = { mode: "disabled" };
-        else if (value.mode === "enabled" && Number.isInteger(value.targetPercent) && value.targetPercent >= 1 && value.targetPercent <= 99) {
-          values[model] = { mode: "enabled", targetPercent: value.targetPercent };
-        } else throw new ConfigError(`${field} must be disabled or enabled with an integer targetPercent from 1 to 99`);
-      }
-      if (Object.keys(values).length) merged[backend] = values;
-      else delete merged[backend];
+      if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`${field} must be an auto-compaction setting`);
+      refuseUnknownKeys(value, value.mode === "disabled" ? ["mode"] : ["mode", "targetPercent"], field);
+      if (value.mode === "disabled") merged[backend] = { mode: "disabled" };
+      else if (value.mode === "enabled" && Number.isInteger(value.targetPercent) && value.targetPercent >= 1 && value.targetPercent <= 99) {
+        merged[backend] = { mode: "enabled", targetPercent: value.targetPercent };
+      } else throw new ConfigError(`${field} must be disabled or enabled with an integer targetPercent from 1 to 99`);
     }
     if (Object.keys(merged).length) next.autoCompaction = merged;
     else delete next.autoCompaction;
+  }
+
+  if (patch.compactionModels !== undefined) {
+    const entries: unknown = patch.compactionModels;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+      throw new ConfigError("providers.compactionModels must map a backend to a model id");
+    }
+    const merged = { ...next.compactionModels };
+    for (const [backend, modelId] of Object.entries(entries)) {
+      const field = `providers.compactionModels.${backend}`;
+      if (backend !== "pi") throw new ConfigError(`${field} is supported only by Pi`);
+      if (modelId === "") {
+        delete merged[backend];
+        continue;
+      }
+      const problem = checkModelId(modelId, field);
+      if (problem || modelId !== (modelId as string).trim()) throw new ConfigError(problem ?? `${field} must name a model without surrounding whitespace`);
+      merged[backend] = modelId as string;
+    }
+    if (Object.keys(merged).length) next.compactionModels = merged;
+    else delete next.compactionModels;
   }
 
   const defaults: unknown = patch.defaults;
