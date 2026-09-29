@@ -32,6 +32,7 @@ import type {
   BackendEvent,
   Capabilities,
   EffortLevel,
+  AgentPermissionMode,
   LoggedEvent,
   PermissionDecision,
   Producer,
@@ -210,6 +211,7 @@ type SessionRecord = {
   resumeToken: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
+  permissionMode: AgentPermissionMode;
   /** Creation-only configuration must be exact; live selections keep adapter clamping semantics. */
   initialEffortUnconfirmed: boolean;
   createdAt: string;
@@ -267,6 +269,7 @@ export type SessionHostOptions = {
   autoCompaction?: (backend: string) => AutoCompaction | undefined;
   compactionModel?: (backend: string) => string | undefined;
   defaultEffort?: (backend: string) => EffortLevel | undefined;
+  defaultPermissionMode?: (backend: string) => AgentPermissionMode | undefined;
   /**
    * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
    * Session (ADR 0020).
@@ -445,6 +448,7 @@ export class SessionHost {
   private readonly autoCompaction: SessionHostOptions["autoCompaction"];
   private readonly compactionModel: SessionHostOptions["compactionModel"];
   private readonly defaultEffort: ((backend: string) => EffortLevel | undefined) | undefined;
+  private readonly defaultPermissionMode: SessionHostOptions["defaultPermissionMode"];
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
@@ -470,6 +474,7 @@ export class SessionHost {
     this.autoCompaction = options.autoCompaction;
     this.compactionModel = options.compactionModel;
     this.defaultEffort = options.defaultEffort;
+    this.defaultPermissionMode = options.defaultPermissionMode;
     this.summaryModel = options.summaryModel;
   }
 
@@ -672,6 +677,7 @@ export class SessionHost {
           scope: record.scope,
           backend: record.backendName,
           status,
+          permissionMode: record.permissionMode,
           title: record.title,
           ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
           restingAt: record.restingAt,
@@ -758,6 +764,7 @@ export class SessionHost {
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
         effort: meta.effort,
+        permissionMode: meta.permissionMode ?? this.permissionDefault(meta.backend),
         initialEffortUnconfirmed: meta.initialEffortUnconfirmed ?? false,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
@@ -766,6 +773,7 @@ export class SessionHost {
       // Empties all three sets seeded above: a torn turn's prompts and Subagents are closed here,
       // and nothing can be open on an Agent Session with no Backend Session attached.
       this.closeTornTurn(record, entries);
+      if (!meta.permissionMode) record.log.append({ type: "permission_mode_changed", mode: record.permissionMode });
       // Dormancy has to be visible to a client reducing the transcript, or a session with nothing
       // running still looks ready to type at. A clean shutdown already recorded it.
       if (record.lifecycle === "dormant" && lastEventType(record.log.since(0)) !== "session_dormant") {
@@ -782,6 +790,7 @@ export class SessionHost {
     backend?: string;
     modelId?: string;
     effort?: EffortLevel;
+    permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
   }): Promise<string> {
@@ -800,6 +809,8 @@ export class SessionHost {
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
     const effort = options.effort ?? this.defaultEffort?.(backend.name);
+    const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
+    this.validatePermissionMode(backend.name, permissionMode);
 
     const record: SessionRecord = {
       id,
@@ -848,6 +859,7 @@ export class SessionHost {
        */
       modelId,
       effort,
+      permissionMode,
       initialEffortUnconfirmed: effort !== undefined,
       createdAt: now,
       updatedAt: now,
@@ -858,7 +870,7 @@ export class SessionHost {
     record.buffered = [];
     let session: BackendSession;
     try {
-      session = await this.startBackendSession(record);
+      session = await this.startPermissionBackend(record);
       if (session.capabilities.models.length === 0) {
         throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
       }
@@ -877,6 +889,7 @@ export class SessionHost {
       backend: backend.name,
       scope,
       capabilities: session.capabilities,
+      permissionMode: record.permissionMode,
       ...(worktree === undefined ? {} : { worktree: true as const }),
     });
     this.flushBuffered(record);
@@ -985,7 +998,7 @@ export class SessionHost {
     this.closeOpenSubagents(record, record.log.since(0));
     this.closeOpenBackgroundCalls(record, record.log.since(0));
     record.backendEpoch += 1;
-    await this.startBackendSession(record);
+    await this.startPermissionBackend(record);
     record.lifecycle = "live";
     // Un-settled, so the retention window starts again from the next Settle rather than from the
     // one this Revive just undid.
@@ -1108,6 +1121,34 @@ export class SessionHost {
     await record.session?.setModel(modelId);
     record.modelId = modelId;
     record.initialEffortUnconfirmed = false;
+    this.touch(record);
+  }
+
+  private permissionDefault(backend: string): AgentPermissionMode {
+    return this.defaultPermissionMode?.(backend) ?? (backend === "claude" ? "auto" : backend === "pi" ? "always" : "ask");
+  }
+
+  private validatePermissionMode(backend: string, mode: AgentPermissionMode): void {
+    if (!["ask", "auto", "always"].includes(mode) || (mode === "auto" && backend !== "claude")) throw new CommandRefused(`${backend} does not support ${mode} permissions`);
+  }
+
+  async setPermissionMode(sessionId: string, mode: AgentPermissionMode): Promise<void> {
+    const record = this.record(sessionId);
+    this.validatePermissionMode(record.backendName, mode);
+    if (record.lifecycle === "ended" || record.turnInFlight || record.openPermissionAttention.size ||
+        openPermissions(record.log.since(0)).length) throw new CommandRefused("Finish the turn and decide all Permission Prompts first");
+    if (record.permissionMode === mode) return;
+    // No optimistic event: a failed SDK transition must not change either client or disk.
+    try {
+      await record.session?.setPermissionMode?.(mode);
+    } catch (error) {
+      if (mode !== "auto" || record.backendName !== "claude") throw error;
+      await record.session?.setPermissionMode?.("ask");
+      mode = "ask";
+      record.log.append({ type: "notice", level: "warn", text: `Claude Auto permissions unavailable: ${String(error)}. Using Ask.` });
+    }
+    record.permissionMode = mode;
+    record.log.append({ type: "permission_mode_changed", mode });
     this.touch(record);
   }
 
@@ -1982,6 +2023,7 @@ export class SessionHost {
           ...(command.backend === undefined ? {} : { backend: command.backend }),
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
           ...(command.effort === undefined ? {} : { effort: command.effort }),
+          ...(command.permissionMode === undefined ? {} : { permissionMode: command.permissionMode }),
           ...(command.mcpConnectionIds === undefined ? {} : { mcpConnectionIds: command.mcpConnectionIds }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
         });
@@ -2003,6 +2045,8 @@ export class SessionHost {
         return this.acknowledge(command.sessionId, command.throughVersion);
       case "set_model":
         return await this.setModel(command.sessionId, command.modelId);
+      case "set_permission_mode":
+        return await this.setPermissionMode(command.sessionId, command.mode);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
       case "pull_branch":
@@ -2111,6 +2155,18 @@ export class SessionHost {
     });
   }
 
+  private async startPermissionBackend(record: SessionRecord): Promise<BackendSession> {
+    try { return await this.startBackendSession(record); }
+    catch (error) {
+      if (record.backendName !== "claude" || record.permissionMode !== "auto" || !(error instanceof (await import("../backend/claude/index.ts")).AutoPermissionUnavailable)) throw error;
+      record.permissionMode = "ask";
+      record.buffered?.push({ type: "notice", level: "warn", text: `Claude Auto permissions unavailable: ${String(error)}. Using Ask.` });
+      record.buffered?.push({ type: "permission_mode_changed", mode: "ask" });
+      this.persist(record);
+      return await this.startBackendSession(record);
+    }
+  }
+
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
@@ -2134,6 +2190,7 @@ export class SessionHost {
       ...(compactionModelId === undefined ? {} : { compactionModelId }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      permissionMode: record.permissionMode,
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
@@ -2617,6 +2674,7 @@ export class SessionHost {
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      permissionMode: record.permissionMode,
       ...(record.initialEffortUnconfirmed ? { initialEffortUnconfirmed: true } : {}),
       ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
     };

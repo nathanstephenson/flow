@@ -189,6 +189,7 @@ function chromeOf(view: ViewState, link: LinkState): Chrome {
     capabilities: view.capabilities,
     model: view.model,
     effort: view.effort,
+    permissionMode: view.permissionMode,
     branch: view.branch,
     worktree: view.worktree,
     contextUsage: view.contextUsage,

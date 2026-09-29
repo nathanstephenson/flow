@@ -21,6 +21,7 @@ import type { AutoCompaction } from "../../protocol/settings.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
+  AgentPermissionMode,
   Capabilities,
   EffortLevel,
   ModelInfo,
@@ -39,6 +40,8 @@ import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { BackgroundCalls } from "./background-calls.ts";
+
+export class AutoPermissionUnavailable extends Error {}
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -251,6 +254,7 @@ class ClaudeSession implements BackendSession {
   private readonly calls = new BackgroundCalls();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
+  private permissionMode: AgentPermissionMode;
   /**
    * What runs without being asked about: the pre-approved set, plus the Standing Authorisations this
    * Backend Session was created with.
@@ -278,6 +282,7 @@ class ClaudeSession implements BackendSession {
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.parentWorkflow = workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.options = options;
+    this.permissionMode = options.permissionMode ?? "ask";
     this.backendOptions = backendOptions;
     this.workflowAutoCompaction = structuredClone(options.autoCompaction);
     this.emit = options.emit;
@@ -337,7 +342,7 @@ class ClaudeSession implements BackendSession {
         // the turn open until the caller gave up on it.
         if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
-        if (this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
+        if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
         return await this.authorise(extra.toolUseID, toolName, input);
       },
     };
@@ -610,6 +615,11 @@ class ClaudeSession implements BackendSession {
     } catch (error) {
       this.emit({ type: "notice", level: "warn", text: `Interrupt failed: ${message(error)}` });
     }
+  }
+
+  async setPermissionMode(mode: AgentPermissionMode): Promise<void> {
+    await this.stream.setPermissionMode(mode === "auto" ? "auto" : "default");
+    this.permissionMode = mode;
   }
 
   async setModel(modelId: string): Promise<void> {
@@ -1059,6 +1069,10 @@ export class ClaudeBackend implements AgentBackend {
       ]);
       if (session.capabilities.models.length === 0) {
         throw new Error("Claude model capabilities are unavailable; check the CLI and try again");
+      }
+      if (options.permissionMode === "auto") {
+        try { await session.setPermissionMode("auto"); }
+        catch (error) { throw new AutoPermissionUnavailable(`SDK rejected Auto: ${String(error)}`); }
       }
       return session;
     } catch (error) {

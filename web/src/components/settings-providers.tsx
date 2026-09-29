@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import type {
   BackendModels,
   EffortLevel,
+  AgentPermissionMode,
 } from "../../../src/protocol/events.ts";
 import {
   resolveDefaultBackend,
@@ -27,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
+import { PermissionModeSelect } from "@/components/permission-mode-select.tsx";
 import { ConfiguredEffortSelect } from "@/components/effort-select.tsx";
 
 const UNSET = "__unset__";
@@ -165,21 +167,25 @@ function BackendSettings({
     (legacy?.backend === backend ? legacy : undefined);
   const currentModel = providers?.defaults?.[backend] ?? "";
   const currentEffort = providers?.efforts?.[backend] ?? "";
+  const currentPermissionMode = providers?.permissionModes?.[backend] ?? "";
   const currentSummary = summary?.modelId ?? "";
   const currentAutomatic = summary?.automatic ?? true;
   const [model, setModel] = useState(currentModel);
   const [effort, setEffort] = useState<EffortLevel | "">(currentEffort);
+  const [permissionMode, setPermissionMode] = useState<AgentPermissionMode | "">(currentPermissionMode);
   const [summaryModel, setSummaryModel] = useState(currentSummary);
   const [automatic, setAutomatic] = useState(currentAutomatic);
   function reset() {
     setModel(currentModel);
     setEffort(currentEffort);
+    setPermissionMode(currentPermissionMode);
     setSummaryModel(currentSummary);
     setAutomatic(currentAutomatic);
   }
   useEffect(reset, [
     currentModel,
     currentEffort,
+    currentPermissionMode,
     currentSummary,
     currentAutomatic,
   ]);
@@ -194,6 +200,7 @@ function BackendSettings({
   const dirty =
     model !== currentModel ||
     effort !== currentEffort ||
+    permissionMode !== currentPermissionMode ||
     summaryModel !== currentSummary ||
     automatic !== currentAutomatic;
 
@@ -228,7 +235,7 @@ function BackendSettings({
       </summary>
       <div className="flex flex-col gap-4 border-t p-4">
         <p className="text-xs text-muted-foreground">
-          Model and effort defaults apply to new Agent Sessions only.
+          Model, effort and permission defaults apply to new Agent Sessions only.
         </p>
         <div className="grid gap-6 md:grid-cols-2">
           <div className="flex min-w-0 flex-col gap-3">
@@ -297,6 +304,12 @@ function BackendSettings({
             ) : null}
           </div>
         </div>
+        {(backend === "pi" || backend === "claude") && <div className="flex items-center gap-3">
+          <span className="text-sm font-medium">Default Permission Mode</span>
+          <PermissionModeSelect backend={backend} value={permissionMode || (backend === "claude" ? "auto" : "always")}
+            onChange={setPermissionMode} />
+          {permissionMode && <Button size="sm" variant="ghost" onClick={() => setPermissionMode("")}>Use backend default</Button>}
+        </div>}
         <SaveRow
           dirty={dirty}
           saving={saving}
@@ -308,6 +321,7 @@ function BackendSettings({
                 providers: {
                   defaults: { [backend]: model },
                   efforts: { [backend]: effort },
+                  permissionModes: { [backend]: permissionMode },
                   summaries: {
                     [backend]: summaryModel
                       ? { modelId: summaryModel, automatic }

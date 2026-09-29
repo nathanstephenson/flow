@@ -9,7 +9,7 @@
 // streaming snapshot re-renders exactly one row.
 import type { Entry, ViewState } from "../../../src/client/reduce.ts";
 import type { LinkState } from "../../../src/client/connection.ts";
-import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol/events.ts";
+import type { AgentPermissionMode, Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol/events.ts";
 import type { SessionStatus } from "../../../src/protocol/commands.ts";
 import type { Branch } from "../../../src/protocol/git.ts";
 
@@ -26,6 +26,7 @@ export type Chrome = {
   capabilities: Capabilities | undefined;
   model: ModelInfo | undefined;
   effort: EffortLevel | undefined;
+  permissionMode?: AgentPermissionMode | undefined;
   /** Absent when the Scope is not a repository, which is how the header hides the control. */
   branch: Branch | undefined;
   /** Set when the Scope is a worktree the host made, so the header can still name the Project. */
