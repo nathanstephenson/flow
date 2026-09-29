@@ -254,6 +254,8 @@ class ClaudeSession implements BackendSession {
   private readonly calls = new BackgroundCalls();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
+  /** SDK `agentID` for each parked ordinary-Subagent permission, retained through its terminal event. */
+  private readonly permissionProducers = new Map<string, string>();
   private permissionMode: AgentPermissionMode;
   /**
    * What runs without being asked about: the pre-approved set, plus the Standing Authorisations this
@@ -337,13 +339,13 @@ class ClaudeSession implements BackendSession {
        * What settles them is a human, through `answerEnquiry` or `answerPermission`; on every path
        * where there will never be one, an abandonment.
        */
-      canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string }) => {
+      canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string; agentID?: string }) => {
         // Denied, never parked. There is no human behind a toolless session, so parking would hold
         // the turn open until the caller gave up on it.
         if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
         if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
-        return await this.authorise(extra.toolUseID, toolName, input);
+        return await this.authorise(extra.toolUseID, toolName, input, extra.agentID ?? "");
       },
     };
 
@@ -565,6 +567,7 @@ class ClaudeSession implements BackendSession {
     callId: string,
     tool: string,
     input: Record<string, unknown>,
+    producer: string,
   ): Promise<
     { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string }
   > {
@@ -574,13 +577,16 @@ class ClaudeSession implements BackendSession {
 
     return await new Promise((resolve) => {
       this.permissions.hold(callId, tool, input, resolve);
-      this.emit({ type: "permission", callId, tool, state: "asked" });
+      if (producer !== "") this.permissionProducers.set(callId, producer);
+      this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "asked" });
     });
   }
 
   async answerPermission(callId: string, decision: PermissionDecision): Promise<boolean> {
     const tool = this.permissions.describe(callId);
     if (tool === undefined || !this.permissions.decide(callId, decision)) return false;
+    const producer = this.permissionProducers.get(callId) ?? "";
+    this.permissionProducers.delete(callId);
     // Before the snapshot, so nothing can observe a decided Always against a session still asking.
     // The Standing Authorisation itself is the host's to persist; this is only this session honouring
     // it, which it must do itself because the list it was created with is a snapshot.
@@ -588,7 +594,7 @@ class ClaudeSession implements BackendSession {
       this.allowed.add(tool);
       this.workflowGrants.add(tool);
     }
-    this.emit({ type: "permission", callId, tool, state: "decided", decision });
+    this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "decided", decision });
     return true;
   }
 
@@ -601,7 +607,9 @@ class ClaudeSession implements BackendSession {
    */
   private abandonPermissions(why: string): void {
     for (const { callId, tool } of this.permissions.abandonAll(why)) {
-      this.emit({ type: "permission", callId, tool, state: "aborted" });
+      const producer = this.permissionProducers.get(callId) ?? "";
+      this.permissionProducers.delete(callId);
+      this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "aborted" });
     }
   }
 

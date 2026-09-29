@@ -3,7 +3,56 @@ import { it } from "node:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { query, type Options, type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { BackendEvent } from "../../src/protocol/events.ts";
+import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeBackend, AutoPermissionUnavailable } from "../../src/backend/claude/index.ts";
+
+it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answerable across live mode changes", async () => {
+  const messages = new AsyncQueue<SDKMessage>();
+  const events: BackendEvent[] = [];
+  const modes: string[] = [];
+  let canUseTool: NonNullable<Options["canUseTool"]> | undefined;
+  const backend = new ClaudeBackend({ query: ((args: Parameters<typeof query>[0]) => {
+    canUseTool = args.options?.canUseTool;
+    return {
+      [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+      supportedModels: async () => [{ value: "sonnet", supportedEffortLevels: ["high"] }],
+      getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+      setPermissionMode: async (mode: string) => { modes.push(mode); },
+      close: () => messages.close(),
+    } as unknown as Query;
+  }) as typeof query, allowedTools: [] });
+  const session = await backend.create({ scope: "/tmp", emit: (event) => events.push(event), permissionMode: "auto" });
+  assert.deepEqual(modes, ["auto"]);
+  assert.ok(canUseTool);
+  const permissionCallback = canUseTool;
+
+  const escalated = permissionCallback("Bash", { command: "git push" }, {
+    toolUseID: "sub-tool-1", agentID: "agent-call-1", requestId: "request-1",
+    signal: AbortSignal.timeout(1000), suggestions: [],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.find((event) => event.type === "permission" && event.state === "asked"), {
+    type: "permission", callId: "sub-tool-1", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "asked",
+  });
+  assert.equal(await session.answerPermission!("sub-tool-1", "allow"), true);
+  assert.deepEqual(await escalated, { behavior: "allow", updatedInput: { command: "git push" } });
+  assert.deepEqual(events.find((event) => event.type === "permission" && event.state === "decided"), {
+    type: "permission", callId: "sub-tool-1", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "allow",
+  });
+
+  await session.setPermissionMode?.("always");
+  assert.deepEqual(modes, ["auto", "default"]);
+  assert.deepEqual(await permissionCallback("Bash", { command: "git push" }, {
+    toolUseID: "sub-tool-2", agentID: "agent-call-1", requestId: "request-2",
+    signal: AbortSignal.timeout(1000), suggestions: [],
+  }), { behavior: "allow", updatedInput: { command: "git push" } });
+  assert.equal(events.filter((event) => event.type === "permission" && event.state === "asked").length, 1);
+  await session.dispose();
+});
 
 it("Claude's pinned SDK sends native Auto through its control protocol and reports rejection, not a local substitute", { timeout: 10000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "flow-claude-permission-"));
