@@ -89,3 +89,36 @@ it("a background Subagent prompt blocks changes after the parent turn, without d
   assert.equal(host.list()[0]?.permissionMode, "always");
   await host.shutdown();
 });
+
+it("Claude Auto refusal on Revive and live change is visible and never retained as Auto", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flow-claude-auto-fallback-"));
+  const store = new TranscriptStore(root);
+  const fake = new FakeBackend();
+  let refuse = false;
+  const adapter = { name: "claude", create: async (options: Parameters<FakeBackend["create"]>[0]) => {
+    if (refuse && options.permissionMode === "auto") throw new AutoPermissionUnavailable("Auto unsupported");
+    const session = await fake.create(options);
+    session.setPermissionMode = async (mode) => { if (refuse && mode === "auto") throw new Error("Auto unsupported"); };
+    return session;
+  } };
+  const host = new SessionHost({ store });
+  host.registerBackend(adapter);
+  try {
+    const id = await host.create({ scope: root, backend: "claude" });
+    assert.equal(host.list()[0]?.permissionMode, "auto");
+    await host.shutdown();
+    refuse = true;
+    const revived = new SessionHost({ store });
+    revived.registerBackend(adapter);
+    await revived.load();
+    await revived.revive(id);
+    assert.equal(revived.list()[0]?.permissionMode, "ask");
+    assert.equal(store.readMeta(id)?.permissionMode, "ask");
+    await revived.setPermissionMode(id, "always");
+    await revived.setPermissionMode(id, "auto");
+    assert.equal(revived.list()[0]?.permissionMode, "ask");
+    assert.equal(store.readMeta(id)?.permissionMode, "ask");
+    assert.ok(revived.logFor(id).since(0).filter(({ event }) => event.type === "notice" && event.level === "warn" && event.text.includes("Auto")).length >= 2);
+    await revived.shutdown();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
