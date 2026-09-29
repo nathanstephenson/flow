@@ -345,7 +345,12 @@ class ClaudeSession implements BackendSession {
         if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
         if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
-        return await this.authorise(extra.toolUseID, toolName, input, extra.agentID ?? "");
+        // The SDK calls this field agentID, but for an ordinary Agent it is the task id announced by
+        // task_started, not the Agent tool-use id carried as parent_tool_use_id on transcript events.
+        // Resolve through the same task map used by task notifications so the permission belongs to
+        // the Subagent card clients can actually answer, rather than to an otherwise unknown id.
+        const producer = extra.agentID ? (this.subagents.callIdOf(extra.agentID) ?? extra.agentID) : "";
+        return await this.authorise(extra.toolUseID, toolName, input, producer);
       },
     };
 

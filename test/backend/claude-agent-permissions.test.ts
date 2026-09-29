@@ -7,6 +7,7 @@ import { query, type Options, type Query, type SDKMessage } from "@anthropic-ai/
 import type { BackendEvent } from "../../src/protocol/events.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeBackend, AutoPermissionUnavailable } from "../../src/backend/claude/index.ts";
+import { runNativeAutoScenario } from "./claude-native-auto.fixture.ts";
 
 it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answerable across live mode changes", async () => {
   const messages = new AsyncQueue<SDKMessage>();
@@ -28,8 +29,24 @@ it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answer
   assert.ok(canUseTool);
   const permissionCallback = canUseTool;
 
+  // The native SDK's agentID is the task id, while transcript attribution uses the Agent tool id.
+  // Feed the real ordering so this regression catches either id being mistaken for the other.
+  messages.push({
+    type: "assistant", parent_tool_use_id: null, session_id: "session-1", uuid: "assistant-1",
+    message: { id: "message-1", type: "message", role: "assistant", model: "sonnet", stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 }, content: [{
+      type: "tool_use", id: "agent-call-1", name: "Agent",
+      input: { description: "permission probe", prompt: "run git push", subagent_type: "general-purpose" },
+    }] },
+  } as unknown as SDKMessage);
+  messages.push({
+    type: "system", subtype: "task_started", session_id: "session-1", uuid: "task-started-1",
+    task_id: "sdk-task-1", tool_use_id: "agent-call-1", description: "permission probe",
+    subagent_type: "general-purpose", is_backgrounded: false,
+  } as unknown as SDKMessage);
+  await new Promise((resolve) => setImmediate(resolve));
+
   const escalated = permissionCallback("Bash", { command: "git push" }, {
-    toolUseID: "sub-tool-1", agentID: "agent-call-1", requestId: "request-1",
+    toolUseID: "sub-tool-1", agentID: "sdk-task-1", requestId: "request-1",
     signal: AbortSignal.timeout(1000), suggestions: [],
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -47,11 +64,40 @@ it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answer
   await session.setPermissionMode?.("always");
   assert.deepEqual(modes, ["auto", "default"]);
   assert.deepEqual(await permissionCallback("Bash", { command: "git push" }, {
-    toolUseID: "sub-tool-2", agentID: "agent-call-1", requestId: "request-2",
+    toolUseID: "sub-tool-2", agentID: "sdk-task-1", requestId: "request-2",
     signal: AbortSignal.timeout(1000), suggestions: [],
   }), { behavior: "allow", updatedInput: { command: "git push" } });
   assert.equal(events.filter((event) => event.type === "permission" && event.state === "asked").length, 1);
   await session.dispose();
+});
+
+it("the pinned SDK's native Auto classifier allows, denies, and escalates an ordinary Subagent after a live mode change", { timeout: 30000 }, async () => {
+  const allowed = await runNativeAutoScenario("allow");
+  assert.ok(allowed.classifierRequests >= 1, "the native classifier must inspect the allowed command");
+  assert.deepEqual(allowed.permissionCallbacks, []);
+  assert.ok(allowed.messages.some((message) => message.type === "user" && JSON.stringify(message).includes('"content":"42"')),
+    "the classifier-allowed command must execute");
+  assert.ok(!allowed.messages.some((message) => message.type === "system" && message.subtype === "permission_denied"));
+
+  const denied = await runNativeAutoScenario("deny");
+  assert.ok(denied.classifierRequests >= 2, "a block must traverse both native classifier stages");
+  assert.deepEqual(denied.permissionCallbacks, [], "native Auto denial must not be replaced by Flow policy");
+  assert.ok(denied.messages.some((message) => message.type === "system" && message.subtype === "permission_denied" && message.decision_reason_type === "classifier"));
+  const denialResult = denied.messages.find((message) => message.type === "result") as (SDKMessage & { permission_denials?: unknown[] }) | undefined;
+  assert.ok(denialResult?.permission_denials?.length, "the SDK result must retain its authoritative denial evidence");
+
+  const escalated = await runNativeAutoScenario("subagent");
+  assert.ok(escalated.classifierRequests >= 1, "native Auto must classify the Agent launch");
+  assert.equal(escalated.switchedToDefault, true);
+  assert.equal(escalated.permissionCallbacks.length, 1);
+  const callback = escalated.permissionCallbacks[0]!;
+  assert.equal(callback.tool, "Bash");
+  assert.equal(callback.toolUseID, "sub-tool-1");
+  const taskStarted = escalated.messages.find((message) => message.type === "system" && message.subtype === "task_started") as (SDKMessage & { task_id?: string; tool_use_id?: string }) | undefined;
+  assert.equal(callback.agentID, taskStarted?.task_id, "the SDK escalation must carry the ordinary Subagent task id");
+  assert.equal(taskStarted?.tool_use_id, "agent-call-1", "the task id must remain mappable to the transcript Subagent");
+  assert.ok(escalated.messages.some((message) => message.type === "system" && message.subtype === "status" && message.permissionMode === "default"),
+    "the native stream must acknowledge the live mode change before escalation");
 });
 
 it("Claude's pinned SDK sends native Auto through its control protocol and reports rejection, not a local substitute", { timeout: 10000 }, async (t) => {
