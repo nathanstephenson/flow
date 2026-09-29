@@ -8,12 +8,39 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
 import { query, type Options, type Query, type SDKMessage, type SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
 import type { AutoCompaction } from "../../src/protocol/settings.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "../../src/backend/claude/workflow-subagent.ts";
 import { WorkflowProcesses } from "../../src/backend/claude/workflow-processes.ts";
 import { ClaudeBackend } from "../../src/backend/claude/index.ts";
+import { workflowParentServer } from "../../src/backend/claude/workflow-parent.ts";
+
+it("keeps parent workflow relay tools available without Claude tool search", async () => {
+  const parent = {
+    inspect: async () => ({}), recover: async () => ({}),
+    relayEnquiry: async () => ({}), relayPermission: async () => ({}),
+  };
+  const server = workflowParentServer(parent).flow_workflow!;
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test", version: "1" });
+  try {
+    await server.instance.connect(serverTransport);
+    await client.connect(clientTransport);
+    const listed = await client.listTools();
+    assert.deepEqual(listed.tools.map(tool => tool.name).sort(), [
+      "workflow_inspect", "workflow_recover", "workflow_relay_enquiry", "workflow_relay_permission",
+    ]);
+    for (const tool of listed.tools) {
+      assert.equal(tool._meta?.["anthropic/alwaysLoad"], true, `${tool.name} must not be deferred`);
+    }
+  } finally {
+    await client.close();
+    await server.instance.close();
+  }
+});
 
 const gate = () => { let resolve!: () => void; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; };
 const options = (extra: Partial<WorkflowSubagentOptions> = {}): WorkflowSubagentOptions => ({

@@ -26,7 +26,7 @@ const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
 
-async function fixture(options: { naming?: boolean; automaticNaming?: boolean } = {}) {
+async function fixture(options: { naming?: boolean; automaticNaming?: boolean; backendName?: 'fake' | 'claude' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'flow-executions-'));
   const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
   config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
@@ -38,11 +38,12 @@ async function fixture(options: { naming?: boolean; automaticNaming?: boolean } 
     store, retention: 0, allowTool: config.allowTool,
     ...(options.naming ? { summaryModel: () => ({ backend: 'summary', modelId: 'fake-2', automatic: automaticNaming }) } : {}),
   });
-  host.registerBackend(backend);
+  const backendName = options.backendName ?? 'fake';
+  host.registerBackend(backendName === 'fake' ? backend : { ...backend, name: 'claude', create: create => backend.create(create) });
   if (options.naming) host.registerBackend({ ...summary, name: 'summary', create: create => summary.create(create) });
   const service = new WorkflowExecutionService(host, workflows, secrets, config, runtimePath);
   await host.load(); service.reconcile();
-  const id = await host.create({ scope: root, backend: 'fake' });
+  const id = await host.create({ scope: root, backend: backendName });
   workflows.saveDefinition(definition);
   const server = await serve({ host, store, workflows, secrets, config, workflowExecutions: service, token: 'test', assets: {} });
   const request = (path: string, method = 'GET', body?: unknown) => fetch(server.url + path, { method, headers: { authorization: 'Bearer test' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -978,6 +979,7 @@ it('queues exact Workflow questions behind a running parent, then relays and for
     assert.ok(prompt.includes('Workflow “Sample” · Step “Agent” · Attempt 1'));
     assert.ok(prompt.includes('Which targets?'));
     assert.ok(prompt.includes('Anything else?'));
+    assert.ok(prompt.includes('Call the tool directly; do not use ToolSearch'));
     const requestId = /requestId "([0-9a-f-]+)"/.exec(prompt)?.[1];
     assert.ok(requestId);
     const relay = f.backend.latest.workflow!.relayEnquiry({ requestId });
@@ -992,6 +994,21 @@ it('queues exact Workflow questions behind a running parent, then relays and for
     f.backend.latest.completeTurn();
     handle.complete('done');
     await f.service.scheduler.wait(f.id, started.execution.id);
+  } finally { await f.close(); }
+});
+
+it('names the Claude relay tool with its MCP server prefix', async () => {
+  const f = await fixture({ backendName: 'claude' });
+  try {
+    await f.service.start({ sessionId: f.id, definition: { ...definition, backend: 'claude' }, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.ask([
+      { header: 'Target', question: 'Which target?', multiSelect: false, options: [{ label: 'Web' }] },
+    ], 'qualified-ask');
+    await until(() => f.backend.latest.prompts.length === 1);
+    assert.match(f.backend.latest.prompts[0]!, /call mcp__flow_workflow__workflow_relay_enquiry exactly once/);
+    assert.match(f.service.context(f.id), /Use mcp__flow_workflow__workflow_inspect/);
+    assert.match(f.service.context(f.id), /use mcp__flow_workflow__workflow_recover/);
   } finally { await f.close(); }
 });
 
