@@ -7,7 +7,7 @@ import { query, type Options, type Query, type SDKMessage } from "@anthropic-ai/
 import type { BackendEvent } from "../../src/protocol/events.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeBackend, AutoPermissionUnavailable } from "../../src/backend/claude/index.ts";
-import { runNativeAutoScenario, runNativeAutoSubagentScenario } from "./claude-native-auto.fixture.ts";
+import { runNativeAutoScenario, runNativeAutoSubagentIncompatibilityScenario } from "./claude-native-auto.fixture.ts";
 
 it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answerable across live mode changes", async () => {
   const messages = new AsyncQueue<SDKMessage>();
@@ -61,13 +61,25 @@ it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answer
     producer: { subagentId: "agent-call-1" }, state: "decided", decision: "allow",
   });
 
+  const refused = permissionCallback("Bash", { command: "git push --force" }, {
+    toolUseID: "sub-tool-2", agentID: "sdk-task-1", requestId: "request-2",
+    signal: AbortSignal.timeout(1000), suggestions: [],
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await session.answerPermission!("sub-tool-2", "deny"), true);
+  assert.deepEqual(await refused, { behavior: "deny", message: "Bash is not enabled for this session. Continue without it." });
+  assert.deepEqual(events.find((event) => event.type === "permission" && event.state === "decided" && event.callId === "sub-tool-2"), {
+    type: "permission", callId: "sub-tool-2", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "deny",
+  });
+
   await session.setPermissionMode?.("always");
   assert.deepEqual(modes, ["auto", "default"]);
   assert.deepEqual(await permissionCallback("Bash", { command: "git push" }, {
-    toolUseID: "sub-tool-2", agentID: "sdk-task-1", requestId: "request-2",
+    toolUseID: "sub-tool-3", agentID: "sdk-task-1", requestId: "request-3",
     signal: AbortSignal.timeout(1000), suggestions: [],
   }), { behavior: "allow", updatedInput: { command: "git push" } });
-  assert.equal(events.filter((event) => event.type === "permission" && event.state === "asked").length, 1);
+  assert.equal(events.filter((event) => event.type === "permission" && event.state === "asked").length, 2);
   await session.dispose();
 });
 
@@ -87,28 +99,16 @@ it("the pinned SDK's native Auto classifier allows and denies tools", { timeout:
   assert.ok(denialResult?.permission_denials?.length, "the SDK result must retain its authoritative denial evidence");
 });
 
-it("keeps native Auto active while an ordinary Subagent escalation is routed and answered through ClaudeSession", { timeout: 30000 }, async () => {
-  const allowed = await runNativeAutoSubagentScenario("allow");
-  assert.deepEqual(allowed.permissionModes, ["auto"], "the SDK must stay in Auto through the escalation");
-  assert.ok(allowed.classifierRequests >= 2, "native Auto must classify both the Agent launch and child Bash call");
-  assert.equal(allowed.executed, true, "allowing the Flow prompt must execute the child call");
-  assert.deepEqual(allowed.events.find((event) => event.type === "permission" && event.state === "asked"), {
-    type: "permission", callId: "sub-tool-1", tool: "Bash",
-    producer: { subagentId: "agent-call-1" }, state: "asked",
-  });
-  assert.deepEqual(allowed.events.find((event) => event.type === "permission" && event.state === "decided"), {
-    type: "permission", callId: "sub-tool-1", tool: "Bash",
-    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "allow",
-  });
-
-  const refused = await runNativeAutoSubagentScenario("deny");
-  assert.deepEqual(refused.permissionModes, ["auto"], "refusal must not change the live Auto mode");
-  assert.ok(refused.classifierRequests >= 2, "the refused child call must traverse native Auto too");
-  assert.equal(refused.executed, false, "refusing the Flow prompt must prevent child execution");
-  assert.deepEqual(refused.events.find((event) => event.type === "permission" && event.state === "decided"), {
-    type: "permission", callId: "sub-tool-1", tool: "Bash",
-    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "deny",
-  });
+it("surfaces that pinned SDK native Auto cannot deterministically escalate the Subagent safety probe", { timeout: 30000 }, async () => {
+  const result = await runNativeAutoSubagentIncompatibilityScenario();
+  assert.deepEqual(result.permissionModes, ["auto"], "the SDK must stay in Auto for the ordinary Agent turn");
+  assert.ok(result.classifierRequests >= 2, "native Auto must classify the Agent launch and child Bash call");
+  assert.deepEqual(result.permissionCallbacks, [],
+    "SDK 0.3.247 classifier-routes the background safety probe instead of exposing a human callback");
+  assert.equal(result.events.some((event) => event.type === "permission"), false,
+    "without an Ask rule, Flow receives no native escalation to attribute or answer");
+  assert.equal(result.executed, true,
+    "execution evidence must come from tool_result content, demonstrating that the classifier allowed the harmless probe");
 });
 
 it("Claude's pinned SDK sends native Auto through its control protocol and reports rejection, not a local substitute", { timeout: 10000 }, async (t) => {
