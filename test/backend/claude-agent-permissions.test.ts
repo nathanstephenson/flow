@@ -7,7 +7,7 @@ import { query, type Options, type Query, type SDKMessage } from "@anthropic-ai/
 import type { BackendEvent } from "../../src/protocol/events.ts";
 import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import { ClaudeBackend, AutoPermissionUnavailable } from "../../src/backend/claude/index.ts";
-import { runNativeAutoScenario } from "./claude-native-auto.fixture.ts";
+import { runNativeAutoScenario, runNativeAutoSubagentScenario } from "./claude-native-auto.fixture.ts";
 
 it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answerable across live mode changes", async () => {
   const messages = new AsyncQueue<SDKMessage>();
@@ -71,7 +71,7 @@ it("attributes an ordinary Claude Subagent's Auto escalation and keeps it answer
   await session.dispose();
 });
 
-it("the pinned SDK's native Auto classifier allows, denies, and escalates an ordinary Subagent after a live mode change", { timeout: 30000 }, async () => {
+it("the pinned SDK's native Auto classifier allows and denies tools", { timeout: 30000 }, async () => {
   const allowed = await runNativeAutoScenario("allow");
   assert.ok(allowed.classifierRequests >= 1, "the native classifier must inspect the allowed command");
   assert.deepEqual(allowed.permissionCallbacks, []);
@@ -85,19 +85,30 @@ it("the pinned SDK's native Auto classifier allows, denies, and escalates an ord
   assert.ok(denied.messages.some((message) => message.type === "system" && message.subtype === "permission_denied" && message.decision_reason_type === "classifier"));
   const denialResult = denied.messages.find((message) => message.type === "result") as (SDKMessage & { permission_denials?: unknown[] }) | undefined;
   assert.ok(denialResult?.permission_denials?.length, "the SDK result must retain its authoritative denial evidence");
+});
 
-  const escalated = await runNativeAutoScenario("subagent");
-  assert.ok(escalated.classifierRequests >= 1, "native Auto must classify the Agent launch");
-  assert.equal(escalated.switchedToDefault, true);
-  assert.equal(escalated.permissionCallbacks.length, 1);
-  const callback = escalated.permissionCallbacks[0]!;
-  assert.equal(callback.tool, "Bash");
-  assert.equal(callback.toolUseID, "sub-tool-1");
-  const taskStarted = escalated.messages.find((message) => message.type === "system" && message.subtype === "task_started") as (SDKMessage & { task_id?: string; tool_use_id?: string }) | undefined;
-  assert.equal(callback.agentID, taskStarted?.task_id, "the SDK escalation must carry the ordinary Subagent task id");
-  assert.equal(taskStarted?.tool_use_id, "agent-call-1", "the task id must remain mappable to the transcript Subagent");
-  assert.ok(escalated.messages.some((message) => message.type === "system" && message.subtype === "status" && message.permissionMode === "default"),
-    "the native stream must acknowledge the live mode change before escalation");
+it("keeps native Auto active while an ordinary Subagent escalation is routed and answered through ClaudeSession", { timeout: 30000 }, async () => {
+  const allowed = await runNativeAutoSubagentScenario("allow");
+  assert.deepEqual(allowed.permissionModes, ["auto"], "the SDK must stay in Auto through the escalation");
+  assert.ok(allowed.classifierRequests >= 2, "native Auto must classify both the Agent launch and child Bash call");
+  assert.equal(allowed.executed, true, "allowing the Flow prompt must execute the child call");
+  assert.deepEqual(allowed.events.find((event) => event.type === "permission" && event.state === "asked"), {
+    type: "permission", callId: "sub-tool-1", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "asked",
+  });
+  assert.deepEqual(allowed.events.find((event) => event.type === "permission" && event.state === "decided"), {
+    type: "permission", callId: "sub-tool-1", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "allow",
+  });
+
+  const refused = await runNativeAutoSubagentScenario("deny");
+  assert.deepEqual(refused.permissionModes, ["auto"], "refusal must not change the live Auto mode");
+  assert.ok(refused.classifierRequests >= 2, "the refused child call must traverse native Auto too");
+  assert.equal(refused.executed, false, "refusing the Flow prompt must prevent child execution");
+  assert.deepEqual(refused.events.find((event) => event.type === "permission" && event.state === "decided"), {
+    type: "permission", callId: "sub-tool-1", tool: "Bash",
+    producer: { subagentId: "agent-call-1" }, state: "decided", decision: "deny",
+  });
 });
 
 it("Claude's pinned SDK sends native Auto through its control protocol and reports rejection, not a local substitute", { timeout: 10000 }, async (t) => {

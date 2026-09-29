@@ -1,19 +1,27 @@
 import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ClaudeBackend } from "../../src/backend/claude/index.ts";
+import type { BackendEvent, PermissionDecision } from "../../src/protocol/events.ts";
 
 export type NativeAutoResult = {
   messages: SDKMessage[];
   classifierRequests: number;
   permissionCallbacks: Array<{ tool: string; input: Record<string, unknown>; toolUseID: string; agentID?: string }>;
-  switchedToDefault: boolean;
 };
 
-type Scenario = "allow" | "deny" | "subagent";
+export type NativeAutoSubagentResult = {
+  events: BackendEvent[];
+  classifierRequests: number;
+  permissionModes: string[];
+  executed: boolean;
+};
+
+type Scenario = "allow" | "deny";
 
 let messageSequence = 0;
 
@@ -60,8 +68,6 @@ function bodyText(body: { messages?: unknown }): string {
 export async function runNativeAutoScenario(scenario: Scenario): Promise<NativeAutoResult> {
   const root = mkdtempSync(join(tmpdir(), `flow-native-auto-${scenario}-`));
   let classifierRequests = 0;
-  let switchedToDefault = false;
-  let sdkQuery: ReturnType<typeof query> | undefined;
   const permissionCallbacks: NativeAutoResult["permissionCallbacks"] = [];
 
   const server = createServer(async (request, response) => {
@@ -89,22 +95,6 @@ export async function runNativeAutoScenario(scenario: Scenario): Promise<NativeA
     }
 
     const hasToolResult = transcript.includes("tool_result");
-    if (scenario === "subagent") {
-      if (transcript.includes("native child marker") && !hasToolResult) {
-        await sdkQuery?.setPermissionMode("default");
-        switchedToDefault = true;
-        streamMessage(response, { type: "tool_use", id: "sub-tool-1", name: "Bash", input: { command: "git push" } }, "tool_use");
-      } else if (!hasToolResult) {
-        streamMessage(response, { type: "tool_use", id: "agent-call-1", name: "Agent", input: {
-          description: "native permission probe", prompt: "native child marker: run git push",
-          subagent_type: "general-purpose", run_in_background: false,
-        } }, "tool_use");
-      } else {
-        streamMessage(response, { type: "text", text: "done" }, "end_turn");
-      }
-      return;
-    }
-
     if (!hasToolResult) {
       const command = scenario === "allow" ? "node -e \"console.log(42)\"" : "git reset --hard";
       streamMessage(response, { type: "tool_use", id: `${scenario}-tool-1`, name: "Bash", input: { command } }, "tool_use");
@@ -120,11 +110,11 @@ export async function runNativeAutoScenario(scenario: Scenario): Promise<NativeA
   const promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
   async function* prompts() {
     await promptGate;
-    yield { type: "user" as const, message: { role: "user" as const, content: scenario === "subagent" ? "spawn ordinary worker" : `run ${scenario}` }, parent_tool_use_id: null, session_id: "" };
+    yield { type: "user" as const, message: { role: "user" as const, content: `run ${scenario}` }, parent_tool_use_id: null, session_id: "" };
   }
 
-  sdkQuery = query({ prompt: prompts(), options: {
-    cwd: root, model: "claude-sonnet-4-6", tools: scenario === "subagent" ? ["Bash", "Agent"] : ["Bash"],
+  const sdkQuery = query({ prompt: prompts(), options: {
+    cwd: root, model: "claude-sonnet-4-6", tools: ["Bash"],
     allowedTools: [], env: {
       ...process.env, ANTHROPIC_API_KEY: "sk-ant-api03-native-auto-fixture",
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, CLAUDE_CONFIG_DIR: join(root, ".claude"), CLAUDE_CODE_ENABLE_AUTO_MODE: "1",
@@ -147,5 +137,110 @@ export async function runNativeAutoScenario(scenario: Scenario): Promise<NativeA
     await once(server, "close");
     rmSync(root, { recursive: true, force: true });
   }
-  return { messages, classifierRequests, permissionCallbacks, switchedToDefault };
+  return { messages, classifierRequests, permissionCallbacks };
+}
+
+/**
+ * Exercise native Auto's human-escalation path through Flow's real ClaudeSession adapter.
+ *
+ * An explicit SDK Ask rule outranks Auto, but the pinned CLI still runs both native classifier
+ * stages first. That gives us a deterministic escalation without changing out of Auto or replacing
+ * the classifier with Flow policy. The callback is then parked and answered by ClaudeSession.
+ */
+export async function runNativeAutoSubagentScenario(decision: Exclude<PermissionDecision, "always">): Promise<NativeAutoSubagentResult> {
+  const root = mkdtempSync(join(tmpdir(), `flow-native-auto-subagent-${decision}-`));
+  const marker = join(root, "subagent-executed");
+  mkdirSync(join(root, ".claude"));
+  writeFileSync(join(root, ".claude", "settings.json"), JSON.stringify({ permissions: { ask: ["Bash"] } }));
+  let classifierRequests = 0;
+  const permissionModes: string[] = [];
+  const events: BackendEvent[] = [];
+  let turnEnded!: () => void;
+  const ended = new Promise<void>((resolve) => { turnEnded = resolve; });
+
+  const server = createServer(async (request, response) => {
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    const body = raw ? JSON.parse(raw) as { system?: unknown; messages?: unknown } : {};
+    if (!request.url?.includes("/messages")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      return;
+    }
+
+    const transcript = bodyText(body);
+    if (JSON.stringify(body.system ?? []).includes("security monitor for autonomous AI coding agents")) {
+      classifierRequests++;
+      // Stage 1 and stage 2 both allow. The explicit Ask rule is what requires a human afterwards.
+      classifierMessage(response, "<block>no</block>");
+      return;
+    }
+
+    const hasToolResult = transcript.includes("tool_result");
+    if (transcript.includes("native child marker") && !hasToolResult) {
+      streamMessage(response, { type: "tool_use", id: "sub-tool-1", name: "Bash", input: {
+        command: `node -e ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'yes')`)}`,
+      } }, "tool_use");
+    } else if (!hasToolResult) {
+      streamMessage(response, { type: "tool_use", id: "agent-call-1", name: "Agent", input: {
+        description: "native permission probe", prompt: "native child marker: write the execution marker",
+        subagent_type: "general-purpose", run_in_background: false,
+      } }, "tool_use");
+    } else {
+      streamMessage(response, { type: "text", text: "done" }, "end_turn");
+    }
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = (server.address() as AddressInfo).port;
+  const nativeQuery = ((args: Parameters<typeof query>[0]) => {
+    const stream = query({ ...args, options: { ...args.options, env: {
+      ...process.env,
+      ...args.options?.env,
+      ANTHROPIC_API_KEY: "sk-ant-api03-native-auto-fixture",
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
+      CLAUDE_CONFIG_DIR: join(root, ".claude"),
+      CLAUDE_CODE_ENABLE_AUTO_MODE: "1",
+      DISABLE_TELEMETRY: "1",
+      DISABLE_ERROR_REPORTING: "1",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    } } });
+    const setPermissionMode = stream.setPermissionMode.bind(stream);
+    stream.setPermissionMode = async (mode) => {
+      permissionModes.push(mode);
+      await setPermissionMode(mode);
+    };
+    return stream;
+  }) as typeof query;
+
+  const backend = new ClaudeBackend({ query: nativeQuery, allowedTools: [] });
+  let session: Awaited<ReturnType<ClaudeBackend["create"]>> | undefined;
+  try {
+    session = await backend.create({ scope: root, emit: (event) => {
+      events.push(event);
+      if (event.type === "turn_ended") turnEnded();
+    }, permissionMode: "auto", modelId: "claude-sonnet-4-6" });
+    await session.prompt("spawn ordinary worker");
+    const deadline = Date.now() + 10_000;
+    while (!events.some((event) => event.type === "permission" && event.state === "asked")) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for native Auto escalation (${classifierRequests} classifier requests; events: ${events.map((event) => event.type).join(", ")})`);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!await session.answerPermission?.("sub-tool-1", decision)) throw new Error("Flow did not answer the native Auto escalation");
+    let endTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([ended, new Promise<never>((_, reject) => {
+        endTimer = setTimeout(() => reject(new Error("Timed out waiting for turn end")), 10_000);
+      })]);
+    } finally {
+      if (endTimer) clearTimeout(endTimer);
+    }
+    return { events, classifierRequests, permissionModes, executed: existsSync(marker) };
+  } finally {
+    await session?.dispose();
+    server.close();
+    await once(server, "close");
+    rmSync(root, { recursive: true, force: true });
+  }
 }
