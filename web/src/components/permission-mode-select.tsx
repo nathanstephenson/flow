@@ -2,17 +2,18 @@ import type { AgentPermissionMode } from "../../../src/protocol/events.ts";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
 import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
 
-export function PermissionModeSelect({ backend, value, disabled, onChange }: {
+export function PermissionModeSelect({ backend, value, disabled, label = "Permissions", onChange }: {
   backend: string | undefined;
   value: AgentPermissionMode;
   disabled?: boolean;
+  label?: string;
   onChange: (mode: AgentPermissionMode) => void;
 }) {
   if (backend !== "pi" && backend !== "claude") return null;
   return <Select value={value} disabled={disabled} onValueChange={(mode) => {
     if (mode === "ask" || mode === "always" || (backend === "claude" && mode === "auto")) onChange(mode);
   }}>
-    <SelectTrigger aria-label="Permissions" size="sm" className={QUIET_TRIGGER}>
+    <SelectTrigger aria-label={label} size="sm" className={QUIET_TRIGGER}>
       <SelectValue>{value === "ask" ? "Ask" : value === "auto" ? "Auto" : "Always"}</SelectValue>
     </SelectTrigger>
     <SelectContent>

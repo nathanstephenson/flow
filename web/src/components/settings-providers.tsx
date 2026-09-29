@@ -307,7 +307,7 @@ function BackendSettings({
         {(backend === "pi" || backend === "claude") && <div className="flex items-center gap-3">
           <span className="text-sm font-medium">Default Permission Mode</span>
           <PermissionModeSelect backend={backend} value={permissionMode || (backend === "claude" ? "auto" : "always")}
-            onChange={setPermissionMode} />
+            label={`Default Permission Mode for ${backendLabel(backend)}`} onChange={setPermissionMode} />
           {permissionMode && <Button size="sm" variant="ghost" onClick={() => setPermissionMode("")}>Use backend default</Button>}
         </div>}
         <SaveRow
