@@ -41,7 +41,7 @@ export class PiWork {
       try {
         signal.throwIfAborted();
         const result = await execute(signal, (result) => { work.result = result; });
-        return { brief, state: signal.aborted ? "aborted" : "complete", result };
+        return { brief, state: signal.aborted ? "aborted" : result.isError ? "error" : "complete", result };
       } catch (error) {
         return { brief, state: signal.aborted ? "aborted" : "error", result: textResult(error instanceof Error ? error.message : String(error)) };
       }
