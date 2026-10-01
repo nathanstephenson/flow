@@ -117,7 +117,7 @@ _Avoid_: closed, deleted, settled
 
 ### Directories and shells
 
-**Scope**: The working directory an Agent Session is bound to; local model work may write there and in private execution state, not elsewhere on the host.
+**Scope**: The working directory an Agent Session is bound to; with filesystem isolation enabled, local model work may write there and in private execution state, not elsewhere on the host. In unrestricted mode it is only a working directory, not a filesystem boundary.
 _Avoid_: workspace, project, repo
 
 **Project**: A directory its owner has opted into as a candidate Scope, independent of any Agent Session.

@@ -1,13 +1,46 @@
-# 28. Local model work has a fail-closed filesystem boundary
+# 28. Local filesystem isolation is optional; enabled mode fails closed
 
 ## Status
 
-Accepted.
+Accepted, amended to replace mandatory enforcement with a machine-wide optional policy. The
+filename is retained for stable links; fail-closed behaviour applies whenever isolation is enabled.
 
 ## Decision
 
-Production Claude and Pi Backend Sessions run behind the worker IPC boundary (ADR 0027). On Linux,
-Flow launches their workers through Bubblewrap. The host filesystem is read-only, the canonical
+Filesystem isolation is toggled in **Settings → General → Filesystem isolation**, not per Scope,
+model, Workflow Step or MCP Connection. The optional persisted key is
+`filesystemIsolation?: boolean`: `true` requires enforcement, `false` selects unrestricted
+execution, and omission selects automatic mode. PUT `/api/config` accepts `null` to remove the
+override and return to automatic; omission in a patch leaves the override unchanged.
+
+Automatic mode uses an actual launch capability check, not merely Linux detection or finding a
+Bubblewrap executable. It defaults ON when Linux Bubblewrap enforcement with descriptor-backed
+mounts and working user, mount and PID namespaces is available. Unsupported operating systems,
+missing Bubblewrap and unavailable namespaces default to **UNRESTRICTED** with a clear warning,
+not refusal to run Flow. macOS can run Flow without this Linux-only enforcement. The initial
+capability-dependent automatic choice is latched for the Session Host's lifetime; fixing support
+requires a host restart to refresh that choice. While checking, automatic work waits for the result.
+
+The config view reports `supported`, `enabled`, `automatic`, `checking` and `reason`. General
+Settings displays the support reason and an explicit warning about unrestricted filesystem
+authority when isolation is off. Explicit enable fails closed: unsupported enforcement or a failed
+restricted launch refuses work. An enabled policy never silently downgrades after a launch failure,
+and there is no model-controlled opt-out.
+
+Policy changes apply to new Backend Sessions (including Revive), new Workflow Executions and new
+local stdio MCP clients. Existing work retains its captured policy; recovery retains the Workflow
+Execution's saved policy. Agent Workflow Steps inherit their owning Backend Session's boundary.
+HTTP MCP and network access remain unchanged. Local Workflow execution stays local; this amendment
+does not restore Docker execution.
+
+Production Claude and Pi Backend Sessions run behind the worker IPC boundary (ADR 0027) in **both**
+modes. Disabling filesystem isolation does not disable worker process separation, ownership,
+heartbeats or cancellation. Those mechanisms alone are not an OS-enforced filesystem or detached
+process boundary.
+
+### Enabled-mode enforcement
+
+On Linux, Flow launches workers through Bubblewrap. The host filesystem is read-only, the canonical
 Scope is writable, and adapter state and scratch space have distinct private writable mounts.
 Ordinary Subagents, Background Calls and adapter-owned Workflow Subagents inherit that boundary.
 A separate container or virtual machine per Subagent is unnecessary.
@@ -38,13 +71,14 @@ lifetime. A minimal device filesystem and private runtime/temporary directories 
 host control sockets such as Docker's. Workers have no added capabilities or privilege escalation.
 Network access remains available for inference.
 
-Local Workflow Shell and TypeScript execution always receives this policy. One boundary covers
-the local supervisor, TypeScript compiler/QuickJS worker and all Shell descendants. The inherited
-PID namespace enforces cleanup even when descendants detach or create new sessions. Host Node 22
-or later and available enforcement are required; Node readiness probes run behind the policy too.
-`workflowRuntime` Settings contain only an optional absolute `nodePath` override, not an isolation
-opt-out. Local stdio MCP servers receive the filesystem policy, since executing them outside it
-would turn host-side tool delegation into a bypass. Explicit dependency asset mounts keep Node
+When isolation is enabled, local Workflow Shell and TypeScript execution receives this policy.
+One boundary covers the local supervisor, TypeScript compiler/QuickJS worker and all Shell
+descendants. The inherited PID namespace enforces cleanup even when descendants detach or create
+new sessions. Host Node 22 or later is required in both modes; enabled mode also requires available
+enforcement. Node readiness probes use the captured policy too. `workflowRuntime` Settings contain
+only an optional absolute `nodePath` override; isolation is the separate machine-wide setting.
+Local stdio MCP servers also receive the captured policy, since executing them outside an enabled
+boundary would turn host-side tool delegation into a bypass. Explicit dependency asset mounts keep Node
 stdio packages and npm/SEA workers available under ancestor masks, including ancestor node_modules
 search paths and linked packages
 outside the launch package. These trees pass the same protected-state checks and descriptor pinning;
@@ -56,26 +90,43 @@ both destinations and targets pass the same protected-state checks, so parent al
 graft execution assets into hidden host state. SEA SDK discovery also preserves Node's default
 $PREFIX/lib/node lookup; this is distinct from the scrubbed NODE_PATH environment override.
 
-A missing Bubblewrap executable, unavailable namespaces, invalid Scope or failed restricted launch
-refuses work. There is no silent unrestricted fallback or model-controlled opt-out. Unsupported
-operating systems cannot execute production model work until an equivalent enforcement mechanism
-is implemented. Fake adapters and direct SDK integration tests are not production registration.
+With isolation enabled, a missing Bubblewrap executable, unavailable namespaces, invalid Scope or
+failed restricted launch refuses work. This remains fail closed even if the initial support check
+succeeded; it never launches unrestricted as recovery. Fake adapters and direct SDK integration
+tests are not production registration.
+
+### Unrestricted mode
+
+Scope is only a working directory, not a writable boundary. Agent tools, Shell commands and local
+stdio MCP servers have the host user's filesystem authority: they can read, write and delete
+outside Scope, including credentials and Session Host state that enabled mode masks. Worker
+separation and process-group cleanup remain, but there is no inherited PID namespace to contain
+detached processes; descendants that detach can escape that cleanup.
+
+Closed TypeScript compilation, the QuickJS guest and the scoped filesystem API remain in place
+when isolation is off. They reject imports, process APIs, escaping paths and symlink traversal for
+direct TypeScript API access. They do not restrict Shell's or the trusted Node supervisor's host
+authority through an OS boundary. TypeScript guest restrictions must not be presented as equivalent
+to enabled Linux filesystem enforcement.
 
 ## Consequences and limits
 
-This is a local filesystem and process boundary, not a complete untrusted-code sandbox. Models and
-remote MCP tools can still use authorised external services, including services reachable through
-network connections. Read-only host files are not a confidentiality guarantee. Operator-supplied
+Enabled isolation is a local filesystem and process boundary, not a complete untrusted-code
+sandbox. Models and remote MCP tools can still use authorised external services, including services
+reachable through network connections. Read-only host files are not a confidentiality guarantee. Operator-supplied
 credentials and secrets remain available to the work for which they were supplied. A malicious
 Scope or pre-existing hard link can share an inode with another location; read-only mount paths do
 not undo that sharing. Do not use a Scope containing hard links to protected files.
 
 The Scope itself can still be deleted or corrupted. This policy complements, rather than replaces,
 Git and backups. It does not restrict explicit human Shells or host-owned Git operations. Git
-Worktree metadata outside the Scope is not granted general write access; agent Git commands that
-need it can fail, while host-owned Git operations remain available.
+Worktree metadata outside Scope is not granted general write access in enabled mode; agent Git
+commands that need it can fail, while host-owned Git operations remain available.
 
-A project can read files outside its Scope where they are not deliberately hidden, but cannot
-modify them through normal filesystem operations. Symlinks cannot widen its writable mounts.
-Changes to SDK state locations, launch paths, MCP transports or Workflow runtimes must preserve
-this guarantee and be tested through real restricted processes, not merely argument inspection.
+With isolation enabled, a project can read files outside Scope where they are not deliberately
+hidden, but cannot modify them through normal filesystem operations. Symlinks cannot widen its
+writable mounts. With isolation disabled, none of these OS-enforced write or masking guarantees
+apply. Changes to SDK state locations, launch paths, MCP transports or Workflow runtimes must
+preserve enabled-mode guarantees and be tested through real restricted processes, not merely
+argument inspection. Tests must also cover the unrestricted warning, latched automatic choice,
+policy capture by new work, and refusal without downgrade after an enabled launch failure.

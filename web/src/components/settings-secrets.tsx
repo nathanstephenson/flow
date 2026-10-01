@@ -107,7 +107,7 @@ export default function SecretsSettings() {
       </SettingsGroup>
       <SettingsGroup
         title="Workflow runtime"
-        description="Shell and TypeScript steps run locally with a mandatory filesystem boundary: only the Scope and private execution state are writable. Execution is refused if that boundary cannot be enforced. There is no unrestricted fallback."
+        description="Shell and TypeScript steps run locally using the machine-wide filesystem isolation setting in General. Automatic mode enables isolation when supported; otherwise code runs unrestricted. With isolation off, code can write or delete outside the Scope and access host credentials. Scope alone is only a working directory, not a security boundary. New Workflow Executions use the current setting; existing work keeps its starting mode."
       >
         <p className="text-xs text-muted-foreground" role="status">
           {runtime.error ||

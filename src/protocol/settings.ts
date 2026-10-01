@@ -22,7 +22,18 @@ export type WorkflowRuntimeSettings = {
 
 export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {};
 
+/** Runtime capability and resolved machine-wide policy; never persisted as a default. */
+export interface FilesystemIsolationStatus {
+  supported: boolean;
+  enabled: boolean;
+  automatic: boolean;
+  checking: boolean;
+  reason?: string;
+}
+
 export type Settings = {
+  /** Omitted chooses isolation only when the machine's real launch probe succeeds. */
+  filesystemIsolation?: boolean;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
@@ -124,6 +135,8 @@ export type AutoCompaction = { mode: "disabled" } | { mode: "enabled"; targetPer
  * would erase it.
  */
 export type SettingsPatch = {
+  /** null restores automatic selection; true never permits an unrestricted launch fallback. */
+  filesystemIsolation?: boolean | null;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };

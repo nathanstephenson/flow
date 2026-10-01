@@ -9,6 +9,8 @@ import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIso
 export interface CodeExecutorOptions {
   runtimePath: string;
   nodePath: string;
+  /** Host-resolved launch policy. Defaults to restricted; no fallback on preparation failure. */
+  isolationEnabled?: boolean;
   /** The owning Session Host state root, including programmatically configured roots. */
   stateRoot?: string;
   /** Known before availability probes in production Workflow Executions. */
@@ -30,11 +32,19 @@ function probe(command: string, args: string[], stdioFds: number[] = [], env: No
 }
 
 export async function createCodeExecutors(options: CodeExecutorOptions): Promise<Executors> {
-  if (options.scope) validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
-    ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}) });
+  const isolationEnabled = options.isolationEnabled ?? true;
+  function canonicalScope(scope: string): string {
+    if (isolationEnabled) return validateFilesystemScope({ scope, expectedScope: resolve(scope),
+      ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}) });
+    const canonical = realpathSync(scope);
+    if (!statSync(canonical).isDirectory()) throw new Error('Scope must be a directory');
+    return canonical;
+  }
+  if (options.scope) canonicalScope(options.scope);
   let boundaryError: string | undefined;
   async function probeNode(): Promise<boolean> {
     const args = ['-e', 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'];
+    if (!isolationEnabled) return probe(options.nodePath, args);
     const scope = mkdtempSync(join(realpathSync('/tmp'), 'flow-runtime-probe-'));
     let isolation: FilesystemIsolation | undefined;
     try {
@@ -58,7 +68,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
   const executor: WorkflowExecutor = {
     check,
     async execute(context) {
-      validateFilesystemScope({ scope: context.scope, expectedScope: resolve(context.scope), ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}) });
+      canonicalScope(context.scope);
       check(context.step);
       context.signal.throwIfAborted();
       const secrets: Record<string, string> = Object.create(null);
@@ -75,27 +85,29 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
   };
   async function executeRuntime(context: ExecutorContext, secrets: Record<string, string>, inputSchema?: VisualSchema): Promise<Json> {
     const stateRoot = options.stateRoot ? { stateRoot: options.stateRoot } : {};
-    const scope = validateFilesystemScope({ scope: context.scope, expectedScope: resolve(context.scope), ...stateRoot });
+    const scope = canonicalScope(context.scope);
     const runtimePath = realpathSync(options.runtimePath);
     const nodePath = realpathSync(options.nodePath);
     const args = ['--noprofile', '--norc', '-c', 'ulimit -c 0; exec "$@"', 'flow-workflow', nodePath, '--max-old-space-size=128', runtimePath];
     const timeout = Math.min(context.step.timeoutMs ?? 60_000, 2_147_000_000);
     const request = JSON.stringify({ ...context.step, scope, input: context.input, inputType: inputSchema ? toTypeScript(inputSchema) : 'unknown', outputType: context.step.kind === 'typescript' ? toTypeScript(context.step.outputSchema) : 'unknown', secrets, timeout });
     context.signal.throwIfAborted();
-    // The local supervisor, QuickJS guest and every Shell descendant share one boundary.
+    // When enabled, the local supervisor, QuickJS guest and Shell descendants share a boundary.
     // Explicitly unset inherited variables before the isolation launcher merges environments.
     const env = { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])), ...environment,
       FLOW_BWRAP_PATH: process.env.FLOW_BWRAP_PATH, FLOW_STATE_DIR: process.env.FLOW_STATE_DIR,
       HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
-    const isolation = await prepareFilesystemIsolation({ scope, expectedScope: resolve(context.scope),
-      ...stateRoot, command: '/bin/bash', args, env, readablePaths: [nodePath, runtimePath], credentials: 'none' });
+    const isolation = isolationEnabled ? await prepareFilesystemIsolation({ scope, expectedScope: resolve(context.scope),
+      ...stateRoot, command: '/bin/bash', args, env, readablePaths: [nodePath, runtimePath], credentials: 'none' }) : undefined;
     try {
       context.signal.throwIfAborted();
-      const child = spawn(isolation.command, isolation.args,
-        { env: isolation.env, detached: true, stdio: ['pipe', 'pipe', 'pipe', ...isolation.stdioFds] });
+      const child = spawn(isolation?.command ?? '/bin/bash', isolation?.args ?? args,
+        { env: isolation?.env ?? environment, ...(!isolation ? { cwd: scope } : {}), detached: true,
+          stdio: ['pipe', 'pipe', 'pipe', ...(isolation?.stdioFds ?? [])] });
       let stdout = '', stderr = '', stopped = false;
-      // Killing Bubblewrap ends the PID namespace too, including descendants which called setsid.
+      // Restricted launches also end the PID namespace. Unrestricted detached descendants
+      // can escape the process group; this lifecycle supervision is not confinement.
       const kill = () => {
         if (!child.pid) return;
         try { process.kill(-child.pid, 'SIGKILL'); }
@@ -129,7 +141,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
         kill();
       }
     } finally {
-      isolation.cleanup();
+      isolation?.cleanup();
     }
   }
   return { shell: executor, typescript: executor };

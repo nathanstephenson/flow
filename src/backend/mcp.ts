@@ -90,6 +90,7 @@ export class McpSession {
   private readonly resolveSecret: ((name: string) => string) | undefined;
   private readonly protectedPaths: string[] | undefined;
   private readonly stateRoot: string | undefined;
+  private readonly isolationEnabled: boolean;
   constructor(
     connections: readonly McpConnection[],
     scope: string,
@@ -98,6 +99,7 @@ export class McpSession {
     resolveSecret?: (name: string) => string,
     protectedPaths?: string[],
     stateRoot?: string,
+    isolationEnabled = true,
   ) {
     this.connections = structuredClone(connections);
     this.scope = scope;
@@ -106,6 +108,7 @@ export class McpSession {
     this.resolveSecret = resolveSecret;
     this.protectedPaths = protectedPaths;
     this.stateRoot = stateRoot;
+    this.isolationEnabled = isolationEnabled;
   }
   registrationFailed(): void {
     for (const [id] of this.states) this.states.set(id, { id, state: "failed", tools: 0 });
@@ -179,7 +182,17 @@ export class McpSession {
         return;
       }
       const configured = connection.transport === "http" ? this.configuredHeaders(connection.headers) : {};
-      if (connection.transport === "stdio") {
+      if (connection.transport === "stdio" && !this.isolationEnabled) {
+        const scope = realpathSync(this.scope);
+        if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
+        transport = new SupervisedStdioTransport({
+          command: connection.command,
+          args: connection.args,
+          env: getDefaultEnvironment(),
+          cwd: scope,
+          stderr: "ignore",
+        });
+      } else if (connection.transport === "stdio") {
         isolation = await prepareFilesystemIsolation({
           scope: this.scope, expectedScope: resolve(this.scope),
           command: connection.command.includes("/") ? resolve(this.scope, connection.command) : connection.command,

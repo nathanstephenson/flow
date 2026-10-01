@@ -16,9 +16,10 @@ import {
 } from "@/components/ui/alert-dialog.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { UpdateSettings } from "@/components/settings-update.tsx";
+import { IsolationSettings } from "@/components/settings-isolation.tsx";
 
 /**
- * General: the retention window, and what this Session Host is.
+ * General: machine-wide isolation, the retention window, and what this Session Host is.
  *
  * Retention is the one destructive Setting. Shortening it does not delete anything on save — the
  * next sweep does, within the hour — but saving is the moment the reader decides, so this is where
@@ -63,6 +64,7 @@ export function GeneralSettings() {
   return (
     <>
       <UpdateSettings />
+      <IsolationSettings />
       <SettingsGroup
         title="Retention"
         description={

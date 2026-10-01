@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
@@ -19,14 +20,25 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
   backendModule?: string;
   /** Trusted execution assets hidden by temporary-directory masks, never writable roots. */
   readablePaths?: string[];
+  /** Host-resolved launch policy, snapshotted once per Backend Session. Defaults to restricted. */
+  isolationEnabled?: () => boolean;
 };
 
-/** One restricted worker per Backend Session; all adapter/SDK descendants inherit its policy. */
+/** One owned worker per Backend Session, optionally enforcing a filesystem boundary. */
 export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
   async create(options: BackendCreateOptions): Promise<BackendSession> {
+    const isolationEnabled = this.options.isolationEnabled?.() ?? true;
+    if (!isolationEnabled) {
+      const scope = realpathSync(options.scope);
+      if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
+      // Normal SDK environment and supplied durable state, with the same owned IPC lifecycle.
+      const proxy = new WorkerSession({ ...options, scope }, this.options, () => {});
+      try { await proxy.open(); return proxy; }
+      catch (error) { await proxy.dispose(); throw error; }
+    }
     const plan = workerCommand(this.options);
     const packageRoot = isSea() ? dirname(process.execPath) : fileURLToPath(new URL("../../..", import.meta.url));
     const assets = [packageRoot, ...(this.options.readablePaths ?? [])];

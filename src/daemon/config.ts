@@ -46,6 +46,8 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
  * typed. `view()` on the ConfigStore is where the two meet.
  */
 export type Config = {
+  /** Omitted means automatic; resolved runtime defaults are never written here. */
+  filesystemIsolation?: boolean;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
@@ -157,11 +159,13 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const projects = parseProjects(parsed, warnings);
   const permissions = parsePermissions(parsed, warnings);
   const providers = parseProviders(parsed, warnings);
+  const filesystemIsolation = readFilesystemIsolation(parsed, warnings);
 
   return {
     config: {
       retention,
       fonts,
+      ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
       mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
       ...(projects === undefined ? {} : { projects }),
@@ -205,7 +209,7 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
   }
   for (const [key, value] of Object.entries(section)) {
     if (['externalSandbox', 'dockerImage', 'dockerPath'].includes(key)) {
-      warnings.push(`Retired workflowRuntime.${key} ignored: Docker Workflow execution was removed; local filesystem isolation is mandatory`);
+      warnings.push(`Retired workflowRuntime.${key} ignored: Docker Workflow execution was removed; local execution follows the machine-wide filesystem isolation setting`);
       continue;
     }
     if (key !== 'nodePath') continue;
@@ -213,6 +217,21 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
     catch { warnings.push('Invalid workflowRuntime.nodePath; using automatic discovery'); }
   }
   return result;
+}
+
+function readFilesystemIsolation(parsed: unknown, warnings: string[]): boolean | undefined {
+  const value = (parsed as { filesystemIsolation?: unknown } | null)?.filesystemIsolation;
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  warnings.push("filesystemIsolation must be true or false; using automatic selection");
+  return undefined;
+}
+
+function patchFilesystemIsolation(current: boolean | undefined, value: unknown): boolean | undefined {
+  if (value === undefined) return current;
+  if (value === null) return undefined;
+  if (typeof value !== "boolean") throw new ConfigError("filesystemIsolation must be true, false, or null");
+  return value;
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
@@ -498,11 +517,13 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
+  const filesystemIsolation = patchFilesystemIsolation(current.filesystemIsolation, body.filesystemIsolation);
   return {
+    ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
     mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },

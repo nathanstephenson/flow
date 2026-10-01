@@ -117,9 +117,16 @@ try {
   };
   const runtimeStatus = await runtimeReadiness();
   assert.equal(typeof runtimeStatus.available, 'boolean', JSON.stringify(runtimeStatus));
-  if (process.platform !== 'linux') assert.equal(runtimeStatus.available, false, JSON.stringify(runtimeStatus));
-  // Linux CI must actually exercise isolation, not silently turn every code test into refusal.
-  if (process.platform === 'linux' && process.env.CI) assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
+  const isolationStatus = (await (await request('/api/config')).json()).filesystemIsolationStatus;
+  assert.equal(isolationStatus.automatic, true, JSON.stringify(isolationStatus));
+  assert.equal(isolationStatus.enabled, isolationStatus.supported, JSON.stringify(isolationStatus));
+  if (process.platform !== 'linux') assert.equal(isolationStatus.enabled, false, JSON.stringify(isolationStatus));
+  if (process.platform === 'darwin') assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
+  // Linux CI must actually exercise isolation, not silently accept automatic unrestricted mode.
+  if (process.platform === 'linux' && process.env.CI) {
+    assert.equal(isolationStatus.supported, true, JSON.stringify(isolationStatus));
+    assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
+  }
   await request('/api/command', { method: 'POST', body: JSON.stringify({ type: 'create', scope: cwd, backend: 'fake' }) });
   const sessions = await (await request('/api/sessions')).json();
   assert.equal(sessions.length, 1);
