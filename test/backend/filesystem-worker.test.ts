@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
@@ -11,8 +11,8 @@ import { isolationIntegration, privateWorkerState } from "../isolation-fixture.t
 import { piFixture, until, userText } from "./pi-fixture.ts";
 
 function attackFixture(t: TestContext) {
-  // Put the sentinel outside /tmp so it is visible read-only, not merely hidden by scratch mounts.
-  const outside = mkdtempSync(join(homedir(), ".flow-denial-test-"));
+  // Keep the sentinel in the explicit read-only worker asset mount, not hidden by home masks.
+  const outside = mkdtempSync(join(process.cwd(), ".flow-denial-test-"));
   writeFileSync(join(outside, "sentinel"), "intact");
   t.after(() => rmSync(outside, { recursive: true, force: true }));
   const source = `const f=require('fs'),a=require('assert/strict'),p=${JSON.stringify(outside)};

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync, realpathSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -79,12 +79,12 @@ try {
     await delay(100);
   }
   assert.ok(daemon, `Session Host did not start: ${hostOutput}`);
-  const request = async (path, options = {}) => {
+  const request = async (path, options = {}, expectedStatus = 200) => {
     const response = await fetch(`${daemon.url}${path}`, {
       ...options, headers: { authorization: `Bearer ${daemon.token}`, 'content-type': 'application/json' },
       signal: AbortSignal.timeout(10_000),
     });
-    assert.equal(response.status, 200, `${path}: ${await response.clone().text()}`);
+    assert.equal(response.status, expectedStatus, `${path}: ${await response.clone().text()}`);
     return response;
   };
   const html = await (await request('/')).text();
@@ -106,13 +106,62 @@ try {
     assert.equal((await head.arrayBuffer()).byteLength, 0, path);
   }
   assert.equal((await fetch(`${daemon.url}/favicon.svg`, { method: 'POST' })).status, 401);
-  const runtimeStatus = await (await request('/api/workflow-runtime')).json();
-  assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
+  const runtimeReadiness = async () => {
+    let status;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      status = await (await request('/api/workflow-runtime')).json();
+      if (status.error !== 'Workflow runtime readiness check in progress') return status;
+      await delay(100);
+    }
+    assert.fail(`Workflow runtime probe did not finish: ${JSON.stringify(status)}`);
+  };
+  const runtimeStatus = await runtimeReadiness();
+  assert.equal(typeof runtimeStatus.available, 'boolean', JSON.stringify(runtimeStatus));
+  if (process.platform !== 'linux') assert.equal(runtimeStatus.available, false, JSON.stringify(runtimeStatus));
+  // Linux CI must actually exercise isolation, not silently turn every code test into refusal.
+  if (process.platform === 'linux' && process.env.CI) assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
   await request('/api/command', { method: 'POST', body: JSON.stringify({ type: 'create', scope: cwd, backend: 'fake' }) });
   const sessions = await (await request('/api/sessions')).json();
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].backend, 'fake');
   assert.match(run(flow, ['list']), /fake/);
+
+  const marker = join(cwd, 'package-workflow-ran');
+  const definition = {
+    version: 1, id: 'package-smoke', name: 'Packed code runtime', backend: 'fake',
+    inputSchema: { type: 'object', fields: {} },
+    steps: [{ id: 'shell', name: 'Shell', kind: 'shell', command: 'printf packed > package-workflow-ran; printf packed' }],
+    edges: [],
+  };
+  const testCode = () => ({ method: 'POST', body: JSON.stringify({ definition, sessionId: sessions[0].id, stepId: 'shell', input: {} }) });
+  const assertCodeRefused = async () => {
+    const refusal = await (await request('/api/workflows/test', testCode(), 400)).json();
+    assert.match(refusal.error, /isolation unavailable|runtime.*unavailable|require.*(?:Linux|POSIX)/i);
+    assert.equal(existsSync(marker), false, 'Unavailable code runtime must not execute work');
+    const listing = await (await request(`/api/sessions/${sessions[0].id}/workflows`)).json();
+    assert.equal(listing.occupied, false, 'Refusal must not occupy the Workflow Execution slot');
+  };
+  if (runtimeStatus.available) {
+    const started = await (await request('/api/workflows/test', testCode())).json();
+    let execution;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      ({ execution } = await (await request(`/api/sessions/${sessions[0].id}/workflows/${started.execution.id}`)).json());
+      if (execution.finishedAt) break;
+      await delay(100);
+    }
+    assert.equal(execution.status, 'completed', JSON.stringify(execution));
+    assert.deepEqual(execution.result, { exitCode: 0, stdout: 'packed', stderr: '' });
+    assert.equal(readFileSync(marker, 'utf8'), 'packed');
+    rmSync(marker);
+  } else {
+    assert.match(runtimeStatus.error, /unavailable/i);
+    await assertCodeRefused();
+  }
+  // Also cover unavailable configuration on supported hosts; never fall back to host Node.
+  await request('/api/config', { method: 'PUT', body: JSON.stringify({ workflowRuntime: { nodePath: join(temp, 'missing-node') } }) });
+  assert.equal((await runtimeReadiness()).available, false);
+  await assertCodeRefused();
+  await request('/api/config', { method: 'PUT', body: JSON.stringify({ workflowRuntime: { nodePath: process.execPath } }) });
 
   const tuiExit = async () => {
     const tui = spawn(flow, ['tui', '--backend', 'fake', '--scope', cwd], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -167,6 +216,8 @@ try {
   assert.equal(embedded.mode, 'embedded');
   assert.throws(() => readFileSync(join(state, 'daemon.json')), { code: 'ENOENT' });
 
+  // Bundle/QuickJS packaging coverage on every platform. Direct --guest is an internal
+  // artifact probe, not a production code launch; the Session Host boundary is tested above.
   const runtime = join(prefix, 'lib/node_modules', metadata.name, 'build/workflow-runtime.cjs');
   const child = spawn(process.execPath, [runtime, '--guest'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const closed = once(child, 'close');
@@ -181,7 +232,7 @@ try {
     assert.equal(code, 0, errors);
     assert.deepEqual(JSON.parse(output), { output: 42 });
   } finally { clearTimeout(timer); child.kill('SIGKILL'); }
-  console.log('Packed install: host control, TUI ownership, version, web assets, fake backend, and Workflow runtime passed.');
+  console.log(`Packed install: host control, TUI ownership, version, web assets, fake backend, Workflow bundle, and code runtime ${runtimeStatus.available ? 'execution/refusal' : 'fail-closed refusal'} passed.`);
 } finally {
   if (host) {
     host.kill('SIGTERM');

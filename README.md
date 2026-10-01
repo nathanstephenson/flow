@@ -40,6 +40,8 @@ Claude and Pi Backend Sessions run in owned workers. On Linux, Bubblewrap makes 
 read-only, with writable mounts only for the selected Scope, dedicated backend state and private
 scratch. Subagents and Background Calls inherit that boundary. Local Workflow code and stdio MCP
 servers are restricted too; HTTP MCP and network access retain their external authority.
+External Docker Workflow execution currently refuses work because end-to-end mount-source pinning
+is unverified; enabling it never falls back to local execution. Use the restricted local runtime.
 
 Install Bubblewrap (for example, `sudo apt install bubblewrap`) with descriptor-backed bind mounts
 (`--bind-fd` and `--ro-bind-fd`) and working user, mount and PID namespaces. Unavailable enforcement,

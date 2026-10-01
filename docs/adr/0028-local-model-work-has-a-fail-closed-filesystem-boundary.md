@@ -18,7 +18,10 @@ is mounted at a worker-private path for Revive. Credential files needed by the s
 staged narrowly into a private home, never by mounting the real home writable. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
 without admitting symlinks or parents that contain protected host state. Adapter-local credential
-refresh does not write back to the user's global credential files.
+refresh does not write back to the user's global credential files. Missing protected paths are
+masked through an existing ancestor so credentials or host state created later remain hidden.
+Only explicitly validated runtime assets and the selected Scope are restored beneath those masks.
+Enforcement executables and unrestricted launch runtimes must remain outside writable backend state.
 
 Scope bindings are recorded canonically and later symlink redirection refuses execution. Mount
 sources are pinned with host-owned descriptors before launch; Bubblewrap consumes them before
@@ -32,12 +35,18 @@ host control sockets such as Docker's. Workers have no added capabilities or pri
 Network access remains available for inference.
 
 Local Workflow Shell and TypeScript execution also receives this policy when the external Docker
-runtime is disabled. The Docker runtime retains its existing read-only root and Scope-only bind
-mount; its trusted supervisor runs already-loaded code using the Session Host runtime, not a
-Workflow bundle a writable Scope could replace. Default Docker client discovery ignores Project PATH
-entries; an operator-supplied host client must be trusted and outside writable Scope. Local Node readiness probes run behind the policy
-too. Local stdio MCP servers receive the filesystem
-policy too, since executing them outside it would turn host-side tool delegation into a bypass.
+runtime is disabled. Local Node readiness probes run behind the policy too. Local stdio MCP servers
+receive the filesystem policy, since executing them outside it would turn host-side tool delegation
+into a bypass. Explicit dependency asset mounts keep Node stdio packages available under ancestor masks.
+
+External Docker Workflow execution is currently unavailable and fails closed before even its
+readiness probe. A validated mount pathname is not a pinned inode: a concurrent model with an
+ancestor Scope could redirect Docker's writable mount. Passing a host-owned `/proc/<pid>/fd/<fd>`
+source may work on some daemon/OCI runtime stacks, but their string-based mount APIs do not guarantee
+that identity end to end. Flow has not verified an installed stack. Neither before/after path checks
+nor an unrestricted/local fallback are acceptable. Re-enabling this mode requires verified source
+pinning for Scope and runtime assets through container removal. A future host supervisor must still
+run already-loaded trusted code, never a Workflow bundle a writable Scope could replace.
 
 A missing Bubblewrap executable, unavailable namespaces, invalid Scope or failed restricted launch
 refuses work. There is no silent unrestricted fallback or model-controlled opt-out. Unsupported

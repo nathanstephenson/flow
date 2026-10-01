@@ -86,6 +86,29 @@ describe("filesystem isolation fails closed", () => {
     assert.equal(readFileSync(join(f.outside, "keep"), "utf8"), "outside");
   });
 
+  it("refuses a launcher in writable backend state before executing even its probe", async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    const launcher = join(f.backend, "bwrap");
+    const marker = join(f.outside, "unrestricted-probe");
+    writeFileSync(launcher, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o700 });
+    const alias = join(f.root, "launcher-alias"); symlinkSync(launcher, alias);
+    const otherBackend = join(f.flow, 'sessions/two/backend'); mkdirSync(otherBackend, { recursive: true });
+    const otherLauncher = join(otherBackend, 'bwrap');
+    writeFileSync(otherLauncher, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o700 });
+    for (const path of [launcher, alias, otherLauncher]) {
+      await assert.rejects(prepareFilesystemIsolation(f.options({ stateDir: f.backend,
+        env: { ...f.env, FLOW_BWRAP_PATH: path } })), /Trusted launch executable.*writable backend state/);
+      assert.equal(existsSync(marker), false);
+    }
+  });
+
+  it("refuses a missing protected root without a safe existing ancestor", async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    await assert.rejects(prepareFilesystemIsolation(f.options({
+      env: { ...f.env, FLOW_BWRAP_PATH: "/bin/true" }, protectedPaths: [`/flow-absent-protected-${process.pid}/token`],
+    })), /no safe existing ancestor/);
+  });
+
   it("refuses unsupported platforms", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -219,6 +242,46 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     `, { scope, token: join(f.flow, "token"), sibling: join(sibling, "secret"), git,
       transcript: join(f.flow, "sessions/one/transcript.jsonl"), originalBackend: join(f.backend, "private") });
     assert.equal(readFileSync(join(scope, "allowed"), "utf8"), "yes");
+  });
+
+  it("keeps initially missing credentials and configured state hidden after host creation", { timeout: 10_000 }, async (t) => {
+    // Outside scratch: a read-only root bind would expose files created after launch.
+    const f = fixture(homedir()); t.after(f.cleanup);
+    const config = join(f.home, ".claude.json"); rmSync(config);
+    const cloud = join(f.home, ".config/gcloud/credentials.db");
+    const state = join(f.outside, "future-state/token");
+    const hidden = [config, cloud, state];
+    const prepared = await prepareFilesystemIsolation(f.options({ protectedPaths: [join(f.outside, "future-state")],
+      args: ["-e", String.raw`
+        const f=require('fs'),a=require('assert/strict'),paths=JSON.parse(process.argv[1]);
+        for(const p of paths)a.throws(()=>f.readFileSync(p));
+        process.stdout.write('ready\n');
+        process.stdin.once('data',()=>{
+          for(const p of paths)a.throws(()=>f.readFileSync(p),p);
+          f.writeFileSync(process.cwd()+'/allowed','yes');
+          process.exit(0);
+        });
+      `, JSON.stringify(hidden)] }));
+    const child = spawn(prepared.command, prepared.args, { env: prepared.env,
+      stdio: ["pipe", "pipe", "pipe", ...prepared.stdioFds] });
+    const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
+    let exited: Promise<void> | undefined;
+    try {
+      let errors = ''; child.stderr!.on('data', chunk => { errors += chunk; });
+      exited = new Promise<void>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', code => code === 0 ? resolve() : reject(new Error(errors)));
+      });
+      void exited.catch(() => {}); // Observe teardown failures even if an earlier host assertion fails.
+      await Promise.race([new Promise<void>(resolve => child.stdout!.once('data', () => resolve())), exited]);
+      for (const path of hidden) {
+        mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, 'new-host-secret');
+      }
+      child.stdin!.end('\n');
+      await exited;
+      assert.equal(readFileSync(join(f.scope, 'allowed'), 'utf8'), 'yes');
+      for (const path of hidden) assert.equal(readFileSync(path, 'utf8'), 'new-host-secret');
+    } finally { child.kill('SIGKILL'); await closed; await exited?.catch(() => {}); prepared.cleanup(); }
   });
 
   it("persists only the supplied backend directory for Revive and cleans ephemeral backend state", async (t) => {

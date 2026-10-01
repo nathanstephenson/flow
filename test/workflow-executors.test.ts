@@ -105,11 +105,11 @@ test('Shell and detached descendants cannot write, delete or follow symlinks out
   const ctx = context('');
   ctx.step = { id: 'a', name: 'a', kind: 'shell', command: `
     set -e
-    test "$(cat ${q(sentinel)})" = keep-me
+    if test -e ${q(sentinel)}; then test "$(cat ${q(sentinel)})" = keep-me; fi
     if printf compromised > ${q(sentinel)} 2>/dev/null; then exit 10; fi
-    if rm ${q(sentinel)} 2>/dev/null; then exit 11; fi
+    if test -e ${q(sentinel)} && rm ${q(sentinel)} 2>/dev/null; then exit 11; fi
     if printf compromised > outside-sentinel 2>/dev/null; then exit 12; fi
-    /bin/bash -c ${q(`if printf compromised > ${q(sentinel)} 2>/dev/null; then exit 13; fi; if rm ${q(sentinel)} 2>/dev/null; then exit 14; fi`)}
+    /bin/bash -c ${q(`if printf compromised > ${q(sentinel)} 2>/dev/null; then exit 13; fi; if test -e ${q(sentinel)} && rm ${q(sentinel)} 2>/dev/null; then exit 14; fi`)}
     setsid /bin/bash -c ${q(`printf started > detached-started; while true; do printf x >> detached-progress; printf compromised > ${q(sentinel)} 2>/dev/null; rm ${q(sentinel)} 2>/dev/null; sleep 0.05; done`)} </dev/null >/dev/null 2>&1 &
     while test ! -e detached-started; do sleep 0.05; done
     printf allowed > in-scope-write
@@ -207,7 +207,7 @@ test('Shell passes JSON without interpolation, honours cancellation and removes 
 });
 test('explicit unavailable sandbox fails; restricted local runs; named secrets stay out of env and output', localIntegration, async () => {
   const unavailable = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: false, image: 'none' } });
-  assert.throws(() => unavailable.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' }), /unavailable/);
+  assert.throws(() => unavailable.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' }), /External sandbox execution refused/);
   const ctx = context('return secrets.KEY;', { type: 'string' }); ctx.step.secrets = { KEY: 'reference' };
   assert.equal(await local.typescript.execute(ctx), '[REDACTED]');
   const quoted = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: false }, resolveSecret: async () => 'secret"\nvalue' });
@@ -215,13 +215,14 @@ test('explicit unavailable sandbox fails; restricted local runs; named secrets s
   const unsafe = context(''); unsafe.step = { id: 'a', name: 'a', kind: 'shell', command: 'true', secrets: { BASH_ENV: 'reference' } };
   assert.throws(() => local.shell.check(unsafe.step, { sessionId: 's', scope, backend: 'pi' }), /Unsafe/);
 });
-test('slow Docker readiness probe preserves another Agent Session Shell heartbeat', { ...localIntegration, timeout: 25000 }, async () => {
+test('refusing external mode does not disturb another Agent Session Shell heartbeat', { ...localIntegration, timeout: 10000 }, async () => {
   const dockerPath = join(runtimeDirectory, 'slow-docker');
-  writeFileSync(dockerPath, `#!${process.execPath}\nsetTimeout(() => process.exit(1), 4000);`, { mode: 0o700 });
+  const probeMarker = join(runtimeDirectory, 'unverified-probe');
+  writeFileSync(dockerPath, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(probeMarker)}, 'bad'); setTimeout(() => process.exit(1), 4000);`, { mode: 0o700 });
   const marker = join(scope, 'probe-shell-started');
   const ctx = context('');
   ctx.sessionId = 'other-session';
-  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: 22000, command: 'touch probe-shell-started; sleep 20; printf healthy' };
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: 5000, command: 'touch probe-shell-started; sleep 1; printf healthy' };
   const work = local.shell.execute(ctx);
   const result = assert.doesNotReject(async () => {
     assert.deepEqual(await work, { exitCode: 0, stdout: 'healthy', stderr: '' });
@@ -231,21 +232,23 @@ test('slow Docker readiness probe preserves another Agent Session Shell heartbea
   const heartbeat = setInterval(() => ticks++, 100);
   try {
     const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: true, image: 'test', dockerPath } });
-    assert.ok(ticks >= 20, `Heartbeat ran only ${ticks} times during probe`);
-    assert.throws(() => executor.shell.check(ctx.step, { sessionId: 's', scope, backend: 'pi' }), /External sandbox is enabled but unavailable/);
+    assert.throws(() => executor.shell.check(ctx.step, { sessionId: 's', scope, backend: 'pi' }), /External sandbox execution refused/);
+    assert.equal(existsSync(probeMarker), false);
+    await result;
+    assert.ok(ticks >= 3, `Heartbeat ran only ${ticks} times while local work continued`);
   } finally { clearInterval(heartbeat); await result; }
 });
 
-test('external mode uses the running host runtime, needs no Bubblewrap and reports container cleanup failure', async () => {
+test('external mode refuses without Bubblewrap and never falls back to a local runtime', async () => {
   const dockerPath = join(runtimeDirectory, 'fake-docker');
   writeFileSync(dockerPath, `#!${process.execPath}\nif (process.argv.includes('rm')) { console.error('cleanup-canary'); process.exit(1); } if (process.argv.includes('run')) console.log(JSON.stringify({output: 7}));`, { mode: 0o700 });
   const sandbox = { enabled: true as const, available: true, image: 'owned-test-image', dockerPath };
   const executor = await createCodeExecutors({ runtimePath, nodePath: '/missing-node', sandbox });
-  executor.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' });
+  assert.throws(() => executor.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' }), /External sandbox execution refused/);
   const previous = process.env.FLOW_BWRAP_PATH;
   process.env.FLOW_BWRAP_PATH = '/flow-no-such-bwrap';
   try {
-    await assert.rejects(executor.typescript.execute(context('return 7;')), /Docker container cleanup failed: cleanup-canary/);
+    await assert.rejects(executor.typescript.execute(context('return 7;')), /External sandbox execution refused/);
   } finally {
     if (previous === undefined) delete process.env.FLOW_BWRAP_PATH; else process.env.FLOW_BWRAP_PATH = previous;
   }
@@ -258,12 +261,14 @@ test('a writable Workflow runtime bundle cannot replace the trusted Docker super
   writeFileSync(dockerPath, `#!${process.execPath}\nif(process.argv.includes('run')) console.log(JSON.stringify({output:7}));`, { mode: 0o700 });
   const executor = await createCodeExecutors({ runtimePath: mutableBundle, nodePath: '/missing-node', scope,
     sandbox: { enabled: true, available: true, image: 'owned-test-image', dockerPath } });
-  assert.equal(await executor.typescript.execute(context('return 7;')), 7);
+  await assert.rejects(executor.typescript.execute(context('return 7;')), /External sandbox execution refused/);
   assert.equal(existsSync(canary), false);
 });
 
 const image = 'mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm';
-const dockerAvailable = spawnSync('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'image', 'inspect', image], { stdio: 'ignore' }).status === 0;
+// Retain historical container lifecycle coverage for when verified source pinning re-enables it.
+// An installed Docker executable alone must not turn these into claims of supported enforcement.
+const dockerAvailable = false;
 test('Docker executes QuickJS and Shell with restricted mount and environment', { skip: !dockerAvailable }, async () => {
   const docker = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: true, image } });
   assert.equal(await docker.typescript.execute(context('return input.value + 3;')), 7);

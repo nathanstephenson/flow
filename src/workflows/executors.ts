@@ -6,7 +6,7 @@ import type { Json, VisualSchema, WorkflowStep } from '../protocol/workflows.ts'
 import type { ExecutorContext, WorkflowExecutor, WorkflowExecutors } from './scheduler.ts';
 import { parseValue, toTypeScript } from './schema.ts';
 import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIsolation } from '../isolation/filesystem.ts';
-import { dockerSupervisorLaunch } from './docker-supervisor.ts';
+import { assertDockerMountSourceSupport, dockerSupervisorLaunch } from './docker-supervisor.ts';
 
 export interface CodeExecutorOptions {
   runtimePath: string;
@@ -60,17 +60,14 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     } catch (error) { boundaryError = (error as Error).message; return false; }
     finally { isolation?.cleanup(); rmSync(scope, { recursive: true, force: true }); }
   }
-  const [nodeAvailable, runtimeAvailable] = await Promise.all([
-    probeNode(),
-    !sandbox.enabled || (sandbox.available && probe(docker, [...dockerArgs, 'image', 'inspect', sandbox.image])),
-  ]);
+  const nodeAvailable = await probeNode();
+  // Do not run even a Docker readiness probe while its mount-source enforcement is unsupported.
+  // Explicit external mode refuses work rather than switching silently to local execution.
   function check(step: WorkflowStep) {
     if (!['shell', 'typescript'].includes(step.kind)) throw new Error('Unsupported executor kind');
     if (process.platform === 'win32') throw new Error('Code executors require POSIX');
     if (!isAbsolute(options.runtimePath) || !existsSync(options.runtimePath) || !statSync(options.runtimePath).isFile()) throw new Error('Workflow runtime bundle is unavailable; run build:workflow-runtime');
-    if (sandbox.enabled) {
-      if (!runtimeAvailable) throw new Error('External sandbox is enabled but unavailable');
-    }
+    if (sandbox.enabled) assertDockerMountSourceSupport();
     if (!nodeAvailable) throw new Error(boundaryError ?? 'Host Node 22 or later runtime is unavailable');
     if (step.secrets && Object.keys(step.secrets).length && !options.resolveSecret) throw new Error('Secret resolver is unavailable');
     if (step.kind === 'shell' && Object.keys(step.secrets ?? {}).some(name => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || /^(PATH|OUTPUT|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|LD_.*|DYLD_.*|NODE_.*)$/.test(name))) throw new Error('Unsafe Shell secret environment name');

@@ -29,8 +29,20 @@ jobs:
 
       - run: npm run typecheck
 
-      # Real local worker, MCP and Workflow filesystem boundaries (ADR 0028).
-      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap
+      # Only on this ephemeral hosted VM: Ubuntu's AppArmor userns restriction otherwise
+      # denies Bubblewrap's uid map even after installation. Never relax production policy.
+      - name: Enable and verify local filesystem isolation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl -w user.max_user_namespaces=28633
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          node --experimental-strip-types scripts/test-ci-isolation.mjs
 
       - run: npm test
 
@@ -94,5 +106,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # The Linux packed install uses the same fail-closed boundary as the check job.
+      - name: Enable and verify local filesystem isolation (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl -w user.max_user_namespaces=28633
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          node --experimental-strip-types scripts/test-ci-isolation.mjs
       - run: node --experimental-strip-types --test test/install-update.test.ts test/install-process.test.ts test/host-control.test.ts test/host-control-client.test.ts test/host-runtime.test.ts
       - run: npm run test:package

@@ -281,8 +281,9 @@ _Avoid_: closed, deleted, terminated, killed, settled
 The working directory an Agent Session is bound to. Local Backend Sessions, their Subagents and
 Background Calls, local Workflow code and stdio MCP servers have an OS-enforced writable boundary:
 that Scope plus dedicated backend state and private scratch. Other host files are read-only or masked.
-Unavailable enforcement refuses execution. This is not a network sandbox or protection from damage
-inside the Scope; see ADR 0028. Explicit human Shells and host-owned Git operations remain distinct.
+Unavailable enforcement refuses execution, including external Docker Workflow execution until its
+mount-source pinning is verified. This is not a network sandbox or protection from damage inside
+the Scope; see ADR 0028. Explicit human Shells and host-owned Git operations remain distinct.
 _Avoid_: workspace, project, repo — a Project is a distinct thing, defined below, and calling a
 Scope one confuses a binding with a candidate for it.
 

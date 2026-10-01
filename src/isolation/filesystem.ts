@@ -57,6 +57,17 @@ function canonical(path: string): string {
   }
 }
 
+/** Mask an existing ancestor instead of dropping protection for a future credential path. */
+function existingMask(path: string): string {
+  while (!existsSync(path)) {
+    const parent = dirname(path);
+    if (parent === path) throw new Error(`Cannot mask protected path: ${path}`);
+    path = parent;
+  }
+  if (path === "/") throw new Error("Protected path has no safe existing ancestor");
+  return path;
+}
+
 function expandHome(path: string, home: string): string {
   return path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
 }
@@ -202,6 +213,11 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     if (!isAbsolute(launcher)) throw new Error("FLOW_BWRAP_PATH must be an absolute trusted executable path");
     const bwrap = await executable(launcher, env);
     if (within(bwrap, scope)) throw new Error("Unsafe Scope: would expose the trusted isolation launcher");
+    if (flowRoots.some((root) => /^sessions\/[^/]+\/backend(?:\/|$)/.test(relative(root, bwrap))
+        || within(bwrap, join(root, 'worktrees')))
+      || /^flow-isolation-[A-Za-z0-9]{6}(?:\/|$)/.test(relative(canonical('/tmp'), bwrap))) {
+      throw new Error("Trusted launch executable must be outside writable backend state and scratch");
+    }
     const command = await executable(options.command, env);
     const readable = [...new Set([command, ...(options.readablePaths ?? []).map((path) => realpathSync(path)),
       ...(env.FLOW_CLAUDE_PATH ? [await executable(env.FLOW_CLAUDE_PATH, env)] : [])])];
@@ -227,12 +243,20 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
         }
       }
     } else mkdirSync(backend, { mode: 0o700 });
+    // These programs run outside the boundary, including during the probe. Neither Scope nor
+    // private state may grant a model authority to replace them before a later launch/Revive.
+    for (const trusted of [bwrap, canonical(process.execPath)]) {
+      if ([backend, scratch].some((writable) => within(trusted, writable))) {
+        throw new Error("Trusted launch executable must be outside writable backend state and scratch");
+      }
+    }
 
     const args = ["--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
       "--ro-bind", "/", "/", "--tmpfs", "/tmp", "--tmpfs", "/var/tmp", "--tmpfs", canonical("/run")];
     // Masks must precede the selected Worktree bind. Remount only the parent, not its children.
-    const masks = [...new Set([...protectedPaths, backend, scratch])]
-      .filter((path) => existsSync(path) && !["/tmp", "/var/tmp", "/run"].some((root) => within(path, canonical(root))))
+    const masks = [...new Set([...protectedPaths, backend, scratch]
+      .filter((path) => !["/tmp", "/var/tmp", "/run"].some((root) => within(path, canonical(root))))
+      .map(existingMask))]
       .sort((a, b) => a.length - b.length)
       .filter((path, index, paths) => !paths.slice(0, index).some((parent) => within(path, parent)));
     const directoryMasks: string[] = [];
@@ -240,9 +264,11 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
       if (statSync(path).isDirectory()) { args.push("--tmpfs", path); directoryMasks.push(path); }
       else args.push("--ro-bind", "/dev/null", path);
     }
-    // Explicit asset binds are necessary only where the scratch mounts hid their original paths.
+    // Ancestor masks may hide runtime assets too. Restore only explicitly validated assets,
+    // never the ancestor itself: new host credentials must stay hidden for this worker's life.
     for (const path of readable) {
-      if (within(path, canonical("/tmp")) && !within(path, scope)) args.push("--ro-bind-fd", pinned(path), path);
+      if ((within(path, canonical("/tmp")) || masks.some((mask) => within(path, mask)))
+        && !within(path, scope)) args.push("--ro-bind-fd", pinned(path), path);
     }
     const privateHome = join(scratch, "home");
     mkdirSync(join(privateHome, ".pi/agent"), { recursive: true, mode: 0o700 });
