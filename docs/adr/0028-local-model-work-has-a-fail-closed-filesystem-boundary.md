@@ -44,7 +44,13 @@ receive the filesystem policy, since executing them outside it would turn host-s
 into a bypass. Explicit dependency asset mounts keep Node stdio packages and npm/SEA workers
 available under ancestor masks, including ancestor node_modules search paths and linked packages
 outside the launch package. These trees pass the same protected-state checks and descriptor pinning;
-dependency discovery never grants general access to the containing home or workspace.
+dependency discovery never grants general access to the containing home or workspace. A masked
+node_modules lookup alias is recreated as a namespace symlink to its validated, pinned target, not
+as a second directory bind that would change Node's realpath-based lookup. Missing parent lookup aliases (such as $PREFIX/lib) are preserved too, without mounting their
+containing directories or sibling data. Recreated alias destinations canonicalize their parents;
+both destinations and targets pass the same protected-state checks, so parent aliases cannot
+graft execution assets into hidden host state. SEA SDK discovery also preserves Node's default
+$PREFIX/lib/node lookup; this is distinct from the scrubbed NODE_PATH environment override.
 
 External Docker Workflow execution is currently unavailable and fails closed before even its
 readiness probe. A validated mount pathname is not a pinned inode: a concurrent model with an

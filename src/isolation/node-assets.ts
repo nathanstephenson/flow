@@ -15,8 +15,17 @@ export function nodeExecutionAssets(entries: readonly string[]): string[] {
     if (!existsSync(path)) return;
     const canonical = realpathSync(path);
     if (!statSync(canonical).isDirectory()) return;
+    // Retain the lookup name too: an ancestor mask hides the original node_modules
+    // symlink even when its canonical target is restored. The policy rebuilds only
+    // this validated alias, never its containing home/workspace.
+    assets.add(path);
     assets.add(canonical);
-    if (!trees.has(canonical)) { trees.add(canonical); pending.push(canonical); }
+    if (!trees.has(canonical)) {
+      trees.add(canonical); pending.push(canonical);
+      // Packages in an aliased tree resolve from its real directory, which need not be
+      // named node_modules. Preserve that directory's own ancestor lookup trees too.
+      search(canonical);
+    }
   };
   const search = (entry: string) => {
     const canonical = realpathSync(entry);
@@ -24,7 +33,8 @@ export function nodeExecutionAssets(entries: readonly string[]): string[] {
     if (searched.has(directory)) return;
     searched.add(directory);
     // Node skips node_modules/node_modules, but otherwise searches up to the root.
-    // Deliberately exclude NODE_PATH/global lookup directories (scrubbed at launch).
+    // NODE_PATH is scrubbed. Loaders needing Node's default global-prefix directories
+    // must supply those roots explicitly (as the SEA SDK loader does).
     for (let ancestor = directory; ; ancestor = dirname(ancestor)) {
       if (basename(ancestor) !== "node_modules") addTree(join(ancestor, "node_modules"));
       if (ancestor === dirname(ancestor)) break;

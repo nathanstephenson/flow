@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -22,7 +22,7 @@ export type FilesystemIsolationOptions = {
   env?: NodeJS.ProcessEnv;
   /** The caller must supply fd 3 (Node IPC), with serialization: "advanced", when spawning. */
   ipc?: boolean;
-  /** Individual execution assets hidden by scratch mounts, mounted read-only at their real paths. */
+  /** Execution assets hidden by masks, mounted read-only at real paths; narrow lookup aliases are preserved. */
   readablePaths?: string[];
   credentials?: "pi" | "claude" | "none";
 };
@@ -225,15 +225,31 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
       path => maskRoots.some(root => within(path, root)),
       path => protectedPaths.some(root => within(path, root)) || ['/var/tmp', '/run'].some(root => within(path, canonical(root))));
     env.PATH = tools.path;
-    const readable = [...new Set([command, ...tools.assets, ...(options.readablePaths ?? []).map((path) => realpathSync(path)),
-      ...(env.FLOW_CLAUDE_PATH ? [await executable(env.FLOW_CLAUDE_PATH, env)] : [])])];
-    for (const path of readable) {
+    const aliases = new Map<string, string>();
+    const readable = [...new Set([command, ...tools.assets, ...(options.readablePaths ?? []),
+      ...(env.FLOW_CLAUDE_PATH ? [await executable(env.FLOW_CLAUDE_PATH, env)] : [])].map(asset => {
+        const source = realpathSync(asset);
+        // Preserve every lookup symlink, including $PREFIX/lib -> another library directory.
+        // Canonicalize each alias's parents to prevent an ancestor alias grafting into hidden
+        // state. Do not mount alias targets' parents: only the requested canonical leaf is data.
+        let logical: string = sep;
+        for (const name of resolve(asset).split(sep).filter(Boolean)) {
+          logical = join(logical, name);
+          if (lstatSync(logical).isSymbolicLink()) {
+            const destination = join(canonical(dirname(logical)), basename(logical));
+            aliases.set(destination, realpathSync(logical));
+          }
+        }
+        return source;
+      }))];
+    const validateAsset = (path: string) => {
       if ([home, credentialHome, "/", ...["/tmp", "/var/tmp", "/run", "/var/run", "/proc", "/dev", "/sys"].map(canonical)].includes(path)
         || protectedPaths.some((secret) => within(path, secret) || within(secret, path))
         || within(path, virtualRoot) || ["/proc", "/dev", "/sys", "/run", "/var/tmp"].some((root) => within(path, canonical(root)))) {
         throw new Error(`Readable execution asset would expose protected state: ${path}`);
       }
-    }
+    };
+    readable.forEach(validateAsset);
     // Never stage credentials under operator TMPDIR: it could be inside a writable Scope.
     scratch = mkdtempSync(join(canonical("/tmp"), "flow-isolation-"));
     const backend = options.stateDir ? realpathSync(options.stateDir) : join(scratch, "backend");
@@ -275,6 +291,17 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     for (const path of readable) {
       if ((within(path, canonical("/tmp")) || masks.some((mask) => within(path, mask)))
         && !within(path, scope)) args.push("--ro-bind-fd", pinned(path), path);
+    }
+    for (const [destination, source] of aliases) {
+      if (!within(destination, scope)
+        && (within(destination, canonical('/tmp')) || masks.some(mask => within(destination, mask)))
+        && !readable.some(parent => within(destination, parent) && statSync(parent).isDirectory())) {
+        validateAsset(destination); validateAsset(source);
+        // Keep a symlink, not a second directory bind: Node realpath must still resolve to
+        // the pinned canonical tree so the linked package's own ancestor dependencies work.
+        // Parents are empty mask directories; a restored asset parent already carries its alias.
+        args.push('--symlink', source, destination);
+      }
     }
     const privateHome = join(scratch, "home");
     mkdirSync(join(privateHome, ".pi/agent"), { recursive: true, mode: 0o700 });

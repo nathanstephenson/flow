@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
-import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
@@ -9,6 +7,7 @@ import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
 import type { BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
+import { seaSdkExecutionAssets } from './assets.ts';
 import { WorkerRpc } from "./rpc.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
@@ -31,13 +30,7 @@ export class WorkerBackend implements AgentBackend {
     const plan = workerCommand(this.options);
     const packageRoot = isSea() ? dirname(process.execPath) : fileURLToPath(new URL("../../..", import.meta.url));
     const assets = [packageRoot, ...(this.options.readablePaths ?? [])];
-    if (isSea()) {
-      // Preserve the SEA loader's default-prefix SDK lookups as well as ordinary ancestor
-      // node_modules trees. NODE_PATH is scrubbed, but Node's prefix/lib/node is not NODE_PATH.
-      for (const path of createRequire(process.execPath).resolve.paths('@earendil-works/pi-coding-agent') ?? []) {
-        if (existsSync(join(path, '@earendil-works/pi-coding-agent/package.json'))) assets.push(path);
-      }
-    }
+    if (isSea()) assets.push(...seaSdkExecutionAssets());
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
     if (this.options.entry) {
       assets.push(this.options.entry);

@@ -3,7 +3,7 @@ import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { promisify } from "node:util";
 import { prepareFilesystemIsolation, type FilesystemIsolationOptions } from "../src/isolation/filesystem.ts";
@@ -66,16 +66,22 @@ describe("filesystem isolation fails closed", () => {
 
   it("refuses failed namespace/mount probes and removes staging directories", async (t) => {
     const f = fixture(); t.after(f.cleanup);
-    const before = readdirSync(tmpdir()).filter((name) => name.startsWith("flow-isolation-") && !name.startsWith("flow-isolation-test-"));
-    await assert.rejects(prepareFilesystemIsolation(f.options({ env: { ...f.env, FLOW_BWRAP_PATH: "/bin/false", ANTHROPIC_API_KEY: "never-log-this" } })),
+    const marker = join(f.outside, 'owned-staging'), launcher = join(f.outside, 'failed-probe');
+    // Observe this probe's private home fd, not all /tmp staging roots: other test files
+    // may legitimately create/remove their own boundaries while this asynchronous probe runs.
+    writeFileSync(launcher, `#!${process.execPath}\nconst f=require('fs'),args=process.argv.slice(2);
+      const i=args.findIndex((arg,index)=>arg==='--bind-fd'&&args[index+2]==='/tmp/flow-isolation/home');
+      f.writeFileSync(${JSON.stringify(marker)},f.readlinkSync('/proc/self/fd/'+args[i+1]));process.exit(1);`, { mode: 0o700 });
+    await assert.rejects(prepareFilesystemIsolation(f.options({ env: { ...f.env, FLOW_BWRAP_PATH: launcher, ANTHROPIC_API_KEY: "never-log-this" } })),
+
       (error: Error) => {
         assert.match(error.message, /isolation unavailable.*unrestricted launch refused/i);
         assert.equal(String(error).includes("never-log-this"), false);
         assert.equal(String(error.cause).includes("never-log-this"), false);
         return true;
       });
-    const after = readdirSync(tmpdir()).filter((name) => name.startsWith("flow-isolation-") && !name.startsWith("flow-isolation-test-"));
-    assert.deepEqual(after.sort(), before.sort());
+    if (process.platform === 'linux') assert.equal(existsSync(dirname(readFileSync(marker, 'utf8'))), false);
+    else assert.equal(existsSync(marker), false);
   });
 
   it("refuses a Scope redirected after its canonical binding was selected", async (t) => {

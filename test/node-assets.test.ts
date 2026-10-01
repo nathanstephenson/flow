@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +10,7 @@ import { McpSession } from "../src/backend/mcp.ts";
 import { WorkerBackend } from "../src/backend/worker/index.ts";
 import { prepareFilesystemIsolation } from "../src/isolation/filesystem.ts";
 import { nodeExecutionAssets } from "../src/isolation/node-assets.ts";
+import { filesystemStdioLaunch } from '../src/isolation/launcher.ts';
 import { isolationIntegration } from "./isolation-fixture.ts";
 
 function fixture(t: TestContext) {
@@ -55,12 +58,21 @@ test("Node assets discover ancestor search trees, scoped links and linked-packag
   assert.equal(new Set(assets).size, assets.length);
 });
 
-test("hoisted MCP workspace server survives a real HOME mask and hides future credentials", { ...isolationIntegration, timeout: 30_000 }, async (t) => {
+function aliasModules(f: ReturnType<typeof fixture>) {
+  const target = join(f.home, 'cache', 'dependencies');
+  mkdirSync(join(f.home, 'cache')); renameSync(f.modules, target);
+  symlinkSync(target, f.modules, 'dir');
+  return target;
+}
+
+for (const alias of [false, true]) {
+test(`hoisted MCP workspace server survives a real HOME mask and hides future credentials (alias=${alias})`, { ...isolationIntegration, timeout: 30_000 }, async (t) => {
   const f = fixture(t);
   // The package has no local node_modules. Both SDK and zod are workspace-hoisted links.
   mkdirSync(join(f.modules, "@modelcontextprotocol"));
   symlinkSync(realpathSync(resolve("node_modules/@modelcontextprotocol/sdk")), join(f.modules, "@modelcontextprotocol/sdk"), "dir");
   symlinkSync(realpathSync(resolve("node_modules/zod")), join(f.modules, "zod"), "dir");
+  if (alias) aliasModules(f);
   const server = join(f.pkg, "server.ts");
   writeFileSync(server, `
     import { existsSync, writeFileSync } from 'node:fs';
@@ -85,8 +97,9 @@ test("hoisted MCP workspace server survives a real HOME mask and hides future cr
   } finally { await mcp.dispose(); }
 });
 
-test("non-SEA worker restores hoisted linked packages and their dependencies under a HOME mask", { ...isolationIntegration, timeout: 30_000 }, async (t) => {
+test(`non-SEA worker restores hoisted linked packages and their dependencies under a HOME mask (alias=${alias})`, { ...isolationIntegration, timeout: 30_000 }, async (t) => {
   const f = fixture(t); linkedDependency(f);
+  if (alias) aliasModules(f);
   // This bootstrap is an ordinary Node worker, not a SEA. The linked dependency must
   // load before the worker can start IPC; its own dependency lives outside the workspace.
   const entry = join(f.pkg, "entry.cjs");
@@ -115,6 +128,82 @@ test("non-SEA worker restores hoisted linked packages and their dependencies und
     writeFileSync(join(f.home, ".npmrc"), "future secret");
     await session.prompt("probe");
   } finally { await session.dispose(); }
+});
+
+}
+
+test('masked dependency aliases preserve realpath and target-side ancestor dependencies', { ...isolationIntegration, timeout: 30_000 }, async t => {
+  const f = fixture(t);
+  const plain = join(f.modules, 'plain'); mkdirSync(plain);
+  writeFileSync(join(plain, 'index.js'), "module.exports={value:require('secondary'),filename:__filename};");
+  const target = aliasModules(f);
+  const secondary = join(f.home, 'cache/node_modules/secondary'); mkdirSync(secondary, { recursive: true });
+  writeFileSync(join(secondary, 'index.js'), "module.exports='target-side';");
+  const entry = join(f.pkg, 'entry.cjs'); writeFileSync(entry, "console.log(JSON.stringify(require('plain')));");
+  const assets = nodeExecutionAssets([entry]);
+  assert.ok(assets.includes(f.modules)); assert.ok(assets.includes(target));
+  const plan = await prepareFilesystemIsolation({ scope: f.scope, command: process.execPath, args: [entry],
+    readablePaths: [f.pkg, ...assets], credentials: 'none' });
+  try {
+    const launch = filesystemStdioLaunch(plan);
+    const { stdout } = await promisify(execFile)(launch.command, launch.args, { env: plan.env, timeout: 15_000 });
+    assert.deepEqual(JSON.parse(stdout), { value: 'target-side', filename: join(target, 'plain/index.js') });
+  } finally { plan.cleanup(); }
+});
+
+for (const mode of ['direct', 'linked SDK', 'linked library parent'] as const) test(`SEA SDK default-prefix lookup survives masking (${mode})`, { ...isolationIntegration, timeout: 30_000 }, async t => {
+  const f = fixture(t), prefix = join(f.home, 'prefix');
+  const executable = join(prefix, 'bin/node'), sdkRoot = join(prefix, 'lib/node');
+  const pkg = join(sdkRoot, '@earendil-works/pi-coding-agent');
+  mkdirSync(join(prefix, 'bin'), { recursive: true }); copyFileSync(process.execPath, executable);
+  const library = join(f.home, 'tool-library');
+  if (mode === 'linked library parent') {
+    mkdirSync(library); writeFileSync(join(library, 'unmounted-sentinel'), 'never restored');
+    symlinkSync(library, join(prefix, 'lib'));
+  }
+  const linked = mode === 'linked SDK', source = linked ? f.linked : pkg;
+  const probeCode = `const a=require('assert/strict'),f=require('fs');
+    a.equal(require('@earendil-works/pi-coding-agent'),'default-prefix-sdk');
+    a.throws(()=>f.writeFileSync(${JSON.stringify(join(source, 'index.js'))},'bad'));
+    a.equal(f.existsSync(${JSON.stringify(join(library, 'unmounted-sentinel'))}),false);console.log('global-sdk');`;
+  mkdirSync(source, { recursive: true }); mkdirSync(join(sdkRoot, '@earendil-works'), { recursive: true });
+  writeFileSync(join(source, 'package.json'), '{"main":"index.js"}');
+  writeFileSync(join(source, 'index.js'), "module.exports='default-prefix-sdk';");
+  if (linked) symlinkSync(source, pkg);
+  const script = join(f.pkg, 'prefix.mjs');
+  writeFileSync(script, `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    import { execFile } from 'node:child_process';
+    import { promisify } from 'node:util';
+    import { seaSdkExecutionAssets } from ${JSON.stringify(pathToFileURL(resolve('src/backend/worker/assets.ts')).href)};
+    import { nodeExecutionAssets } from ${JSON.stringify(pathToFileURL(resolve('src/isolation/node-assets.ts')).href)};
+    import { prepareFilesystemIsolation } from ${JSON.stringify(pathToFileURL(resolve('src/isolation/filesystem.ts')).href)};
+    import { filesystemStdioLaunch } from ${JSON.stringify(pathToFileURL(resolve('src/isolation/launcher.ts')).href)};
+    const sdk='@earendil-works/pi-coding-agent';
+    assert.equal(createRequire(process.execPath)(sdk),'default-prefix-sdk');
+    const assets=seaSdkExecutionAssets(); assert.ok(assets.includes(${JSON.stringify(sdkRoot)}));
+    const plan=await prepareFilesystemIsolation({scope:${JSON.stringify(f.scope)},command:process.execPath,
+      args:['-e',${JSON.stringify(probeCode)}],
+      readablePaths:[...assets,...nodeExecutionAssets(assets)],credentials:'none'});
+    try { const launch=filesystemStdioLaunch(plan);
+      const result=await promisify(execFile)(launch.command,launch.args,{env:plan.env,timeout:15000});
+      process.stdout.write(result.stdout);
+    } finally {plan.cleanup();}
+  `);
+  const { stdout } = await promisify(execFile)(executable, ['--experimental-strip-types', script], {
+    env: { ...process.env, PATH: '/usr/bin:/bin', NODE_PATH: '' }, timeout: 25_000,
+  });
+  assert.equal(stdout.trim(), 'global-sdk');
+});
+
+test('logical asset destinations beneath protected ancestor aliases are refused', isolationIntegration, async t => {
+  const f = fixture(t);
+  const state = join(f.home, '.flow'); mkdirSync(state);
+  const parentAlias = join(f.home, 'state-alias'); symlinkSync(state, parentAlias);
+  const assetAlias = join(parentAlias, 'modules'); symlinkSync(f.linked, assetAlias);
+  await assert.rejects(prepareFilesystemIsolation({ scope: f.scope, command: process.execPath, args: [],
+    readablePaths: [assetAlias], credentials: 'none' }), /Readable execution asset would expose protected state/);
 });
 
 for (const mode of ["tree", "linked target"] as const) test(`protected dependency ${mode} is refused by the strict mount policy`, { ...isolationIntegration, timeout: 15_000 }, async (t) => {
