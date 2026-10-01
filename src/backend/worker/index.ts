@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
-import type { BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
+import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
 import { launchWorker, type WorkerLaunchOptions } from "./launcher.ts";
 import { WorkerRpc } from "./rpc.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
@@ -42,6 +42,7 @@ class WorkerSession implements BackendSession {
   skills?: () => Promise<Skill[]>;
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
+  setPermissionMode?: (mode: AgentPermissionMode) => Promise<void>;
 
   private readonly options: BackendCreateOptions;
   private readonly launchOptions: WorkerBackendOptions;
@@ -101,6 +102,7 @@ class WorkerSession implements BackendSession {
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
+      if (methods.has("setPermissionMode")) this.setPermissionMode = (mode) => this.rpc.call("setPermissionMode", [mode]);
       if (methods.has("startWorkflowSubagent")) this.startWorkflowSubagent = (options) => this.startWorkflow(options);
     } finally { clearTimeout(timer); }
   }

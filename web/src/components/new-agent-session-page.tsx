@@ -89,6 +89,7 @@ export function NewAgentSessionPage({
   const backend = chosenBackend ?? resolveDefaultBackend(config.backends, config.providers?.defaultBackend) ?? "";
   const [chosenModel, setChosenModel] = useState<string | undefined>();
   const [effort, setEffort] = useState<EffortLevel | undefined>();
+  const [chosenPermissionMode, setPermissionMode] = useState<import("../../../src/protocol/events.ts").AgentPermissionMode | undefined>();
   const [inWorktree, setInWorktree] = useState(false);
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
@@ -133,6 +134,7 @@ export function NewAgentSessionPage({
     backend,
     modelId: model?.id,
     effort,
+    ...(chosenPermissionMode ? { permissionMode: chosenPermissionMode } : {}),
     inWorktree,
     repository,
     base,
@@ -157,6 +159,7 @@ export function NewAgentSessionPage({
         : undefined,
       model,
       effort,
+      permissionMode: backend === "claude" || backend === "pi" ? chosenPermissionMode ?? config.providers?.permissionModes?.[backend] ?? (backend === "claude" ? "auto" : "always") : undefined,
       branch: shownBranch,
       worktree: undefined,
       contextUsage: undefined,
@@ -170,7 +173,7 @@ export function NewAgentSessionPage({
       spoken: false,
       link: "live",
     }),
-    [backend, backendModels, discoveryProblem, effort, model, scope, shownBranch],
+    [backend, backendModels, chosenPermissionMode, config.providers?.permissionModes, discoveryProblem, effort, model, scope, shownBranch],
   );
 
   const create = useCallback(async (): Promise<string | undefined> => {
@@ -215,6 +218,7 @@ export function NewAgentSessionPage({
         setEffort((current) => current && levels.includes(current) ? current : undefined);
       },
       setEffort,
+      setPermissionMode,
       switchBranch: async (branch: string) => {
         if (inWorktree) {
           setCutFrom(branch);
@@ -354,6 +358,7 @@ export function NewAgentSessionPage({
                   onValueChange={(value) => {
                     if (typeof value !== "string") return;
                     setBackend(value);
+                    setPermissionMode(undefined);
                     setChosenModel(undefined);
                     setEffort(undefined);
                   }}
@@ -463,7 +468,7 @@ export function NewAgentSessionPage({
                   </>
                 )}
                 <div className="overflow-hidden rounded-xl border bg-background">
-                  <TurnStrip chrome={chrome} actions={actions} />
+                  <TurnStrip chrome={chrome} actions={actions} permissions={false} />
                 </div>
               </TabsContent>
 

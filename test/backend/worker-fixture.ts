@@ -10,6 +10,7 @@ const backend: AgentBackend = {
   async create(options) {
     if (options.modelId === "create-error") throw new Error("fixture create failed");
     if (options.modelId === "create-hang") await new Promise(() => {});
+    let permissionMode = options.permissionMode ?? "always";
     let resume = "initial-token";
     let activeCapabilities = capabilities;
     let finishPrompt: (() => void) | undefined;
@@ -21,6 +22,7 @@ const backend: AgentBackend = {
       async prompt(text) {
         options.emit({ type: "turn_started", turnId: "fixture-turn" });
         if (text === "crash") { process.exit(23); }
+        if (text === "permission-mode") options.emit({ type: "message", id: "permission-mode", text: permissionMode, final: true });
         if (text === "late-crash") {
           options.emit({ type: "subagent", subagentId: "child", name: "child", state: "running" });
           options.emit({ type: "background_call", callId: "job", tool: "Bash", state: "running" });
@@ -58,6 +60,10 @@ const backend: AgentBackend = {
         options.emit({ type: "model_changed", model: { id: modelId } });
       },
       async setEffort(effort) { options.emit({ type: "effort_changed", effort }); },
+      async setPermissionMode(mode) {
+        if (mode === "auto") throw new Error("Pi does not support Auto permissions");
+        permissionMode = mode;
+      },
       async compact() { options.emit({ type: "turn_started", turnId: "compaction" }); options.emit({ type: "turn_ended", turnId: "compaction", reason: "complete" }); },
       async skills() { return [{ name: "fixture", description: "fixture skill" }]; },
       async refreshMcp() { options.emit({ type: "message", id: "tools", text: options.mcp!.tools().map((tool) => tool.name).join(","), final: true }); },

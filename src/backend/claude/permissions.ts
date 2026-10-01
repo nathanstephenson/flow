@@ -19,14 +19,16 @@ export type Settle = (
 
 type Pending = {
   tool: string;
+  /** Empty for the parent turn; otherwise the Subagent's spawning call id. */
+  producer: string;
   /** The call's own arguments, handed straight back on an allow — never altered, never inspected. */
   input: Record<string, unknown>;
   settle: Settle;
 };
 
 /**
- * The Permission Prompts open in one turn, the callbacks held for them, and what the human has
- * already refused.
+ * The Permission Prompts open in a Backend Session, the callbacks held for them, and what the human
+ * has already refused in each producer's work. Detached Subagents outlive the parent turn.
  *
  * A sibling of `PendingEnquiries`, and the rule is the same one: the Claude SDK does not continue
  * until `canUseTool` settles, so **every path must settle it**. A rejected or dropped callback leaves
@@ -41,20 +43,20 @@ type Pending = {
  * than "the human declined", because the model is being unblocked, not corrected, and one told a
  * person refused it will spend the turn negotiating.
  *
- * Turn-scoped and no wider. A no was about what was being attempted, not about the tool forever;
- * `clear()` drops it at the end of the turn, and the Always decision is the only thing here that
- * outlives one.
+ * Producer-scoped and no wider. A no was about what was being attempted, not about the tool forever;
+ * the parent forgets its refusals at turn end, a Subagent at termination. Neither can refuse a tool
+ * on the other's behalf. Always remains a Backend Session-wide grant.
  *
  * Its own module rather than fields on ClaudeSession because that session cannot be constructed
  * without spawning a Claude process, so none of this would be reachable from a test there.
  */
 export class PendingPermissions {
   private readonly open = new Map<string, Pending>();
-  private readonly refused = new Set<string>();
+  private readonly refused = new Map<string, Set<string>>();
 
   /** Park a callback against the call awaiting authorisation. `callId` is the SDK's `toolUseID`. */
-  hold(callId: string, tool: string, input: Record<string, unknown>, settle: Settle): void {
-    this.open.set(callId, { tool, input, settle });
+  hold(callId: string, tool: string, input: Record<string, unknown>, settle: Settle, producer = ""): void {
+    this.open.set(callId, { tool, input, settle, producer });
   }
 
   /** Which tool an open prompt is about, or undefined for one already settled. */
@@ -62,9 +64,9 @@ export class PendingPermissions {
     return this.open.get(callId)?.tool;
   }
 
-  /** Whether this tool has already been refused in this turn, and so must not be asked about again. */
-  isRefused(tool: string): boolean {
-    return this.refused.has(tool);
+  /** Whether this producer's work has already refused the tool, so it must not be asked again. */
+  isRefused(tool: string, producer = ""): boolean {
+    return this.refused.get(producer)?.has(tool) ?? false;
   }
 
   /**
@@ -79,7 +81,9 @@ export class PendingPermissions {
     if (!pending) return false;
     this.open.delete(callId);
     if (decision === "deny") {
-      this.refused.add(pending.tool);
+      const refused = this.refused.get(pending.producer) ?? new Set<string>();
+      refused.add(pending.tool);
+      this.refused.set(pending.producer, refused);
       pending.settle({ behavior: "deny", message: refusal(pending.tool) });
       return true;
     }
@@ -99,12 +103,20 @@ export class PendingPermissions {
     return pending.tool;
   }
 
-  /** Abandon everything open, and say what was abandoned so each gets its terminal snapshot. */
-  abandonAll(why: string): { callId: string; tool: string }[] {
-    return [...this.open.keys()].flatMap((callId) => {
+  /** Abandon matching prompts, and name each one for its terminal snapshot. */
+  abandonAll(why: string, matches: (producer: string) => boolean = () => true): { callId: string; tool: string }[] {
+    return [...this.open].flatMap(([callId, pending]) => {
+      if (!matches(pending.producer)) return [];
       const tool = this.abandon(callId, why);
       return tool ? [{ callId, tool }] : [];
     });
+  }
+
+  /** Forget refusals only for work that ended; pending callbacks must be settled separately. */
+  clearRefusals(matches: (producer: string) => boolean = () => true): void {
+    for (const producer of this.refused.keys()) {
+      if (matches(producer)) this.refused.delete(producer);
+    }
   }
 
   /**

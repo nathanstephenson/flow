@@ -1,6 +1,6 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
-import type { Capabilities, EffortLevel, PermissionDecision } from "./events.ts";
+import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision } from "./events.ts";
 import type { Branch } from "./git.ts";
 import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
@@ -47,6 +47,7 @@ export type SessionSummary = {
   scope: string;
   backend: string;
   status: SessionStatus;
+  permissionMode?: AgentPermissionMode;
   title: string;
   /** Latest assistant output, updated as its streamed snapshot grows. */
   outputPreview?: string;
@@ -140,6 +141,7 @@ export type Command =
       backend?: string;
       modelId?: string;
       effort?: EffortLevel;
+      permissionMode?: AgentPermissionMode;
       /**
        * Start this Agent Session in a fresh worktree instead of in `scope` itself.
        *
@@ -187,6 +189,7 @@ export type Command =
   | { type: "acknowledge"; sessionId: string; throughVersion: number }
   | { type: "set_model"; sessionId: string; modelId: string }
   | { type: "set_effort"; sessionId: string; effort: EffortLevel }
+  | { type: "set_permission_mode"; sessionId: string; mode: AgentPermissionMode }
   /**
    * `switch_branch` rather than `set_branch`: `set_model` and `set_effort` set a property the host
    * holds and the next turn reads, whereas this moves someone's working tree on disk. Borrowing

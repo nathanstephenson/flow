@@ -30,6 +30,8 @@ import { compactionExtensionError, compactionModelExtension } from "./compaction
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
+import { PiAgentPermissions } from "./agent-permissions.ts";
+import type { AgentPermissionMode, PermissionDecision } from "../../protocol/events.ts";
 import { PiWork, callIdFor, resultText, textResult, type Completion, type ToolResult } from "./work.ts";
 
 /**
@@ -86,6 +88,9 @@ export class PiSession implements BackendSession {
     this.unsubscribe = this.session.subscribe((event) => this.translate(event));
   }
   private readonly standingAuthorisations: readonly string[];
+  private readonly agentPermissions: PiAgentPermissions | undefined;
+  private readonly permissionProducer?: { subagentId: string };
+  answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
   private disposed = false;
   private disposal: Promise<void> | undefined;
   private turnReason: TurnEndReason = "complete";
@@ -112,10 +117,12 @@ export class PiSession implements BackendSession {
   private currentMessageId: string | undefined;
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
+    support: { mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
     this.mcp = support.mcp;
     this.recreate = support.recreate;
     this.standingAuthorisations = [...(support.standingAuthorisations ?? [])];
+    this.agentPermissions = support.agentPermissions;
+    if (support.permissionProducer) this.permissionProducer = support.permissionProducer;
     this.session = session;
     this.applyAutoCompaction = support.autoCompaction;
     this.workflowAutoCompaction = support.workflowAutoCompaction;
@@ -126,6 +133,7 @@ export class PiSession implements BackendSession {
     this.enquiries = support.enquiries;
     this.work = support.work;
     const enquiries = support.enquiries;
+    if (this.agentPermissions) this.answerPermission = async (callId, decision) => this.agentPermissions!.answer(callId, decision);
     if (enquiries) this.answerEnquiry = async (askId, answers) => enquiries.answer(askId, answers);
     this.capabilities = capabilitiesOf(session, support.enquiries !== undefined, support.subagents ?? false);
     this.unsubscribe = session.subscribe((event) => this.translate(event));
@@ -160,9 +168,12 @@ export class PiSession implements BackendSession {
   }
 
   async abort(): Promise<void> {
+    this.agentPermissions?.cancel(this.permissionProducer ?? { subagentId: "" });
     this.aborting = this.turnId !== undefined;
     await this.session.abort();
   }
+
+  async setPermissionMode(mode: AgentPermissionMode): Promise<void> { this.agentPermissions?.setMode(mode); }
 
   async setModel(modelId: string): Promise<void> {
     const available = await this.session.modelRuntime.getAvailable();
@@ -296,6 +307,7 @@ export class PiSession implements BackendSession {
 
   private async disposeOnce(): Promise<void> {
     this.disposed = true;
+    this.agentPermissions?.cancel(this.permissionProducer);
     this.completions.length = 0;
     try {
       await Promise.all([this.abort(), this.work?.dispose(), ...[...this.workflows.values()].map((handle) => handle.cancel())]);
@@ -481,13 +493,17 @@ export class PiBackend implements AgentBackend {
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.
     const settingsManager = SettingsManager.create(options.scope, agentDir);
+    const agentPermissions = options.tools === "none" ? undefined : new PiAgentPermissions(options.permissionMode ?? "always", options.standingAuthorisations ?? [], options.emit);
     const resourceLoader = new DefaultResourceLoader({
       cwd: options.scope,
       agentDir,
       settingsManager,
       noExtensions: true,
-      ...(options.compactionModelId ? { extensionFactories: [compactionModelExtension(options.compactionModelId,
-        (text) => options.emit({ type: "notice", level: "error", text }))] } : {}),
+      extensionFactories: [
+        ...(agentPermissions ? [agentPermissions.extension()] : []),
+        ...(options.compactionModelId ? [compactionModelExtension(options.compactionModelId,
+          (text) => options.emit({ type: "notice", level: "error", text }))] : []),
+      ],
     });
     await resourceLoader.reload();
 
@@ -516,7 +532,7 @@ export class PiBackend implements AgentBackend {
       ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
       ...(enquiries ? [enquiries.tool] : []),
       ...(subagents ? [subagentTool(work, (id, input, signal) =>
-        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp, options.compactionModelId))] : []),
+        runSubagent(session, options.scope, agentDir, work, id, input, signal, options.emit, mcp, options.compactionModelId, agentPermissions))] : []),
     ];
     const start = (current?: AgentSession): ReturnType<typeof createAgentSession> => {
       const mcpTools = piMcpTools(mcp);
@@ -541,7 +557,7 @@ export class PiBackend implements AgentBackend {
     }
 
     const autoCompaction = structuredClone(options.autoCompaction);
-    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
     if (options.modelId) {
       try {
         await piSession.setModel(options.modelId);
@@ -578,20 +594,23 @@ export class PiBackend implements AgentBackend {
 }
 
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
-  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession, compactionModelId?: string): Promise<ToolResult> {
+  input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession, compactionModelId?: string, agentPermissions?: PiAgentPermissions): Promise<ToolResult> {
   const available = parent.modelRuntime.getAvailableSnapshot();
   const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
   if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
   const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
+  const producer = { subagentId: id };
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
-    ...(compactionModelId ? { extensionFactories: [compactionModelExtension(compactionModelId,
-      (text) => emit({ type: "notice", level: "error", text }))] } : {}),
+    extensionFactories: [
+      ...(agentPermissions ? [agentPermissions.extension(producer)] : []),
+      ...(compactionModelId ? [compactionModelExtension(compactionModelId,
+        (text) => emit({ type: "notice", level: "error", text }))] : []),
+    ],
     appendSystemPrompt: ["You are a Subagent. Complete the delegated work and return the result. If human input is needed, return that request to the parent. You cannot ask the human or create further Subagents."] });
   await resourceLoader.reload();
   signal.throwIfAborted();
-  const producer = { subagentId: id };
   const { session: child, extensionsResult } = await createAgentSession({ cwd: scope, agentDir, model, modelRuntime: parent.modelRuntime,
     resourceLoader, settingsManager, sessionManager: SessionManager.inMemory(scope), tools,
     customTools: [...piMcpTools(mcp), ...backgroundTools(scope, settingsManager, work, producer, input.run_in_background === false).filter((tool) => tools.includes(tool.name))],
@@ -625,8 +644,8 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
         break;
       case "turn_ended": reason = event.reason; break;
     }
-  });
-  const abort = () => { void adapter.abort(); };
+  }, undefined, agentPermissions ? { agentPermissions, permissionProducer: producer } : {});
+  const abort = () => { agentPermissions?.cancel(producer); void adapter.abort(); };
   signal.addEventListener("abort", abort, { once: true });
   try {
     signal.throwIfAborted();
@@ -637,6 +656,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
     return textResult(output || "Subagent completed without text output");
   } finally {
     signal.removeEventListener("abort", abort);
+    agentPermissions?.cancel(producer);
     await adapter.dispose();
     if (input.run_in_background === false) await work.stopOwnedCalls(id);
   }
@@ -655,7 +675,7 @@ function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: bo
     fork: false,
     subagents,
     enquiries,
-    permissions: false,
+    permissions: true,
   };
 }
 

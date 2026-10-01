@@ -261,6 +261,8 @@ export type EnquiryState =
  * transcript is durable and a reader scrolling back should be able to see which click widened what
  * the machine pre-approves.
  */
+export type AgentPermissionMode = "ask" | "auto" | "always";
+
 export type PermissionDecision = "allow" | "always" | "deny";
 
 /**
@@ -291,6 +293,7 @@ export type AgentEvent =
       backend: string;
       scope: string;
       capabilities: Capabilities;
+      permissionMode?: AgentPermissionMode;
       worktree?: true;
     }
   | { type: "capabilities_changed"; capabilities: Capabilities }
@@ -397,10 +400,8 @@ export type AgentEvent =
    * composer is handed the chrome and nothing else, and cannot fetch a body it could have been
    * handed.
    *
-   * `producer` is here for the reason it is on `enquiry`, and unpopulated for the same reason: the
-   * SDK's callback carries an `agentID` that nothing has yet been observed to fill in, so a
-   * Subagent's Permission Prompt is not attributable and `SubagentWait`'s `"permission"` still has
-   * nothing to report.
+   * `producer` identifies ordinary Pi Subagents; Claude supplies it only when the SDK does.
+   * A background Subagent prompt may outlive the parent turn but remains answerable here.
    */
   | ({
       type: "permission";
@@ -460,6 +461,7 @@ export type AgentEvent =
   | { type: "compacting"; active: boolean }
   | { type: "model_changed"; model: ModelInfo }
   | { type: "effort_changed"; effort: EffortLevel }
+  | { type: "permission_mode_changed"; mode: AgentPermissionMode }
   | { type: "branch_changed"; branch: Branch }
   | { type: 'workflow_spend'; executionId: string; spend: Spend }
   | { type: "notice"; level: NoticeLevel; text: string }
