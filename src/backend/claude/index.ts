@@ -39,6 +39,7 @@ import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { BackgroundCalls } from "./background-calls.ts";
+import { prepareClaudeState } from "../worker/claude-state.ts";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -274,8 +275,11 @@ class ClaudeSession implements BackendSession {
   private readonly options: BackendCreateOptions;
   private readonly backendOptions: ClaudeBackendOptions;
   private readonly workflowAutoCompaction: AutoCompaction | undefined;
+  private readonly claudeState: ReturnType<typeof prepareClaudeState>;
 
-  constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
+  constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions,
+    claudeState: ReturnType<typeof prepareClaudeState>) {
+    this.claudeState = claudeState;
     this.parentWorkflow = workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.options = options;
     this.backendOptions = backendOptions;
@@ -297,10 +301,10 @@ class ClaudeSession implements BackendSession {
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
     // `disallowedTools` — which an operator meant — still outranks a grant a human clicked.
     const startingEffort = sdkEffort(options.effort);
-    const env = claudeAutoCompactionEnv(this.workflowAutoCompaction);
+    const env = claudeAutoCompactionEnv(this.workflowAutoCompaction, claudeState.env) ?? claudeState.env;
     const queryOptions: Options = {
       cwd: options.scope,
-      ...(env ? { env } : {}),
+      env,
       includePartialMessages: true,
       mcpServers: toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow },
       strictMcpConfig: true,
@@ -671,7 +675,13 @@ class ClaudeSession implements BackendSession {
       ...(this.backendOptions.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: this.backendOptions.pathToClaudeCodeExecutable } : {}),
     }, options, this.workflowGrants, {
       ...(this.backendOptions.query ? { query: this.backendOptions.query } : {}),
-      spawn: (options) => spawnWorkflowProcess(isSingleExecutable() ? { ...options, ...seaSpawnTarget(options) } : options),
+      spawn: (options) => spawnWorkflowProcess({ ...options,
+        ...(isSingleExecutable() ? seaSpawnTarget(options) : {}),
+        // Worker launches inherit this view already; direct embeddings must pass it to owned
+        // Workflow children too, without replacing their toolless/compaction environment.
+        env: { ...options.env, CLAUDE_CONFIG_DIR: this.claudeState.env.CLAUDE_CONFIG_DIR,
+          CLAUDE_SECURESTORAGE_CONFIG_DIR: this.claudeState.env.CLAUDE_SECURESTORAGE_CONFIG_DIR },
+      }),
     }, this.workflowAutoCompaction);
     this.workflowSubagents.add(handle);
     void handle.done.finally(() => this.workflowSubagents.delete(handle)).catch(() => {});
@@ -701,8 +711,10 @@ class ClaudeSession implements BackendSession {
     } catch {
       // Closing a stream that already ended is not an error worth surfacing.
     }
-    await this.pump.catch(() => undefined);
-    await workflowsStopped;
+    try {
+      await this.pump.catch(() => undefined);
+      await workflowsStopped;
+    } finally { this.claudeState.cleanup(); }
   }
 
   private async consume(): Promise<void> {
@@ -1048,7 +1060,10 @@ export class ClaudeBackend implements AgentBackend {
     // Do not await the init message: streaming input yields none until the first prompt. The
     // supportedModels control request does answer before that prompt, however. Returning while it
     // is still in flight lets the first send race the empty provisional capabilities.
-    const session = new ClaudeSession(options, this.options);
+    const claudeState = prepareClaudeState(options.stateDir);
+    let session: ClaudeSession;
+    try { session = new ClaudeSession(options, this.options, claudeState); }
+    catch (error) { claudeState.cleanup(); throw error; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([

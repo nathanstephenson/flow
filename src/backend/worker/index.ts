@@ -12,6 +12,7 @@ import { seaSdkExecutionAssets } from './assets.ts';
 import { WorkerRpc } from "./rpc.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
+import { prepareClaudeState } from "./claude-state.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
   backend?: "pi" | "claude";
@@ -34,10 +35,18 @@ export class WorkerBackend implements AgentBackend {
     if (!isolationEnabled) {
       const scope = realpathSync(options.scope);
       if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
-      // Normal SDK environment and supplied durable state, with the same owned IPC lifecycle.
-      const proxy = new WorkerSession({ ...options, scope }, this.options, () => {});
-      try { await proxy.open(); return proxy; }
-      catch (error) { await proxy.dispose(); throw error; }
+      // Pi retains its ordinary full environment. Claude needs an owned projects tree in both
+      // modes; prepare its private config view on the host so Workflow children inherit it too.
+      const claude = this.name === "claude" ? prepareClaudeState(options.stateDir, { ...process.env, ...this.options.env }) : undefined;
+      let proxy: WorkerSession | undefined;
+      try {
+        proxy = new WorkerSession({ ...options, scope },
+          claude ? { ...this.options, env: claude.env } : this.options, claude?.cleanup ?? (() => {}));
+        await proxy.open(); return proxy;
+      } catch (error) {
+        if (proxy) await proxy.dispose(); else claude?.cleanup();
+        throw error;
+      }
     }
     const plan = workerCommand(this.options);
     const packageRoot = isSea() ? dirname(process.execPath) : fileURLToPath(new URL("../../..", import.meta.url));

@@ -38,6 +38,18 @@ modes. Disabling filesystem isolation does not disable worker process separation
 heartbeats or cancellation. Those mechanisms alone are not an OS-enforced filesystem or detached
 process boundary.
 
+Claude's project records use the same dedicated backend `claude-projects` directory in both
+modes, so changing the policy on Revive does not change their storage location. Unrestricted
+Claude uses an ephemeral config view; restricted Claude reuses its narrowly staged view.
+Credentials are not persisted in the durable project-record directory. Legacy resume IDs whose
+records exist only in the global Claude projects directory require a separate, narrowly scoped
+migration; Flow does not bulk import other Agent Sessions' records.
+
+Local stdio MCP transports own ordinary subprocess groups in both modes. Shutdown is bounded and
+closes inherited pipes independently of leader exit, so a surviving pipe holder cannot hang Retry
+or disposal. Restricted mount state remains until actual leader exit and group cleanup. These
+lifecycle controls are not unrestricted-mode confinement: detached descendants can escape them.
+
 ### Enabled-mode enforcement
 
 On Linux, Flow launches workers through Bubblewrap. The host filesystem is read-only, the canonical

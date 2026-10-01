@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { prepareFilesystemIsolation, type FilesystemIsolation } from "../isolation/filesystem.ts";
-import { filesystemStdioLaunch } from "../isolation/launcher.ts";
+import { SupervisedStdioTransport } from "./mcp-stdio-supervisor.ts";
 import { nodeExecutionAssets } from "../isolation/node-assets.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -22,30 +22,6 @@ export type McpTool = {
     timeoutMs?: number,
   ) => Promise<CallToolResult>;
 };
-// SDK close() sends SIGKILL after its grace periods but does not wait for that final exit.
-// A Bubblewrap mount's backing state must outlive the process, including failed discovery.
-class SupervisedStdioTransport extends StdioClientTransport {
-  private started = false;
-  private closing?: Promise<void>;
-  private resolveExit!: () => void;
-  readonly exited = new Promise<void>((resolve) => { this.resolveExit = resolve; });
-  constructor(options: ConstructorParameters<typeof StdioClientTransport>[0]) {
-    super(options);
-    // Client.connect chains this callback; it runs only on the subprocess close event.
-    this.onclose = () => this.resolveExit();
-  }
-  override async start(): Promise<void> {
-    this.started = true;
-    await super.start();
-  }
-  override close(): Promise<void> {
-    return this.closing ??= (async () => {
-      await super.close();
-      if (this.started) await this.exited;
-    })();
-  }
-}
-
 /** Execution assets, not a general grant to the directories named in server arguments.
  * The policy canonicalises and rejects broad/protected mounts before launching anything.
  * Package roots keep relative imports and dependencies available when /tmp is masked.
@@ -171,7 +147,9 @@ export class McpSession {
       await client.close().catch(() => {});
       // Client may already have detached a transport after an error or spontaneous exit.
       await transport?.close();
-      isolation?.cleanup();
+      // A bounded stdio close may return before a kernel-stalled process exits. Its pinned
+      // mount state is released only by the actual-exit hook registered below.
+      if (!(transport instanceof SupervisedStdioTransport)) isolation?.cleanup();
     })();
     this.stops.set(id, stop);
     try {
@@ -190,7 +168,6 @@ export class McpSession {
           args: connection.args,
           env: getDefaultEnvironment(),
           cwd: scope,
-          stderr: "ignore",
         });
       } else if (connection.transport === "stdio") {
         isolation = await prepareFilesystemIsolation({
@@ -210,10 +187,11 @@ export class McpSession {
         // follow it, even when preparation succeeds after dispose() has closed the client.
         if (this.disposed) { isolation.cleanup(); return; }
         transport = new SupervisedStdioTransport({
-          ...filesystemStdioLaunch(isolation),
-          env: isolation.env as Record<string, string>,
+          command: isolation.command,
+          args: isolation.args,
+          stdioFds: isolation.stdioFds,
+          env: isolation.env,
           cwd: isolation.scope,
-          stderr: "ignore",
         });
         const prepared = isolation;
         void transport.exited.then(() => prepared.cleanup());
