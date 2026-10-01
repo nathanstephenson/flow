@@ -64,6 +64,11 @@ export class Subagents {
     return this.release();
   }
 
+  /** Whether this Subagent's work survives the parent turn ending. */
+  isDetached(callId: string): boolean {
+    return this.detached.has(callId);
+  }
+
   /** Remember which Subagent a task id belongs to. Ignores a task that is not one's. */
   noteTask(taskId: string, callId: string): void {
     if (this.describe(callId) === undefined) return;

@@ -21,6 +21,7 @@ import type { AutoCompaction } from "../../protocol/settings.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
+  AgentPermissionMode,
   Capabilities,
   EffortLevel,
   ModelInfo,
@@ -39,6 +40,8 @@ import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { BackgroundCalls } from "./background-calls.ts";
+
+export class AutoPermissionUnavailable extends Error {}
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
 
@@ -251,6 +254,9 @@ class ClaudeSession implements BackendSession {
   private readonly calls = new BackgroundCalls();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
+  /** Spawning call id for each parked ordinary-Subagent permission, through its terminal event. */
+  private readonly permissionProducers = new Map<string, string>();
+  private permissionMode: AgentPermissionMode;
   /**
    * What runs without being asked about: the pre-approved set, plus the Standing Authorisations this
    * Backend Session was created with.
@@ -278,6 +284,7 @@ class ClaudeSession implements BackendSession {
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions) {
     this.parentWorkflow = workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.options = options;
+    this.permissionMode = options.permissionMode ?? "ask";
     this.backendOptions = backendOptions;
     this.workflowAutoCompaction = structuredClone(options.autoCompaction);
     this.emit = options.emit;
@@ -332,13 +339,19 @@ class ClaudeSession implements BackendSession {
        * What settles them is a human, through `answerEnquiry` or `answerPermission`; on every path
        * where there will never be one, an abandonment.
        */
-      canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string }) => {
+      canUseTool: async (toolName: string, input: Record<string, unknown>, extra: { toolUseID: string; agentID?: string; signal: AbortSignal }) => {
         // Denied, never parked. There is no human behind a toolless session, so parking would hold
         // the turn open until the caller gave up on it.
         if (toolless) return { behavior: "deny" as const, message: "This session runs no tools" };
+        if (extra.signal.aborted || this.disposed) return { behavior: "deny" as const, message: `${toolName} was not authorised: the permission request was cancelled. Continue without it.` };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
-        if (this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
-        return await this.authorise(extra.toolUseID, toolName, input);
+        if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
+        // The SDK calls this field agentID, but for an ordinary Agent it is the task id announced by
+        // task_started, not the Agent tool-use id carried as parent_tool_use_id on transcript events.
+        // Resolve through the same task map used by task notifications so the permission belongs to
+        // the Subagent card clients can actually answer, rather than to an otherwise unknown id.
+        const producer = extra.agentID ? (this.subagents.callIdOf(extra.agentID) ?? extra.agentID) : "";
+        return await this.authorise(extra.toolUseID, toolName, input, producer, extra.signal);
       },
     };
 
@@ -546,12 +559,12 @@ class ClaudeSession implements BackendSession {
   /**
    * Hold the permission callback for a tool nobody has authorised until a human decides.
    *
-   * The returned promise is the turn: the SDK does not continue until it settles, so nothing here may
-   * throw and no path may drop it. Deliberately has no timeout, the rule ADR 0016 set for an Enquiry
-   * — a timer that gave up on a prompt someone was still reading would be worse than one that waits,
-   * and Abort is the escape.
+   * The returned promise holds the tool call: its producer cannot continue until it settles, so
+   * nothing here may throw and no path may drop it. Deliberately has no timeout, the rule ADR 0016
+   * set for an Enquiry — a timer that gave up on a prompt someone was still reading would be worse
+   * than one that waits, and Abort is the escape.
    *
-   * A tool already refused this turn is answered here rather than asked about again, with the
+   * A tool already refused in this producer's work is answered here rather than asked again, with the
    * adapter's own neutral message. That is not a shortcut: a model that wanted a tool wants it
    * several times, and re-asking the moment someone says no pins the composer on the same question
    * while the model rephrases around it.
@@ -560,22 +573,36 @@ class ClaudeSession implements BackendSession {
     callId: string,
     tool: string,
     input: Record<string, unknown>,
+    producer: string,
+    signal: AbortSignal,
   ): Promise<
     { behavior: "allow"; updatedInput: Record<string, unknown> } | { behavior: "deny"; message: string }
   > {
-    if (this.permissions.isRefused(tool)) {
+    if (this.permissions.isRefused(tool, producer)) {
       return { behavior: "deny", message: `${tool} is not enabled for this session. Continue without it.` };
     }
 
     return await new Promise((resolve) => {
-      this.permissions.hold(callId, tool, input, resolve);
-      this.emit({ type: "permission", callId, tool, state: "asked" });
+      // The SDK cancels individual requests independently of the parent turn (for example when a
+      // background Subagent stops). Remove the listener on *every* settlement path, and remove the
+      // pending callback before emitting its terminal event so a stale Always cannot grant a tool.
+      const onAbort = () => this.abandonPermission(callId, "the permission request was cancelled");
+      this.permissions.hold(callId, tool, input, (result) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      }, producer);
+      if (producer !== "") this.permissionProducers.set(callId, producer);
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "asked" });
+      if (signal.aborted) onAbort();
     });
   }
 
   async answerPermission(callId: string, decision: PermissionDecision): Promise<boolean> {
     const tool = this.permissions.describe(callId);
     if (tool === undefined || !this.permissions.decide(callId, decision)) return false;
+    const producer = this.permissionProducers.get(callId) ?? "";
+    this.permissionProducers.delete(callId);
     // Before the snapshot, so nothing can observe a decided Always against a session still asking.
     // The Standing Authorisation itself is the host's to persist; this is only this session honouring
     // it, which it must do itself because the list it was created with is a snapshot.
@@ -583,24 +610,35 @@ class ClaudeSession implements BackendSession {
       this.allowed.add(tool);
       this.workflowGrants.add(tool);
     }
-    this.emit({ type: "permission", callId, tool, state: "decided", decision });
+    this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "decided", decision });
     return true;
   }
 
   /**
    * Settle every open Permission Prompt as unauthorised, and say so in the transcript.
    *
-   * Called from every path that ends a turn or a Backend Session, for the reason `abandonEnquiries`
-   * is: denying rather than dropping leaves the CLI's own conversation record complete, so a later
-   * Revive resumes onto a turn with no dangling `tool_use`.
+   * Parent turn cleanup preserves detached producers; termination and Backend Session shutdown do
+   * not. Denying rather than dropping leaves the CLI's own conversation record complete.
    */
-  private abandonPermissions(why: string): void {
-    for (const { callId, tool } of this.permissions.abandonAll(why)) {
-      this.emit({ type: "permission", callId, tool, state: "aborted" });
+  private abandonPermissions(why: string, matches: (producer: string) => boolean = () => true): void {
+    for (const { callId, tool } of this.permissions.abandonAll(why, matches)) {
+      const producer = this.permissionProducers.get(callId) ?? "";
+      this.permissionProducers.delete(callId);
+      this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "aborted" });
     }
   }
 
+  /** Cancel one SDK request, idempotently with human answers and lifecycle cleanup. */
+  private abandonPermission(callId: string, why: string): void {
+    const tool = this.permissions.abandon(callId, why);
+    if (tool === undefined) return;
+    const producer = this.permissionProducers.get(callId) ?? "";
+    this.permissionProducers.delete(callId);
+    this.emit({ type: "permission", callId, tool, ...attribution(producer), state: "aborted" });
+  }
+
   async abort(): Promise<void> {
+    // Keep the existing all-prompts semantics: this interrupts the shared CLI, not a single producer.
     // Before the interrupt, not after: the CLI is blocked on this callback, and an interrupt that
     // waits on the outstanding permission request would be waiting on something only this releases.
     this.abandonEnquiries("the turn was aborted");
@@ -610,6 +648,11 @@ class ClaudeSession implements BackendSession {
     } catch (error) {
       this.emit({ type: "notice", level: "warn", text: `Interrupt failed: ${message(error)}` });
     }
+  }
+
+  async setPermissionMode(mode: AgentPermissionMode): Promise<void> {
+    await this.stream.setPermissionMode(mode === "auto" ? "auto" : "default");
+    this.permissionMode = mode;
   }
 
   async setModel(modelId: string): Promise<void> {
@@ -690,6 +733,7 @@ class ClaudeSession implements BackendSession {
     // belongs to is going Dormant — so that record is exactly what the next Revive resumes onto.
     this.abandonEnquiries("the session stopped");
     this.abandonPermissions("the session stopped");
+    this.permissions.clearRefusals();
     // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
     // Session Host records that from the transcript, the way it does a torn turn.
     this.subagents.abandon();
@@ -721,6 +765,7 @@ class ClaudeSession implements BackendSession {
         // session that has stopped is a question the human can answer into nothing.
         this.abandonEnquiries("the session failed");
         this.abandonPermissions("the session failed");
+        this.permissions.clearRefusals();
         this.emit({ type: "notice", level: "error", text: message(error) });
         this.endTurn("error");
       }
@@ -932,6 +977,8 @@ class ClaudeSession implements BackendSession {
   }
 
   private closeSubagent(callId: string): void {
+    this.abandonPermissions("the Subagent stopped", (producer) => producer === callId);
+    this.permissions.clearRefusals((producer) => producer === callId);
     const released = this.subagents.returned(callId);
     if (released) this.endTurn(released);
   }
@@ -1012,22 +1059,20 @@ class ClaudeSession implements BackendSession {
   private endTurn(reason: TurnEndReason): void {
     const turnId = this.turnId;
     /*
-     * Defensive, and should be unreachable: the turn cannot end while the CLI is blocked on a
-     * permission callback, so anything still open here has already been abandoned by the path that
-     * got us here. One line against the alternative, which is a picker on screen over a turn that
-     * ended — a question with no way to answer it and no way to dismiss it.
+     * Defensive for the parent and foreground work: an ended turn cannot answer their callbacks.
+     * Detached Subagents hold no parent turn and keep their prompts until their own termination,
+     * SDK request cancellation, or Backend Session shutdown (ADR 0016).
      */
     this.abandonEnquiries("the turn ended");
-    this.abandonPermissions("the turn ended");
-    // Cleared whatever the outcome, so a held end cannot reach the turn after this one. For
-    // permissions that also drops what the human refused: a no was about what was being attempted,
-    // and the next turn is a different attempt.
+    const ended = (producer: string) => !this.subagents.isDetached(producer);
+    this.abandonPermissions("the turn ended", ended);
+    this.permissions.clearRefusals(ended);
+    // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
     this.subagents.clear();
     // Drops the calls this turn announced. Open Background Calls survive — one outlives the turn
     // that made it, which is the whole of ADR 0021.
     this.calls.clear();
     this.enquiries.clear();
-    this.permissions.clear();
     if (!turnId) return;
     this.turnId = undefined;
     this.emit({ type: "turn_ended", turnId, reason });
@@ -1059,6 +1104,10 @@ export class ClaudeBackend implements AgentBackend {
       ]);
       if (session.capabilities.models.length === 0) {
         throw new Error("Claude model capabilities are unavailable; check the CLI and try again");
+      }
+      if (options.permissionMode === "auto") {
+        try { await session.setPermissionMode("auto"); }
+        catch (error) { throw new AutoPermissionUnavailable(`SDK rejected Auto: ${String(error)}`); }
       }
       return session;
     } catch (error) {

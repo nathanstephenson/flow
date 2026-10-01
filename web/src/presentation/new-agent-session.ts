@@ -1,5 +1,5 @@
 import type { Command } from "../../../src/protocol/commands.ts";
-import type { EffortLevel } from "../../../src/protocol/events.ts";
+import type { AgentPermissionMode, EffortLevel } from "../../../src/protocol/events.ts";
 import type { Json, VisualSchema, WorkflowDefinition } from "../../../src/protocol/workflows.ts";
 import { validateDefinition } from "../../../src/workflows/graph.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
@@ -21,6 +21,7 @@ export type NewAgentSessionForm = {
   modelId: string | undefined;
   /** Absent until somebody chooses one; the backend then runs at whatever it chose for itself. */
   effort: EffortLevel | undefined;
+  permissionMode?: AgentPermissionMode;
   inWorktree: boolean;
   /** Whether the Scope is a repository. Asked, not assumed — the field is free text. */
   repository: boolean;
@@ -70,6 +71,7 @@ export function createCommandFor(
     backend: form.backend,
     ...(form.modelId === undefined ? {} : { modelId: form.modelId }),
     ...(form.effort === undefined ? {} : { effort: form.effort }),
+    ...(form.permissionMode === undefined ? {} : { permissionMode: form.permissionMode }),
     /*
      * All three conditions, every time.
      *

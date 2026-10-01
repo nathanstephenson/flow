@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { ATTACHMENT_MEDIA_TYPES, type AttachmentMediaType } from "../protocol/attachments.ts";
-import type { EffortLevel, LoggedEvent } from "../protocol/events.ts";
+import type { AgentPermissionMode, EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import type { SessionAttention, SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
 
 /**
@@ -50,6 +50,7 @@ export type SessionMeta = {
   resumeToken?: string;
   modelId?: string;
   effort?: EffortLevel;
+  permissionMode?: AgentPermissionMode;
   /** Creation-time configured Effort still needs exact capability validation before first work. */
   initialEffortUnconfirmed?: boolean;
   /**
