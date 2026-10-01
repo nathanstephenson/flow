@@ -10,6 +10,7 @@ import { claudeMcpServers } from "../src/backend/claude/mcp.ts";
 import { piMcpTools } from "../src/backend/pi/mcp.ts";
 import { McpAuth } from "../src/daemon/mcp-auth.ts";
 import { ConfigStore } from "../src/daemon/config-store.ts";
+import { prepareFilesystemIsolation } from "../src/isolation/filesystem.ts";
 
 const connection = {
   id: "fixture",
@@ -22,7 +23,10 @@ const connection = {
 test(
   "stdio MCP tools execute through both Flow adapter bridges and retry",
   { timeout: 30_000 },
-  async () => {
+  async (t) => {
+    try {
+      (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+    } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
     const mcp = new McpSession([connection], process.cwd());
     try {
       await mcp.open();
@@ -74,7 +78,10 @@ test(
 test(
   "failed MCP connections do not prevent other tools opening",
   { timeout: 30_000 },
-  async () => {
+  async (t) => {
+    try {
+      (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+    } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
     const mcp = new McpSession(
       [
         { ...connection, id: "missing", command: "/missing-flow-mcp-command" },

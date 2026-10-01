@@ -1,25 +1,60 @@
 import { randomUUID } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { isSea } from "node:sea";
+import { fileURLToPath } from "node:url";
+import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
 import type { BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
-import { launchWorker, type WorkerLaunchOptions } from "./launcher.ts";
+import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
 import { WorkerRpc } from "./rpc.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
+  backend?: "pi" | "claude";
+  stateRoot?: string;
   /** Trusted test/embedding injection: module exports a default AgentBackend instance. */
   backendModule?: string;
+  /** Trusted execution assets hidden by temporary-directory masks, never writable roots. */
+  readablePaths?: string[];
 };
 
-/** Production Pi Adapter: one OS process per Backend Session, including all its SDK descendants. */
+/** One restricted worker per Backend Session; all adapter/SDK descendants inherit its policy. */
 export class WorkerBackend implements AgentBackend {
-  readonly name = "pi";
+  readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
-  constructor(options: WorkerBackendOptions = {}) { this.options = options; }
+  constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
   async create(options: BackendCreateOptions): Promise<BackendSession> {
-    const proxy = new WorkerSession(options, this.options);
-    try { await proxy.open(); return proxy; }
-    catch (error) { await proxy.dispose(); throw error; }
+    const plan = workerCommand(this.options);
+    const packageRoot = isSea() ? dirname(process.execPath) : fileURLToPath(new URL("../../..", import.meta.url));
+    const assets = [packageRoot, ...(this.options.readablePaths ?? [])];
+    if (isSea()) {
+      // The optional SDK and native dependencies remain installed beside a SEA executable.
+      for (const path of createRequire(process.execPath).resolve.paths("@earendil-works/pi-coding-agent") ?? []) {
+        if (existsSync(join(path, "@earendil-works/pi-coding-agent/package.json"))) assets.push(path);
+      }
+    }
+    if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
+    if (this.options.entry) {
+      assets.push(this.options.entry);
+      if (dirname(this.options.entry).endsWith("/backend/worker")) assets.push(resolve(dirname(this.options.entry), "../../.."));
+    }
+    const isolation = await prepareFilesystemIsolation({ ...plan, scope: options.scope, expectedScope: resolve(options.scope),
+      ...(options.stateDir ? { stateDir: options.stateDir } : {}),
+      ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
+      env: this.options.env ?? {}, credentials: this.name, ipc: true, readablePaths: assets });
+    let proxy: WorkerSession | undefined;
+    try {
+      proxy = new WorkerSession({ ...options, scope: isolation.scope, stateDir: isolation.stateDir },
+        { ...this.options, command: isolation.command, args: isolation.args, env: isolation.env, stdioFds: isolation.stdioFds }, isolation.cleanup);
+      await proxy.open();
+      return proxy;
+    } catch (error) {
+      if (proxy) await proxy.dispose(); else isolation.cleanup();
+      throw error;
+    }
   }
 }
 
@@ -45,7 +80,9 @@ class WorkerSession implements BackendSession {
 
   private readonly options: BackendCreateOptions;
   private readonly launchOptions: WorkerBackendOptions;
-  constructor(options: BackendCreateOptions, launchOptions: WorkerBackendOptions) {
+  private readonly cleanup: () => void;
+  constructor(options: BackendCreateOptions, launchOptions: WorkerBackendOptions, cleanup: () => void) {
+    this.cleanup = cleanup;
     this.options = options;
     this.launchOptions = launchOptions;
     this.worker = launchWorker(launchOptions);
@@ -89,7 +126,7 @@ class WorkerSession implements BackendSession {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.launchOptions.startupTimeoutMs ?? 60_000);
     try {
-      const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options,
+      const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
         workflowEnabled: !!workflow,
         ...(mcp ? { mcpTools: mcpMetadata(mcp) } : {}),
         ...(this.launchOptions.backendModule ? { backendModule: this.launchOptions.backendModule } : {}),
@@ -163,7 +200,7 @@ class WorkerSession implements BackendSession {
       this.options.emit({ type: "notice", level: "error", text: error.message });
       this.options.onFailure?.(error);
     }
-    void this.worker.stop(async () => {}).catch(() => {});
+    void this.worker.stop(async () => {}).then(this.cleanup).catch(() => {});
   }
   resumeToken() { return this.resume; }
   prompt(text: string, attachments?: PromptAttachment[]) { return this.rpc.call<void>("prompt", [text, attachments]); }
@@ -174,7 +211,7 @@ class WorkerSession implements BackendSession {
     return this.disposal ??= (async () => {
       this.disposing = true;
       try { await this.worker.stop(() => this.rpc.call("dispose")); }
-      finally { this.fail(new Error("Backend Session stopped")); }
+      finally { this.fail(new Error("Backend Session stopped")); this.cleanup(); }
     })();
   }
 }

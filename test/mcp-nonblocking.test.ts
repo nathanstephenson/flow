@@ -2,11 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SessionHost } from "../src/daemon/host.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
+import { prepareFilesystemIsolation } from "../src/isolation/filesystem.ts";
 
 test(
   "an unresponsive MCP process cannot hold Agent Session creation or shutdown",
   { timeout: 5000 },
-  async () => {
+  async (t) => {
+    try {
+      (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+    } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
     const host = new SessionHost({
       mcpConnections: () => [
         {

@@ -9,9 +9,16 @@ import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { isSea } from "node:sea";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isFilesystemLauncher, runFilesystemLauncher } from "../../isolation/launcher.ts";
 
 /** Private executable entry; no host/state initialization takes place in this process. */
 export function runWorker(): void {
+  if (isFilesystemLauncher()) {
+    void runFilesystemLauncher().catch((error: unknown) => {
+      console.error(errorText(error)); process.exitCode = 1;
+    });
+    return;
+  }
   if (!process.send) throw new Error("Backend worker requires an IPC channel");
   let session: BackendSession | undefined;
   let published: SessionSnapshot | undefined;
@@ -29,7 +36,7 @@ export function runWorker(): void {
     if (method === "create") {
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, workflowEnabled, backendModule, ...options } = args[0] as CreateMetadata;
+      const { mcpTools, workflowEnabled, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       updateTools(mcpTools ?? []);
       const workflow: WorkflowParent = {
         inspect: (input) => rpc.call("workflow.inspect", [input]),
@@ -43,9 +50,10 @@ export function runWorker(): void {
           ? (isSea()
             ? createRequire(pathToFileURL(process.execPath))(fileURLToPath(backendModule)).default
             : (await import(backendModule)).default)
+          : backendName === "claude" ? new (await import("../claude/index.ts")).ClaudeBackend()
           : new (await import("../pi/index.ts")).PiBackend();
       } catch (error) {
-        throw new Error(`Backend "pi" is not available in this build: ${errorText(error)}`);
+        throw new Error(`Backend "${backendName}" is not available in this build: ${errorText(error)}`);
       }
       session = await backend.create({
         ...options,
@@ -124,4 +132,4 @@ export function runWorker(): void {
   process.once("SIGINT", () => { void stop(); });
 }
 
-if (process.env.FLOW_BACKEND_WORKER === "1") runWorker();
+if (process.env.FLOW_BACKEND_WORKER === "1" || isFilesystemLauncher()) runWorker();

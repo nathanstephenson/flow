@@ -5,6 +5,7 @@ import { SessionHost } from "../src/daemon/host.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { McpSession } from "../src/backend/mcp.ts";
 import type { BackendSession } from "../src/backend/types.ts";
+import { prepareFilesystemIsolation } from "../src/isolation/filesystem.ts";
 
 const connection = { id: "fixture", name: "Fixture", enabledByDefault: true, transport: "stdio" as const,
   command: process.execPath, args: ["--experimental-strip-types", resolve("test/fixtures/mcp-server.ts")] };
@@ -22,7 +23,10 @@ test("immediate MCP disposal does not start clients after shutdown", { timeout: 
   assert.deepEqual(mcp.tools(), []);
 });
 
-test("first prompt waits for discovery and registration; Retry cannot race a new prompt", { timeout: 5000 }, async () => {
+test("first prompt waits for discovery and registration; Retry cannot race a new prompt", { timeout: 5000 }, async (t) => {
+  try {
+    (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+  } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
   const host = new SessionHost({ mcpConnections: () => [connection] });
   const fake = new FakeBackend();
   let entered = deferred();

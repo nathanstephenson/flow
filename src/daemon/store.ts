@@ -109,7 +109,7 @@ export function defaultStateRoot(): string {
 }
 
 export class TranscriptStore {
-  private readonly root: string;
+  readonly root: string;
 
   constructor(root: string = defaultStateRoot()) {
     this.root = root;

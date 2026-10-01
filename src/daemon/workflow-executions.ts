@@ -127,6 +127,11 @@ export class WorkflowExecutionService {
     this.refresh();
   }
 
+  private filesystemPolicy() {
+    const stateRoot = this.host.filesystemStateRoot();
+    return stateRoot ? { stateRoot } : {};
+  }
+
   refresh(): void {
     const discovered = workflowRuntimeOptions(this.config.view().workflowRuntime);
     const options = { externalSandbox: discovered.externalSandbox, dockerImage: discovered.dockerImage, ...(discovered.nodePath ? { nodePath: discovered.nodePath } : {}), ...(discovered.dockerPath ? { dockerPath: discovered.dockerPath } : {}) };
@@ -137,7 +142,7 @@ export class WorkflowExecutionService {
     this.code = {};
     this.ready = (async () => {
       try {
-        const executors = await createCodeExecutors({ runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
+        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
         if (key !== this.runtimeKey) return;
         this.code = executors;
         executors.shell.check({ id: 'probe', name: 'probe', kind: 'shell', command: 'true' }, { sessionId: 'probe', backend: 'probe', scope: '/' });
@@ -463,7 +468,7 @@ export class WorkflowExecutionService {
     this.privateView(sessionId, executionId);
     const options = this.runtimeSnapshots.get(executionId) ?? workflowRuntimeOptions(this.config.view().workflowRuntime);
     const needsCode = saved.definition.steps.some(step => ['shell', 'typescript'].includes(step.kind));
-    const code = needsCode ? await createCodeExecutors({ runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
+    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
     if (saved.definition.projectId && !sameProject(saved.definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
     const values = this.referencedSecrets(saved.definition, saved.testStepId);
     assertNoSecrets({ ...saved, definition: publicDefinition(saved.definition), action }, values);

@@ -36,10 +36,17 @@ do not start another host against that state directory. Inspect the log and reso
 operation before attempting recovery.
 Configure credentials for the Backend Adapter you use.
 
-Pi Backend Sessions run in separate worker processes, including their ordinary Subagents and
-Background Calls. The Session Host retains transcripts and services; worker failure interrupts work
-rather than replaying it. **Process separation is not filesystem confinement:** without an OS-level
-filesystem policy, tools still have the launching user's filesystem access.
+Claude and Pi Backend Sessions run in owned workers. On Linux, Bubblewrap makes the host filesystem
+read-only, with writable mounts only for the selected Scope, dedicated backend state and private
+scratch. Subagents and Background Calls inherit that boundary. Local Workflow code and stdio MCP
+servers are restricted too; HTTP MCP and network access retain their external authority.
+
+Install Bubblewrap (for example, `sudo apt install bubblewrap`) with descriptor-backed bind mounts
+(`--bind-fd` and `--ro-bind-fd`) and working user, mount and PID namespaces. Unavailable enforcement,
+unsupported operating systems and unsafe Scopes **refuse execution**, without an unrestricted fallback.
+The Session Host retains transcripts and authorisation; worker failure interrupts rather than replays
+work. This does not protect the Scope from damage or fully mediate pre-existing hard links and data
+aliases. See [the boundary and its limits](docs/adr/0028-local-model-work-has-a-fail-closed-filesystem-boundary.md).
 
 To check a release from source, run `npm ci` and `npm run test:package`.
 This builds, packs, and installs the archive into a temporary prefix, then checks it

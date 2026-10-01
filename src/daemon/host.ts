@@ -796,7 +796,7 @@ export class SessionHost {
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
-    const scope = worktree?.path ?? options.scope;
+    const scope = scopeKey(worktree?.path ?? options.scope);
     const id = randomUUID();
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
@@ -1699,7 +1699,9 @@ export class SessionHost {
   workflowSession(sessionId: string) {
     const record = this.record(sessionId);
     if (record.lifecycle === 'ended') throw new CommandRefused('Agent Session has ended');
-    return { sessionId, backend: record.backendName, scope: scopeKey(record.scope), projectId: scopeKey(record.worktree?.repo ?? record.scope), session: record.session };
+    const scope = scopeKey(record.scope);
+    if (scope !== resolve(record.scope)) throw new Error('Scope changed since selection; refusing redirected execution');
+    return { sessionId, backend: record.backendName, scope, projectId: scopeKey(record.worktree?.repo ?? record.scope), session: record.session };
   }
 
   assertWorkflowSession(sessionId: string, session: BackendSession | undefined): void {
@@ -2077,12 +2079,15 @@ export class SessionHost {
     return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
   }
 
+  /** Include an SDK-supplied owning root in every local execution's filesystem policy. */
+  filesystemStateRoot(): string | undefined { return this.store?.root; }
+
   async openWorkflowMcp(id: string, connectionId: string) {
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret);
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot());
   }
 
   mcpStatus(id: string) {
@@ -2133,7 +2138,7 @@ export class SessionHost {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
-      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret);
+      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret, undefined, this.filesystemStateRoot());
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);

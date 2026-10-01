@@ -10,6 +10,23 @@ import { SecretStore } from '../src/daemon/secret-store.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
 import { workflowRuntimeOptions } from '../src/workflows/runtime-settings.ts';
 
+it('auto-discovery does not execute a Docker client planted in Project PATH', () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-docker-path-'));
+  const previous = process.env.PATH;
+  const planted = join(root, 'docker');
+  writeFileSync(planted, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  process.env.PATH = root;
+  try {
+    assert.notEqual(workflowRuntimeOptions().dockerPath, planted);
+    // A deliberately supplied discovery path and explicit operator configuration remain testable.
+    assert.equal(workflowRuntimeOptions(undefined, root).dockerPath, planted);
+    assert.equal(workflowRuntimeOptions({ externalSandbox: true, dockerImage: 'node:22', dockerPath: planted }).dockerPath, planted);
+  } finally {
+    if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('serves private machine-wide workflow and secret CRUD through authenticated HTTP', async () => {
   const root = mkdtempSync(join(tmpdir(), 'flow-workflow-api-'));
   const secrets = new SecretStore(root);

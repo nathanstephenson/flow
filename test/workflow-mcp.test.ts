@@ -22,6 +22,7 @@ import { parseExecution } from '../src/workflows/records.ts';
 import type { Json, JsonSchema, McpToolSnapshot, WorkflowDefinition, WorkflowExecution } from '../src/protocol/workflows.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
 import { reduceAll } from '../src/client/reduce.ts';
+import { prepareFilesystemIsolation } from '../src/isolation/filesystem.ts';
 
 const pause = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check: () => boolean) { for (let i = 0; i < 400; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
@@ -29,6 +30,7 @@ const secret = 'oauth-credential-not-for-history';
 const inputSchema: JsonSchema = { type: 'object', properties: { id: { type: 'string', minLength: 1 }, mode: { type: 'string' } }, required: ['id'], additionalProperties: false };
 async function fixture(transport: 'stdio' | 'http' = 'http') {
   const root = mkdtempSync(join(tmpdir(), 'flow-workflow-mcp-'));
+  const scope = mkdtempSync(join(tmpdir(), 'flow-workflow-mcp-scope-'));
   const requests: Array<{ name: string; arguments: Record<string, Json>; authorization?: string }> = [];
   let schema = inputSchema;
   let lists = 0;
@@ -70,14 +72,14 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   host.registerBackend(backend);
   const service = new WorkflowExecutionService(host, workflows, secrets, config, '/missing-runtime');
   await host.load();
-  const id = await host.create({ backend: 'fake', scope: root });
+  const id = await host.create({ backend: 'fake', scope });
   const discovered = await service.discoverMcp(id, connection.id);
   const tool = discovered.tools.find(tool => transport === 'http' || tool.toolName === 'echo')!;
   const definition: WorkflowDefinition = { version: 1, id: 'mcp', name: 'MCP', backend: 'fake', inputSchema: { type: 'object', fields: { id: { schema: { type: 'string' }, required: true } } }, steps: [{ id: 'fetch', name: 'Fetch', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { [transport === 'http' ? 'id' : 'text']: { kind: 'reference', reference: { source: 'input', path: ['id'] } } } } } }], edges: [] };
   return { listCount: () => lists, advertiseUnsupported: () => { unsupported = true; }, root, requests, connection, auth, workflows, config, backend, host, service, id, tool, definition,
     result(value: Json) { result = value; }, schema(value: JsonSchema) { schema = value; }, version(value: string) { version = value; }, authenticated(value: boolean) { authenticated = value; },
     async run(def = definition, input: Json = { id: 'LIN-123' }, stepId?: string) { const view = await service.start({ sessionId: id, definition: def, input, ...(stepId ? { stepId } : {}) }); return service.scheduler.wait(id, view.execution.id); },
-    async close() { await host.shutdown(); auth.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); },
+    async close() { await host.shutdown(); auth.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); rmSync(scope, { recursive: true, force: true }); },
   };
 }
 
@@ -98,7 +100,10 @@ test('direct HTTP/OAuth call uses original tool name, stable blocks, references,
   } finally { await f.close(); }
 });
 
-test('stdio discovery and text-only output work without parsing JSON text', async () => {
+test('stdio discovery and text-only output work without parsing JSON text', async (t) => {
+  try {
+    (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: 'none' })).cleanup();
+  } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
   const f = await fixture('stdio');
   try {
     const record = await f.run(f.definition, { id: '{"a":1}' });

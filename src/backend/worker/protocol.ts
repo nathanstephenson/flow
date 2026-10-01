@@ -8,6 +8,7 @@ export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workfl
   workflowEnabled: boolean;
   /** Trusted launcher configuration, never accepted from model RPC. */
   backendModule?: string;
+  backend?: "pi" | "claude";
 };
 export type WorkflowMetadata = Omit<WorkflowSubagentOptions, "emit">;
 export type SessionSnapshot = {

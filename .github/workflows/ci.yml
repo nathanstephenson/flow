@@ -29,6 +29,9 @@ jobs:
 
       - run: npm run typecheck
 
+      # Real local worker, MCP and Workflow filesystem boundaries (ADR 0028).
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends bubblewrap
+
       - run: npm test
 
       # Nothing else exercises the single-executable build, and it is the path that reaches a user —

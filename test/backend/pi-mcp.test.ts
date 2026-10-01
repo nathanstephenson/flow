@@ -1,6 +1,9 @@
 import { it } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { prepareFilesystemIsolation } from "../../src/isolation/filesystem.ts";
 import { McpSession } from "../../src/backend/mcp.ts";
 import type { WorkflowSubagentOptions } from "../../src/backend/types.ts";
 import { piFixture, until, userText } from "./pi-fixture.ts";
@@ -9,6 +12,10 @@ it(
   "Pi parent, Subagents, and Workflow Steps inherit MCP tools and workflow permission rules",
   { timeout: 15_000 },
   async (t) => {
+    try {
+      (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+    } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
+    const scope = mkdtempSync(join(tmpdir(), "flow-pi-mcp-scope-"));
     const fixture = await piFixture(t, (request) => {
       if (request.messages.at(-1)?.role !== "user")
         return { text: '{"ok":true}' };
@@ -56,10 +63,12 @@ it(
           ],
         },
       ],
-      fixture.scope,
+      scope,
     );
     t.after(() => mcp.dispose());
-    const session = await fixture.create({ mcp });
+    t.after(() => rmSync(scope, { recursive: true, force: true }));
+    const session = await fixture.create({ mcp, scope });
+    // piFixture keeps its SDK credential/config directory separate from the restricted Scope.
     await mcp.open();
     await session.refreshMcp!();
     await session.prompt("Use MCP");
