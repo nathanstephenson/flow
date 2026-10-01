@@ -126,6 +126,30 @@ describe("pending Permission Prompts", () => {
       assert.equal(permissions.isRefused("WebFetch"), false);
     });
 
+    it("scopes refusals to the producer that attempted the tool", () => {
+      const permissions = new PendingPermissions();
+      const child = settler();
+      permissions.hold("child-call", "Bash", {}, child.settle, "child");
+      permissions.decide("child-call", "deny");
+      assert.equal(permissions.isRefused("Bash", "child"), true);
+      assert.equal(permissions.isRefused("Bash"), false);
+      assert.equal(permissions.isRefused("Bash", "sibling"), false);
+    });
+
+    it("clears only ended producers' refusals, including a child on its own termination", () => {
+      const permissions = new PendingPermissions();
+      for (const producer of ["", "child", "sibling"]) {
+        permissions.hold(`call-${producer}`, "Bash", {}, settler().settle, producer);
+        permissions.decide(`call-${producer}`, "deny");
+      }
+      permissions.clearRefusals((producer) => producer === "");
+      assert.equal(permissions.isRefused("Bash"), false);
+      assert.equal(permissions.isRefused("Bash", "child"), true);
+      permissions.clearRefusals((producer) => producer === "child");
+      assert.equal(permissions.isRefused("Bash", "child"), false);
+      assert.equal(permissions.isRefused("Bash", "sibling"), true);
+    });
+
     it("forgets it when the turn ends", () => {
       const permissions = new PendingPermissions();
       const first = settler();
@@ -170,6 +194,22 @@ describe("pending Permission Prompts", () => {
       ]);
       assert.equal(first.settled[0]?.behavior, "deny");
       assert.equal(second.settled[0]?.behavior, "deny");
+    });
+
+    it("preserves detached callbacks when abandoning parent work", () => {
+      const permissions = new PendingPermissions();
+      const parent = settler();
+      const child = settler();
+      permissions.hold("parent-call", "Bash", {}, parent.settle);
+      permissions.hold("child-call", "Bash", {}, child.settle, "child");
+      assert.deepEqual(permissions.abandonAll("the turn ended", (producer) => producer === ""), [
+        { callId: "parent-call", tool: "Bash" },
+      ]);
+      assert.equal(parent.settled.length, 1);
+      assert.deepEqual(child.settled, []);
+      assert.equal(permissions.describe("child-call"), "Bash");
+      assert.equal(permissions.decide("child-call", "allow"), true);
+      assert.equal(child.settled.length, 1);
     });
 
     it("is safe to call twice, settling nothing the second time", () => {
