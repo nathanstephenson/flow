@@ -449,6 +449,7 @@ export class SessionHost {
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
   private readonly closedListeners = new Set<(sessionId: string) => void>();
+  private readonly backendFailures = new Set<Promise<void>>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
   >();
@@ -1956,6 +1957,7 @@ export class SessionHost {
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
     // `SummaryModelSpare.dispose`.
     this.summarySpare.dispose();
+    await Promise.all(this.backendFailures);
     for (const record of this.sessions.values()) {
       if (!record.session) continue;
       const session = record.session;
@@ -2111,6 +2113,22 @@ export class SessionHost {
     });
   }
 
+  private async backendFailed(record: SessionRecord, session: BackendSession): Promise<void> {
+    if (record.session !== session) return;
+    this.captureResumeToken(record);
+    record.session = undefined;
+    record.lifecycle = "dormant";
+    record.turnInFlight = false;
+    record.queue.length = 0;
+    try { await this.stopBackendSession(record.scope, session, record.id); }
+    finally {
+      this.closeTornTurn(record, record.log.since(0), "error");
+      const marker = record.log.append({ type: "session_dormant", reason: "backend worker lost" });
+      this.markAttention(record, "Failed", `backend-loss:${record.backendEpoch}`, marker.at);
+      this.touch(record);
+    }
+  }
+
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
@@ -2120,8 +2138,15 @@ export class SessionHost {
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);
     const compactionModelId = this.compactionModel?.(backend.name);
+    let attached: BackendSession | undefined;
     const session = await backend.create({
       mcp,
+      onFailure: () => {
+        if (!attached || record.session !== attached) return;
+        const stopped = this.backendFailed(record, attached).catch(() => {});
+        this.backendFailures.add(stopped);
+        void stopped.finally(() => this.backendFailures.delete(stopped));
+      },
       workflow: {
         inspect: input => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).inspect(input); },
         recover: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).recover(input, signal); },
@@ -2143,6 +2168,7 @@ export class SessionHost {
         ? { standingAuthorisations: this.standingAuthorisations() }
         : {}),
     }).catch(async (error: unknown) => { await mcp.dispose(); throw error; });
+    attached = session;
     const dispose = session.dispose.bind(session);
     let disposed = false;
     session.dispose = async () => { disposed = true; try { await dispose(); } finally { await mcp.dispose(); } };
@@ -2224,7 +2250,7 @@ export class SessionHost {
    * transcript is append-only (ADR 0001), so we record that we now know it ended instead of
    * rewriting the turn that never finished.
    */
-  private closeTornTurn(record: SessionRecord, entries: LoggedEvent[]): void {
+  private closeTornTurn(record: SessionRecord, entries: LoggedEvent[], reason: "aborted" | "error" = "aborted"): void {
     this.closeOpenSubagents(record, entries);
     this.closeOpenBackgroundCalls(record, entries);
     // The daemon-restart case for an Enquiry: nothing was in memory to abandon its callback, and the
@@ -2233,7 +2259,7 @@ export class SessionHost {
     this.closeOpenPermissions(record, entries);
     const openTurn = openTurnId(entries);
     if (!openTurn) return;
-    record.log.append({ type: "turn_ended", turnId: openTurn, reason: "aborted" });
+    record.log.append({ type: "turn_ended", turnId: openTurn, reason });
   }
 
   /**
@@ -2404,6 +2430,7 @@ export class SessionHost {
       record.buffered.push(event);
       return;
     }
+    if (record.lifecycle === "dormant") return;
 
     const before = this.activityOf(record);
     const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
@@ -2544,6 +2571,7 @@ export class SessionHost {
   }
 
   private recordDispatchFailure(record: SessionRecord, error: unknown): void {
+    if (record.lifecycle === "dormant") return; // Fatal worker loss already recorded the failure.
     const before = this.activityOf(record);
     const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
     record.turnInFlight = false;

@@ -72,6 +72,8 @@ export type BackendCreateOptions = {
    */
   tools?: "none";
   emit: (event: BackendEvent) => void;
+  /** Fatal execution loss, not an ordinary model error. The host interrupts and makes it Dormant. */
+  onFailure?: (error: Error) => void;
 };
 
 /**
