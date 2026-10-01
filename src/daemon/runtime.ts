@@ -38,12 +38,20 @@ export async function startRuntime(options: {
     }
     const config = new ConfigStore(root);
     if (config.warning) console.error(`  WARNING: ${config.warning}`);
+    await config.initializeFilesystemIsolation();
+    const isolation = config.filesystemIsolationStatus();
+    if (!isolation.enabled) {
+      console.error(`  WARNING: Filesystem isolation is OFF. Agent tools, local Workflow code and stdio MCP can access or delete files outside Scope, including host credentials.${isolation.reason ? ` ${isolation.reason}` : ''}`);
+    } else if (!isolation.supported) {
+      console.error(`  WARNING: Filesystem isolation is enabled but unavailable; restricted execution will be refused. ${isolation.reason ?? ''}`);
+    }
     const mcpAuth = new McpAuth(root);
     const store = new TranscriptStore(root);
     const secrets = new SecretStore(root);
     const host = new SessionHost({
       store, resolveSecret: name => secrets.resolve(name), retention: config.retention,
       mcpConnections: config.mcpConnections, mcpAuth,
+      filesystemIsolationEnabled: config.filesystemIsolationEnabled,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,

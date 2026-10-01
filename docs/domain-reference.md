@@ -278,7 +278,23 @@ disk until removed by hand.
 _Avoid_: closed, deleted, terminated, killed, settled
 
 **Scope**:
-The working directory an Agent Session is bound to.
+The working directory an Agent Session is bound to. When machine-wide filesystem isolation is
+enabled, local Backend Sessions, their Subagents and Background Calls, local Workflow code and
+stdio MCP servers have an OS-enforced writable boundary: that Scope plus dedicated backend state
+and private scratch. Other host files are read-only or masked. Linux Bubblewrap enforcement uses
+pinned mount sources; an enabled launch refuses unavailable enforcement or an unsafe Scope without
+an unrestricted fallback. Backend worker process separation remains on in both modes.
+
+With isolation disabled, Scope is only a working directory: agent tools, Shell commands and local
+stdio MCP servers can read, write or delete elsewhere with the host user's authority, exposing
+credentials and host state. Process-group cleanup still operates, but detached descendants lack
+PID-namespace containment. The TypeScript closed compiler, QuickJS guest and scoped filesystem API
+still restrict direct guest access; they do not OS-enforce restrictions on Shell or the trusted Node
+supervisor's host authority. Local Workflow Shell and TypeScript work requires host Node 22 or
+later. When isolation is enabled, one boundary covers the supervisor, QuickJS worker and all Shell
+descendants, with inherited PID namespace cleanup. Neither mode changes HTTP MCP or network access,
+or protects against damage inside Scope or pre-existing hard-link/data aliases; see ADR 0028.
+Explicit human Shells and host-owned Git operations remain distinct.
 _Avoid_: workspace, project, repo — a Project is a distinct thing, defined below, and calling a
 Scope one confuses a binding with a candidate for it.
 
@@ -334,6 +350,22 @@ rather than one Scope. Read leniently and written strictly: a value it cannot us
 default on the way up, but one offered by a client is refused. Machine-wide is the fact most easily
 got wrong from a browser window showing one Scope, and the Standing Authorisations are where getting
 it wrong costs the most.
+
+Filesystem isolation is a machine-wide policy in **Settings → General → Filesystem isolation**.
+`filesystemIsolation?: boolean` is an optional persisted override: `true` requires enforcement,
+`false` selects unrestricted execution, and omission selects the capability-dependent automatic
+default. PUT `/api/config` accepts `null` to remove the override; omitting the key in a patch leaves
+it unchanged. The initial real Linux Bubblewrap capability check chooses ON when supported and
+UNRESTRICTED otherwise, including missing Bubblewrap or unavailable namespaces. That automatic
+choice is latched for the Session Host's lifetime, not silently reconsidered after a failed launch.
+Explicit enable fails closed and never downgrades to unrestricted execution.
+
+The config view reports isolation status as `supported`, `enabled`, `automatic`, `checking` and
+`reason`. General Settings shows the support reason and a clear unrestricted warning when off;
+checking is not permission to launch unrestricted work. Changes affect new Backend Sessions
+(including Revive), new Workflow Executions and new local stdio MCP clients; existing work retains
+its policy. Agent Workflow Steps still inherit their owning Backend Session's boundary. Worker
+process separation stays enabled in both modes; HTTP MCP and network authority are unchanged.
 _Avoid_: config, preferences, options, profile
 
 **Effort**:

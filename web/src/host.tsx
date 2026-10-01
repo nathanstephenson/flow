@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 
 import type { Connection } from "@client/connection.ts";
 import type { Project } from "../../src/protocol/projects.ts";
-import type { Settings, SettingsPatch } from "../../src/protocol/settings.ts";
+import type { FilesystemIsolationStatus, Settings, SettingsPatch } from "../../src/protocol/settings.ts";
 import { applyFonts, type Fonts } from "@/fonts.ts";
 import { host } from "@/store/host.ts";
 import { authenticatedFetch } from "@/authentication.ts";
@@ -20,6 +20,10 @@ const connection: Connection = host;
 /** What the host offers a new Agent Session: a default Scope, and every backend it has registered. */
 export type HostConfig = {
   mcp?: Settings["mcp"];
+  /** Omission selects automatic isolation: enabled when this machine supports it. */
+  filesystemIsolation?: Settings["filesystemIsolation"];
+  /** Fresh machine capability and effective mode, reported by the Session Host. */
+  filesystemIsolationStatus?: FilesystemIsolationStatus;
   /** Browser gate in use. Provider details and tokens are intentionally never exposed. */
   authentication?: "token" | "oidc";
   scope: string;
@@ -153,7 +157,10 @@ export function HostProvider({ children }: { children: ReactNode }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     });
-    const body = (await response.json()) as Settings & { error?: string };
+    const body = (await response.json()) as Settings & {
+      filesystemIsolationStatus?: FilesystemIsolationStatus;
+      error?: string;
+    };
     // The daemon refuses a bad value rather than warning and keeping the old one, and its message
     // names the offending field — so it is the message worth showing.
     if (!response.ok) throw new Error(body.error ?? `Could not save the Settings (${response.status})`);
@@ -169,6 +176,10 @@ export function HostProvider({ children }: { children: ReactNode }) {
               ...current.config,
               fonts: body.fonts,
               retention: body.retention,
+              // Both are authoritative, including omission after resetting to automatic. Do not
+              // infer capability from the saved preference or retain a previous effective mode.
+              filesystemIsolation: body.filesystemIsolation,
+              filesystemIsolationStatus: body.filesystemIsolationStatus,
               // Spread-with-undefined would leave a stale value behind once a section is cleared.
               // Both optional sections need it, and for `permissions` it is not tidiness: a stale
               // list would leave a revoked row on screen, and revoking a second grant would send the

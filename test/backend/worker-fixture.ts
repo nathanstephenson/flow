@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile } from "node:fs/promises";
+import { readlinkSync } from "node:fs";
 import { join } from "node:path";
+import { AutoPermissionUnavailable } from "../../src/backend/permission-errors.ts";
 import type { AgentBackend, BackendSession, WorkflowSubagentHandle } from "../../src/backend/types.ts";
 import type { Capabilities } from "../../src/protocol/events.ts";
 
@@ -9,6 +11,7 @@ const backend: AgentBackend = {
   name: "fixture",
   async create(options) {
     if (options.modelId === "create-error") throw new Error("fixture create failed");
+    if (options.modelId === "auto-unavailable" && options.permissionMode === "auto") throw new AutoPermissionUnavailable("fixture Auto unsupported");
     if (options.modelId === "create-hang") await new Promise(() => {});
     let permissionMode = options.permissionMode ?? "always";
     let resume = "initial-token";
@@ -33,7 +36,7 @@ const backend: AgentBackend = {
         if (text === "hold") await new Promise<void>((resolve) => { finishPrompt = resolve; });
         if (text === "descendant") {
           ownedProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-          options.emit({ type: "message", id: "process", text: String(ownedProcess.pid), final: true });
+          options.emit({ type: "message", id: "process", text: JSON.stringify({ pid: ownedProcess.pid, namespace: readlinkSync("/proc/self/ns/pid") }), final: true });
         }
         if (text === "mcp-hold") await options.mcp!.tools()[0]!.call({ hold: true });
         if (text === "mcp") {

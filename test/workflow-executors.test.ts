@@ -1,35 +1,147 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync, spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync, readFileSync, existsSync, writeFileSync, copyFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { buildSync } from 'esbuild';
 import { createCodeExecutors } from '../src/workflows/executors.ts';
+import { prepareFilesystemIsolation } from '../src/isolation/filesystem.ts';
 import type { ExecutorContext } from '../src/workflows/scheduler.ts';
 import type { VisualSchema } from '../src/protocol/workflows.ts';
 const scope = mkdtempSync(join(tmpdir(), 'flow-code-'));
 const runtimeDirectory = mkdtempSync(join(tmpdir(), 'flow-runtime-test-'));
 const runtimePath = join(runtimeDirectory, 'runtime.cjs');
+let localUnavailable: string | false = false;
+try {
+  const policy = await prepareFilesystemIsolation({ scope, command: '/bin/true', args: [], credentials: 'none' });
+  policy.cleanup();
+} catch (error) { localUnavailable = `Local namespace integration unavailable: ${(error as Error).message}`; }
+const localIntegration = { skip: localUnavailable };
 before(() => { execFileSync(process.execPath, ['scripts/build-workflow-runtime.mjs', runtimePath]); });
 after(() => { rmSync(scope, { recursive: true, force: true }); rmSync(runtimeDirectory, { recursive: true, force: true }); });
-const local = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: false }, resolveSecret: async () => 'private-value' });
+const local = await createCodeExecutors({ runtimePath, nodePath: process.execPath, resolveSecret: async () => 'private-value' });
 const context = (code: string, outputSchema: VisualSchema = { type: 'number' }): ExecutorContext => ({ sessionId: 's', executionId: 'e', scope, input: { value: 4 }, inputSchema: { type: 'object', fields: { value: { schema: { type: 'number' }, required: true } } }, step: { id: 'a', name: 'a', kind: 'typescript', code, outputSchema }, permission: 'auto-accept', signal: new AbortController().signal });
-test('TypeScript checks types, transforms JSON and rejects unsupported APIs', async () => {
+test('local Workflow execution fails closed when isolation is missing or its probe fails', async () => {
+  const previous = process.env.FLOW_BWRAP_PATH;
+  const marker = join(scope, 'unrestricted-launch');
+  const ctx = context(''); ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'touch unrestricted-launch' };
+  try {
+    for (const launcher of ['/flow-no-such-bwrap', '/bin/false']) {
+      process.env.FLOW_BWRAP_PATH = launcher;
+      await assert.rejects(local.shell.execute(ctx), /Filesystem isolation unavailable; unrestricted launch refused/);
+      assert.equal(existsSync(marker), false);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.FLOW_BWRAP_PATH; else process.env.FLOW_BWRAP_PATH = previous;
+  }
+});
+
+test('spawn failure after preparation cleans up private isolation state', { skip: process.platform !== 'linux' }, async () => {
+  // A launcher that passes the probe, records its private mount, then disappears before spawn.
+  const launcher = join(runtimeDirectory, 'vanishing-bwrap');
+  const marker = join(runtimeDirectory, 'private-state-path');
+  writeFileSync(launcher, `#!${process.execPath}\nconst fs = require('node:fs'); const args = process.argv; const state = fs.realpathSync('/proc/self/fd/' + args[args.indexOf('/tmp/flow-isolation/state') - 1]); fs.writeFileSync(${JSON.stringify(marker)}, state); fs.unlinkSync(__filename);`, { mode: 0o700 });
+  const previous = process.env.FLOW_BWRAP_PATH;
+  process.env.FLOW_BWRAP_PATH = launcher;
+  try {
+    await assert.rejects(local.typescript.execute(context('return 1;')), /ENOENT/);
+    const backend = readFileSync(marker, 'utf8');
+    assert.match(backend, /flow-isolation-[^/]+\/backend$/);
+    assert.equal(existsSync(backend), false);
+    assert.equal(existsSync(join(backend, '..')), false);
+  } finally {
+    if (previous === undefined) delete process.env.FLOW_BWRAP_PATH; else process.env.FLOW_BWRAP_PATH = previous;
+  }
+});
+
+test('cancellation during preparation cleans private state without launching code', { skip: process.platform !== 'linux' }, async () => {
+  const launcher = join(runtimeDirectory, 'slow-bwrap');
+  const marker = join(runtimeDirectory, 'cancelled-state-path');
+  writeFileSync(launcher, `#!${process.execPath}\nconst args = process.argv; const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(marker)}, fs.realpathSync('/proc/self/fd/' + args[args.indexOf('/tmp/flow-isolation/state') - 1])); setTimeout(() => process.exit(0), 200);`, { mode: 0o700 });
+  const controller = new AbortController();
+  const ctx = context(''); ctx.signal = controller.signal;
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'touch after-preparation-cancel' };
+  const previous = process.env.FLOW_BWRAP_PATH;
+  process.env.FLOW_BWRAP_PATH = launcher;
+  const timer = setTimeout(() => controller.abort(), 50);
+  try {
+    await assert.rejects(local.shell.execute(ctx), /abort/i);
+    const backend = readFileSync(marker, 'utf8');
+    assert.equal(existsSync(join(backend, '..')), false);
+    assert.equal(existsSync(join(scope, 'after-preparation-cancel')), false);
+  } finally {
+    clearTimeout(timer);
+    if (previous === undefined) delete process.env.FLOW_BWRAP_PATH; else process.env.FLOW_BWRAP_PATH = previous;
+  }
+});
+
+test('local execution validates Scope before launching the supervisor or probing a selected Scope', { skip: process.platform !== 'linux' }, async () => {
+  const hostState = join(runtimeDirectory, 'host-state');
+  const privateSession = join(hostState, 'sessions', 'private');
+  mkdirSync(privateSession, { recursive: true });
+  const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, stateRoot: hostState });
+  for (const unsafeScope of ['/', homedir(), hostState, privateSession]) {
+    const ctx = context('return 1;'); ctx.scope = unsafeScope;
+    await assert.rejects(executor.typescript.execute(ctx), /Unsafe Scope|protected host state/);
+    await assert.rejects(createCodeExecutors({ runtimePath, nodePath: process.execPath, scope: unsafeScope, stateRoot: hostState }), /Unsafe Scope|protected host state/);
+  }
+});
+
+test('Shell and detached descendants cannot write, delete or follow symlinks outside Scope', { ...localIntegration, timeout: 15000 }, async () => {
+  // Outside /tmp: the sentinel is visible through the read-only root, not hidden by scratch.
+  const outside = mkdtempSync(join(process.cwd(), '.flow-workflow-isolation-test-'));
+  const sentinel = join(outside, 'sentinel');
+  const alias = join(scope, 'outside-sentinel');
+  writeFileSync(sentinel, 'keep-me'); symlinkSync(sentinel, alias);
+  const q = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+  const ctx = context('');
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: `
+    set -e
+    if test -e ${q(sentinel)}; then test "$(cat ${q(sentinel)})" = keep-me; fi
+    if printf compromised > ${q(sentinel)} 2>/dev/null; then exit 10; fi
+    if test -e ${q(sentinel)} && rm ${q(sentinel)} 2>/dev/null; then exit 11; fi
+    if printf compromised > outside-sentinel 2>/dev/null; then exit 12; fi
+    /bin/bash -c ${q(`if printf compromised > ${q(sentinel)} 2>/dev/null; then exit 13; fi; if test -e ${q(sentinel)} && rm ${q(sentinel)} 2>/dev/null; then exit 14; fi`)}
+    setsid /bin/bash -c ${q(`printf started > detached-started; while true; do printf x >> detached-progress; printf compromised > ${q(sentinel)} 2>/dev/null; rm ${q(sentinel)} 2>/dev/null; sleep 0.05; done`)} </dev/null >/dev/null 2>&1 &
+    while test ! -e detached-started; do sleep 0.05; done
+    printf allowed > in-scope-write
+  ` };
+  try {
+    const output = await local.shell.execute(ctx) as { exitCode: number };
+    assert.equal(output.exitCode, 0);
+    assert.equal(readFileSync(join(scope, 'in-scope-write'), 'utf8'), 'allowed');
+    assert.equal(readFileSync(sentinel, 'utf8'), 'keep-me');
+    const size = readFileSync(join(scope, 'detached-progress')).length;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(readFileSync(join(scope, 'detached-progress')).length, size);
+    assert.equal(readFileSync(sentinel, 'utf8'), 'keep-me');
+  } finally { rmSync(alias, { force: true }); rmSync(outside, { recursive: true, force: true }); }
+});
+
+test('TypeScript checks types, transforms JSON and rejects unsupported APIs', localIntegration, async () => {
   assert.equal(await local.typescript.execute(context('return input.value * 2;')), 8);
   for (const code of ['return "wrong";', 'return process.pid;', 'import fs from "node:fs"; return 1;', 'return input.missing;']) await assert.rejects(local.typescript.execute(context(code)));
   assert.equal(await local.typescript.execute(context('return Function("return typeof process + typeof require")();', { type: 'string' })), 'undefinedundefined');
   for (const code of ['return "wrong" as any;', 'return NaN;', 'return Infinity;', 'return Function("return import(\\"node:fs\\")")();']) await assert.rejects(local.typescript.execute(context(code)));
 });
-test('scoped files and symlink checks', async () => {
+test('runtime and Node assets reached through /tmp symlinks stay readable', localIntegration, async () => {
+  const runtimeAlias = join(runtimeDirectory, 'runtime-alias.cjs');
+  const nodeAlias = join(runtimeDirectory, 'node-alias');
+  symlinkSync(runtimePath, runtimeAlias); symlinkSync(process.execPath, nodeAlias);
+  const executor = await createCodeExecutors({ runtimePath: runtimeAlias, nodePath: nodeAlias });
+  assert.equal(await executor.typescript.execute(context('return 7;')), 7);
+});
+
+test('scoped files and symlink checks', localIntegration, async () => {
   assert.equal(await local.typescript.execute(context('await fs.mkdir("artifacts"); await fs.writeText("artifacts/a", "hello"); return await fs.readText("artifacts/a");', { type: 'string' })), 'hello');
   symlinkSync('/etc', join(scope, 'escape'));
   for (const path of ['/etc/passwd', '../etc/passwd', 'escape/passwd']) await assert.rejects(local.typescript.execute(context(`return await fs.readText(${JSON.stringify(path)});`, { type: 'string' })));
   await assert.rejects(local.typescript.execute(context('await fs.writeText("escape/flow-no", "x"); return 1;')));
 });
-test('intermediate symlink swaps cannot redirect file opens', { timeout: 10000 }, async () => {
+test('intermediate symlink swaps cannot redirect file opens', { ...localIntegration, timeout: 10000 }, async () => {
   const directory = join(scope, 'race'), saved = join(scope, 'race-saved'), outside = join(runtimeDirectory, 'outside');
   mkdirSync(directory); mkdirSync(outside);
   writeFileSync(join(directory, 'value'), 'inside'); writeFileSync(join(outside, 'value'), 'outside');
@@ -40,7 +152,7 @@ test('intermediate symlink swaps cannot redirect file opens', { timeout: 10000 }
     assert.equal(readFileSync(join(outside, 'value'), 'utf8'), 'outside');
   } finally { racer.kill('SIGKILL'); await new Promise(resolve => racer.once('close', resolve)); }
 });
-test('HTTP fetch preserves large responses and bounds redirects', async () => {
+test('HTTP fetch preserves large responses and bounds redirects', localIntegration, async () => {
   const server = createServer((req, res) => { if (req.url === '/large') res.end('x'.repeat(100_001)); else if (req.url === '/redirect') { res.writeHead(302, { location: '/redirect' }); res.end(); } else res.end('hello'); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as { port: number };
@@ -51,7 +163,7 @@ test('HTTP fetch preserves large responses and bounds redirects', async () => {
     for (const path of ['/redirect']) await assert.rejects(local.typescript.execute(context(`return (await fetch('${url}${path}')).body;`, { type: 'string' })));
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
 });
-test('configured deadline permits eleven seconds of IO followed by CPU work', { timeout: 25000 }, async () => {
+test('configured deadline permits eleven seconds of IO followed by CPU work', { ...localIntegration, timeout: 25000 }, async () => {
   const server = createServer((_req, res) => { setTimeout(() => res.end('ok'), 11000); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const ctx = context(`await fetch('http://127.0.0.1:${(server.address() as { port: number }).port}'); let n = 0; for (let i = 0; i < 100000; i++) n++; return n;`);
@@ -59,9 +171,9 @@ test('configured deadline permits eleven seconds of IO followed by CPU work', { 
   try { assert.equal(await local.typescript.execute(ctx), 100000); }
   finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
-test('quoted multiline secrets are redacted before thrown errors are encoded', async () => {
+test('quoted multiline secrets are redacted before thrown errors are encoded', localIntegration, async () => {
   const secret = 'quote"secret\nvalue';
-  const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: false }, resolveSecret: async () => secret });
+  const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, resolveSecret: async () => secret });
   for (const code of ['throw new Error(secrets.KEY);', 'throw { message: secrets.KEY, nested: { detail: secrets.KEY }, [secrets.KEY]: secrets.KEY };', 'throw secrets.KEY;']) {
     const ctx = context(code); ctx.step.secrets = { KEY: 'reference' };
     await assert.rejects(executor.typescript.execute(ctx), (error: Error) => {
@@ -72,7 +184,7 @@ test('quoted multiline secrets are redacted before thrown errors are encoded', a
     });
   }
 });
-test('CPU, cancellation, large output and sandbox memory protection', { timeout: 10000 }, async () => {
+test('CPU, cancellation, large output and sandbox memory protection', { ...localIntegration, timeout: 15000 }, async () => {
   const infinite = context('while(true) {}'); infinite.step.timeoutMs = 250;
   await assert.rejects(local.typescript.execute(infinite));
   const controller = new AbortController(); const cancelled = context('while(true) {}'); cancelled.signal = controller.signal;
@@ -81,30 +193,29 @@ test('CPU, cancellation, large output and sandbox memory protection', { timeout:
   assert.equal(await local.typescript.execute(context('return "x".repeat(100001);', { type: 'string' })), 'x'.repeat(100001));
   await assert.rejects(local.typescript.execute(context('return "x".repeat(64 * 1024 * 1024);', { type: 'string' })));
 });
-test('Shell passes JSON without interpolation, honours cancellation and removes inherited credentials', async () => {
+test('Shell passes JSON without interpolation, honours cancellation and removes inherited credentials', localIntegration, async () => {
   process.env.FLOW_TEST_CREDENTIAL = 'must-not-leak';
   const ctx = context(''); ctx.input = { text: '$(touch injected)' }; ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'printf "%s" "$OUTPUT"; printf "%s" "${FLOW_TEST_CREDENTIAL-unset}" >&2; exit 7' };
   assert.deepEqual(await local.shell.execute(ctx), { exitCode: 7, stdout: JSON.stringify(ctx.input), stderr: 'unset' });
   ctx.step.command = 'while true; do sleep 1; done'; ctx.step.timeoutMs = 100; await assert.rejects(local.shell.execute(ctx));
   delete process.env.FLOW_TEST_CREDENTIAL;
 });
-test('explicit unavailable sandbox fails; disabled runs; named secrets stay out of env and output', async () => {
-  const unavailable = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: false, image: 'none' } });
-  assert.throws(() => unavailable.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' }), /unavailable/);
+test('restricted local named secrets stay out of env and output', localIntegration, async () => {
   const ctx = context('return secrets.KEY;', { type: 'string' }); ctx.step.secrets = { KEY: 'reference' };
   assert.equal(await local.typescript.execute(ctx), '[REDACTED]');
-  const quoted = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: false }, resolveSecret: async () => 'secret"\nvalue' });
+  const quoted = await createCodeExecutors({ runtimePath, nodePath: process.execPath, resolveSecret: async () => 'secret"\nvalue' });
   assert.equal(await quoted.typescript.execute(ctx), '[REDACTED]');
   const unsafe = context(''); unsafe.step = { id: 'a', name: 'a', kind: 'shell', command: 'true', secrets: { BASH_ENV: 'reference' } };
   assert.throws(() => local.shell.check(unsafe.step, { sessionId: 's', scope, backend: 'pi' }), /Unsafe/);
 });
-test('slow Docker readiness probe preserves another Agent Session Shell heartbeat', { timeout: 25000 }, async () => {
-  const dockerPath = join(runtimeDirectory, 'slow-docker');
-  writeFileSync(dockerPath, `#!${process.execPath}\nsetTimeout(() => process.exit(1), 4000);`, { mode: 0o700 });
+test('Node readiness probes do not disturb another Agent Session Shell heartbeat', { ...localIntegration, timeout: 10000 }, async () => {
+  const nodePath = join(runtimeDirectory, 'slow-node');
+  // Use a system interpreter: the host Node binary may itself live under a masked home.
+  writeFileSync(nodePath, '#!/bin/sh\nsleep 1.5\nexit 0\n', { mode: 0o700 });
   const marker = join(scope, 'probe-shell-started');
   const ctx = context('');
   ctx.sessionId = 'other-session';
-  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: 22000, command: 'touch probe-shell-started; sleep 20; printf healthy' };
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: 5000, command: 'touch probe-shell-started; sleep 1; printf healthy' };
   const work = local.shell.execute(ctx);
   const result = assert.doesNotReject(async () => {
     assert.deepEqual(await work, { exitCode: 0, stdout: 'healthy', stderr: '' });
@@ -113,69 +224,59 @@ test('slow Docker readiness probe preserves another Agent Session Shell heartbea
   let ticks = 0;
   const heartbeat = setInterval(() => ticks++, 100);
   try {
-    const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: true, image: 'test', dockerPath } });
-    assert.ok(ticks >= 20, `Heartbeat ran only ${ticks} times during probe`);
-    assert.throws(() => executor.shell.check(ctx.step, { sessionId: 's', scope, backend: 'pi' }), /External sandbox is enabled but unavailable/);
+    const executor = await createCodeExecutors({ runtimePath, nodePath });
+    assert.doesNotThrow(() => executor.typescript.check(context('return 1;').step, { sessionId: 's', scope, backend: 'pi' }));
+    await result;
+    assert.ok(ticks >= 3, `Heartbeat ran only ${ticks} times during a Node readiness probe`);
   } finally { clearInterval(heartbeat); await result; }
 });
 
-test('external mode requires host Node and reports container cleanup failure', async () => {
-  const dockerPath = join(runtimeDirectory, 'fake-docker');
-  writeFileSync(dockerPath, `#!${process.execPath}\nif (process.argv.includes('rm')) { console.error('cleanup-canary'); process.exit(1); } if (process.argv.includes('run')) console.log(JSON.stringify({output: 7}));`, { mode: 0o700 });
-  const sandbox = { enabled: true as const, available: true, image: 'owned-test-image', dockerPath };
-  const unavailable = await createCodeExecutors({ runtimePath, nodePath: '/missing-node', sandbox });
-  assert.throws(() => unavailable.typescript.check(context('').step, { sessionId: 's', scope, backend: 'pi' }), /Host Node/);
-  const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox });
-  await assert.rejects(executor.typescript.execute(context('return 7;')), /Docker container cleanup failed: cleanup-canary/);
+test('missing or old Node fails preflight without launching Workflow code', localIntegration, async () => {
+  const oldNode = join(runtimeDirectory, 'old-node');
+  // Emulate an older Node failing the >=22 version probe, without a hidden host interpreter.
+  writeFileSync(oldNode, '#!/bin/sh\ncase "$*" in *process.versions.node*) exit 1;; *) exit 0;; esac\n', { mode: 0o700 });
+  const marker = join(scope, 'failed-node-preflight');
+  for (const { nodePath, refusal } of [
+    { nodePath: join(runtimeDirectory, 'missing-node'), refusal: /Executable not found/ },
+    { nodePath: oldNode, refusal: /Host Node 22 or later runtime is unavailable/ },
+  ]) {
+    const executor = await createCodeExecutors({ runtimePath, nodePath });
+    const ctx = context('return 7;');
+    assert.throws(() => executor.typescript.check(ctx.step, { sessionId: 's', scope, backend: 'pi' }), refusal);
+    await assert.rejects(executor.typescript.execute(ctx), refusal);
+    ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'touch failed-node-preflight' };
+    assert.throws(() => executor.shell.check(ctx.step, { sessionId: 's', scope, backend: 'pi' }), refusal);
+    await assert.rejects(executor.shell.execute(ctx), refusal);
+    assert.equal(existsSync(marker), false);
+  }
 });
-const image = 'mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm';
-const dockerAvailable = spawnSync('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'image', 'inspect', image], { stdio: 'ignore' }).status === 0;
-test('Docker executes QuickJS and Shell with restricted mount and environment', { skip: !dockerAvailable }, async () => {
-  const docker = await createCodeExecutors({ runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: true, image } });
-  assert.equal(await docker.typescript.execute(context('return input.value + 3;')), 7);
-  assert.equal(await docker.typescript.execute(context('await fs.mkdir("docker-artifacts"); await fs.writeText("docker-artifacts/a", "ok"); return await fs.readText("docker-artifacts/a");', { type: 'string' })), 'ok');
-  symlinkSync('/etc', join(scope, 'docker-escape'));
-  for (const path of ['/etc/passwd', 'docker-escape/passwd']) await assert.rejects(docker.typescript.execute(context(`return await fs.readText(${JSON.stringify(path)});`, { type: 'string' })));
-  const infinite = context('while (true) {}'); infinite.step.timeoutMs = 500;
-  await assert.rejects(docker.typescript.execute(infinite));
-  writeFileSync(join(runtimeDirectory, 'host-secret'), 'private');
-  const ctx = context(''); ctx.step = { id: 'a', name: 'a', kind: 'shell', command: `set -e; test ! -S /var/run/docker.sock; test ! -e ${runtimeDirectory}/host-secret; test "$(awk '/CapEff/{print $2}' /proc/self/status)" = 0000000000000000; if touch /tmp/flow-must-not-write 2>/dev/null; then exit 1; fi; printf "%s" "$OUTPUT"` };
-  assert.deepEqual(await docker.shell.execute(ctx), { exitCode: 0, stdout: JSON.stringify(ctx.input), stderr: '' });
-});
-
-function procText(path: string): string {
-  try { return readFileSync(path, 'utf8'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error; }
-}
-const children = (pid: number) => procText(`/proc/${pid}/task/${pid}/children`).trim().split(/\s+/).filter(Boolean).map(Number);
-const commandLine = (pid: number) => procText(`/proc/${pid}/cmdline`).split('\0');
-const dockerSupervisor = (pid: number) => children(pid).find(child => commandLine(child).includes('--docker-supervisor'));
-const dockerCli = (pid: number) => children(pid).find(child => {
-  const args = commandLine(child);
-  return args.includes('run') && args.includes('--name') && args[args.indexOf('--name') + 1]?.startsWith('flow-workflow-');
+test('a writable Workflow runtime bundle stays inside the local filesystem boundary', localIntegration, async () => {
+  // The host target is read-only or hidden by credential masks; neither permits a host write.
+  const outside = mkdtempSync(join(process.cwd(), '.flow-mutable-runtime-test-'));
+  const canary = join(outside, 'outside-scope-canary');
+  const mutableBundle = join(scope, 'mutable-runtime.cjs');
+  writeFileSync(mutableBundle, `require('node:fs').writeFileSync(${JSON.stringify(canary)}, 'escaped'); console.log(JSON.stringify({ output: 7 }));`, { mode: 0o600 });
+  try {
+    const executor = await createCodeExecutors({ runtimePath: mutableBundle, nodePath: process.execPath, scope });
+    await assert.rejects(executor.typescript.execute(context('return 7;')), /(?:EROFS|EACCES|EPERM|ENOENT):.*outside-scope-canary/);
+    assert.equal(existsSync(canary), false);
+  } finally { rmSync(mutableBundle, { force: true }); rmSync(outside, { recursive: true, force: true }); }
 });
 
 async function waitFor(check: () => boolean, timeout = 8000) {
   const deadline = Date.now() + timeout;
   while (!check()) { if (Date.now() > deadline) throw new Error('Wait timed out'); await new Promise(resolve => setTimeout(resolve, 50)); }
 }
-for (const mode of ['local', 'docker'] as const) test(`host loss stops owned Shell work (${mode})`, { skip: mode === 'docker' && !dockerAvailable, timeout: 15000 }, async () => {
-  const marker = join(scope, `orphan-${mode}`);
+test('host loss stops owned local Shell work', { ...localIntegration, timeout: 15000 }, async () => {
+  const marker = join(scope, 'orphan-local');
   const ctx = context('');
-  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: `while true; do printf x >> orphan-${mode}; sleep 0.1; done & wait` };
-  const settings = { runtimePath, nodePath: process.execPath, sandbox: mode === 'docker' ? { enabled: true, available: true, image } : { enabled: false } };
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: "setsid /bin/bash -c 'while true; do printf x >> orphan-local; sleep 0.1; done' </dev/null >/dev/null 2>&1 & wait" };
+  const settings = { runtimePath, nodePath: process.execPath };
   const source = `import { createCodeExecutors } from ${JSON.stringify(new URL('../src/workflows/executors.ts', import.meta.url).href)}; const ctx = ${JSON.stringify(ctx)}; ctx.signal = new AbortController().signal; await (await createCodeExecutors(${JSON.stringify(settings)})).shell.execute(ctx);`;
   const host = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', source], { stdio: 'ignore' });
   try {
     await waitFor(() => existsSync(marker));
-    let cli: number | undefined;
-    if (mode === 'docker' && process.platform === 'linux') await waitFor(() => {
-      const supervisor = dockerSupervisor(host.pid!);
-      cli = supervisor === undefined ? undefined : dockerCli(supervisor);
-      return cli !== undefined;
-    });
     host.kill('SIGKILL');
-    for (const pid of cli === undefined ? [] : [cli]) { try { process.kill(pid, 'SIGKILL'); } catch {} }
     await new Promise(resolve => host.once('close', resolve));
     await new Promise(resolve => setTimeout(resolve, 4500));
     const size = readFileSync(marker).length;
@@ -183,42 +284,44 @@ for (const mode of ['local', 'docker'] as const) test(`host loss stops owned She
     assert.equal(readFileSync(marker).length, size);
   } finally { host.kill('SIGKILL'); }
 });
-for (const failure of ['host-cli', 'heartbeat', 'deadline', 'kill-inner'] as const) test(`outside Docker lease survives inner supervisor attack (${failure})`, { skip: !dockerAvailable || process.platform !== 'linux', timeout: 18000 }, async () => {
-  const marker = join(scope, `attack-${failure}`);
+test('local heartbeat loss stops detached descendants', { ...localIntegration, timeout: 15000 }, async () => {
+  const marker = join(scope, 'local-heartbeat');
   const ctx = context('');
-  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: failure === 'deadline' ? 5000 : 60000, command: `kill -${failure === 'kill-inner' ? 'KILL' : 'STOP'} "$PPID"; while true; do printf x >> attack-${failure}; sleep 0.1; done` };
-  const settings = { runtimePath, nodePath: process.execPath, sandbox: { enabled: true, available: true, image } };
-  const source = `import { createCodeExecutors } from ${JSON.stringify(new URL('../src/workflows/executors.ts', import.meta.url).href)}; const ctx = ${JSON.stringify(ctx)}; ctx.signal = new AbortController().signal; await (await createCodeExecutors(${JSON.stringify(settings)})).shell.execute(ctx);`;
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: "setsid /bin/bash -c 'while true; do printf x >> local-heartbeat; sleep 0.05; done' </dev/null >/dev/null 2>&1 & wait" };
+  const settings = { runtimePath, nodePath: process.execPath };
+  const source = `import { createCodeExecutors } from ${JSON.stringify(new URL('../src/workflows/executors.ts', import.meta.url).href)}; const ctx = ${JSON.stringify(ctx)}; ctx.signal = new AbortController().signal; await (await createCodeExecutors(${JSON.stringify(settings)})).shell.execute(ctx).catch(() => {});`;
   const host = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', source], { stdio: 'ignore' });
-  let name = '';
+  const closed = new Promise(resolve => host.once('close', resolve));
   try {
-    let cli: number | undefined;
-    await waitFor(() => {
-      const supervisor = dockerSupervisor(host.pid!);
-      cli = supervisor === undefined ? undefined : dockerCli(supervisor);
-      if (cli === undefined) return false;
-      const args = commandLine(cli);
-      name = args[args.indexOf('--name') + 1] ?? '';
-      return name.startsWith('flow-workflow-');
-    });
-    assert.match(name, /^flow-workflow-/);
-    if (failure !== 'kill-inner') await waitFor(() => existsSync(marker));
-    if (failure === 'heartbeat') host.kill('SIGSTOP');
-    if (failure === 'host-cli' || failure === 'kill-inner') {
-      host.kill('SIGKILL');
-      try { process.kill(cli!, 'SIGKILL'); } catch (error) { assert.equal((error as NodeJS.ErrnoException).code, 'ESRCH'); }
-    }
-    await new Promise(resolve => setTimeout(resolve, failure === 'deadline' ? 6500 : 4000));
-    assert.notEqual(spawnSync('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'inspect', name], { stdio: 'ignore' }).status, 0);
-    const size = existsSync(marker) ? readFileSync(marker).length : 0;
-    await new Promise(resolve => setTimeout(resolve, 500));
-    assert.equal(existsSync(marker) ? readFileSync(marker).length : 0, size);
-  } finally {
-    host.kill('SIGKILL');
-    if (name.startsWith('flow-workflow-')) spawnSync('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', 'rm', '--force', name], { stdio: 'ignore', timeout: 5000 });
-  }
+    await waitFor(() => existsSync(marker));
+    host.kill('SIGSTOP');
+    await new Promise(resolve => setTimeout(resolve, 4500));
+    const size = readFileSync(marker).length;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(readFileSync(marker).length, size);
+    host.kill('SIGCONT');
+    await closed;
+  } finally { host.kill('SIGKILL'); }
 });
-test('cancellation drains an active fetch and ignores late results', { timeout: 10000 }, async () => {
+
+for (const failure of ['cancel', 'deadline', 'stopped-supervisor'] as const) test(`local ${failure} stops detached descendants`, { ...localIntegration, timeout: 12000 }, async () => {
+  const marker = join(scope, `local-${failure}`);
+  const controller = new AbortController();
+  const ctx = context(''); ctx.signal = controller.signal;
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', timeoutMs: failure === 'cancel' ? 60000 : 500,
+    command: `${failure === 'stopped-supervisor' ? 'kill -STOP "$PPID";' : ''} setsid /bin/bash -c 'while true; do printf x >> local-${failure}; sleep 0.05; done' </dev/null >/dev/null 2>&1 & wait` };
+  const work = assert.rejects(local.shell.execute(ctx));
+  try {
+    await waitFor(() => existsSync(marker));
+    if (failure === 'cancel') controller.abort();
+    await work;
+    const size = readFileSync(marker).length;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(readFileSync(marker).length, size);
+  } finally { controller.abort(); await work; }
+});
+
+test('cancellation drains an active fetch and ignores late results', { ...localIntegration, timeout: 10000 }, async () => {
   let closed = false, requested = false;
   const server = createServer((req, _res) => { requested = true; req.on('close', () => { closed = true; }); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -230,14 +333,14 @@ test('cancellation drains an active fetch and ignores late results', { timeout: 
   finally { controller.abort(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
-test('SEA extracts a complete runtime and runs without source-relative assets', { skip: process.platform !== 'linux' || process.versions.node.split('.')[0] !== '22' ? 'SEA packaging requires the supported Linux Node 22 toolchain' : false, timeout: 30000 }, () => {
+test('SEA extracts a complete runtime and runs without source-relative assets', { skip: localUnavailable || (process.platform !== 'linux' || process.versions.node.split('.')[0] !== '22' ? 'SEA packaging requires the supported Linux Node 22 toolchain' : false), timeout: 30000 }, () => {
   const entry = join(runtimeDirectory, 'sea-entry.cjs');
   const binary = join(runtimeDirectory, 'sea-flow');
   const blob = join(runtimeDirectory, 'sea.blob');
   const config = join(runtimeDirectory, 'sea.json');
   const executors = fileURLToPath(new URL('../src/workflows/executors.ts', import.meta.url));
   const asset = fileURLToPath(new URL('../src/workflows/runtime-asset.ts', import.meta.url));
-  buildSync({ stdin: { contents: `import { createCodeExecutors } from ${JSON.stringify(executors)}; import { embeddedWorkflowRuntime } from ${JSON.stringify(asset)}; const ctx = ${JSON.stringify(context('return input.value * 3;'))}; ctx.signal = new AbortController().signal; createCodeExecutors({runtimePath: embeddedWorkflowRuntime(), nodePath: ${JSON.stringify(process.execPath)}, sandbox: {enabled:false}}).then(executors => executors.typescript.execute(ctx)).then(value => console.log(value), error => { console.error(error); process.exitCode = 1; });`, resolveDir: process.cwd() }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', target: 'node22' });
+  buildSync({ stdin: { contents: `import { createCodeExecutors } from ${JSON.stringify(executors)}; import { embeddedWorkflowRuntime } from ${JSON.stringify(asset)}; const ctx = ${JSON.stringify(context('return input.value * 3;'))}; ctx.signal = new AbortController().signal; createCodeExecutors({runtimePath: embeddedWorkflowRuntime(), nodePath: ${JSON.stringify(process.execPath)}}).then(executors => executors.typescript.execute(ctx)).then(value => console.log(value), error => { console.error(error); process.exitCode = 1; });`, resolveDir: process.cwd() }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', target: 'node22' });
   writeFileSync(config, JSON.stringify({ main: entry, output: blob, disableExperimentalSEAWarning: true, assets: { 'workflow-runtime.cjs': runtimePath } }));
   execFileSync(process.execPath, ['--experimental-sea-config', config], { stdio: 'pipe' });
   copyFileSync(process.execPath, binary);
@@ -245,7 +348,7 @@ test('SEA extracts a complete runtime and runs without source-relative assets', 
   assert.equal(execFileSync(binary, [], { cwd: tmpdir(), encoding: 'utf8' }).trim(), '12');
 });
 
-test('large shell output survives transport, TypeScript downstream input and file IO', async () => {
+test('large shell output survives transport, TypeScript downstream input and file IO', localIntegration, async () => {
   const ctx = context('');
   ctx.step = { id: 'a', name: 'Large shell', kind: 'shell', command: 'printf "%0250000d" 0; printf "%0150000d" 0 >&2' };
   const output = await local.shell.execute(ctx) as { stdout: string; stderr: string; exitCode: number };

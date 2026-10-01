@@ -10,7 +10,12 @@ import {
   type SettingsPatch,
   type SummaryModel,
 } from "./config.ts";
-import { DEFAULT_WORKFLOW_RUNTIME } from '../protocol/settings.ts';
+import { DEFAULT_WORKFLOW_RUNTIME, type FilesystemIsolationStatus } from '../protocol/settings.ts';
+import {
+  detectFilesystemIsolationSupport,
+  type FilesystemIsolationSupport,
+  type FilesystemIsolationSupportDetector,
+} from '../isolation/support.ts';
 import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
 
@@ -30,16 +35,47 @@ export class ConfigStore {
   private readonly path: string;
   private readonly root: string;
   private config: Config;
+  private isolationSupport: FilesystemIsolationSupport | undefined;
+  private isolationInitialization: Promise<void> | undefined;
+  private readonly isolationDetector: FilesystemIsolationSupportDetector;
   /** Why part of the file on disk was ignored, for the daemon to print on the way up. */
   readonly warning: string | undefined;
 
-  constructor(root: string = defaultStateRoot()) {
+  constructor(root: string = defaultStateRoot(), detector: FilesystemIsolationSupportDetector = detectFilesystemIsolationSupport) {
+    this.isolationDetector = detector;
     this.root = root;
     this.path = join(root, "config.json");
     const loaded = loadConfig(root);
     this.config = loaded.config;
     this.warning = loaded.warning;
   }
+
+  /**
+   * Probe once, including concurrent callers, and latch the automatic startup decision.
+   * A later failed restricted launch must never turn this policy off.
+   */
+  async initializeFilesystemIsolation(): Promise<void> {
+    this.isolationInitialization ??= Promise.resolve().then(async () => {
+      try {
+        this.isolationSupport = { ...await this.isolationDetector({ stateRoot: this.root }) };
+      } catch (error) {
+        this.isolationSupport = { supported: false, reason: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    await this.isolationInitialization;
+  }
+
+  /** Pending automatic selection is fail-closed; explicit true stays enabled even if unsupported. */
+  readonly filesystemIsolationEnabled = (): boolean =>
+    this.config.filesystemIsolation ?? this.isolationSupport?.supported ?? true;
+
+  readonly filesystemIsolationStatus = (): FilesystemIsolationStatus => ({
+    supported: this.isolationSupport?.supported ?? false,
+    enabled: this.filesystemIsolationEnabled(),
+    automatic: this.config.filesystemIsolation === undefined,
+    checking: this.isolationSupport === undefined,
+    ...(this.isolationSupport?.reason === undefined ? {} : { reason: this.isolationSupport.reason }),
+  });
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */
   current(): Config {
@@ -159,6 +195,9 @@ export class ConfigStore {
     // cleared. Both optional sections can be cleared, so both are deleted when absent — and for
     // `permissions` that is not tidiness: a section left behind would keep a Standing Authorisation
     // the human had just revoked.
+    // Keep automatic selection absent, including after reset or a leniently ignored disk value.
+    // Persisting the resolved default here would pin the next host to today's probe result.
+    if (next.filesystemIsolation === undefined) delete document["filesystemIsolation"];
     if (next.projects === undefined) delete document["projects"];
     if (next.permissions === undefined) delete document["permissions"];
     if (next.providers === undefined) delete document["providers"];
@@ -201,6 +240,7 @@ function settingsOf(config: Config): Settings {
     fonts: config.fonts,
     mcp: config.mcp ?? [],
     workflowRuntime: { ...DEFAULT_WORKFLOW_RUNTIME, ...config.workflowRuntime },
+    ...(config.filesystemIsolation === undefined ? {} : { filesystemIsolation: config.filesystemIsolation }),
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),

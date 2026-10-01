@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { SessionHost } from "../../src/daemon/host.ts";
+import { isolationIntegration } from "../isolation-fixture.ts";
 
 async function waitFor(predicate: () => boolean) {
   const deadline = Date.now() + 10_000;
@@ -15,7 +16,7 @@ async function waitFor(predicate: () => boolean) {
   }
 }
 
-test("fatal worker loss makes its Agent Session Dormant, closes owned work, and allows explicit Revive", async (t) => {
+test("fatal worker loss makes its Agent Session Dormant, closes owned work, and allows explicit Revive", isolationIntegration, async (t) => {
   const scope = await mkdtemp(join(tmpdir(), "flow-worker-host-"));
   const host = new SessionHost();
   t.after(async () => { await host.shutdown(); await rm(scope, { recursive: true, force: true }); });
@@ -39,7 +40,7 @@ test("fatal worker loss makes its Agent Session Dormant, closes owned work, and 
   assert.ok(host.logFor(id).since(0).some(({ event }) => event.type === "revived"));
 });
 
-test("a worker crash during a prompt is recorded once and shutdown waits for teardown", async (t) => {
+test("a worker crash during a prompt is recorded once and shutdown waits for teardown", isolationIntegration, async (t) => {
   const scope = await mkdtemp(join(tmpdir(), "flow-worker-host-"));
   const host = new SessionHost();
   t.after(async () => { await host.shutdown(); await rm(scope, { recursive: true, force: true }); });

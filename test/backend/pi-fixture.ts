@@ -32,8 +32,8 @@ export function gate() {
   return { promise, release };
 }
 
-export async function until(check: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5000;
+export async function until(check: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (!check()) {
     assert.ok(Date.now() < deadline, "Timed out waiting for SDK events");
     await new Promise((resolve) => setTimeout(resolve, 10));

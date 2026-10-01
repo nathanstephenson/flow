@@ -328,17 +328,17 @@ describe('workflow execution', () => {
     assert.equal((await invalid.wait(session.sessionId, started.id)).status, 'recovery-required');
   });
 
-  it('blocks unavailable executors, external sandboxes, adapter mismatches and Project restrictions', () => {
+  it('blocks unavailable executors, filesystem boundaries, adapter mismatches and Project restrictions', () => {
     const scheduler = new WorkflowScheduler(store, {});
     assert.throws(() => scheduler.start(definition([agent('a')]), session, {}), /unavailable/);
     assert.throws(() => scheduler.start(definition([agent('a')]), { ...session, backend: 'other' }, {}), /mismatch/);
     assert.throws(() => scheduler.start({ ...definition([agent('a')]), projectId: 'project' }, session, {}), /Project/);
     const typescript: WorkflowStep = { id: 'ts', name: 'TS', kind: 'typescript', code: 'return 1', outputSchema: number };
-    const noSandbox = new WorkflowScheduler(store, { typescript: {
-      check() { throw new Error('Enabled external sandbox is unavailable'); },
-      async execute() { assert.fail('Must not execute without the enabled sandbox'); },
+    const noBoundary = new WorkflowScheduler(store, { typescript: {
+      check() { throw new Error('Required filesystem boundary is unavailable'); },
+      async execute() { assert.fail('Must not execute without the required filesystem boundary'); },
     } });
-    assert.throws(() => noSandbox.start(definition([typescript]), session, {}), /sandbox/);
+    assert.throws(() => noBoundary.start(definition([typescript]), session, {}), /filesystem boundary/);
     assert.equal(scheduler.occupied(session.sessionId), false);
     assert.deepEqual(store.listExecutions(session.sessionId), []);
   });
@@ -464,7 +464,7 @@ describe('workflow execution', () => {
     assert.equal((await restarted.wait(session.sessionId, started.id)).result, 1);
   });
 
-  it('honours executor capability checks and permits TypeScript without external sandboxing', async () => {
+  it('honours executor capability checks and permits available TypeScript executors', async () => {
     const unsupported = new WorkflowScheduler(store, { agent: { check() { throw new Error('unsupported effort'); }, async execute() { return 1; } } });
     assert.throws(() => unsupported.start(definition([agent('a')]), session, {}), /unsupported effort/);
     const scheduler = new WorkflowScheduler(store, { typescript: executor(async context => {
