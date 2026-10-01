@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { piFixture, until } from "./pi-fixture.ts";
+import { join, resolve } from "node:path";
+import { McpSession } from "../../src/backend/mcp.ts";
+import { piFixture, until, userText } from "./pi-fixture.ts";
 
 it("Pi Ask intercepts the SDK's tool execution and refuses or allows without machine-wide grants", { timeout: 15000 }, async (t) => {
   let call = 0;
@@ -50,6 +51,40 @@ it("Pi Always and Standing Authorisations run without prompting; live Ask applie
   await granted.prompt("write");
   assert.equal(standing.events.filter((event) => event.type === "permission").length, 0);
   assert.ok(existsSync(join(standing.scope, "standing.txt")));
+});
+
+it("MCP session recreation preserves Ask interception, remembered grants, and live mode changes", { timeout: 15000 }, async (t) => {
+  const fixture = await piFixture(t, (request) => request.messages.at(-1)?.role !== "user"
+    ? { text: "done" }
+    : { tools: [{ id: `call-${fixture.requests.length}`, name: userText(request).startsWith("write") ? "write" : "mcp__fixture__echo",
+      arguments: userText(request).startsWith("write") ? { path: `${userText(request)}.txt`, content: "ok" } : { text: "MCP reached" } }] });
+  const mcp = new McpSession([{ id: "fixture", name: "Fixture", enabledByDefault: true,
+    transport: "stdio", command: process.execPath, args: ["--experimental-strip-types", resolve("test/fixtures/mcp-server.ts")] }], fixture.scope);
+  t.after(() => mcp.dispose());
+  const session = await fixture.create({ permissionMode: "ask", mcp });
+  const first = session.prompt("write-before-refresh");
+  await until(() => fixture.events.some((event) => event.type === "permission" && event.state === "asked"));
+  assert.equal(await session.answerPermission!("call-1", "always"), true);
+  await first;
+
+  await mcp.open();
+  await session.refreshMcp!();
+  const before = fixture.events.filter((event) => event.type === "permission").length;
+  await session.prompt("write-after-refresh");
+  assert.equal(readFileSync(join(fixture.scope, "write-after-refresh.txt"), "utf8"), "ok");
+  assert.equal(fixture.events.filter((event) => event.type === "permission").length, before);
+  const echo = session.prompt("Use MCP");
+  await until(() => fixture.events.some((event) => event.type === "permission" && event.callId === "call-5" && event.state === "asked"));
+  assert.equal(fixture.events.some((event) => event.type === "tool_ended" && event.callId === "call-5"), false);
+  assert.equal(await session.answerPermission!("call-5", "allow"), true);
+  await echo;
+
+  await session.setPermissionMode!("always");
+  await session.refreshMcp!();
+  const after = fixture.events.filter((event) => event.type === "permission").length;
+  await session.prompt("Use MCP again");
+  assert.equal(fixture.events.filter((event) => event.type === "permission").length, after);
+  assert.ok(fixture.events.some((event) => event.type === "tool_ended" && event.callId === "call-7"));
 });
 
 it("background Subagent prompts remain answerable from the parent after its turn", { timeout: 15000 }, async (t) => {

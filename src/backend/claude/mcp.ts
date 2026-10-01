@@ -30,7 +30,9 @@ export async function refreshClaudeMcp(stream: Pick<Query, "setMcpServers" | "mc
     if (Date.now() >= deadline || selected.some((entry) => entry && entry.status !== "pending" && entry.status !== "connected")) break;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  await stream.setMcpServers({});
+  // A failed external refresh must not remove the parent workflow controls. They are owned by
+  // this Backend Session, not by the external connection being retried.
+  await stream.setMcpServers(additional);
   throw new Error("MCP tools could not be registered");
 }
 
