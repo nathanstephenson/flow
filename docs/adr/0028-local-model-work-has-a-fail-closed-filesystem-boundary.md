@@ -20,7 +20,11 @@ cloud and package credential stores are masked too. SDK resource folders are mou
 without admitting symlinks or parents that contain protected host state. Adapter-local credential
 refresh does not write back to the user's global credential files. Missing protected paths are
 masked through an existing ancestor so credentials or host state created later remain hidden.
-Only explicitly validated runtime assets and the selected Scope are restored beneath those masks.
+Only validated runtime assets and the selected Scope are restored beneath those masks. PATH-selected
+tool directories and their linked package/library assets are discovered narrowly and mounted
+read-only, so home-installed npm/npx do not silently switch to system versions. Masked directory
+aliases in PATH are rewritten to their canonical tool directories. Intentionally protected PATH
+entries remain hidden; discovery never restores a credential store or a broad home ancestor.
 Enforcement executables and unrestricted launch runtimes must remain outside writable backend state.
 
 Scope bindings are recorded canonically and later symlink redirection refuses execution. Mount
@@ -37,7 +41,10 @@ Network access remains available for inference.
 Local Workflow Shell and TypeScript execution also receives this policy when the external Docker
 runtime is disabled. Local Node readiness probes run behind the policy too. Local stdio MCP servers
 receive the filesystem policy, since executing them outside it would turn host-side tool delegation
-into a bypass. Explicit dependency asset mounts keep Node stdio packages available under ancestor masks.
+into a bypass. Explicit dependency asset mounts keep Node stdio packages and npm/SEA workers
+available under ancestor masks, including ancestor node_modules search paths and linked packages
+outside the launch package. These trees pass the same protected-state checks and descriptor pinning;
+dependency discovery never grants general access to the containing home or workspace.
 
 External Docker Workflow execution is currently unavailable and fails closed before even its
 readiness probe. A validated mount pathname is not a pinned inode: a concurrent model with an

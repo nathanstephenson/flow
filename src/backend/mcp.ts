@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { prepareFilesystemIsolation, type FilesystemIsolation } from "../isolation/filesystem.ts";
 import { filesystemStdioLaunch } from "../isolation/launcher.ts";
+import { nodeExecutionAssets } from "../isolation/node-assets.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -69,15 +70,7 @@ function executionAssets(connection: Extract<McpConnection, { transport: "stdio"
   }
   // A private ancestor mask can hide symlinked or hoisted Node dependencies even when the
   // package itself remains visible. Restore dependency trees explicitly, still policy-checked.
-  for (const path of paths.slice()) {
-    if (!statSync(path).isDirectory()) continue;
-    const dependencies = join(path, 'node_modules');
-    if (existsSync(dependencies)) paths.push(realpathSync(dependencies));
-    for (let ancestor = path; ancestor !== dirname(ancestor); ancestor = dirname(ancestor)) {
-      if (basename(ancestor) === 'node_modules') { paths.push(realpathSync(ancestor)); break; }
-    }
-  }
-  return [...new Set(paths)];
+  return [...new Set([...paths, ...nodeExecutionAssets(paths)])];
 }
 
 export class McpSession {

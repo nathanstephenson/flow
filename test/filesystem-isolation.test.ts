@@ -102,6 +102,18 @@ describe("filesystem isolation fails closed", () => {
     }
   });
 
+  it("refuses broad PATH restoration and explicit protected launch targets", { skip: process.platform !== 'linux' }, async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    const bin = join(f.home, 'bin'); mkdirSync(bin);
+    const tool = join(f.pi, 'private-tool'); writeFileSync(tool, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    symlinkSync(tool, join(bin, 'credential-tool'));
+    for (const [path, command] of [[f.home, process.execPath], [f.pi, tool], [bin, join(bin, 'credential-tool')]] as const) {
+      await assert.rejects(prepareFilesystemIsolation(f.options({ command,
+        env: { ...f.env, PATH: path, FLOW_BWRAP_PATH: '/bin/true' },
+      })), /Readable execution asset would expose protected state/);
+    }
+  });
+
   it("refuses a missing protected root without a safe existing ancestor", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     await assert.rejects(prepareFilesystemIsolation(f.options({
@@ -130,6 +142,54 @@ describe("filesystem isolation fails closed", () => {
 });
 
 describe("real Bubblewrap filesystem boundary", integration, () => {
+  it("preserves masked PATH toolchains, package-relative launch scripts and directory aliases without exposing later credentials", async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    const toolchain = join(f.home, 'toolchain');
+    const bin = join(toolchain, 'bin'), pkg = join(toolchain, 'lib/node_modules/tool');
+    const alias = join(f.home, 'current');
+    mkdirSync(bin, { recursive: true }); mkdirSync(pkg, { recursive: true });
+    writeFileSync(join(pkg, 'package.json'), '{}');
+    const dependency = join(f.home, 'node_modules/hoisted-tool-test'); mkdirSync(dependency, { recursive: true });
+    writeFileSync(join(dependency, 'package.json'), '{"main":"index.cjs"}');
+    writeFileSync(join(dependency, 'index.cjs'), "module.exports='selected-toolchain';");
+    writeFileSync(join(pkg, 'value.cjs'), "module.exports=require('hoisted-tool-test');");
+    writeFileSync(join(pkg, 'cli.cjs'), "#!/usr/bin/env node\nconsole.log(require('./value.cjs'));", { mode: 0o700 });
+    symlinkSync('../lib/node_modules/tool/cli.cjs', join(bin, 'flow-test-npm'));
+    symlinkSync(toolchain, alias);
+    const publicBin = join(f.scope, 'bin'); mkdirSync(publicBin);
+    symlinkSync(join(pkg, 'cli.cjs'), join(publicBin, 'flow-test-public-tool'));
+    const prepared = await prepareFilesystemIsolation(f.options({
+      env: { ...f.env, PATH: `${publicBin}:${alias}/bin:${process.env.PATH}` },
+      args: ['-e', `const a=require('assert/strict'),f=require('fs'),c=require('child_process');
+        const result=c.spawnSync('flow-test-npm',[],{encoding:'utf8'});
+        a.equal(result.status,0,result.stderr);a.equal(result.stdout.trim(),'selected-toolchain');
+        const linked=c.spawnSync('flow-test-public-tool',[],{encoding:'utf8'});
+        a.equal(linked.status,0,linked.stderr);a.equal(linked.stdout.trim(),'selected-toolchain');
+        a.equal(f.existsSync(${JSON.stringify(join(f.home, '.netrc'))}),false);
+        a.throws(()=>f.writeFileSync(${JSON.stringify(join(pkg, 'value.cjs'))},'bad'));
+        console.log('selected');`],
+    }));
+    t.after(prepared.cleanup);
+    writeFileSync(join(f.home, '.netrc'), 'future-host-credential');
+    const launch = filesystemStdioLaunch(prepared);
+    const { stdout } = await execute(launch.command, launch.args, { env: prepared.env, timeout: 15_000 });
+    assert.equal(stdout.trim(), 'selected');
+    assert.equal(readFileSync(join(f.home, '.netrc'), 'utf8'), 'future-host-credential');
+  });
+
+  it("keeps the host-selected npm and npx versions rather than silently switching to system tools", async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    for (const tool of ['npm', 'npx']) {
+      const host = spawnSync(tool, ['--version'], { encoding: 'utf8' });
+      if ((host.error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') { t.skip(`${tool} unavailable on host`); return; }
+      assert.equal(host.status, 0, host.stderr);
+      const { stdout } = await node(f.options(), `const a=require('assert/strict'),c=require('child_process');
+        const result=c.spawnSync(${JSON.stringify(tool)},['--version'],{encoding:'utf8'});
+        a.equal(result.status,0,result.stderr);console.log(result.stdout.trim());`);
+      assert.equal(stdout.trim(), host.stdout.trim());
+    }
+  });
+
   it("allows write/edit/delete only in Scope; denies symlink and descendant process escapes", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     symlinkSync(join(f.outside, "keep"), join(f.scope, "outside-link"));

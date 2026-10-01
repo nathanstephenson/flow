@@ -3,6 +3,7 @@ import { closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, op
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pathToolchainAssets } from "./toolchain-assets.ts";
 const virtualRoot = "/tmp/flow-isolation";
 const virtualState = `${virtualRoot}/state`;
 const virtualHome = `${virtualRoot}/home`;
@@ -219,7 +220,12 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
       throw new Error("Trusted launch executable must be outside writable backend state and scratch");
     }
     const command = await executable(options.command, env);
-    const readable = [...new Set([command, ...(options.readablePaths ?? []).map((path) => realpathSync(path)),
+    const maskRoots = [...protectedPaths.map(existingMask), canonical('/tmp'), canonical('/var/tmp'), canonical('/run')];
+    const tools = pathToolchainAssets(env.PATH ?? '/usr/bin:/bin', scope,
+      path => maskRoots.some(root => within(path, root)),
+      path => protectedPaths.some(root => within(path, root)) || ['/var/tmp', '/run'].some(root => within(path, canonical(root))));
+    env.PATH = tools.path;
+    const readable = [...new Set([command, ...tools.assets, ...(options.readablePaths ?? []).map((path) => realpathSync(path)),
       ...(env.FLOW_CLAUDE_PATH ? [await executable(env.FLOW_CLAUDE_PATH, env)] : [])])];
     for (const path of readable) {
       if ([home, credentialHome, "/", ...["/tmp", "/var/tmp", "/run", "/var/run", "/proc", "/dev", "/sys"].map(canonical)].includes(path)

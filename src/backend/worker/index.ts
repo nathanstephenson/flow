@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
+import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
 import type { BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
@@ -31,9 +32,10 @@ export class WorkerBackend implements AgentBackend {
     const packageRoot = isSea() ? dirname(process.execPath) : fileURLToPath(new URL("../../..", import.meta.url));
     const assets = [packageRoot, ...(this.options.readablePaths ?? [])];
     if (isSea()) {
-      // The optional SDK and native dependencies remain installed beside a SEA executable.
-      for (const path of createRequire(process.execPath).resolve.paths("@earendil-works/pi-coding-agent") ?? []) {
-        if (existsSync(join(path, "@earendil-works/pi-coding-agent/package.json"))) assets.push(path);
+      // Preserve the SEA loader's default-prefix SDK lookups as well as ordinary ancestor
+      // node_modules trees. NODE_PATH is scrubbed, but Node's prefix/lib/node is not NODE_PATH.
+      for (const path of createRequire(process.execPath).resolve.paths('@earendil-works/pi-coding-agent') ?? []) {
+        if (existsSync(join(path, '@earendil-works/pi-coding-agent/package.json'))) assets.push(path);
       }
     }
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
@@ -41,6 +43,9 @@ export class WorkerBackend implements AgentBackend {
       assets.push(this.options.entry);
       if (dirname(this.options.entry).endsWith("/backend/worker")) assets.push(resolve(dirname(this.options.entry), "../../.."));
     }
+    // Both npm workers and SEAs can resolve hoisted or linked dependencies outside the
+    // package root. Restore only those trees/targets; the policy validates all mounts.
+    assets.push(...nodeExecutionAssets(assets));
     const isolation = await prepareFilesystemIsolation({ ...plan, scope: options.scope, expectedScope: resolve(options.scope),
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
