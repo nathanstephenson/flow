@@ -12,7 +12,7 @@
  * they mean on disk; this file owns only their shape.
  */
 
-import type { EffortLevel } from "./events.ts";
+import type { AgentPermissionMode, EffortLevel } from "./events.ts";
 import type { Fonts } from "./fonts.ts";
 
 export type WorkflowRuntimeSettings = {
@@ -108,6 +108,7 @@ export type Settings = {
     compactionModels?: Record<string, string>;
     /** Creation-only main-model effort per Backend Adapter; never used for naming. */
     efforts?: Record<string, EffortLevel>;
+    permissionModes?: Record<string, AgentPermissionMode>;
     /** Naming stays within the Agent Session's Backend Adapter. Absent means keep the first line. */
     summaries?: Record<string, { modelId: string; automatic: boolean }>;
     /**
@@ -172,6 +173,7 @@ export type SettingsPatch = {
     compactionModels?: Record<string, string>;
     /** Merges per backend; an empty string clears its Default Effort. */
     efforts?: Record<string, EffortLevel | "">;
+    permissionModes?: Record<string, AgentPermissionMode | "">;
     /** Merges per backend; null clears one summary, including its legacy singleton value. */
     summaries?: Record<string, { modelId: string; automatic?: boolean } | null>;
     /** `automatic` may be omitted when setting a model, and defaults to naming automatically. */

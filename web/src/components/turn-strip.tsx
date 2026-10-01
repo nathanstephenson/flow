@@ -7,6 +7,7 @@ import { useBranches } from "@/branches.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
 import type { Chrome } from "@/store/contract.ts";
 import { ContextUsageMeter } from "@/components/context-usage-meter.tsx";
+import { PermissionModeSelect } from "@/components/permission-mode-select.tsx";
 import { EffortPicker, ModelPicker } from "@/components/model-picker.tsx";
 import {
   Select,
@@ -36,7 +37,7 @@ import { cn } from "@/lib/utils.ts";
  * The branch half is absent for a Scope that is not a repository; the rest of the row is not, which
  * is why this renders unconditionally. A Project need not be a repository at all (ADR 0011).
  */
-export function TurnStrip({ chrome, actions }: { chrome: Chrome; actions: ComposerActions }) {
+export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chrome; actions: ComposerActions; permissions?: boolean }) {
   const ended = chrome.status === "ended";
 
   return (
@@ -63,6 +64,9 @@ export function TurnStrip({ chrome, actions }: { chrome: Chrome; actions: Compos
           disabled={ended}
           onSelect={actions.setEffort}
         />
+        {permissions && chrome.permissionMode && <PermissionModeSelect backend={chrome.backend} value={chrome.permissionMode}
+          disabled={ended || occupied(chrome.status) || !!chrome.authorising}
+          onChange={actions.setPermissionMode} />}
       </div>
 
       <ContextUsageMeter usage={chrome.contextUsage} compacting={chrome.compacting} />

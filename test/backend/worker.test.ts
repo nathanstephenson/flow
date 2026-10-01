@@ -40,6 +40,24 @@ test("worker provides synchronous snapshots and updates them before emitting mod
   await session.compact!();
 });
 
+test("worker preserves startup permission policy and confirms live changes through IPC", isolationIntegration, async t => {
+  const { session, events } = await fixture(t, { permissionMode: "ask" });
+  const readMode = async () => {
+    await session.prompt("permission-mode");
+    const event = events.findLast(event => event.type === "message" && event.id === "permission-mode");
+    assert.ok(event?.type === "message");
+    return event.text;
+  };
+  assert.equal(await readMode(), "ask");
+  assert.equal(typeof session.setPermissionMode, "function");
+  await session.setPermissionMode!("always");
+  assert.equal(await readMode(), "always");
+  await assert.rejects(session.setPermissionMode!("auto"), /does not support Auto/);
+  assert.equal(await readMode(), "always", "a rejected change cannot replace the confirmed policy");
+  await session.setPermissionMode!("ask");
+  assert.equal(await readMode(), "ask");
+});
+
 test("held prompt does not block enquiry answers, permission answers or abort", isolationIntegration, async (t) => {
   const { session, events } = await fixture(t);
   for (const answer of [() => session.answerEnquiry!("open", [["yes"]]), () => session.answerPermission!("open", "allow"), () => session.abort()]) {

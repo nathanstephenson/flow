@@ -32,6 +32,7 @@ import type {
   BackendEvent,
   Capabilities,
   EffortLevel,
+  AgentPermissionMode,
   LoggedEvent,
   PermissionDecision,
   Producer,
@@ -210,6 +211,11 @@ type SessionRecord = {
   resumeToken: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
+  permissionMode: AgentPermissionMode;
+  /** A reserved policy transition: host-driven turns and Revive wait for the confirmed mode. */
+  permissionChanging?: Promise<void>;
+  /** Detect SDK-owned turns/prompts even if they also finish while a policy request is awaiting. */
+  permissionActivityVersion?: number;
   /** Creation-only configuration must be exact; live selections keep adapter clamping semantics. */
   initialEffortUnconfirmed: boolean;
   createdAt: string;
@@ -269,6 +275,7 @@ export type SessionHostOptions = {
   autoCompaction?: (backend: string) => AutoCompaction | undefined;
   compactionModel?: (backend: string) => string | undefined;
   defaultEffort?: (backend: string) => EffortLevel | undefined;
+  defaultPermissionMode?: (backend: string) => AgentPermissionMode | undefined;
   /**
    * The Summary Model, and the Backend Adapter to reach it through — the model that names an Agent
    * Session (ADR 0020).
@@ -447,6 +454,7 @@ export class SessionHost {
   private readonly autoCompaction: SessionHostOptions["autoCompaction"];
   private readonly compactionModel: SessionHostOptions["compactionModel"];
   private readonly defaultEffort: ((backend: string) => EffortLevel | undefined) | undefined;
+  private readonly defaultPermissionMode: SessionHostOptions["defaultPermissionMode"];
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
@@ -475,6 +483,7 @@ export class SessionHost {
     this.autoCompaction = options.autoCompaction;
     this.compactionModel = options.compactionModel;
     this.defaultEffort = options.defaultEffort;
+    this.defaultPermissionMode = options.defaultPermissionMode;
     this.summaryModel = options.summaryModel;
   }
 
@@ -677,6 +686,7 @@ export class SessionHost {
           scope: record.scope,
           backend: record.backendName,
           status,
+          permissionMode: record.permissionMode,
           title: record.title,
           ...(record.outputPreview === undefined ? {} : { outputPreview: record.outputPreview }),
           restingAt: record.restingAt,
@@ -763,6 +773,7 @@ export class SessionHost {
         resumeToken: meta.resumeToken,
         modelId: meta.modelId,
         effort: meta.effort,
+        permissionMode: meta.permissionMode ?? this.permissionDefault(meta.backend),
         initialEffortUnconfirmed: meta.initialEffortUnconfirmed ?? false,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
@@ -771,6 +782,7 @@ export class SessionHost {
       // Empties all three sets seeded above: a torn turn's prompts and Subagents are closed here,
       // and nothing can be open on an Agent Session with no Backend Session attached.
       this.closeTornTurn(record, entries);
+      if (!meta.permissionMode) record.log.append({ type: "permission_mode_changed", mode: record.permissionMode });
       // Dormancy has to be visible to a client reducing the transcript, or a session with nothing
       // running still looks ready to type at. A clean shutdown already recorded it.
       if (record.lifecycle === "dormant" && lastEventType(record.log.since(0)) !== "session_dormant") {
@@ -787,6 +799,7 @@ export class SessionHost {
     backend?: string;
     modelId?: string;
     effort?: EffortLevel;
+    permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
   }): Promise<string> {
@@ -796,6 +809,9 @@ export class SessionHost {
     const backendName = options.backend ?? resolveDefaultBackend([...this.backends.keys()], this.defaultBackend?.());
     if (backendName === undefined) throw new Error("No backends available");
     const backend = this.backendFor(backendName);
+    // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
+    const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
+    this.validatePermissionMode(backend.name, permissionMode);
     const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
@@ -853,6 +869,7 @@ export class SessionHost {
        */
       modelId,
       effort,
+      permissionMode,
       initialEffortUnconfirmed: effort !== undefined,
       createdAt: now,
       updatedAt: now,
@@ -863,7 +880,7 @@ export class SessionHost {
     record.buffered = [];
     let session: BackendSession;
     try {
-      session = await this.startBackendSession(record);
+      session = await this.startPermissionBackend(record);
       if (session.capabilities.models.length === 0) {
         throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
       }
@@ -882,6 +899,7 @@ export class SessionHost {
       backend: backend.name,
       scope,
       capabilities: session.capabilities,
+      permissionMode: record.permissionMode,
       ...(worktree === undefined ? {} : { worktree: true as const }),
     });
     this.flushBuffered(record);
@@ -969,6 +987,11 @@ export class SessionHost {
     if (record.session) return;
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.reviving) return await record.reviving;
+    if (record.permissionChanging) {
+      await this.waitForPermissionChange(record);
+      // Another caller may have Revived or Ended it while the policy transition was in flight.
+      return await this.revive(sessionId);
+    }
 
     const reviving = this.reviveOnce(record);
     record.reviving = reviving;
@@ -990,7 +1013,7 @@ export class SessionHost {
     this.closeOpenSubagents(record, record.log.since(0));
     this.closeOpenBackgroundCalls(record, record.log.since(0));
     record.backendEpoch += 1;
-    await this.startBackendSession(record);
+    await this.startPermissionBackend(record);
     record.lifecycle = "live";
     // Un-settled, so the retention window starts again from the next Settle rather than from the
     // one this Revive just undid.
@@ -1015,6 +1038,7 @@ export class SessionHost {
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
     if (!record.session) await this.revive(sessionId);
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
 
     // Checked before anything is written, so a refused send leaves no bytes behind.
     this.refuseUnservableAttachments(record, attachments);
@@ -1114,6 +1138,105 @@ export class SessionHost {
     record.modelId = modelId;
     record.initialEffortUnconfirmed = false;
     this.touch(record);
+  }
+
+  private permissionDefault(backend: string): AgentPermissionMode {
+    return this.defaultPermissionMode?.(backend) ?? (backend === "claude" ? "auto" : backend === "pi" ? "always" : "ask");
+  }
+
+  private validatePermissionMode(backend: string, mode: AgentPermissionMode): void {
+    if (!["ask", "auto", "always"].includes(mode) || (mode === "auto" && backend !== "claude")) throw new CommandRefused(`${backend} does not support ${mode} permissions`);
+  }
+
+  private async waitForPermissionChange(record: SessionRecord): Promise<void> {
+    // A failed selection leaves the last confirmed mode in force; it must not discard a send.
+    while (record.permissionChanging) await record.permissionChanging.catch(() => {});
+  }
+
+  async setPermissionMode(sessionId: string, mode: AgentPermissionMode): Promise<void> {
+    const record = this.record(sessionId);
+    this.validatePermissionMode(record.backendName, mode);
+    const previous = record.permissionChanging;
+    const reviving = record.reviving;
+    // Reserve before yielding, including for a Dormant Agent Session. Capture the existing Revive
+    // rather than reading it later: a new Revive waits for this reservation, not vice versa.
+    const changing = Promise.resolve().then(async () => {
+      await previous?.catch(() => {});
+      await reviving;
+      await this.setPermissionModeOnce(record, mode);
+    });
+    record.permissionChanging = changing;
+    try {
+      await changing;
+    } finally {
+      if (record.permissionChanging === changing) {
+        delete record.permissionChanging;
+        if (record.session && record.lifecycle === "live" && !record.turnInFlight) void this.drain(record);
+      }
+    }
+  }
+
+  private async setPermissionModeOnce(record: SessionRecord, mode: AgentPermissionMode): Promise<void> {
+    if (record.lifecycle === "ended" || record.turnInFlight || record.openPermissionAttention.size ||
+        openPermissions(record.log.since(0)).length) throw new CommandRefused("Finish the turn and decide all Permission Prompts first");
+    if (record.permissionMode === mode) return;
+    const session = record.session;
+    const priorMode = record.permissionMode;
+    const activityVersion = record.permissionActivityVersion ?? 0;
+    let interrupted = false;
+    const apply = async (next: AgentPermissionMode): Promise<void> => {
+      try {
+        await session?.setPermissionMode?.(next);
+      } finally {
+        // The host reservation cannot stop an SDK-owned background completion or Subagent prompt.
+        // Do not confirm a policy that raced either, even if that work already ended again.
+        interrupted = record.session !== session || record.lifecycle === "ended" || record.turnInFlight ||
+          record.openPermissionAttention.size > 0 || (record.permissionActivityVersion ?? 0) !== activityVersion;
+        if (interrupted) {
+          if (session && record.session === session) {
+            try { await session.setPermissionMode?.(priorMode); }
+            catch (error) { await this.stopUnconfirmedPermissionBackend(record, session, error); }
+          }
+          throw new CommandRefused("Permission mode change interrupted by Backend Session activity; try again when idle");
+        }
+      }
+    };
+    let warning: string | undefined;
+    // No optimistic event: a failed SDK transition must not change either client or disk.
+    try {
+      await apply(mode);
+    } catch (error) {
+      if (interrupted || mode !== "auto" || record.backendName !== "claude") throw error;
+      await apply("ask");
+      mode = "ask";
+      warning = `Claude Auto permissions unavailable: ${String(error)}. Using Ask.`;
+    }
+    record.permissionMode = mode;
+    if (warning) record.log.append({ type: "notice", level: "warn", text: warning });
+    record.log.append({ type: "permission_mode_changed", mode });
+    this.touch(record);
+  }
+
+  private async stopUnconfirmedPermissionBackend(record: SessionRecord, session: BackendSession, error: unknown): Promise<void> {
+    // Rollback itself awaited the SDK: do not stop a replacement, or revive an Ended/Settled record.
+    if (record.session !== session) return;
+    // A rejected rollback leaves SDK policy unknown. Stop rather than display the old confirmed
+    // mode over a backend that may still be executing under the unconfirmed one.
+    record.session = undefined;
+    record.lifecycle = "dormant";
+    record.turnInFlight = false;
+    record.queue.length = 0;
+    try { await this.stopBackendSession(record.scope, session, record.id); }
+    finally {
+      // An explicit End/Settle while shutdown awaited must remain the final lifecycle transition.
+      if (record.lifecycle === "dormant" && record.session === undefined) {
+        this.closeTornTurn(record, record.log.since(0));
+        record.log.append({ type: "queue_changed", pending: [] });
+        record.log.append({ type: "notice", level: "error", text: `Could not restore permission mode; Backend Session stopped: ${errorMessage(error)}` });
+        record.log.append({ type: "session_dormant", reason: "permission mode could not be confirmed" });
+        this.touch(record);
+      }
+    }
   }
 
   async setEffort(sessionId: string, effort: EffortLevel): Promise<void> {
@@ -1296,6 +1419,7 @@ export class SessionHost {
       throw new CommandRefused(`Agent Session ${sessionId} has Ended; it has no Conversation Context`);
     }
     if (!record.session) await this.revive(sessionId);
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
 
     this.refuseGitOperation(record.scope);
     const session = record.session;
@@ -1539,7 +1663,7 @@ export class SessionHost {
    * must not become "after every message that happened to be queued while it ran".
    */
   private async drainWorkflowNotification(record: SessionRecord): Promise<boolean> {
-    if (record.turnInFlight || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return false;
+    if (record.permissionChanging || record.turnInFlight || !record.session || record.lifecycle !== 'live' || this.workflowShutdown || this.workflowStopping.has(record.id)) return false;
     let kind: 'input' | 'recovery' | 'completion' | undefined;
     let text: string | undefined;
     if (this.workflowInputs.delete(record.id)) {
@@ -1990,6 +2114,7 @@ export class SessionHost {
           ...(command.backend === undefined ? {} : { backend: command.backend }),
           ...(command.modelId === undefined ? {} : { modelId: command.modelId }),
           ...(command.effort === undefined ? {} : { effort: command.effort }),
+          ...(command.permissionMode === undefined ? {} : { permissionMode: command.permissionMode }),
           ...(command.mcpConnectionIds === undefined ? {} : { mcpConnectionIds: command.mcpConnectionIds }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
         });
@@ -2011,6 +2136,8 @@ export class SessionHost {
         return this.acknowledge(command.sessionId, command.throughVersion);
       case "set_model":
         return await this.setModel(command.sessionId, command.modelId);
+      case "set_permission_mode":
+        return await this.setPermissionMode(command.sessionId, command.mode);
       case "set_effort":
         return await this.setEffort(command.sessionId, command.effort);
       case "pull_branch":
@@ -2141,6 +2268,24 @@ export class SessionHost {
     }
   }
 
+  private async startPermissionBackend(record: SessionRecord): Promise<BackendSession> {
+    try { return await this.startBackendSession(record); }
+    catch (error) {
+      if (record.backendName !== "claude" || record.permissionMode !== "auto" || !(error instanceof (await import("../backend/permission-errors.ts")).AutoPermissionUnavailable)) throw error;
+      record.permissionMode = "ask";
+      const fallback: BackendEvent[] = [
+        { type: "notice", level: "warn", text: `Claude Auto permissions unavailable: ${String(error)}. Using Ask.` },
+        { type: "permission_mode_changed", mode: "ask" },
+      ];
+      // Creation must still open with session_started. A Revive already has a transcript: write
+      // its effective policy now, even if the replacement backend fails and the buffer is lost.
+      if (record.log.lastSeq === 0) record.buffered?.push(...fallback);
+      else for (const event of fallback) record.log.append(event);
+      this.persist(record);
+      return await this.startBackendSession(record);
+    }
+  }
+
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
@@ -2171,6 +2316,7 @@ export class SessionHost {
       ...(compactionModelId === undefined ? {} : { compactionModelId }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      permissionMode: record.permissionMode,
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
@@ -2347,6 +2493,7 @@ export class SessionHost {
   }
 
   private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
     if (record.session.capabilities.models.length === 0) {
@@ -2444,6 +2591,9 @@ export class SessionHost {
     }
     if (record.lifecycle === "dormant") return;
 
+    if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
+      record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;
+    }
     const before = this.activityOf(record);
     const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
     const enquiryWasOpen = event.type === "enquiry" && record.openEnquiryAttention.has(event.askId);
@@ -2593,6 +2743,7 @@ export class SessionHost {
   }
 
   private async drain(record: SessionRecord): Promise<void> {
+    if (record.permissionChanging) return;
     // Avoid an `await` at all when there is no workflow notification. Yielding here lets a backend
     // mint a new turn between the check and the queue shift, which would dispatch into that turn.
     if ((this.workflowInputs.has(record.id) || this.workflowNotifications.has(record.id) || this.workflowCompletions.has(record.id)) &&
@@ -2657,6 +2808,7 @@ export class SessionHost {
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
+      permissionMode: record.permissionMode,
       ...(record.initialEffortUnconfirmed ? { initialEffortUnconfirmed: true } : {}),
       ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
     };

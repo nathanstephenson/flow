@@ -235,7 +235,7 @@ function patchFilesystemIsolation(current: boolean | undefined, value: unknown):
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown; permissionModes?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -286,7 +286,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels"] as const) {
+  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -551,13 +551,14 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"], "providers");
 
   const next: Providers = {
     ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
     ...(current?.compactionModels === undefined ? {} : { compactionModels: { ...current.compactionModels } }),
     ...(current?.defaultBackend === undefined ? {} : { defaultBackend: current.defaultBackend }),
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
+    ...(current?.permissionModes === undefined ? {} : { permissionModes: { ...current.permissionModes } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
     ...(current?.defaults === undefined ? {} : { defaults: { ...current.defaults } }),
     ...(current?.summary === undefined ? {} : { summary: current.summary }),
@@ -660,6 +661,17 @@ function patchProviders(
         automatic: named.automatic !== false,
       };
     }
+  }
+
+  if (patch.permissionModes !== undefined) {
+    if (typeof patch.permissionModes !== "object" || patch.permissionModes === null || Array.isArray(patch.permissionModes)) throw new ConfigError("providers.permissionModes must be an object");
+    const modes = { ...next.permissionModes };
+    for (const [backend, mode] of Object.entries(patch.permissionModes)) {
+      if (mode === "") delete modes[backend];
+      else if ((backend === "claude" && ["ask", "auto", "always"].includes(mode)) || (backend === "pi" && ["ask", "always"].includes(mode))) modes[backend] = mode as "ask" | "auto" | "always";
+      else throw new ConfigError(`Unsupported permission mode for ${backend}`);
+    }
+    next.permissionModes = modes;
   }
 
   for (const field of ["efforts", "summaries"] as const) {

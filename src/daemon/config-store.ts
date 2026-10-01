@@ -156,6 +156,8 @@ export class ConfigStore {
     return providers?.summary?.backend === backend ? providers.summary : undefined;
   };
 
+  readonly defaultPermissionMode = (backend: string) => this.config.providers?.permissionModes?.[backend];
+
   readonly defaultEffort = (backend: string) => this.config.providers?.efforts?.[backend];
 
   /**

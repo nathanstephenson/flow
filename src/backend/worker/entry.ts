@@ -82,6 +82,13 @@ export function runWorker(): void {
       case "abort": result = await session.abort(); break;
       case "setModel": result = await session.setModel(args[0] as string); break;
       case "setEffort": result = await session.setEffort(args[0] as EffortLevel); break;
+      case "setPermissionMode": {
+        const mode = args[0];
+        if (mode !== "ask" && mode !== "auto" && mode !== "always") throw new Error("Invalid permission mode");
+        if (!session.setPermissionMode) throw new Error("Permission mode changes are not supported");
+        result = await session.setPermissionMode(mode);
+        break;
+      }
       case "compact": result = await session.compact?.(args[0] as string | undefined); break;
       case "skills": result = await session.skills?.(); break;
       case "answerEnquiry": result = await session.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;

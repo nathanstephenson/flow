@@ -230,6 +230,7 @@ export type ViewState = {
   capabilities?: Capabilities;
   model?: ModelInfo;
   effort?: EffortLevel;
+  permissionMode?: import("../protocol/events.ts").AgentPermissionMode;
   /** Absent when the Scope is not a repository, which is how a front-end hides the control. */
   branch?: Branch;
   /**
@@ -392,6 +393,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         backend: event.backend,
         scope: event.scope,
         capabilities: event.capabilities,
+        ...(event.permissionMode ? { permissionMode: event.permissionMode } : {}),
         ...(event.worktree === undefined ? {} : { worktree: event.worktree }),
       };
 
@@ -639,6 +641,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
 
     case "model_changed":
       return { ...state, model: event.model };
+
+    case "permission_mode_changed":
+      return { ...state, permissionMode: event.mode };
 
     case "effort_changed":
       return { ...state, effort: event.effort };

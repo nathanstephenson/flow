@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import type { IncomingAttachment } from "../../src/protocol/attachments.ts";
-import type { EffortLevel, PermissionDecision, Skill } from "../../src/protocol/events.ts";
+import type { AgentPermissionMode, EffortLevel, PermissionDecision, Skill } from "../../src/protocol/events.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 
 /**
@@ -32,6 +32,7 @@ export type ComposerActions = {
   send: (text: string, attachments: IncomingAttachment[]) => Promise<unknown | undefined>;
   setModel: (modelId: string) => void;
   setEffort: (effort: EffortLevel) => void;
+  setPermissionMode: (mode: AgentPermissionMode) => void;
   /** Resolves false where it was refused, which is what the picker says out loud. */
   switchBranch: (branch: string) => Promise<boolean>;
   /** The Skills on offer. Answered per Agent Session in one case and per Scope in the other. */
@@ -67,6 +68,7 @@ export function useSessionActions(sessionId: string): ComposerActions {
         }),
       setModel: (modelId: string) => void run({ type: "set_model", sessionId, modelId }),
       setEffort: (effort: EffortLevel) => void run({ type: "set_effort", sessionId, effort }),
+      setPermissionMode: (mode: AgentPermissionMode) => void run({ type: "set_permission_mode", sessionId, mode }),
       switchBranch: async (branch: string) =>
         (await run({ type: "switch_branch", sessionId, branch })) !== undefined,
       listSkills: async () => (await run<Skill[]>({ type: "list_skills", sessionId })) ?? [],

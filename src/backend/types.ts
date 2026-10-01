@@ -5,6 +5,7 @@ import type {
   Capabilities,
   EffortLevel,
   PermissionDecision,
+  AgentPermissionMode,
   Skill,
   Spend,
 } from "../protocol/events.ts";
@@ -31,6 +32,7 @@ export type BackendCreateOptions = {
   compactionModelId?: string;
   modelId?: string;
   effort?: EffortLevel;
+  permissionMode?: AgentPermissionMode;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */
   resume?: string;
   /** A directory this adapter may keep its own session state in, beside our transcript. */
@@ -119,6 +121,7 @@ export interface BackendSession {
    * nearest one it can serve and reports what it settled on with `effort_changed`.
    */
   setEffort(effort: EffortLevel): Promise<void>;
+  setPermissionMode?(mode: AgentPermissionMode): Promise<void>;
   /**
    * Compact the Conversation Context now.
    *
