@@ -185,15 +185,12 @@ function patchWorkflowRuntime(current: WorkflowRuntimeSettings | undefined, patc
   if (patch === undefined) return next;
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new ConfigError('workflowRuntime must be an object');
   for (const [key, value] of Object.entries(patch)) {
-    if (key === 'externalSandbox') {
-      if (typeof value !== 'boolean') throw new ConfigError('workflowRuntime.externalSandbox must be boolean');
-      next.externalSandbox = value;
-    } else if (key === 'dockerImage' || key === 'nodePath' || key === 'dockerPath') {
-      if (typeof value !== 'string' || value.length > 4096 || /[\x00-\x1f]/.test(value)) throw new ConfigError('Invalid workflowRuntime field');
-      if (key !== 'dockerImage' && value === '') { delete next[key]; continue; }
-      if (key === 'dockerImage' ? !/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/.test(value) : !value.startsWith('/')) throw new ConfigError('Invalid workflowRuntime field');
-      next[key] = value;
-    } else throw new ConfigError('Unknown workflowRuntime field');
+    if (key === 'nodePath') {
+      if (typeof value !== 'string' || value.length > 4096 || /[\x00-\x1f]/.test(value)) throw new ConfigError('workflowRuntime.nodePath must be an absolute executable path');
+      if (value === '') { delete next.nodePath; continue; }
+      if (!value.startsWith('/')) throw new ConfigError('workflowRuntime.nodePath must be absolute');
+      next.nodePath = value;
+    } else throw new ConfigError(`Unknown workflowRuntime field: ${key}`);
   }
   return next;
 }
@@ -207,9 +204,13 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
     return result;
   }
   for (const [key, value] of Object.entries(section)) {
-    if (!['externalSandbox', 'dockerImage', 'nodePath', 'dockerPath'].includes(key)) continue;
+    if (['externalSandbox', 'dockerImage', 'dockerPath'].includes(key)) {
+      warnings.push(`Retired workflowRuntime.${key} ignored: Docker Workflow execution was removed; local filesystem isolation is mandatory`);
+      continue;
+    }
+    if (key !== 'nodePath') continue;
     try { result = patchWorkflowRuntime(result, { [key]: value }); }
-    catch { warnings.push('Invalid workflowRuntime field; using default'); }
+    catch { warnings.push('Invalid workflowRuntime.nodePath; using automatic discovery'); }
   }
   return result;
 }

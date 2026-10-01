@@ -38,11 +38,15 @@ lifetime. A minimal device filesystem and private runtime/temporary directories 
 host control sockets such as Docker's. Workers have no added capabilities or privilege escalation.
 Network access remains available for inference.
 
-Local Workflow Shell and TypeScript execution also receives this policy when the external Docker
-runtime is disabled. Local Node readiness probes run behind the policy too. Local stdio MCP servers
-receive the filesystem policy, since executing them outside it would turn host-side tool delegation
-into a bypass. Explicit dependency asset mounts keep Node stdio packages and npm/SEA workers
-available under ancestor masks, including ancestor node_modules search paths and linked packages
+Local Workflow Shell and TypeScript execution always receives this policy. One boundary covers
+the local supervisor, TypeScript compiler/QuickJS worker and all Shell descendants. The inherited
+PID namespace enforces cleanup even when descendants detach or create new sessions. Host Node 22
+or later and available enforcement are required; Node readiness probes run behind the policy too.
+`workflowRuntime` Settings contain only an optional absolute `nodePath` override, not an isolation
+opt-out. Local stdio MCP servers receive the filesystem policy, since executing them outside it
+would turn host-side tool delegation into a bypass. Explicit dependency asset mounts keep Node
+stdio packages and npm/SEA workers available under ancestor masks, including ancestor node_modules
+search paths and linked packages
 outside the launch package. These trees pass the same protected-state checks and descriptor pinning;
 dependency discovery never grants general access to the containing home or workspace. A masked
 node_modules lookup alias is recreated as a namespace symlink to its validated, pinned target, not
@@ -51,15 +55,6 @@ containing directories or sibling data. Recreated alias destinations canonicaliz
 both destinations and targets pass the same protected-state checks, so parent aliases cannot
 graft execution assets into hidden host state. SEA SDK discovery also preserves Node's default
 $PREFIX/lib/node lookup; this is distinct from the scrubbed NODE_PATH environment override.
-
-External Docker Workflow execution is currently unavailable and fails closed before even its
-readiness probe. A validated mount pathname is not a pinned inode: a concurrent model with an
-ancestor Scope could redirect Docker's writable mount. Passing a host-owned `/proc/<pid>/fd/<fd>`
-source may work on some daemon/OCI runtime stacks, but their string-based mount APIs do not guarantee
-that identity end to end. Flow has not verified an installed stack. Neither before/after path checks
-nor an unrestricted/local fallback are acceptable. Re-enabling this mode requires verified source
-pinning for Scope and runtime assets through container removal. A future host supervisor must still
-run already-loaded trusted code, never a Workflow bundle a writable Scope could replace.
 
 A missing Bubblewrap executable, unavailable namespaces, invalid Scope or failed restricted launch
 refuses work. There is no silent unrestricted fallback or model-controlled opt-out. Unsupported

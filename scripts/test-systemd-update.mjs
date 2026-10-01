@@ -305,7 +305,7 @@ try {
   uid = Number(await run('/usr/bin/id', ['-u', user]));
   assert.ok(uid > 0);
   for (const directory of [home, state, prefix, scope]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  writeFileSync(join(state, 'config.json'), JSON.stringify({ workflowRuntime: { externalSandbox: false, nodePath: node } }), { mode: 0o600 });
+  writeFileSync(join(state, 'config.json'), JSON.stringify({ workflowRuntime: { nodePath: node } }), { mode: 0o600 });
 
   // Only the Flow scope is private. Normal dependencies go directly to npm, just like npm ci.
   registry = createServer(async (request, response) => {

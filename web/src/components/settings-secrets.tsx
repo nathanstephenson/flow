@@ -4,7 +4,6 @@ import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
-import { Switch } from "./ui/switch.tsx";
 export default function SecretsSettings() {
   const { data, error } = useWorkflowResource<{ names: string[] }>(
     "/api/secrets",
@@ -108,7 +107,7 @@ export default function SecretsSettings() {
       </SettingsGroup>
       <SettingsGroup
         title="Workflow runtime"
-        description="External sandboxing applies only to Shell and TypeScript steps, not Agent steps. Disabled mode relies on the surrounding environment for operating-system isolation. TypeScript retains scoped filesystem checks. There is no automatic fallback."
+        description="Shell and TypeScript steps run locally with a mandatory filesystem boundary: only the Scope and private execution state are writable. Execution is refused if that boundary cannot be enforced. There is no unrestricted fallback."
       >
         <p className="text-xs text-muted-foreground" role="status">
           {runtime.error ||
@@ -121,39 +120,19 @@ export default function SecretsSettings() {
         {runtime.data && (
           <form
             className="grid gap-3"
-            key={`${runtime.data.externalSandbox}-${runtime.data.dockerImage}-${runtime.data.nodePath}-${runtime.data.dockerPath}`}
+            key={runtime.data.nodePath ?? "automatic"}
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
               void act(() =>
                 workflowApi("/api/config", "PUT", {
                   workflowRuntime: {
-                    externalSandbox: f.has("sandbox"),
-                    dockerImage: f.get("image"),
                     nodePath: f.get("node"),
-                    dockerPath: f.get("docker"),
                   },
                 }),
               );
             }}
           >
-            <label className="flex items-center justify-between gap-4">
-              <span className="text-sm">
-                External sandbox (default: enabled)
-              </span>
-              <Switch
-                name="sandbox"
-                defaultChecked={runtime.data.externalSandbox}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium">Docker image</span>
-              <Input
-                name="image"
-                defaultValue={runtime.data.dockerImage}
-                required
-              />
-            </label>
             <label className="flex flex-col gap-1">
               <span className="text-sm font-medium">
                 Node executable override
@@ -164,16 +143,9 @@ export default function SecretsSettings() {
                 defaultValue={runtime.data.nodePath ?? ""}
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium">
-                Docker executable override
-              </span>
-              <Input
-                name="docker"
-                placeholder="Automatic PATH discovery"
-                defaultValue={runtime.data.dockerPath ?? ""}
-              />
-            </label>
+            <p className="text-xs text-muted-foreground">
+              Use an absolute executable path, or leave blank for automatic PATH discovery.
+            </p>
             <Button type="submit" size="sm" className="justify-self-start">
               Save runtime settings
             </Button>

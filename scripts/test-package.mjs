@@ -14,7 +14,7 @@ const state = join(temp, 'state');
 const prefix = join(temp, 'prefix');
 mkdirSync(cwd);
 mkdirSync(state);
-writeFileSync(join(state, 'config.json'), JSON.stringify({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } }));
+writeFileSync(join(state, 'config.json'), JSON.stringify({ workflowRuntime: { nodePath: process.execPath } }));
 const env = { ...process.env, FLOW_STATE_DIR: state };
 delete env.FLOW_URL;
 for (const key of Object.keys(env)) if (key.startsWith('FLOW_OIDC_')) delete env[key];

@@ -38,14 +38,17 @@ Configure credentials for the Backend Adapter you use.
 
 Claude and Pi Backend Sessions run in owned workers. On Linux, Bubblewrap makes the host filesystem
 read-only, with writable mounts only for the selected Scope, dedicated backend state and private
-scratch. Subagents and Background Calls inherit that boundary. Local Workflow code and stdio MCP
-servers are restricted too; HTTP MCP and network access retain their external authority.
-External Docker Workflow execution currently refuses work because end-to-end mount-source pinning
-is unverified; enabling it never falls back to local execution. Use the restricted local runtime.
+scratch. Subagents and Background Calls inherit that boundary. Local Workflow Shell and TypeScript
+steps require host Node 22 or later and the same mandatory enforcement. One boundary covers the
+local supervisor, QuickJS worker and all Shell descendants; its inherited PID namespace enforces
+cleanup even for detached processes. `workflowRuntime` Settings contain only an optional absolute
+`nodePath` override. Local stdio MCP servers are restricted too; HTTP MCP and network access retain
+their external authority.
 
 Install Bubblewrap (for example, `sudo apt install bubblewrap`) with descriptor-backed bind mounts
-(`--bind-fd` and `--ro-bind-fd`) and working user, mount and PID namespaces. Unavailable enforcement,
-unsupported operating systems and unsafe Scopes **refuse execution**, without an unrestricted fallback.
+(`--bind-fd` and `--ro-bind-fd`) to pin mount sources, and working user, mount and PID namespaces.
+Unavailable enforcement, unsupported operating systems and unsafe Scopes **refuse execution**,
+without an unrestricted fallback.
 The Session Host retains transcripts and authorisation; worker failure interrupts rather than replays
 work. This does not protect the Scope from damage or fully mediate pre-existing hard links and data
 aliases. See [the boundary and its limits](docs/adr/0028-local-model-work-has-a-fail-closed-filesystem-boundary.md).
@@ -639,8 +642,8 @@ explicitly; no constraint is silently discarded. Supported dialects are draft-07
 2020-12 (the MCP default).
 
 Direct steps support both stdio and Streamable HTTP, including existing OAuth sign-in. They make
-no model call, create no Subagent and add no model tokens. Code-runtime sandbox settings do not
-apply: a stdio server runs as the host user, and HTTP calls use the configured remote service.
+no model call, create no Subagent and add no model tokens. Local stdio servers run as the host user
+behind the mandatory filesystem boundary; HTTP calls use the configured remote service.
 Credentials belong in MCP Settings, never in workflow arguments. Expired/missing authentication
 requires signing in there and a manual Retry; executions never launch a login flow or replay an
 HTTP tool request after a 401.

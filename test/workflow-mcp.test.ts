@@ -66,7 +66,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   await auth.provider(connection).saveTokens({ access_token: secret, refresh_token: 'refresh-secret', token_type: 'Bearer' });
   const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
   // Deliberately unavailable code runtime: MCP must not depend on it.
-  config.update({ mcp: [connection], workflowRuntime: { externalSandbox: false, nodePath: '/does-not-exist' } });
+  config.update({ mcp: [connection], workflowRuntime: { nodePath: '/does-not-exist' } });
   const backend = new FakeBackend();
   const host = new SessionHost({ store, retention: 0, mcpConnections: () => config.view().mcp ?? [], mcpAuth: auth });
   host.registerBackend(backend);

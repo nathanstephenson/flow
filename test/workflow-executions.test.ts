@@ -30,7 +30,7 @@ async function fixture(options: { naming?: boolean; automaticNaming?: boolean; b
   const root = mkdtempSync(join(tmpdir(), 'flow-executions-'));
   const stateRoot = mkdtempSync(join(tmpdir(), 'flow-executions-state-'));
   const store = new TranscriptStore(stateRoot), workflows = new WorkflowStore(stateRoot), secrets = new SecretStore(stateRoot), config = new ConfigStore(stateRoot);
-  config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
+  config.update({ workflowRuntime: { nodePath: process.execPath } });
   const backend = new FakeBackend();
   const summary = new FakeBackend();
   summary.autoReply = 'Name the actual workflow work';

@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { isSea } from 'node:sea';
-import { isDockerSupervisor, runDockerSupervisor } from '../workflows/docker-supervisor.ts';
 
-if (isDockerSupervisor()) {
-  void runDockerSupervisor().catch(error => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
-} else if (process.argv[2] === '--flow-isolation-launch' ||
+if (process.argv[2] === '--flow-isolation-launch' ||
   (process.argv[2] === '--flow-backend-worker' && process.send && process.env.FLOW_BACKEND_WORKER === '1')) {
   void import('../backend/worker/entry.ts').catch(error => {
     console.error(error instanceof Error ? error.message : error);

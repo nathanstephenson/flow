@@ -56,12 +56,9 @@ export interface WorkflowExecutionList {
 }
 
 export interface WorkflowRuntimeStatus {
-  externalSandbox: boolean;
-  dockerImage: string;
   available: boolean;
   error?: string;
   nodePath?: string;
-  dockerPath?: string;
 }
 
 export type StartWorkflow = { workflowId: string; input: Json; /** Durable identity making an ambiguous launch safe to retry. */ launchId?: string; /** Name an untouched Agent Session once the execution reveals its actual work. */ nameSession?: true };

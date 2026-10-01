@@ -50,13 +50,61 @@ describe("the Settings on disk", () => {
     assert.deepEqual(store.view(), {
       mcp: [],
       retention: { settled: "1d" },
-      workflowRuntime: { externalSandbox: true, dockerImage: 'flow-workflow-runtime:local' },
+      workflowRuntime: {},
       fonts: { chrome: DEFAULT_CHROME_FONT, monospace: DEFAULT_MONOSPACE_FONT },
       // No `projects` key, deliberately: unlike a retention window and a typeface, a Project Root
       // has no right answer for a machine nobody has configured, so it is absent rather than
       // defaulted. This deepEqual is what holds that decision in place.
     });
     assert.equal(store.warning, undefined, "an absent file is normal, not a warning");
+  });
+
+  for (const externalSandbox of [true, false]) {
+    it(`discards retired Docker settings with externalSandbox=${externalSandbox} while preserving Node and unrelated configuration`, () => {
+      writeFileSync(join(root, "config.json"), JSON.stringify({
+        experiment: { widgets: 3 },
+        retention: { settled: "36h" },
+        workflowRuntime: { externalSandbox, dockerImage: "node:22", dockerPath: "/opt/docker", nodePath: "/opt/node" },
+      }));
+      const store = new ConfigStore(root);
+      assert.deepEqual(store.current().workflowRuntime, { nodePath: "/opt/node" });
+      assert.deepEqual(store.view().workflowRuntime, { nodePath: "/opt/node" });
+      assert.equal(store.view().retention.settled, "36h");
+      for (const field of ["externalSandbox", "dockerImage", "dockerPath"]) {
+        assert.ok(store.warning?.includes(`Retired workflowRuntime.${field} ignored`));
+      }
+      assert.match(store.warning ?? "", /Docker Workflow execution was removed/);
+      assert.match(store.warning ?? "", /isolation is mandatory/);
+      // Saving an unrelated setting removes the retired fields from the next persisted version.
+      store.update({ fonts: { chrome: "Berkeley Mono" } });
+      assert.deepEqual(file().workflowRuntime, { nodePath: "/opt/node" });
+      assert.deepEqual(file().experiment, { widgets: 3 });
+      const reloaded = new ConfigStore(root);
+      assert.deepEqual(reloaded.view().workflowRuntime, { nodePath: "/opt/node" });
+      assert.equal(reloaded.warning, undefined);
+    });
+  }
+
+  it("rejects retired Docker settings atomically instead of persisting them", () => {
+    const store = new ConfigStore(root);
+    store.update({ workflowRuntime: { nodePath: "/opt/node" } });
+    const before = readFileSync(join(root, "config.json"), "utf8");
+    for (const patch of [{ externalSandbox: true }, { externalSandbox: false }, { dockerImage: "node:22" }, { dockerPath: "/opt/docker" }]) {
+      assert.throws(() => store.update({ workflowRuntime: { nodePath: "/changed/node", ...patch } } as never), /Unknown workflowRuntime field/);
+      assert.deepEqual(store.view().workflowRuntime, { nodePath: "/opt/node" });
+      assert.equal(readFileSync(join(root, "config.json"), "utf8"), before);
+    }
+  });
+
+  it("warns about an invalid Node override without reviving retired Docker settings", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({
+      workflowRuntime: { externalSandbox: false, nodePath: "relative/node" },
+      retention: { settled: "36h" },
+    }));
+    const store = new ConfigStore(root);
+    assert.deepEqual(store.view().workflowRuntime, {});
+    assert.match(store.warning ?? "", /Invalid workflowRuntime.nodePath; using automatic discovery/);
+    assert.equal(store.view().retention.settled, "36h");
   });
 
   it("writes a patch through and reports the merged result", () => {

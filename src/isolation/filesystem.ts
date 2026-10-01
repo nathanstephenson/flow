@@ -148,8 +148,7 @@ function scopeContext(options: Pick<FilesystemIsolationOptions, "scope" | "expec
   }
   if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
   const launcher = inherited.FLOW_BWRAP_PATH ?? "/usr/bin/bwrap";
-  if ((isAbsolute(launcher) && within(canonical(launcher), scope)) || within(canonical(process.execPath), scope)
-    || ["/usr/bin/docker", "/usr/local/bin/docker", "/bin/docker"].some((path) => within(canonical(path), scope))) {
+  if ((isAbsolute(launcher) && within(canonical(launcher), scope)) || within(canonical(process.execPath), scope)) {
     throw new Error("Unsafe Scope: would expose a trusted launch executable");
   }
   const temporary = relative(canonical("/tmp"), scope).split(sep)[0];
@@ -171,7 +170,7 @@ function scopeContext(options: Pick<FilesystemIsolationOptions, "scope" | "expec
   return { inherited, home, credentialHome, piDir, claudeDir, flowRoots, protectedPaths, scope };
 }
 
-/** Validate a Docker Scope using the same policy, without requiring a local Bubblewrap launch. */
+/** Validate Scope against the shared policy before preparing or probing a restricted launch. */
 export function validateFilesystemScope(options: Pick<FilesystemIsolationOptions, "scope" | "expectedScope" | "env" | "protectedPaths" | "stateRoot">): string {
   return scopeContext(options).scope;
 }

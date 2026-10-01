@@ -16,16 +16,11 @@ import type { EffortLevel } from "./events.ts";
 import type { Fonts } from "./fonts.ts";
 
 export type WorkflowRuntimeSettings = {
-  externalSandbox: boolean;
-  dockerImage: string;
+  /** Absolute operator override; otherwise discover Node on PATH. */
   nodePath?: string;
-  dockerPath?: string;
 };
 
-export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {
-  externalSandbox: true,
-  dockerImage: 'flow-workflow-runtime:local',
-};
+export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {};
 
 export type Settings = {
   mcp?: import("./mcp.ts").McpConnection[];
