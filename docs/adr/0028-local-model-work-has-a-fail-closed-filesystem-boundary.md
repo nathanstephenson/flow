@@ -40,14 +40,17 @@ process boundary.
 
 Claude's project records use the same dedicated backend `claude-projects` directory in both
 modes, so changing the policy on Revive does not change their storage location. Unrestricted
-Claude uses an ephemeral config view; restricted Claude reuses its narrowly staged view.
+Claude uses an ephemeral config view but retains its normal shared credential store and refresh
+locks through `CLAUDE_SECURESTORAGE_CONFIG_DIR`, including normal CLI/concurrent-session sharing.
+Restricted Claude reuses its narrowly staged view and never receives a host auth-root override.
 Credentials are not persisted in the durable project-record directory. Legacy resume IDs whose
 records exist only in the global Claude projects directory require a separate, narrowly scoped
 migration; Flow does not bulk import other Agent Sessions' records.
 
 Local stdio MCP transports own ordinary subprocess groups in both modes. Shutdown is bounded and
-closes inherited pipes independently of leader exit, so a surviving pipe holder cannot hang Retry
-or disposal. Restricted mount state remains until actual leader exit and group cleanup. These
+drains already-written stdout with a bounded EOF wait before closing inherited pipes, so a final
+MCP reply is not discarded on leader exit and a surviving pipe holder cannot hang Retry or disposal.
+Restricted mount state remains until actual leader exit and group cleanup. These
 lifecycle controls are not unrestricted-mode confinement: detached descendants can escape them.
 
 ### Enabled-mode enforcement
@@ -63,7 +66,11 @@ is mounted at a worker-private path for Revive. Credential files needed by the s
 staged narrowly into a private home, never by mounting the real home writable. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
 without admitting symlinks or parents that contain protected host state. Adapter-local credential
-refresh does not write back to the user's global credential files. Missing protected paths are
+refresh does not write back to the user's global credential files. A separately configured Claude
+auth root is masked too and only its credential file is staged. Nonempty `CLAUDE_CONFIG_DIR` and
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` must be absolute for restricted launches: relative roots use the
+CLI's Scope, and literal `~` is not expanded, so host-cwd resolution could select the wrong store.
+Missing protected paths are
 masked through an existing ancestor so credentials or host state created later remain hidden.
 Only validated runtime assets and the selected Scope are restored beneath those masks. PATH-selected
 tool directories and their linked package/library assets are discovered narrowly and mounted

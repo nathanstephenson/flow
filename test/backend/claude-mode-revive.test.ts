@@ -50,7 +50,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   fs.appendFileSync(file, JSON.stringify(text) + '\\n');
   const owned = fs.statSync(projects);
   const report = { config, projects: { dev: owned.dev, ino: owned.ino }, prior,
-    credential: fs.readFileSync(path.join(config, '.credentials.json'), 'utf8'),
+    credential: fs.readFileSync(path.join(process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR || config, '.credentials.json'), 'utf8'),
+    privateCredential: fs.existsSync(path.join(config, '.credentials.json')),
     resource: fs.readFileSync(path.join(config, 'CLAUDE.md'), 'utf8'),
     globalVisible: fs.existsSync(path.join(projects, 'unrelated.jsonl')),
     hostCredentialVisible: fs.existsSync(${JSON.stringify(join(auth, ".credentials.json"))}),
@@ -101,7 +102,11 @@ for (const modes of [[false, true, false], [true, false, true]]) {
         if (enabled) {
           assert.equal(config, "/tmp/flow-isolation/home/.claude", "reuse the restricted staged view");
           assert.equal(report.secretStore, null, "never restore the host credential-service namespace");
-        } else assert.notEqual(config, f.auth);
+        } else {
+          assert.notEqual(config, f.auth);
+          assert.equal(report.secretStore, f.auth, "shared auth root, including refresh locks");
+          assert.equal(report.privateCredential, false, "no disposable credential copy");
+        }
         const owned = statSync(join(f.stateDir, "claude-projects"));
         assert.deepEqual(report.projects, { dev: owned.dev, ino: owned.ino });
         const token = session.resumeToken();

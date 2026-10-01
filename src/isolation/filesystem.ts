@@ -125,7 +125,18 @@ function scopeContext(options: Pick<FilesystemIsolationOptions, "scope" | "expec
   const home = canonical(homedir());
   const credentialHome = canonical(inherited.HOME ?? home);
   const piDir = canonical(expandHome(inherited.PI_CODING_AGENT_DIR ?? join(credentialHome, ".pi/agent"), credentialHome));
-  const claudeDir = canonical(expandHome(inherited.CLAUDE_CONFIG_DIR ?? join(credentialHome, ".claude"), credentialHome));
+  // Relative Claude roots resolve against the CLI's Scope, not this host's cwd;
+  // literal ~ is not expanded by Claude either. Refuse rather than mask/stage the
+  // wrong store. Empty roots retain the SDK's default-home semantics.
+  for (const key of ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] as const) {
+    if (inherited[key] && !isAbsolute(inherited[key])) throw new Error(`${key} must be absolute when filesystem isolation is enabled`);
+  }
+  const claudeDir = canonical(inherited.CLAUDE_CONFIG_DIR || join(credentialHome, ".claude"));
+  // Claude can use a separate auth/lock root. An explicit empty override means the
+  // default home store, not the config root. Mask the real source and stage only its
+  // credential file; never propagate this host-root override into a restricted worker.
+  const authRoot = inherited.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const claudeAuthDir = canonical(authRoot === undefined ? claudeDir : authRoot || join(credentialHome, ".claude"));
   const flowRoots = [...new Set([join(home, ".flow"), inherited.FLOW_STATE_DIR, process.env.FLOW_STATE_DIR, options.stateRoot]
     .filter((path): path is string => !!path).map(canonical))];
   const runtimePaths = [process.env, inherited].flatMap((env) => {
@@ -141,7 +152,7 @@ function scopeContext(options: Pick<FilesystemIsolationOptions, "scope" | "expec
       ".netrc", ".npmrc", ".git-credentials", ".git-credential-cache", ".cache/git/credential"]
       .map((name) => join(root, name)));
   const protectedPaths = [...new Set([...flowRoots, ...hostCredentials, ...runtimePaths, join(home, ".pi/agent"), join(home, ".claude"), join(home, ".claude.json"),
-    piDir, claudeDir, join(credentialHome, ".claude.json"), ...(options.protectedPaths ?? [])].map(canonical))];
+    piDir, claudeDir, claudeAuthDir, join(credentialHome, ".claude.json"), ...(options.protectedPaths ?? [])].map(canonical))];
   const scope = realpathSync(options.scope);
   if (options.expectedScope !== undefined && scope !== resolve(options.expectedScope)) {
     throw new Error('Scope changed since selection; refusing redirected execution');
@@ -167,7 +178,7 @@ function scopeContext(options: Pick<FilesystemIsolationOptions, "scope" | "expec
       }
     }
   }
-  return { inherited, home, credentialHome, piDir, claudeDir, flowRoots, protectedPaths, scope };
+  return { inherited, home, credentialHome, piDir, claudeDir, claudeAuthDir, flowRoots, protectedPaths, scope };
 }
 
 /** Validate Scope against the shared policy before preparing or probing a restricted launch. */
@@ -204,7 +215,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     return String((options.ipc ? 4 : 3) + sources.length - 1);
   };
   try {
-    const { inherited, home, credentialHome, piDir, claudeDir, flowRoots, protectedPaths, scope } = scopeContext(options);
+    const { inherited, home, credentialHome, piDir, claudeDir, claudeAuthDir, flowRoots, protectedPaths, scope } = scopeContext(options);
     const env = scrubEnvironment(inherited);
     if (options.credentials === "claude" && inherited.FLOW_CLAUDE_PATH) env.FLOW_CLAUDE_PATH = inherited.FLOW_CLAUDE_PATH;
     // npm extends PATH with project-controlled .bin directories. They must never select our
@@ -332,7 +343,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
       for (const name of ["auth.json", "models.json", "settings.json"]) stage(join(piDir, name), join(env.PI_CODING_AGENT_DIR!, name));
       resources("Pi", piDir, env.PI_CODING_AGENT_DIR!, ["AGENTS.md", "skills", "prompts", "themes", "extensions", "packages", "bin", "tools"]);
     } else if (options.credentials === "claude") {
-      stage(join(claudeDir, ".credentials.json"), join(env.CLAUDE_CONFIG_DIR!, ".credentials.json"));
+      stage(join(claudeAuthDir, ".credentials.json"), join(env.CLAUDE_CONFIG_DIR!, ".credentials.json"));
       const config = existsSync(join(claudeDir, ".claude.json")) ? join(claudeDir, ".claude.json") : join(credentialHome, ".claude.json");
       stage(config, join(virtualHome, ".claude.json"));
       stage(config, join(env.CLAUDE_CONFIG_DIR!, ".claude.json"));

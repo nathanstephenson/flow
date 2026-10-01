@@ -37,7 +37,7 @@ export class WorkerBackend implements AgentBackend {
       if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
       // Pi retains its ordinary full environment. Claude needs an owned projects tree in both
       // modes; prepare its private config view on the host so Workflow children inherit it too.
-      const claude = this.name === "claude" ? prepareClaudeState(options.stateDir, { ...process.env, ...this.options.env }) : undefined;
+      const claude = this.name === "claude" ? prepareClaudeState(options.stateDir, { ...process.env, ...this.options.env }, scope) : undefined;
       let proxy: WorkerSession | undefined;
       try {
         proxy = new WorkerSession({ ...options, scope },

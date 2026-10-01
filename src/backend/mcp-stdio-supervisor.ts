@@ -30,6 +30,8 @@ export class SupervisedStdioTransport implements Transport {
   private closed = false;
   private notified = false;
   private closing?: Promise<void>;
+  private finishing?: Promise<void>;
+  private leaderExited = false;
   private treeCleanup?: Promise<void>;
   private resolveExit!: () => void;
   /** Actual leader exit (not stdio 'close'), plus group cleanup. State must outlive this. */
@@ -115,11 +117,37 @@ export class SupervisedStdioTransport implements Transport {
     })();
   }
 
-  private async finishExit(): Promise<void> {
-    this.closePipes();
-    await this.killTree();
-    this.resolveExit();
-    this.notifyClose();
+  private drainStdout(): Promise<void> {
+    const stdout = this.child?.stdout;
+    if (this.closed || !stdout || stdout.destroyed || stdout.readableEnded) return Promise.resolve();
+    return new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timer);
+        stdout.off("end", done);
+        stdout.off("close", done);
+        stdout.off("error", done);
+        resolve();
+      };
+      const timer = setTimeout(done, 1000);
+      stdout.once("end", done);
+      stdout.once("close", done);
+      stdout.once("error", done);
+      stdout.resume();
+    });
+  }
+
+  private finishExit(): Promise<void> {
+    return this.finishing ??= (async () => {
+      this.leaderExited = true;
+      // Kill ordinary pipe holders first, but retain stdout until its already-written
+      // final reply drains. 'exit' can precede those data events. A detached holder
+      // cannot force an unbounded EOF wait; explicit disposal may discard replies.
+      await this.killTree();
+      await this.drainStdout();
+      this.closePipes();
+      this.resolveExit();
+      this.notifyClose();
+    })();
   }
 
   private notifyClose(): void {
@@ -148,7 +176,7 @@ export class SupervisedStdioTransport implements Transport {
 
   async send(message: JSONRPCMessage): Promise<void> {
     const stdin = this.child?.stdin;
-    if (this.closed || !stdin || stdin.destroyed) throw new Error("MCP transport not connected");
+    if (this.closed || this.leaderExited || !stdin || stdin.destroyed) throw new Error("MCP transport not connected");
     await new Promise<void>((resolve, reject) => {
       stdin.write(serializeMessage(message), error => error ? reject(error) : resolve());
     });

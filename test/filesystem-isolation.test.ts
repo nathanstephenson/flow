@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { promisify } from "node:util";
-import { prepareFilesystemIsolation, type FilesystemIsolationOptions } from "../src/isolation/filesystem.ts";
+import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIsolationOptions } from "../src/isolation/filesystem.ts";
 import { filesystemStdioLaunch } from "../src/isolation/launcher.ts";
 
 const execute = promisify(execFile);
@@ -54,6 +54,17 @@ async function node(options: FilesystemIsolationOptions, code: string, payload: 
 
 // These tests always run, even on machines where the real namespace tests cannot run.
 describe("filesystem isolation fails closed", () => {
+  it("refuses relative and literal-tilde Claude roots instead of masking the wrong host directory", t => {
+    const f = fixture(); t.after(f.cleanup);
+    for (const key of ["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"] as const) {
+      for (const value of ["backend", "~", "~/auth"]) {
+        assert.throws(() => validateFilesystemScope(f.options({ env: { ...f.env,
+          CLAUDE_CONFIG_DIR: undefined, CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined, [key]: value } })),
+        new RegExp(`${key} must be absolute`));
+      }
+    }
+  });
+
   it("refuses a missing launcher without executing the requested command", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const marker = join(f.scope, "escaped");
@@ -479,6 +490,29 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
       assert.equal(readFileSync(join(f.home, "keep"), "utf8"), "intact");
       assert.equal(existsSync(join(f.home, "pinned-marker")), false);
     } finally { prepared.cleanup(); }
+  });
+
+  for (const separate of [true, false]) it(`stages and masks the ${separate ? 'separate' : 'explicit-default'} Claude auth store without writeback`, async t => {
+    const f = fixture(); t.after(f.cleanup);
+    const config = join(f.root, 'custom-config'); mkdirSync(config);
+    const auth = separate ? join(f.root, 'custom-auth') : f.claude;
+    if (separate) mkdirSync(auth);
+    writeFileSync(join(config, '.credentials.json'), '{"wrong":"config-store"}');
+    writeFileSync(join(auth, '.credentials.json'), '{"oauth":"selected-auth-store"}');
+    const env = { ...f.env, CLAUDE_CONFIG_DIR: config, CLAUDE_SECURESTORAGE_CONFIG_DIR: separate ? auth : '' };
+    const output = await node(f.options({ credentials: 'claude', stateDir: f.backend, env }), `
+      const fs = require('node:fs'), path = require('node:path');
+      const selected = path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json');
+      const payload = JSON.parse(process.argv[1]);
+      const before = fs.readFileSync(selected, 'utf8');
+      const originalVisible = fs.existsSync(path.join(payload.auth, '.credentials.json'));
+      fs.writeFileSync(selected, '{"oauth":"local-rotation"}');
+      console.log(JSON.stringify({before, originalVisible, override: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null}));
+    `, { auth });
+    assert.deepEqual(JSON.parse(output.stdout), { before: '{"oauth":"selected-auth-store"}', originalVisible: false, override: null });
+    assert.equal(readFileSync(join(auth, '.credentials.json'), 'utf8'), '{"oauth":"selected-auth-store"}');
+    assert.equal(readFileSync(join(config, '.credentials.json'), 'utf8'), '{"wrong":"config-store"}');
+    await assert.rejects(prepareFilesystemIsolation(f.options({ scope: auth, env })), /protected host state/);
   });
 
   it("preserves Node IPC fd3 and read-only runtime assets under masked /tmp", async (t) => {

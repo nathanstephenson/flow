@@ -42,11 +42,11 @@ function fixture(t: TestContext, mode = 'normal') {
 const fs = require('node:fs'), { spawn } = require('node:child_process');
 const mode = ${JSON.stringify(mode)};
 const child = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"],
-  { detached: mode === 'escaped', stdio: ['ignore', 1, 2] });
+  { detached: mode === 'escaped' || mode === 'escaped-exit', stdio: ['ignore', 1, 2] });
 fs.appendFileSync('pids', JSON.stringify([process.pid, child.pid])+'\\n');
 process.on('SIGTERM',()=>{});
 setInterval(()=>{},1000);
-if (mode === 'exit') setTimeout(()=>process.exit(1),100);
+if (mode === 'exit' || mode === 'escaped-exit') setTimeout(()=>process.exit(1),100);
 require('node:readline').createInterface({input:process.stdin}).on('line', line => {
   const msg = JSON.parse(line);
   if (msg.id === undefined) return;
@@ -136,6 +136,18 @@ test('detached unrestricted pipe holders cannot hang disposal (not a confinement
   await within(mcp.dispose());
   await dead([f.pids()[0]!]);
   // The escaped child is explicitly cleaned by the fixture, not falsely claimed contained.
+});
+
+test('spontaneous leader exit bounds stdout draining even with a detached pipe holder', { skip: !posix }, async t => {
+  const f = fixture(t, 'escaped-exit');
+  const transport = new SupervisedStdioTransport({ command: f.connection.command, args: f.connection.args, env: process.env, cwd: f.scope });
+  t.after(() => transport.close());
+  await within(transport.start());
+  await within(transport.exited);
+  assert.equal(f.pids().length, 2);
+  await dead([f.pids()[0]!]);
+  assert.ok(alive(f.pids()[1]!), 'the fixture, not the supervisor, owns the deliberately escaped child');
+  await within(transport.close());
 });
 
 test('missing stdio executable resolves actual-exit supervision and supports bounded Retry', async t => {
