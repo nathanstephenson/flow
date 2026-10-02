@@ -9,6 +9,7 @@ import { FakeBackend } from '../src/backend/fake/index.ts';
 import { McpSession } from '../src/backend/mcp.ts';
 import { McpAuth } from '../src/daemon/mcp-auth.ts';
 import { SessionHost } from '../src/daemon/host.ts';
+import { serve } from '../src/daemon/server.ts';
 import { TranscriptStore } from '../src/daemon/store.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
 import { SecretStore } from '../src/daemon/secret-store.ts';
@@ -409,6 +410,38 @@ test('discovery errors redact credentials even when AJV includes them in its rea
     assert.ok(!JSON.stringify(discovered).includes(secret));
     await assert.rejects(f.service.discoverMcp(f.id, f.connection.id, f.tool), error => error instanceof Error && !error.message.includes(secret));
   } finally { await f.close(); }
+});
+
+test('save and single-step test errors redact credential-bearing tool names before truncating diagnostics', async () => {
+  const f = await fixture();
+  const server = await serve({ host: f.host, workflows: f.workflows, config: f.config, workflowExecutions: f.service, token: 'test', assets: {} });
+  try {
+    const colonSecret = 'credential:with-colon';
+    await f.auth.provider(f.connection).saveTokens({ access_token: secret, refresh_token: colonSecret, token_type: 'Bearer' });
+    const step = f.definition.steps[0]!;
+    assert.equal(step.kind, 'mcp');
+    if (step.kind !== 'mcp') throw new Error('Expected MCP step');
+    for (const field of ['inputSchema', 'outputSchema'] as const) {
+      for (const credential of [secret, colonSecret, encodeURIComponent(colonSecret)]) {
+        const definition = { ...f.definition, steps: [{ ...step, tool: { ...f.tool, toolName: `tool-${credential}`, [field]: { type: 'object', unsupportedKeyword: true } } }] };
+        for (const [path, method, body] of [
+          ['/api/workflows/mcp', 'PUT', definition],
+          ['/api/workflows/test', 'POST', { definition, sessionId: f.id, stepId: step.id, input: { id: 'LIN-123' } }],
+        ] as const) {
+          const response = await fetch(server.url + path, { method, headers: { authorization: 'Bearer test' }, body: JSON.stringify(body) });
+          assert.equal(response.status, 400);
+          const text = await response.text();
+          assert.ok(!text.includes(credential), text);
+          assert.ok(!text.includes('tool-credential'), 'must redact before colon truncation');
+          assert.match(text, /REDACTED/);
+          assert.ok(!text.includes('unsupportedKeyword'), 'existing bounded request diagnostics remain unchanged');
+        }
+      }
+    }
+    assert.deepEqual(f.workflows.listDefinitions(), []);
+    assert.deepEqual(f.service.list(f.id).executions, []);
+    assert.equal(f.requests.length, 0);
+  } finally { await server.close(); await f.close(); }
 });
 
 test('known annotations survive discovery and saving without relaxing original constraints', async () => {

@@ -59,8 +59,9 @@ partial retention. Supply output uses the same envelope, schema and size validat
 Configured credential values (including OAuth tokens, client secrets, and recognized credential
 URL/argument fields) are excluded from durable arguments, output, partial output and errors.
 Definition/start/recovery gates reject known credentials; service output and private activity are
-redacted before persistence, with a store-level redaction safeguard. Common escaped and URL-encoded
-forms are covered. As in ADR 0023, literal redaction is not a defence against arbitrary deliberate
+redacted before persistence, with a store-level redaction safeguard. Discovery and save/test request
+diagnostics are redacted before message truncation, including tool names in schema compilation errors.
+Common escaped and URL-encoded forms are covered. As in ADR 0023, literal redaction is not a defence against arbitrary deliberate
 encoding, or unknown credentials independently loaded by an external server.
 
 ## Failure and lifecycle

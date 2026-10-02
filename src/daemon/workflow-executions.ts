@@ -399,6 +399,10 @@ export class WorkflowExecutionService {
     };
   }
 
+  redactRequestError(message: string): string {
+    return redactCredentials(message, this.host.workflowMcpCredentials());
+  }
+
   validateDefinitionCredentials(definition: WorkflowDefinition): void {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
