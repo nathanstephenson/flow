@@ -7,7 +7,10 @@ Agent-facing generated aliases are not durable tool identities. Discovery is sco
 selected Agent Session; execution and recovery use only connections enabled for their owning Agent
 Session. Selection stores hashes of transport configuration and initialized server identity, plus
 unaltered discovered input/output JSON Schemas. The Workflow Definition copy pins these values for
-an execution. Start and every attempted call compare them with fresh discovery; missing or changed
+an execution. Authoring discovery validates tools independently: compatible tools remain selectable,
+while incompatible tools carry their name, input/output schema context and the underlying validator
+error. A schema failure in one tool does not hide other tools. Start preflight checks only pinned tools;
+start and every attempted call compare them with fresh discovery. Missing, incompatible or changed
 connections, servers, tools and schemas fail without retargeting.
 
 Each attempt owns a separate `McpSession`, reusing existing configuration and OAuth credential
@@ -36,10 +39,14 @@ at the consuming step.
 
 Original JSON Schema validation uses AJV, without coercion, default insertion, property removal or
 remote schema fetching. Draft-07, 2019-09 and 2020-12 are supported, with 2020-12 as the MCP default.
-Unsupported dialects, unresolved external references, formats and keywords fail explicitly. The
-schema-driven editor exposes composition, local refs, conditional/dependent fields, tuples, maps,
-primitives and arbitrary JSON construction alongside the original constraints. Presentation hints
-are not validators; the original schema is authoritative once all references resolve.
+Unsupported dialects, unresolved external references, unknown formats and validation keywords fail
+explicitly, with the underlying AJV reason retained. Recognized annotation-only extensions (`example`,
+`externalDocs`, `xml`, `markdownDescription`, `enumDescriptions`, `enumNames`, `enumTitles`) are accepted
+as metadata without rewriting the pinned schema. There is no blanket allowance for custom keywords
+or `x-*` extensions. The schema-driven editor exposes composition, local refs, conditional/dependent
+fields, tuples, maps, primitives and structured JSON construction alongside the original constraints;
+no raw JSON editor is required. Presentation hints are not validators; the original schema is
+authoritative once all references resolve.
 
 Successful output is `{ structuredContent: JSON | null, content: MCPContentBlock[] }`. Returned
 blocks are preserved; text is never automatically parsed, and resource links are not fetched.

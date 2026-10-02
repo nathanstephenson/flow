@@ -1,4 +1,4 @@
-import { compileJsonSchema } from './json-schema.ts';
+import { validateMcpSchemas } from './mcp.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { z } from 'zod';
 import { validSecretName } from '../protocol/secrets.ts';
@@ -221,7 +221,7 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     return input;
   };
   for (const step of order) {
-    if (step.kind === 'mcp') { compileJsonSchema(step.tool.inputSchema); if (step.tool.outputSchema !== undefined) compileJsonSchema(step.tool.outputSchema); }
+    if (step.kind === 'mcp') validateMcpSchemas(step.tool);
     const input = inputFor(step.id);
     if (step.kind === 'branch') {
       const field = schemaAt(step.inputSchema ?? input, step.condition.path);

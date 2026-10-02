@@ -31,6 +31,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   const root = mkdtempSync(join(tmpdir(), 'flow-workflow-mcp-'));
   const requests: Array<{ name: string; arguments: Record<string, Json>; authorization?: string }> = [];
   let schema = inputSchema;
+  let outputSchema: JsonSchema | undefined;
   let lists = 0;
   let unsupported = false;
   let version = '1';
@@ -47,7 +48,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
     if (body.method === 'initialize') value = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'workflow-fixture', version } };
     else if (body.method === 'tools/list') {
       lists++;
-      value = { tools: [{ name: 'Linear / issue.fetch', inputSchema: schema }, ...(unsupported ? [{ name: 'unrelated', inputSchema: { type: 'object', unsupportedKeyword: true } }] : [])] };
+      value = { tools: [{ name: 'Linear / issue.fetch', inputSchema: schema, ...(outputSchema === undefined ? {} : { outputSchema }) }, ...(unsupported ? [{ name: 'unrelated', inputSchema: { type: 'object', unsupportedKeyword: true } }] : [])] };
     }
     else if (body.method === 'tools/call') {
       requests.push({ ...body.params, authorization: request.headers.authorization });
@@ -75,7 +76,7 @@ async function fixture(transport: 'stdio' | 'http' = 'http') {
   const tool = discovered.tools.find(tool => transport === 'http' || tool.toolName === 'echo')!;
   const definition: WorkflowDefinition = { version: 1, id: 'mcp', name: 'MCP', backend: 'fake', inputSchema: { type: 'object', fields: { id: { schema: { type: 'string' }, required: true } } }, steps: [{ id: 'fetch', name: 'Fetch', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { [transport === 'http' ? 'id' : 'text']: { kind: 'reference', reference: { source: 'input', path: ['id'] } } } } } }], edges: [] };
   return { listCount: () => lists, advertiseUnsupported: () => { unsupported = true; }, root, requests, connection, auth, workflows, config, backend, host, service, id, tool, definition,
-    result(value: Json) { result = value; }, schema(value: JsonSchema) { schema = value; }, version(value: string) { version = value; }, authenticated(value: boolean) { authenticated = value; },
+    result(value: Json) { result = value; }, schema(value: JsonSchema) { schema = value; }, outputSchema(value: JsonSchema) { outputSchema = value; }, version(value: string) { version = value; }, authenticated(value: boolean) { authenticated = value; },
     async run(def = definition, input: Json = { id: 'LIN-123' }, stepId?: string) { const view = await service.start({ sessionId: id, definition: def, input, ...(stepId ? { stepId } : {}) }); return service.scheduler.wait(id, view.execution.id); },
     async close() { await host.shutdown(); auth.dispose(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); },
   };
@@ -366,6 +367,66 @@ test('preflight discovers once per connection and ignores unrelated unsupported 
     assert.equal(record.status, 'completed');
     assert.equal(f.listCount() - before, 3); // One preflight, two execution-time checks.
     assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
+
+test('authoring discovery returns compatible tools alongside contextual per-tool errors', async () => {
+  const f = await fixture();
+  try {
+    f.advertiseUnsupported();
+    const discovered = await f.service.discoverMcp(f.id, f.connection.id);
+    assert.deepEqual(discovered.tools, [f.tool]);
+    assert.equal(discovered.errors.length, 1);
+    assert.equal(discovered.errors[0]!.toolName, 'unrelated');
+    assert.match(discovered.errors[0]!.message, /MCP tool "unrelated" inputSchema:/);
+    assert.match(discovered.errors[0]!.message, /unsupportedKeyword/);
+    assert.match(discovered.errors[0]!.message, /No validation was skipped/);
+    assert.equal(f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
+test('incompatible output schemas are reported without blocking compatible tools, but pinned checks reject them', async () => {
+  const f = await fixture();
+  try {
+    f.outputSchema({ type: 'object', properties: { id: { type: 'string', format: 'unrecognized-format' } } });
+    const discovered = await f.service.discoverMcp(f.id, f.connection.id);
+    assert.deepEqual(discovered.tools, []);
+    assert.equal(discovered.errors[0]!.toolName, f.tool.toolName);
+    assert.match(discovered.errors[0]!.message, /outputSchema:.*unrecognized-format/);
+    await assert.rejects(f.service.discoverMcp(f.id, f.connection.id, f.tool), /outputSchema:.*unrecognized-format/);
+    await assert.rejects(f.run(), /outputSchema:.*unrecognized-format/);
+    assert.equal(f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
+test('discovery errors redact credentials even when AJV includes them in its reason', async () => {
+  const f = await fixture();
+  try {
+    f.schema({ type: 'object', [secret]: true });
+    const discovered = await f.service.discoverMcp(f.id, f.connection.id);
+    assert.equal(discovered.errors.length, 1);
+    assert.match(discovered.errors[0]!.message, /inputSchema/);
+    assert.ok(!JSON.stringify(discovered).includes(secret));
+    await assert.rejects(f.service.discoverMcp(f.id, f.connection.id, f.tool), error => error instanceof Error && !error.message.includes(secret));
+  } finally { await f.close(); }
+});
+
+test('known annotations survive discovery and saving without relaxing original constraints', async () => {
+  const f = await fixture();
+  try {
+    const annotated = { ...inputSchema, example: { id: 'LIN-123' }, properties: { id: { type: 'string', minLength: 1, markdownDescription: 'Issue **identifier**' } } };
+    f.schema(annotated);
+    const discovered = await f.service.discoverMcp(f.id, f.connection.id);
+    assert.deepEqual(discovered.errors, []);
+    assert.deepEqual(discovered.tools[0]!.inputSchema, annotated);
+    const step = f.definition.steps[0]!;
+    assert.equal(step.kind, 'mcp');
+    if (step.kind !== 'mcp') throw new Error('Expected MCP step');
+    const definition = { ...f.definition, steps: [{ ...step, tool: discovered.tools[0]! }] };
+    f.workflows.saveDefinition(definition);
+    assert.deepEqual(f.workflows.getDefinition(definition.id).steps, definition.steps);
+    assert.throws(() => validateJsonSchema(discovered.tools[0]!.inputSchema, { id: '' }), /minLength/);
+    assert.throws(() => validateDefinition({ ...definition, steps: [{ ...step, tool: { ...discovered.tools[0]!, outputSchema: { unsupportedKeyword: true } } }] }), /outputSchema:.*unsupportedKeyword/);
   } finally { await f.close(); }
 });
 
