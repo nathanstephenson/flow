@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  McpToolDiscovery,
   McpToolSnapshot,
   WorkflowDefinition,
   WorkflowStep,
@@ -36,6 +37,8 @@ export function McpStepEditor({
   const [sessionId, setSessionId] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const [tools, setTools] = useState<McpToolSnapshot[]>([]);
+  const [toolErrors, setToolErrors] = useState<McpToolDiscovery["errors"]>([]);
+  const [discoverySummary, setDiscoverySummary] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const discoveryVersion = useRef(0);
@@ -43,6 +46,8 @@ export function McpStepEditor({
   const resetDiscovery = () => {
     discoveryVersion.current++;
     setTools([]);
+    setToolErrors([]);
+    setDiscoverySummary("");
     setMessage("");
     setBusy(false);
   };
@@ -136,14 +141,26 @@ export function McpStepEditor({
           onClick={async () => {
             const version = ++discoveryVersion.current;
             setBusy(true);
+            setTools([]);
+            setToolErrors([]);
+            setDiscoverySummary("");
             setMessage("");
             try {
-              const result = await workflowApi<{ tools: McpToolSnapshot[] }>(
+              const result = await workflowApi<McpToolDiscovery>(
                 `/api/sessions/${sessionId}/workflow-mcp/${connectionId}`,
               );
               if (version !== discoveryVersion.current) return;
               setTools(result.tools);
-              if (!result.tools.length) setMessage("No tools discovered.");
+              setToolErrors(result.errors);
+              const compatible = result.tools.length;
+              const incompatible = result.errors.length;
+              setDiscoverySummary(
+                compatible
+                  ? `${compatible} compatible ${compatible === 1 ? "tool" : "tools"} available.${incompatible ? ` ${incompatible} incompatible ${incompatible === 1 ? "tool cannot" : "tools cannot"} be selected.` : ""}`
+                  : incompatible
+                    ? `No compatible tools. All ${incompatible} discovered ${incompatible === 1 ? "tool is" : "tools are"} incompatible.`
+                    : "This server reported no tools.",
+              );
             } catch (error) {
               if (version === discoveryVersion.current) setMessage(String(error));
             } finally {
@@ -151,10 +168,36 @@ export function McpStepEditor({
             }
           }}
         >
-          Discover tools
+          {busy ? "Discovering…" : "Discover tools"}
         </Button>
+        {discoverySummary && (
+          <p
+            className={`text-xs ${toolErrors.length ? "text-destructive" : "text-muted-foreground"}`}
+            role="status"
+          >
+            {discoverySummary}
+          </p>
+        )}
+        {toolErrors.length > 0 && (
+          <section aria-label="Incompatible MCP tools" className="grid gap-2">
+            {toolErrors.map((error, index) => (
+              <details
+                key={`${error.toolName}/${index}`}
+                className="min-w-0 rounded-lg border bg-card p-3 text-xs"
+              >
+                <summary className="cursor-pointer break-words rounded-sm font-medium text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  {error.toolName} · incompatible
+                </summary>
+                <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
+                  {error.message}
+                </p>
+              </details>
+            ))}
+          </section>
+        )}
         <Select
           value={step.tool.toolName}
+          disabled={busy || !tools.length}
           onValueChange={(name) => {
             const tool = tools.find((tool) => tool.toolName === name);
             if (tool)
@@ -187,9 +230,14 @@ export function McpStepEditor({
           Tool identity and original schemas are pinned. Changed servers or
           schemas require explicit reselection, not automatic retargeting.
         </p>
-        {(message || connections.error) && (
+        {message && (
           <p className="text-xs text-destructive" role="alert">
-            {message || connections.error}
+            {message}
+          </p>
+        )}
+        {connections.error && (
+          <p className="text-xs text-destructive" role="alert">
+            {connections.error}
           </p>
         )}
       </fieldset>

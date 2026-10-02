@@ -1,7 +1,16 @@
 import { z } from 'zod';
 import type { Json, McpToolSnapshot } from '../protocol/workflows.ts';
-import { validateJsonSchema } from './json-schema.ts';
+import { compileJsonSchema, validateJsonSchema } from './json-schema.ts';
 
+/** Keep tool and schema context at discovery, save and execution boundaries. */
+export function validateMcpSchemas(tool: Pick<McpToolSnapshot, 'toolName' | 'inputSchema' | 'outputSchema'>): void {
+  for (const field of ['inputSchema', 'outputSchema'] as const) {
+    const schema = tool[field];
+    if (schema === undefined) continue;
+    try { compileJsonSchema(schema); }
+    catch (error) { throw new Error(`MCP tool ${JSON.stringify(tool.toolName)} ${field}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+}
 
 const jsonSchema = z.json();
 const envelopeSchema = z.object({

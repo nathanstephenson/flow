@@ -67,7 +67,7 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
     } else reply(405, { error: 'Method not allowed' });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
-    reply(error instanceof WorkflowConflict ? 409 : code === 'ENOENT' ? 404 : code ? 500 : 400, { error: code ? 'Workflow resource unavailable' : workflowRequestError(error) });
+    reply(error instanceof WorkflowConflict ? 409 : code === 'ENOENT' ? 404 : code ? 500 : 400, { error: code ? 'Workflow resource unavailable' : workflowRequestError(error, message => service.redactRequestError(message)) });
   }
   return true;
 }
