@@ -1,13 +1,14 @@
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
 import { toolChains } from "@client/tool-chains.ts";
 import { isPinned } from "@/presentation/stick-to-bottom.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
-import { useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
+import { useChrome, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { ToolChain } from "@/components/tool-chain.tsx";
+import { Button } from "@/components/ui/button.tsx";
 import { ownKeys } from "@/presentation/subagent-rows.ts";
 
 /**
@@ -20,10 +21,9 @@ import { ownKeys } from "@/presentation/subagent-rows.ts";
  * the key index, `memo` and the store's per-frame coalescing already reduce a streaming tick to one
  * row re-rendering. Growing, variable-height content is the worst case for every virtualiser anyway.
  *
- * The mitigation for a very long transcript is a tail window with a visible boundary, below. Nothing
- * is dropped once shown, and the boundary is honest that there is more.
+ * The Session Host supplies a bounded tail first, with older pages available at the visible boundary
+ * below. Nothing is dropped once loaded; search explicitly fills in the missing earlier pages.
  */
-const TAIL_WINDOW = 400;
 
 export function TranscriptView({
   view,
@@ -39,6 +39,8 @@ export function TranscriptView({
   onObserved?: (throughSeq: number) => void;
 }) {
   const keys = useTranscriptKeys(view);
+  const history = useTranscriptHistory(view);
+  const { link } = useChrome(view);
   const matching = useFilteredKeys(view, keys, query);
 
   // A Subagent's own rows belong to the Agents tab, not here (ADR 0015). This filters *keys*, never
@@ -47,19 +49,11 @@ export function TranscriptView({
   const getEntry = useCallback((key: string) => view.getEntry(key), [view]);
   const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
 
-  const [showAll, setShowAll] = useState(false);
-  // Memoised so the slice keeps its identity across an unrelated re-render: a Tool Chain subscribes
-  // to the transcript through its own key array, and a fresh array every frame would resubscribe it
-  // every frame.
-  const windowed = useMemo(
-    () => (showAll || shown.length <= TAIL_WINDOW ? shown : shown.slice(-TAIL_WINDOW)),
-    [showAll, shown],
-  );
-  const earlier = shown.length - windowed.length;
+  const restore = useRef<{ height: number; top: number; anchor: Element | undefined; offset: number } | undefined>(undefined);
 
-  // After the window and after the filter, never before: a Tool Chain says "these rows are adjacent",
+  // After the loaded tail and the filter: a Tool Chain says "these rows are adjacent",
   // and the only list it can say that about honestly is the one the reader is looking at.
-  const segments = useMemo(() => toolChains(windowed), [windowed]);
+  const segments = useMemo(() => toolChains(shown), [shown]);
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
@@ -175,10 +169,57 @@ export function TranscriptView({
    * reader touching anything. Going to the bottom is the only interpretation that is never wrong.
    */
   useLayoutEffect(() => {
+    restore.current = undefined;
     pinned.current = true;
     followBottom();
     setAtBottom(true);
   }, [query, view, followBottom]);
+
+  const readOlder = useCallback((unpin: boolean) => {
+    const before = view.getHistory().earlier;
+    if (unpin) {
+      pinned.current = false;
+      setAtBottom(false);
+    }
+    return view.loadOlder().then(() => {
+      // The store publishes on the next frame. Capture the reader's current position *after* the
+      // request, not at click time: they may have kept scrolling while the page was in flight.
+      const element = scroller.current;
+      if (!pinned.current && element && view.getHistory().earlier < before) {
+        const top = element.getBoundingClientRect().top;
+        const anchor = [...(content.current?.children ?? [])].find(child => child.tagName === "DIV" && child.getBoundingClientRect().bottom > top);
+        restore.current = { height: element.scrollHeight, top: element.scrollTop, anchor, offset: anchor?.getBoundingClientRect().top ?? 0 };
+      }
+    });
+  }, [view]);
+  const loadOlder = useCallback(() => { void readOlder(true); }, [readOlder]);
+
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    const saved = restore.current;
+    if (!element || !saved) return;
+    // Prefer a retained visible row: live output may also have grown *below* it while the backward
+    // page arrived. A total-height delta alone would count that growth and move the reader.
+    const delta = saved.anchor?.isConnected ? saved.anchor.getBoundingClientRect().top - saved.offset : element.scrollHeight - saved.height;
+    element.scrollTop = saved.top + delta;
+    lastScrollTop.current = element.scrollTop;
+    restore.current = undefined;
+  }, [keys]);
+
+  useEffect(() => {
+    if (!query || history.loading || link !== "live") return;
+    let cancelled = false;
+    // Search means the whole Presentation Transcript, not just the tail. Load missing pages only
+    // on this explicit reader action, and keep the incompleteness visible while doing so.
+    void (async () => {
+      while (!cancelled && view.getHistory().earlier > 0) {
+        const before = view.getHistory().earlier;
+        await readOlder(false);
+        if (view.getHistory().error || view.getHistory().earlier >= before) break;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [query, view, history.loading, link, readOlder]);
 
   const toBottom = useCallback(() => {
     pinned.current = true;
@@ -201,18 +242,20 @@ export function TranscriptView({
         className="transcript-scroller h-full px-3 pt-2 pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
         <div ref={content} className="pane-measure">
-          {earlier > 0 ? (
-            <button
-              type="button"
-              onClick={() => setShowAll(true)}
-              className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+          {history.earlier > 0 ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={loadOlder}
+              disabled={history.loadingOlder || link !== "live"}
+              className="mb-2 h-auto w-full whitespace-normal py-1 text-muted-foreground"
             >
-              <span className="h-px flex-1 bg-border" aria-hidden />
-              {earlier.toLocaleString()} earlier entries · show all
-              <span className="h-px flex-1 bg-border" aria-hidden />
-            </button>
+              {history.loadingOlder ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
+              {history.loadingOlder ? "Loading earlier transcript entries…" : `${history.earlier.toLocaleString()} earlier transcript entries · load earlier`}
+            </Button>
           ) : null}
-
+          {history.error ? <p role="alert" className="px-1 py-2 text-xs text-destructive">Could not load transcript entries: {history.error}</p> : null}
+          {query && history.earlier > 0 ? <p role="status" className="px-1 py-2 text-xs text-muted-foreground">{history.error ? "Search covers loaded entries only; earlier entries could not be loaded." : "Searching earlier transcript entries…"}</p> : null}
           {segments.map((segment) =>
             segment.kind === "entry" ? (
               <TranscriptRow key={segment.key} view={view} entryKey={segment.key} query={query} />
@@ -227,7 +270,7 @@ export function TranscriptView({
 
           {shown.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">
-              {keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
+              {history.loading ? "Loading latest transcript entries…" : history.error && keys.length === 0 ? "Transcript unavailable." : history.earlier > 0 ? "No matching entries in the loaded tail." : keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
             </p>
           ) : null}
 
@@ -341,5 +384,15 @@ function useFilteredKeys(view: AgentSessionView, keys: readonly string[], query:
     return view.subscribeTranscript(recompute);
   }, [view, query, cache]);
 
-  return query === "" ? keys : filtered;
+  // A backward page changes keys before the notification's filtered state is committed. Derive
+  // that new set in this render so scroll restoration measures the actual prepended DOM, not the
+  // previous filter. Ordinary text ticks still bail out in recompute when their match set is equal.
+  return useMemo(() => {
+    if (query === "") return keys;
+    const next = keys.filter(key => {
+      const entry = view.getEntry(key);
+      return entry !== undefined && cache.matches(entry, query);
+    });
+    return filtered.length === next.length && filtered.every((key, index) => key === next[index]) ? filtered : next;
+  }, [view, keys, query, cache, filtered]);
 }

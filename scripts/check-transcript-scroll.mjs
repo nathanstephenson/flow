@@ -85,7 +85,6 @@ try {
           return element.scrollHeight > element.clientHeight && element.scrollHeight - element.scrollTop - element.clientHeight < 1;
         });
         await bottom();
-        await page.getByRole("button", { name: /earlier entries · show all/ }).waitFor();
         const beforeImage = await scroller.evaluate(element => element.scrollHeight);
         releaseImage();
         await page.waitForFunction(() => [...document.querySelectorAll("#transcript-scroll-fixture img")].every(image => image.naturalHeight > 0));
@@ -112,7 +111,8 @@ try {
         await bottom();
         await page.setViewportSize({ width: theme === "light" ? 800 : 360, height: 600 });
         await bottom();
-        await page.evaluate(() => window.scrollFixture.search("Response 449"));
+        await page.evaluate(() => window.scrollFixture.search("response 449"));
+        await page.locator("#transcript-scroll-fixture").getByText(/^Response 449\./).waitFor();
         await page.waitForFunction(() => !document.querySelector("#transcript-scroll-fixture img"));
         await page.evaluate(() => window.scrollFixture.search(""));
         await bottom();

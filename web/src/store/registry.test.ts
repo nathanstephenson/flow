@@ -18,6 +18,9 @@ function fakeView(sessionId: string): FakeView {
     },
     subscribeTranscript: () => () => {},
     getKeys: () => [],
+    getActivityKeys: () => [],
+    getHistory: () => ({ earlier: 0, loading: false, loadingOlder: false, error: undefined }),
+    loadOlder: async () => {},
     getEntry: () => undefined,
     getLastSeq: () => 0,
     start() {

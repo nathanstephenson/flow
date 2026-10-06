@@ -106,6 +106,14 @@ export type Chrome = {
  * StrictMode's double mount and by every switch to another Agent Session, and each disposal replays
  * the whole transcript. `subscribe` must be idempotent and must never start the transport — `acquire` does.
  */
+export type TranscriptHistory = {
+  /** Number of reduced entries before the loaded suffix (not filtered parent-only rows). */
+  earlier: number;
+  loading: boolean;
+  loadingOlder: boolean;
+  error: string | undefined;
+};
+
 export type AgentSessionView = {
   readonly sessionId: string;
 
@@ -118,6 +126,11 @@ export type AgentSessionView = {
    */
   subscribeTranscript(listener: () => void): () => void;
   getKeys(): readonly string[];
+  /** Loaded rows plus related activity cards outside the tail, for the Agents surface. */
+  getActivityKeys(): readonly string[];
+  getHistory(): TranscriptHistory;
+  /** Load one backward page. Concurrent readers share the same request. */
+  loadOlder(): Promise<void>;
 
   /** Keyed by `entryKey(entry)` — kind and id, because an id is only unique within a kind. */
   getEntry(key: string): Entry | undefined;

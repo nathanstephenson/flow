@@ -2,7 +2,7 @@ import { ChevronLeft } from "lucide-react";
 import { useMemo } from "react";
 
 import type { Entry } from "@client/reduce.ts";
-import { useAgentSession, useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
+import { useActivityKeys, useAgentSession, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { useNow } from "@/lib/use-now.ts";
@@ -23,9 +23,9 @@ import { cn } from "@/lib/utils.ts";
  * tab's own content, so it survives a reload the way a Shell's id does.
  *
  * Both derivations are memoised on the key array, which is the correct signal *and only because of
- * how the store invalidates it*: `getKeys()` returns the identical array until `entries.length`
- * changes, and both "which Subagents exist" and "which rows are this one's" change exactly when an
- * Entry is appended. Statuses change without the length moving, which is why `ordered` runs on
+ * how the store invalidates it*: keys keep their identity while rows merely grow. Activity keys
+ * include related Subagent cards outside the tail, while transcript keys contain only loaded rows.
+ * New entries and backward pages change those sets. Statuses change without the length moving, which is why `ordered` runs on
  * every render instead — see subagent-list.ts.
  */
 export type SubagentsPaneProps = {
@@ -54,7 +54,7 @@ function SubagentList({
   view: AgentSessionView;
   onSelect: (subagentId: string) => void;
 }) {
-  const keys = useTranscriptKeys(view);
+  const keys = useActivityKeys(view);
   const getEntry = useMemo(() => (key: string) => view.getEntry(key), [view]);
   const spawned = useMemo(() => subagentKeys(keys, getEntry), [keys, getEntry]);
   // Not memoised: a status change reorders this without changing the key array at all, so a memo
@@ -191,6 +191,7 @@ function SubagentTranscript({
   onBack: () => void;
 }) {
   const keys = useTranscriptKeys(view);
+  const history = useTranscriptHistory(view);
   const getEntry = useMemo(() => (key: string) => view.getEntry(key), [view]);
   const rows = useMemo(() => memberKeys(keys, getEntry, subagentId), [keys, getEntry, subagentId]);
   const subagent = useEntry(view, subagentId);
@@ -198,11 +199,17 @@ function SubagentTranscript({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto px-2 pt-2 pb-16">
+          {history.earlier > 0 ? (
+            <Button variant="ghost" size="sm" disabled={history.loadingOlder} onClick={() => void view.loadOlder()}>
+              {history.loadingOlder ? "Loading earlier entries…" : "Load earlier transcript entries"}
+            </Button>
+          ) : null}
+          {history.error ? <p role="alert" className="p-2 text-xs text-destructive">{history.error}</p> : null}
           {rows.length === 0 ? (
             <p className="p-2 text-sm text-muted-foreground">
-              {subagent?.kind === "subagent" && subagent.status === "running"
-                ? "Working. Nothing to show yet."
-                : "This agent produced no rows of its own."}
+              {history.earlier > 0
+                ? "No rows in the loaded tail. Earlier entries are available above."
+                : subagent?.kind === "subagent" && subagent.status === "running" ? "Working. Nothing to show yet." : "This agent produced no rows of its own."}
             </p>
           ) : (
             rows.map((key: string) => <SubagentRowEntry key={key} view={view} entryKey={key} />)
