@@ -4,7 +4,7 @@ import { readFile, realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 const root = process.env.MOCKUP_STATE_DIR;
-if (!root) throw new Error('Set MOCKUP_STATE_DIR to the isolated dev-host.ts state root.');
+if (!root) throw new Error('Set MOCKUP_STATE_DIR to the Session Host state root.');
 const liveBackend = process.env.MOCKUP_LIVE_BACKEND === '1';
 const handoff = JSON.parse(await readFile(join(root, 'daemon.json'), 'utf8'));
 const { ids } = liveBackend ? { ids: [] } : JSON.parse(await readFile(join(root, 'study.json'), 'utf8'));
