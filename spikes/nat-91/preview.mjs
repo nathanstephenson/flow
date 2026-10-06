@@ -8,7 +8,6 @@ const files = new Map([
   ['/index.html', ['index.html', 'text/html']],
   ['/mockup.css', ['mockup.css', 'text/css']],
   ['/mockup.js', ['mockup.js', 'text/javascript']],
-  ['/icons.svg', ['icons.svg', 'image/svg+xml']],
 ]);
 const font = process.env.MOCKUP_FONT_FILE ?? fileURLToPath(new URL('../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2', import.meta.url));
 const port = Number(process.env.MOCKUP_PORT ?? 4391);

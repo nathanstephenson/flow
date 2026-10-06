@@ -1,14 +1,14 @@
-# NAT-91 — neo-chrome mockups
+# NAT-91 — brushed chrome material studies, round 02
 
 **Design exploration only. Do not merge as a production implementation.**
 
-A standalone, synthetic Flow workspace for comparing three mirror-chrome treatments:
+The first round's blue/silver ribbons were rejected. This replaces the illustrated wave surfaces and whole-app mockup with close-up **brushed, reflective metal** studies:
 
-1. **Cobalt:** blue-black with a restrained silver fold.
-2. **Silver:** a brighter, silver-forward surface reflecting cobalt.
-3. **Liquid:** saturated cobalt, near-black troughs, and more pronounced silver folds; closest to the supplied reference art.
+1. **Silver:** neutral metal, horizontal brushing, broad silver light and dark reflections.
+2. **Cobalt:** the same surface reflecting a blue panel, not a blue coating.
+3. **Graphite:** a darker environment with restrained silver highlights.
 
-All three use the same layout and content. The material spans selected Agent Session rows and Dock tabs. Hover catches a subdued, cursor-following reflection; labels stay still. No continuous animation. Reduced-motion and touch pointers do not drive the highlight.
+All three have fine directional grain and small control-size samples. The material is rendered procedurally in Canvas: a gently formed surface reflects rectangular studio fixtures; anisotropic softness and micro-scratches break up the reflections. No decorative SVG curves or repeating wave shapes. This is a simplified material study, not a physically accurate production renderer.
 
 ## Preview
 
@@ -18,17 +18,18 @@ From the repository root, after dependencies are installed:
 node spikes/nat-91/preview.mjs
 ```
 
-Visit <http://127.0.0.1:4391>. Switch treatments in the study header and scroll down for interaction close-ups. App-shaped buttons are **inert**; only the study selectors, theme toggle, and decorative pointer reflection are wired. Text, tool output, diffs, model labels, and test counts are fixtures, not actual results.
+Visit <http://127.0.0.1:4391>. The comparison board shows all three finishes. Hover over “Publish changes” to shift its subdued reflected light. “Shell 1” is a static selected-control sample. These controls are **inert**: they do not send messages, open Shells, or publish anything.
 
 Direct links:
 
-- `/?treatment=cobalt`
-- `/?treatment=silver`
-- `/?treatment=liquid`
-- `/?treatment=cobalt&theme=light`
-- `/?treatment=liquid&view=detail`
+- `/?material=silver`
+- `/?material=cobalt`
+- `/?material=graphite`
+- `/?theme=light`
 
-The preview is loopback-only and has no connection to a Session Host or API. It cannot send a message, start an Agent Session, or publish changes. `MOCKUP_PORT` overrides the port; `MOCKUP_FONT_FILE` can point to an existing Inter variable font installation instead of this checkout's `node_modules`.
+There is no continuous animation. Reduced-motion and touch pointers do not move the reflected light. Keyboard focus has its own visible outline.
+
+The preview is loopback-only, with no Session Host, API, auth, or production app connection. `MOCKUP_PORT` overrides port 4391; `MOCKUP_FONT_FILE` can point to an existing Inter variable font instead of this checkout's `node_modules`.
 
 ## Capture
 
@@ -38,22 +39,18 @@ Start the preview, then:
 node spikes/nat-91/capture.mjs
 ```
 
-The capture script uses the environment's existing Playwright, not a project dependency. Set `PLAYWRIGHT_MODULE` to an alternate Playwright module and `PLAYWRIGHT_EXECUTABLE_PATH` to an existing Chromium executable if necessary. It produces eight screenshots and checks study/theme selection, pointer lighting, reduced-motion behaviour, asset/console errors, and horizontal overflow at desktop/mobile sizes. Screenshot output defaults to `screenshots/nat-91`; override with `MOCKUP_SCREENSHOTS`.
+Playwright is external tooling, not a new project dependency. If the environment's default installation is unavailable, set:
 
-Screenshots are committed once and removed in a follow-up commit, per the repository convention. View them in the draft PR, whose images point at the retained screenshot commit.
+- `PLAYWRIGHT_MODULE`: path to an installed Playwright module.
+- `PLAYWRIGHT_EXECUTABLE_PATH`: path to an existing Chromium executable.
+- `MOCKUP_FONT_FILE`: existing `inter-latin-wght-normal.woff2`, when dependencies are not installed in this checkout.
 
-## Relationship to the app
+The script captures six images: dark/light comparison boards, three individual close-ups with hover visible, and a narrow comparison board. It checks rendered-pixel changes on pointer movement, reduced-motion and touch stability, actual keyboard focus, theme switching, surface bounds, horizontal overflow, and asset/console errors.
 
-This is **not a running-app screenshot** and does not modify `web/src`, backend code, dependencies, or Settings. Geometry is based on the existing Agent Session rail, pane header, composer, Git view, and Docks. It retains Inter, Lucide icon shapes, neutral light/dark surfaces, and the blue/purple status meanings. It explores flatter, integrated controls rather than inset rounded pills.
+Output defaults to `screenshots/nat-91-round-02`; override with `MOCKUP_SCREENSHOTS`. Screenshots are committed once, then removed in a follow-up commit. The draft PR uses retained commit URLs.
 
-The mobile screenshot is a narrow-layout material check, not a proposal for replacing Flow's mobile navigation. Before implementation, choose the material treatment and bring it into shared UI tokens/components; verify real selection/hover/focus/disabled/destructive states, contrast over every reflection, mobile navigation, and both themes. These mockups are not an accessibility sign-off.
+## Scope and review
 
-## Review questions
+This is a **material study, not an app-layout proposal**. There are no changes to `web/src`, backend code, dependencies, or Settings. The earlier UI mockup remains in PR history for context, but is no longer the design direction.
 
-- Which material is closest to the intended direction: cobalt, silver, or liquid?
-- Is chrome appropriately limited to selection and hover, or should it appear elsewhere?
-- Are the full-bleed controls right, and is the reflection too strong or too restrained?
-
-## Icon attribution
-
-`icons.svg` contains the same Lucide icon paths used by Flow. See [LICENSE-icons](./LICENSE-icons) for the upstream ISC notice and MIT notice covering Feather-derived icons.
+First choose whether the material itself is right, then tune grain, silver highlights, and cobalt reflections. Only after that should it return to the real shared UI components. Production contrast, disabled/destructive states, performance, and both themes still need validation; these mockups are not an accessibility sign-off.
