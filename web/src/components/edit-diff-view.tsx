@@ -1,6 +1,7 @@
 import type { Entry } from "@client/reduce.ts";
-import { editDiff } from "@client/diff.ts";
+import { editDiff, textDiff } from "@client/diff.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { DiffText, diffLineClass } from "@/components/diff-text.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -64,7 +65,7 @@ function DiffLine({
     <div
       className={cn(
         "grid grid-cols-[1.25rem_minmax(0,1fr)] font-mono text-xs whitespace-pre",
-        kind === "removed" ? "bg-destructive/10 text-destructive" : "bg-diff-added/10 text-diff-added",
+        diffLineClass(kind),
       )}
     >
       <span className="pl-2 select-none" aria-hidden>
@@ -102,20 +103,53 @@ function Payload({ label, value, query }: { label: string; value: unknown; query
   if (value === undefined || value === null || value === "") return null;
   const text = typeof value === "string" ? value : safeJson(value);
   if (text === "") return null;
+  const parts = label !== "input" && text.length <= HIGHLIGHT_LIMIT ? structuredDiffParts(value) : undefined;
 
   return (
     <div className="mt-1.5 first:mt-0">
       <p className="m-0 mb-1 text-xs text-muted-foreground">{label}</p>
-      <pre className="m-0 max-h-72 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
-        {/*
-         * A megabyte of tool output split into per-match segments is tens of thousands of DOM nodes
-         * on a keystroke. Past the limit the text is still all there and find-in-page still finds it
-         * — only the `<mark>` is dropped.
-         */}
-        {text.length > HIGHLIGHT_LIMIT ? text : <Highlighted text={text} query={query} />}
-      </pre>
+      {parts ? parts.map((part) => (
+        <Payload key={part.label} label={part.label} value={part.text} query={query} />
+      )) : (
+        <pre className="m-0 max-h-72 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+          {/*
+           * A megabyte of tool output split into per-match segments is tens of thousands of DOM nodes
+           * on a keystroke. Past the limit the text is still all there and find-in-page still finds it
+           * — only the `<mark>` is dropped.
+           */}
+          {text.length > HIGHLIGHT_LIMIT ? text : <DiffText text={text} query={query} />}
+        </pre>
+      )}
     </div>
   );
+}
+
+/** Pi/MCP results wrap text blocks in content. Unwrap only real diffs, keeping every other field. */
+function structuredDiffParts(value: unknown): { label: string; text: string }[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const content = record["content"];
+  if (!Array.isArray(content)) return undefined;
+  const diffText = (block: unknown): string | undefined => {
+    if (!block || typeof block !== "object") return undefined;
+    const fields = block as Record<string, unknown>;
+    return fields["type"] === "text" && typeof fields["text"] === "string" && textDiff(fields["text"])
+      ? fields["text"] : undefined;
+  };
+  if (!content.some((block) => diffText(block) !== undefined)) return undefined;
+
+  const parts = content.flatMap((block, index) => {
+    const text = diffText(block);
+    const label = `content ${index + 1}`;
+    if (text === undefined) return [{ label, text: safeJson(block) }];
+    const { type: _type, text: _text, ...metadata } = block as Record<string, unknown>;
+    const parts = [{ label: `${label} (text)`, text }];
+    if (Object.keys(metadata).length > 0) parts.push({ label: `${label} metadata`, text: safeJson(metadata) });
+    return parts;
+  });
+  const { content: _content, ...metadata } = record;
+  if (Object.keys(metadata).length > 0) parts.push({ label: "metadata", text: safeJson(metadata) });
+  return parts;
 }
 
 function safeJson(value: unknown): string {

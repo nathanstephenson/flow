@@ -36,6 +36,48 @@ export function editDiff(input: unknown): EditDiff | undefined {
   };
 }
 
+export type DiffLineKind = "added" | "removed" | "context";
+export type TextDiffLine = { text: string; kind: DiffLineKind };
+
+/**
+ * Explicit diff/patch fences may contain just +/- fragments. Without that hint, require a unified
+ * file header and hunk, so ordinary code and tool output are not mistaken for changes. Keep every
+ * byte, including newlines, for copying and search highlighting.
+ */
+export function textDiff(text: string, lang?: string): TextDiffLine[] | undefined {
+  const language = lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  const explicit = language === "diff" || language === "patch";
+  if (language && !explicit) return undefined;
+  if (!explicit) {
+    const fileHeader = /^--- [^\n]*\n\+\+\+ [^\n]*\n/m.test(text);
+    const hunkHeader = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text);
+    if (!fileHeader || !hunkHeader) return undefined;
+  }
+
+  let remainingOld = 0;
+  let remainingNew = 0;
+  return (text.match(/[^\n]*\n|[^\n]+$/g) ?? []).map((line): TextDiffLine => {
+    const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+    if (hunk) {
+      remainingOld = Number(hunk[1] ?? 1);
+      remainingNew = Number(hunk[2] ?? 1);
+      return { text: line, kind: "context" };
+    }
+    const inHunk = remainingOld > 0 || remainingNew > 0;
+    let kind: DiffLineKind = "context";
+    if (inHunk || explicit) {
+      // ---/+++ are file headers outside a hunk, but valid removed/added content inside one.
+      if (line.startsWith("-") && (inHunk || !line.startsWith("--- "))) kind = "removed";
+      if (line.startsWith("+") && (inHunk || !line.startsWith("+++ "))) kind = "added";
+    }
+    if (inHunk) {
+      if (kind === "removed" || line.startsWith(" ")) remainingOld = Math.max(0, remainingOld - 1);
+      if (kind === "added" || line.startsWith(" ")) remainingNew = Math.max(0, remainingNew - 1);
+    }
+    return { text: line, kind };
+  });
+}
+
 function lines(text: string | undefined): string[] {
   if (!text) return [];
   const split = text.split("\n");
