@@ -4,10 +4,14 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import { default as formats } from 'ajv-formats';
 import type { Json, JsonSchema } from '../protocol/workflows.ts';
 
-// No coercion, defaults, removal of properties, remote schema fetching or ignored keywords.
+// Only recognizable presentation annotations may be ignored, never validation extensions.
+const annotationKeywords = ['example', 'externalDocs', 'xml', 'markdownDescription', 'enumDescriptions', 'enumNames', 'enumTitles'];
+
+// No coercion, defaults, removal of properties or remote schema fetching.
 function engineFor(Engine: typeof Ajv) {
   const engine = new Engine({ strict: true, strictTypes: false, strictTuples: false, strictRequired: false, allowUnionTypes: true, allErrors: true });
   (formats as unknown as (ajv: Ajv) => void)(engine);
+  for (const keyword of annotationKeywords) engine.addKeyword({ keyword, valid: true });
   return engine;
 }
 const cache = new Map<string, ReturnType<Ajv['compile']>>();
@@ -23,7 +27,10 @@ export function compileJsonSchema(schema: JsonSchema) {
     if (cache.size >= 200) cache.clear();
     cache.set(key, validator);
     return validator;
-  } catch { throw new Error('MCP JSON Schema cannot be validated. Reconfigure the tool schema (supported dialects: draft-07, 2019-09, 2020-12). No validation was skipped.'); }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`MCP JSON Schema cannot be validated: ${reason}. Reconfigure the tool schema (supported dialects: draft-07, 2019-09, 2020-12). No validation was skipped.`);
+  }
 }
 export function validateJsonSchema(schema: JsonSchema, value: Json): void {
   const validate = compileJsonSchema(schema);

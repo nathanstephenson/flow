@@ -3,8 +3,8 @@ import { workflowInspectInput, workflowRecoverInput, workflowRelayInput, type Wo
 import { redactCredentials } from './credential-redaction.ts';
 import { workflowAgentNameInput, workflowOutcomeNameInput } from './summariser.ts';
 import { connectionIdentity, snapshotTool, sameSchema } from './workflow-mcp.ts';
-import { compileJsonSchema, validateJsonSchema } from '../workflows/json-schema.ts';
-import { boundedMcpValue } from '../workflows/mcp.ts';
+import { validateJsonSchema } from '../workflows/json-schema.ts';
+import { boundedMcpValue, validateMcpSchemas } from '../workflows/mcp.ts';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { WorkflowSubagentHandle } from '../backend/types.ts';
 import type { BackendEvent, ModelInfo, Spend } from '../protocol/events.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
-import type { Json, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
+import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { createCodeExecutors } from '../workflows/executors.ts';
 import { parseValue } from '../workflows/schema.ts';
@@ -399,6 +399,10 @@ export class WorkflowExecutionService {
     };
   }
 
+  redactRequestError(message: string): string {
+    return redactCredentials(message, this.host.workflowMcpCredentials());
+  }
+
   validateDefinitionCredentials(definition: WorkflowDefinition): void {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
@@ -615,11 +619,10 @@ export class WorkflowExecutionService {
   private checkMcp(sessionId: string, tool: import('../protocol/workflows.ts').McpToolSnapshot): void {
     const connection = this.host.workflowMcpConnections(sessionId).find(connection => connection.id === tool.connectionId);
     if (!connection || connectionIdentity(connection) !== tool.identity) throw new Error('MCP connection removed, disabled or changed. Enable the original connection or reselect the tool in the workflow editor.');
-    compileJsonSchema(tool.inputSchema);
-    if (tool.outputSchema !== undefined) compileJsonSchema(tool.outputSchema);
+    validateMcpSchemas(tool);
   }
 
-  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[]) {
+  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[]): Promise<McpToolDiscovery> {
     const pinned = expected ? (Array.isArray(expected) ? expected : [expected]) : [];
     for (const tool of pinned) this.checkMcp(sessionId, tool);
     const session = await this.host.openWorkflowMcp(sessionId, connectionId);
@@ -627,13 +630,24 @@ export class WorkflowExecutionService {
       await session.open();
       if (session.status()[0]?.state !== 'connected') throw new Error('MCP connection unavailable. Sign in in MCP Settings or reconfigure the server, then retry manually.');
       // Preflight validates only pinned tools, not unrelated advertised schemas.
-      const tools = session.tools().filter(tool => !expected || pinned.some(pin => pin.toolName === tool.definition.name)).map(tool => snapshotTool(session.connections[0]!, tool));
-      assertNoSecrets(tools, this.host.workflowMcpCredentials(), true);
+      const tools: McpToolDiscovery['tools'] = [], errors: McpToolDiscovery['errors'] = [];
+      const credentials = this.host.workflowMcpCredentials();
+      for (const tool of session.tools().filter(tool => !expected || pinned.some(pin => pin.toolName === tool.definition.name))) {
+        try {
+          const snapshot = snapshotTool(session.connections[0]!, tool);
+          assertNoSecrets(snapshot, credentials, true);
+          tools.push(snapshot);
+        } catch (error) {
+          // Authoring can still use compatible tools. Pinned execution checks remain fail-closed.
+          if (expected) throw safeError(error, credentials);
+          errors.push(redactCredentials({ toolName: tool.definition.name, message: error instanceof Error ? error.message : String(error) }, credentials));
+        }
+      }
       for (const expected of pinned) {
         const tool = tools.find(tool => tool.toolName === expected.toolName);
         if (!tool || tool.serverIdentity !== expected.serverIdentity || !sameSchema(tool.inputSchema, expected.inputSchema) || !sameSchema(tool.outputSchema, expected.outputSchema)) throw new Error('MCP tool or schema changed. Reselect the tool in the workflow editor; this execution will not retarget it.');
       }
-      return { tools };
+      return { tools, errors };
     } finally { await session.dispose(); }
   }
 

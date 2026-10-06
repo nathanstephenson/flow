@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { McpConnection } from '../protocol/mcp.ts';
 import type { JsonSchema, McpToolSnapshot } from '../protocol/workflows.ts';
 import type { McpTool } from '../backend/mcp.ts';
-import { compileJsonSchema } from '../workflows/json-schema.ts';
+import { validateMcpSchemas } from '../workflows/mcp.ts';
 
 export function connectionIdentity(connection: McpConnection): string {
   // Headers join the hash only when there are some, so every identity recorded before headers
@@ -14,8 +14,7 @@ export function connectionIdentity(connection: McpConnection): string {
 export function snapshotTool(connection: McpConnection, tool: McpTool): McpToolSnapshot {
   const inputSchema = tool.definition.inputSchema as JsonSchema;
   const outputSchema = tool.definition.outputSchema as JsonSchema | undefined;
-  compileJsonSchema(inputSchema);
-  if (outputSchema !== undefined) compileJsonSchema(outputSchema);
+  validateMcpSchemas({ toolName: tool.definition.name, inputSchema, ...(outputSchema === undefined ? {} : { outputSchema }) });
   return { connectionId: connection.id, connectionName: connection.name, identity: connectionIdentity(connection), serverIdentity: tool.serverIdentity, toolName: tool.definition.name, inputSchema, ...(outputSchema === undefined ? {} : { outputSchema }) };
 }
 export function sameSchema(a: unknown, b: unknown): boolean {

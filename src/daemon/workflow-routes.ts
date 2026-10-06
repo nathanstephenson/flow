@@ -4,8 +4,9 @@ import { validateDefinition } from '../workflows/graph.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
 import type { SecretStore } from './secret-store.ts';
 
-export function workflowRequestError(error: unknown): string {
-  return error instanceof Error && error.name !== 'ZodError' && error.name !== 'SyntaxError' && error.message ? error.message.split(':')[0]! : 'Invalid workflow request';
+export function workflowRequestError(error: unknown, redact: (message: string) => string = message => message): string {
+  // Redact before truncation: a credential containing ':' must not leak its prefix.
+  return error instanceof Error && error.name !== 'ZodError' && error.name !== 'SyntaxError' && error.message ? redact(error.message).split(':')[0]! : 'Invalid workflow request';
 }
 
 export async function workflowRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, workflows?: WorkflowStore, secrets?: SecretStore, executions?: import('./workflow-executions.ts').WorkflowExecutionService): Promise<boolean> {
@@ -59,7 +60,7 @@ export async function workflowRoutes(request: IncomingMessage, response: ServerR
           definition = validateDefinition(body).definition;
           executions?.validateDefinitionCredentials(definition);
           if (definition.id !== id) throw new Error();
-        } catch (error) { reply(400, { error: workflowRequestError(error) }); return true; }
+        } catch (error) { reply(400, { error: workflowRequestError(error, message => executions?.redactRequestError(message) ?? message) }); return true; }
         workflows!.saveDefinition(definition);
         reply(200, { workflow: definition });
       }
