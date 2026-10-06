@@ -107,6 +107,8 @@ type SessionRecord = {
   turnInFlight: boolean;
   /** Invalidates late prompt rejections after a turn ends, including backend-initiated turns. */
   turnGeneration?: number;
+  /** Terminal events already recorded in this Backend Session, including host-synthesized ends. */
+  endedTurnIds?: Set<string>;
   /**
    * The Permission Prompts, Enquiries, Subagents and Background Calls the transcript has open,
    * indexed by id so the rail can be answered without reading it.
@@ -1699,17 +1701,20 @@ export class SessionHost {
       record.turnInFlight = false;
       return false;
     }
-    try {
-      await record.session.prompt(text);
-      return true;
-    } catch (error) {
-      record.turnInFlight = false;
+    const session = record.session;
+    const generation = record.turnGeneration = (record.turnGeneration ?? 0) + 1;
+    const failed = (error: unknown): void => {
+      if (record.lifecycle !== 'live' || record.session !== session || record.turnGeneration !== generation) return;
       if (kind === 'input') this.workflowOwner?.rearmInput?.(record.id);
-      record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
-      // The notification was consumed but no turn began. Keep draining in case another workflow
-      // event is ready; returning false when there is not one lets drain() release the Steering Queue.
-      return this.drainWorkflowNotification(record);
+      this.recordDispatchFailure(record, new Error(`Could not notify parent: ${errorMessage(error)}`));
+    };
+    try {
+      void session.prompt(text).catch(failed);
+    } catch (error) {
+      failed(error);
     }
+    // Consumed, not completed: turn events (or the guarded rejection) release subsequent work.
+    return true;
   }
 
   /** Confirmation belongs to this exact action, never a standing grant or model assertion. */
@@ -2284,6 +2289,7 @@ export class SessionHost {
   }
 
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
+    record.endedTurnIds = new Set();
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
@@ -2308,7 +2314,9 @@ export class SessionHost {
         relayPermission: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayPermission(input, signal); },
       },
       scope: record.scope,
-      emit: (event) => this.onBackendEvent(record.id, event),
+      emit: (event) => {
+        if (!attached || record.session === attached) this.onBackendEvent(record.id, event);
+      },
       ...(autoCompaction === undefined ? {} : { autoCompaction }),
       ...(compactionModelId === undefined ? {} : { compactionModelId }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
@@ -2601,6 +2609,13 @@ export class SessionHost {
       return;
     }
     if (record.lifecycle === "dormant") return;
+    if (event.type === "turn_ended") {
+      const ended = record.endedTurnIds ??= new Set();
+      if (ended.has(event.turnId)) return;
+      // A delayed SDK terminal event after our synthetic end must not end a newer turn,
+      // cancel its human requests or release its Steering Queue a second time.
+      ended.add(event.turnId);
+    }
 
     if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
       record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;

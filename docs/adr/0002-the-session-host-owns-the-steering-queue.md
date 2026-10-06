@@ -13,5 +13,7 @@ that may last for the whole turn. Progress and failures are reported through the
 Transcript and its event stream. An initiating prompt rejection without a terminal backend event
 closes the visible turn and releases the Steering Queue. Rejecting a steering request does not end
 the original turn, and accepting one does not hide a later failure of the original prompt. A late
-rejection from an ended turn or replaced Backend Session must not interrupt newer work. Clients never automatically replay a send after a
-proxy timeout: the host may already have accepted it.
+rejection from an ended turn or replaced Backend Session must not interrupt newer work. Terminal
+events are deduplicated within each Backend Session, so a late SDK end after a synthetic end cannot
+release the queue twice. Workflow-generated parent prompts follow the same ownership rules.
+Clients never automatically replay a send after a proxy timeout: the host may already have accepted it.
