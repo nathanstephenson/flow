@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 
 import type { MdAlign, MdBlock, MdInline } from "@client/markdown.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { DiffText } from "@/components/diff-text.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -83,8 +84,7 @@ function Block({ block, query, trailing }: { block: MdBlock; query: string; trai
           {/* Scrolls rather than wraps: breaking a line mid-identifier is worse than a scrollbar. */}
           <pre className="overflow-x-auto p-3">
             <code className="font-mono text-sm">
-              <Highlighted text={block.text} query={query} />
-              {trailing}
+              <DiffText text={block.text} lang={block.lang} query={query} trailing={trailing} />
             </code>
           </pre>
         </div>
