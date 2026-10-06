@@ -13,6 +13,13 @@ function typesOf(host: SessionHost, id: string): string[] {
   return events(host, id).map((event) => event.type);
 }
 
+function deferred() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 describe("SessionHost", () => {
   let backend: FakeBackend;
   let host: SessionHost;
@@ -42,6 +49,140 @@ describe("SessionHost", () => {
       "user_message",
       "turn_started",
     ]);
+  });
+
+  it("acknowledges acceptance without waiting for the backend turn", { timeout: 1_000 }, async () => {
+    const pending = deferred();
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      await prompt(text, attachments);
+      await pending.promise;
+    };
+    try {
+      await host.send(sessionId, "long turn", "now");
+      assert.equal(host.list()[0]?.status, "running");
+      await host.send(sessionId, "next", "after_turn");
+      assert.deepEqual(session.prompts, ["long turn"]);
+      session.completeTurn();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(session.prompts, ["long turn", "next"]);
+    } finally {
+      pending.resolve();
+    }
+  });
+
+  it("records a late prompt failure, closes the visible turn and drains queued messages", async () => {
+    const pending = deferred();
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      await prompt(text, attachments);
+      if (text === "fails later") await pending.promise;
+    };
+    await host.send(sessionId, "fails later", "now");
+    await host.send(sessionId, "queued", "after_turn");
+    pending.reject(new Error("inference unavailable"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(session.prompts, ["fails later", "queued"]);
+    assert.ok(events(host, sessionId).some(event => event.type === "notice" && event.level === "error" && event.text === "inference unavailable"));
+    assert.ok(events(host, sessionId).some(event => event.type === "turn_ended" && event.reason === "error"));
+    assert.equal(host.list()[0]?.status, "running", "the queued turn must remain occupied");
+  });
+
+  it("still handles the original prompt failing after a successful steer", async () => {
+    const pending = deferred();
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      if (text === "steer") return; // SDKs can accept steering without starting a new turn.
+      await prompt(text, attachments);
+      if (text === "original") await pending.promise;
+    };
+    await host.send(sessionId, "original", "now");
+    await host.send(sessionId, "steer", "now");
+    await host.send(sessionId, "queued", "after_turn");
+    pending.reject(new Error("original failed"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(session.prompts, ["original", "queued"]);
+    assert.ok(events(host, sessionId).some(event => event.type === "turn_ended" && event.reason === "error"));
+    assert.equal(host.list()[0]?.status, "running");
+  });
+
+  it("does not release the original turn when a steering request rejects", async () => {
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      if (text === "steer") throw new Error("steering failed");
+      await prompt(text, attachments);
+    };
+    await host.send(sessionId, "original", "now");
+    await host.send(sessionId, "steer", "now");
+    await host.send(sessionId, "queued", "after_turn");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(session.prompts, ["original"]);
+    assert.equal(host.list()[0]?.status, "running");
+    assert.ok(events(host, sessionId).some(event => event.type === "notice" && event.text === "steering failed"));
+    session.completeTurn();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(session.prompts, ["original", "queued"]);
+  });
+
+  it("ignores a prompt rejection from a completed turn while the next turn is running", async () => {
+    const pending = deferred();
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      await prompt(text, attachments);
+      if (text === "first") await pending.promise;
+    };
+    await host.send(sessionId, "first", "now");
+    await host.send(sessionId, "next", "after_turn");
+    session.completeTurn();
+    await new Promise(resolve => setImmediate(resolve));
+    pending.reject(new Error("stale failure"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(host.list()[0]?.status, "running");
+    assert.ok(!events(host, sessionId).some(event => event.type === "notice" && event.text === "stale failure"));
+  });
+
+  it("ignores a prompt rejection from a replaced Backend Session", async () => {
+    const pending = deferred();
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      await prompt(text, attachments);
+      await pending.promise;
+    };
+    await host.send(sessionId, "old backend", "now");
+    await host.shutdown();
+    await host.send(sessionId, "revived", "now");
+    pending.reject(new Error("old backend failure"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(host.list()[0]?.status, "running");
+    assert.ok(!events(host, sessionId).some(event => event.type === "notice" && event.text === "old backend failure"));
+  });
+
+  it("reports a synchronous prompt throw in the transcript after acceptance", async () => {
+    backend.latest.prompt = () => { throw new Error("synchronous failure"); };
+    await host.send(sessionId, "accepted", "now");
+    assert.equal(host.list()[0]?.status, "idle");
+    assert.ok(events(host, sessionId).some(event => event.type === "user_message" && event.text === "accepted"));
+    assert.ok(events(host, sessionId).some(event => event.type === "notice" && event.text === "synchronous failure"));
+  });
+
+  it("records a prompt rejection before the backend acknowledges the turn", async () => {
+    const pending = deferred();
+    backend.latest.prompt = () => pending.promise;
+    await host.send(sessionId, "fails before acknowledgement", "now");
+    await host.send(sessionId, "queued", "after_turn");
+    pending.reject(new Error("backend refused prompt"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(host.list()[0]?.status, "idle");
+    const queue = events(host, sessionId).findLast(event => event.type === "queue_changed");
+    assert.ok(queue?.type === "queue_changed");
+    assert.deepEqual(queue.pending, []);
+    assert.ok(events(host, sessionId).some(event => event.type === "notice" && event.text === "backend refused prompt"));
   });
 
   it("refuses creation without model capabilities instead of leaving an empty Agent Session", async () => {

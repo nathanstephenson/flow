@@ -15,6 +15,14 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+async function until(predicate: () => boolean) {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for backend prompt");
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 test("immediate MCP disposal does not start clients after shutdown", { timeout: 1000 }, async () => {
   const mcp = new McpSession([{ ...connection, args: ["-e", "setInterval(() => {}, 1000)"] }], process.cwd());
   const opening = mcp.open();
@@ -49,6 +57,7 @@ test("first prompt waits for discovery and registration; Retry cannot race a new
     await assert.rejects(host.retryMcp(id, "fixture"), /Idle/);
     release.resolve();
     await first;
+    await until(() => prompts === 1);
     assert.equal(prompts, 1);
   } finally { release.resolve(); await host.shutdown(); }
 
@@ -70,6 +79,7 @@ test("first prompt waits for discovery and registration; Retry cannot race a new
     assert.equal(prompts, 1);
     release.resolve();
     await Promise.all([retry, prompt]);
+    await until(() => prompts === 2);
     assert.equal(prompts, 2);
   } finally { release.resolve(); await retryHost.shutdown(); }
 });
@@ -119,6 +129,7 @@ test("failed bounded discovery does not prevent the first prompt", { timeout: 15
   try {
     const id = await host.create({ scope: process.cwd() });
     await host.send(id, "first", "now");
+    await until(() => prompted);
     assert.equal(prompted, true);
   } finally { await host.shutdown(); }
 });
@@ -142,6 +153,7 @@ for (const operation of ["prompt", "compact"] as const) {
       const next = host.send(id, "next", "after_turn");
       release.resolve();
       await next;
+      await until(() => fake.sessions[0]!.prompts.length === 1);
       assert.deepEqual(fake.sessions[0]!.prompts, ["next"]);
       assert.deepEqual(fake.sessions[0]!.compactions, []);
     } finally { release.resolve(); await host.shutdown(); }
@@ -217,6 +229,7 @@ test("queued Retries keep prompts gated until the final registration", { timeout
     assert.equal(prompts, 0);
     release[1]!.resolve();
     await Promise.all([second, prompt]);
+    await until(() => prompts === 1);
     assert.equal(prompts, 1);
   } finally { release.forEach((gate) => gate.resolve()); await host.shutdown(); }
 });

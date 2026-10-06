@@ -73,6 +73,54 @@ describe("Session Host transport", () => {
     assert.equal(backend.latest.promptedAttachments[0]?.[0]?.data.length, data.length);
   });
 
+  it("acknowledges send and steer_queued while prompt promises remain pending", async () => {
+    const id = await client.command<string>({ type: "create", scope: root, backend: "fake" });
+    let resolve!: () => void;
+    const pending = new Promise<void>(done => { resolve = done; });
+    const session = backend.latest;
+    const prompt = session.prompt.bind(session);
+    session.prompt = async (text, attachments) => {
+      await prompt(text, attachments);
+      await pending;
+    };
+    const post = async (command: unknown) => {
+      const response = await fetch(`${running.url}/api/command`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(command),
+        signal: AbortSignal.timeout(2_000),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { result: null });
+    };
+    try {
+      await post({ type: "send", sessionId: id, text: "long turn", when: "now" });
+      await post({ type: "send", sessionId: id, text: "queued", when: "after_turn" });
+      assert.deepEqual(session.prompts, ["long turn"]);
+      const event = host.logFor(id).since(0).findLast(entry => entry.event.type === "queue_changed")?.event;
+      assert.ok(event?.type === "queue_changed");
+      await post({ type: "steer_queued", sessionId: id, messageId: event.ids?.[0] });
+      assert.deepEqual(session.prompts, ["long turn", "queued"]);
+      assert.equal(host.list().find(item => item.id === id)?.status, "running");
+      session.completeTurn();
+      const transcript = host.logFor(id).since(0);
+      assert.ok(transcript.some(entry => entry.event.type === "turn_ended"));
+      assert.equal(reduceAll(transcript).status, "idle");
+    } finally {
+      resolve();
+    }
+  });
+
+  it("still refuses invalid sends before acknowledging acceptance", async () => {
+    const id = await client.command<string>({ type: "create", scope: root, backend: "fake", modelId: "fake-2" });
+    await assert.rejects(client.command({
+      type: "send", sessionId: id, text: "invalid", when: "now",
+      attachments: [{ mediaType: "image/png", data: "aGVsbG8=" }],
+    }), /409.*cannot be shown an attachment/);
+    assert.deepEqual(backend.latest.prompts, []);
+    assert.ok(!host.logFor(id).since(0).some(entry => entry.event.type === "user_message"));
+  });
+
   describe("git over the wire", () => {
     const get = async (path: string) =>
       await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });

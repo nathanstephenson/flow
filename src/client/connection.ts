@@ -230,5 +230,32 @@ async function responseError(response: Response, token: string | undefined, auth
 
 async function describe(response: Response): Promise<string> {
   const body = await response.text().catch(() => "");
-  return `${response.status} ${response.statusText}${body ? `: ${body}` : ""}`;
+  // A proxy timeout says nothing about whether the host accepted or finished a command.
+  if (response.status === 524) {
+    return "524 Proxy timed out. Accepted commands may still be running. Check their status before retrying.";
+  }
+
+  const status = `${response.status} ${safeErrorText(response.statusText)}`.trim();
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType === "text/html" || contentType === "application/xhtml+xml") return status;
+
+  let detail = "";
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") {
+      detail = safeErrorText(parsed.error);
+    }
+  } catch {
+    // Only plain text (or an untyped response) is useful without a JSON error envelope.
+    if (!contentType || contentType === "text/plain") detail = safeErrorText(body);
+  }
+  return detail ? `${status}: ${detail}` : status;
+}
+
+/** Keep toasts single-line and short; never show markup, even from a mislabeled proxy response. */
+function safeErrorText(text: string): string {
+  if (/[<>]/.test(text)) return "";
+  const normalized = text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  const limit = 240;
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }

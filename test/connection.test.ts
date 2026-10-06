@@ -203,6 +203,76 @@ describe("Connection", () => {
   });
 });
 
+describe("Connection HTTP errors", () => {
+  const html = `<!DOCTYPE html><html><head><title>Cloudflare error</title></head><body>${"proxy diagnostics".repeat(1_000)}</body></html>`;
+  const timeout = "524 Proxy timed out. Accepted commands may still be running. Check their status before retrying.";
+  const cases = [
+    { name: "preserves the JSON API error, not its envelope", contentType: "application/json; charset=utf-8", body: JSON.stringify({ error: "Agent Session is Running", diagnostics: "private details" }), expected: "502 Bad Gateway: Agent Session is Running" },
+    { name: "recognizes an untyped JSON API error", contentType: "", body: '{"error":"Scope is required"}', expected: "502 Bad Gateway: Scope is required" },
+    { name: "discards Cloudflare HTML", contentType: "text/html; charset=UTF-8", body: html, expected: "502 Bad Gateway" },
+    { name: "discards markup mislabeled as plain text", contentType: "text/plain", body: html, expected: "502 Bad Gateway" },
+    { name: "discards untyped markup", contentType: "", body: ` \n${html}`, expected: "502 Bad Gateway" },
+    { name: "discards markup inside a JSON error", contentType: "application/json", body: JSON.stringify({ error: html }), expected: "502 Bad Gateway" },
+    { name: "normalizes plain text whitespace and controls", contentType: "text/plain", body: "  upstream\n\t temporarily\u0000 unavailable  ", expected: "502 Bad Gateway: upstream temporarily unavailable" },
+    { name: "bounds plain text", contentType: "text/plain", body: "x".repeat(10_000), expected: `502 Bad Gateway: ${"x".repeat(239)}…` },
+    { name: "bounds JSON error text too", contentType: "application/json", body: JSON.stringify({ error: "x".repeat(10_000) }), expected: `502 Bad Gateway: ${"x".repeat(239)}…` },
+    { name: "falls back for an empty body", contentType: "text/plain", body: "", expected: "502 Bad Gateway" },
+    { name: "falls back for whitespace", contentType: "text/plain", body: " \n\t ", expected: "502 Bad Gateway" },
+    { name: "does not expose malformed JSON", contentType: "application/json", body: '{"error":', expected: "502 Bad Gateway" },
+    { name: "does not expose other JSON fields", contentType: "application/json", body: '{"diagnostics":"private details"}', expected: "502 Bad Gateway" },
+    { name: "does not stringify a structured error", contentType: "application/json", body: '{"error":{"details":"private details"}}', expected: "502 Bad Gateway" },
+    { name: "handles JSON null", contentType: "application/json", body: "null", expected: "502 Bad Gateway" },
+    { name: "explains a 524 HTML timeout without recommending blind retry", status: 524, contentType: "text/html", body: html, expected: timeout },
+    { name: "explains an empty 524 timeout", status: 524, contentType: "", body: "", expected: timeout },
+  ];
+
+  for (const scenario of cases) {
+    it(scenario.name, async (t) => {
+      let requests = 0;
+      const server = createServer((_request, response) => {
+        requests += 1;
+        response.writeHead(scenario.status ?? 502, scenario.contentType ? { "content-type": scenario.contentType } : {});
+        response.end(scenario.body);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      t.after(async () => await new Promise<void>((resolve) => server.close(() => resolve())));
+      const { port } = server.address() as AddressInfo;
+
+      await assert.rejects(
+        connect({ url: `http://127.0.0.1:${port}`, token: "t" }).command({ type: "create", scope: "/tmp/scope", backend: "fake" }),
+        { message: scenario.expected },
+      );
+      assert.equal(requests, 1, "an HTTP error must not cause the command to be replayed");
+    });
+  }
+
+  it("uses the safe formatter for queries and event-stream failures too", async (t) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(404, { "content-type": "text/html" });
+      response.end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(async () => await new Promise<void>((resolve) => server.close(() => resolve())));
+    const { port } = server.address() as AddressInfo;
+    const connection = connect({ url: `http://127.0.0.1:${port}`, token: "t" });
+
+    await assert.rejects(connection.listSessions(), { message: "404 Not Found" });
+    await assert.rejects(connection.branches("/tmp/scope"), { message: "404 Not Found" });
+    let failure: Error | undefined;
+    const stop = connection.subscribe({ sessionId: "s1", since: 0, onEntry: () => undefined, onError: (error) => { failure = error; } });
+    t.after(stop);
+    await waitFor(() => failure !== undefined);
+    assert.equal(failure?.message, "404 Not Found");
+  });
+
+  it("retains the HTTP status when the error body cannot be read", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+      start(controller) { controller.error(new Error("body interrupted")); },
+    }), { status: 502, statusText: "Bad Gateway" }));
+    await assert.rejects(connect({ url: "http://unused", token: "t" }).listSessions(), { message: "502 Bad Gateway" });
+  });
+});
+
 type Recorded = { path: string; since: number; authorization: string | undefined };
 
 /**

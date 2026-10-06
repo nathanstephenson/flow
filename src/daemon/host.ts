@@ -105,6 +105,8 @@ type SessionRecord = {
    * is very much still open.
    */
   turnInFlight: boolean;
+  /** Invalidates late prompt rejections after a turn ends, including backend-initiated turns. */
+  turnGeneration?: number;
   /**
    * The Permission Prompts, Enquiries, Subagents and Background Calls the transcript has open,
    * indexed by id so the rail can be answered without reading it.
@@ -1052,12 +1054,7 @@ export class SessionHost {
       this.touch(record);
       return;
     }
-    try {
-      await this.dispatch(record, { text, attachments: ids });
-    } catch (error) {
-      this.recordDispatchFailure(record, error);
-      throw error;
-    }
+    await this.dispatch(record, { text, attachments: ids });
   }
 
   /**
@@ -2527,6 +2524,9 @@ export class SessionHost {
      */
     const sent = note === undefined ? text : `${text}\n\n${note}`;
 
+    const session = record.session;
+    const startingTurn = !record.turnInFlight;
+    const generation = record.turnGeneration = (record.turnGeneration ?? 0) + (startingTurn ? 1 : 0);
     record.turnInFlight = true;
     record.log.append({
       type: "user_message",
@@ -2554,7 +2554,18 @@ export class SessionHost {
     }
     this.touch(record);
     const workflowContext = this.workflowOwner?.context(record.id);
-    await record.session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments));
+    // Acceptance is durable now. SDK prompt promises may last for the entire turn (including
+    // human input), so never keep the HTTP command open awaiting one. Outcomes belong to the
+    // Presentation Transcript, not to the response that acknowledged this message.
+    const failed = (error: unknown): void => {
+      if (record.lifecycle !== "live" || record.session !== session || record.turnGeneration !== generation) return;
+      this.recordDispatchFailure(record, error, startingTurn);
+    };
+    try {
+      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments)).catch(failed);
+    } catch (error) {
+      failed(error);
+    }
   }
 
   /**
@@ -2634,10 +2645,12 @@ export class SessionHost {
      * dispatch into it, which is the very thing holding the turn open used to prevent.
      */
     if (event.type === "turn_started") {
+      if (!record.turnInFlight) record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       record.turnInFlight = true;
     }
 
     if (event.type === "turn_ended") {
+      record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       this.workflowOwner?.rearmInput?.(sessionId);
       for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
       for (const pending of this.workflowEnquiryRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
@@ -2732,14 +2745,28 @@ export class SessionHost {
     }
   }
 
-  private recordDispatchFailure(record: SessionRecord, error: unknown): void {
+  private recordDispatchFailure(record: SessionRecord, error: unknown, endTurn = true): void {
     if (record.lifecycle === "dormant") return; // Fatal worker loss already recorded the failure.
     const before = this.activityOf(record);
     const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+    if (!endTurn) {
+      // A rejected steering request does not stop the already-running original prompt.
+      this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
+      this.touch(record);
+      return;
+    }
+    const turnId = openTurnId(record.log.since(0));
+    if (turnId) {
+      // A backend can reject without sending turn_ended. Close the visible turn too, otherwise
+      // the host is Idle while the composer remains Running forever.
+      this.onBackendEvent(record.id, { type: "turn_ended", turnId, reason: "error" });
+      return;
+    }
     record.turnInFlight = false;
     this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
     this.noteResting(record, before);
     this.touch(record);
+    void this.drain(record);
   }
 
   private async drain(record: SessionRecord): Promise<void> {
