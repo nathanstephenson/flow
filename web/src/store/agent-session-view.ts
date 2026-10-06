@@ -2,7 +2,7 @@ import type { Connection, LinkState, SubscribeOptions } from "../../../src/clien
 import type { Entry, ViewState } from "../../../src/client/reduce.ts";
 import { initialState, reduce } from "../../../src/client/reduce.ts";
 import type { LoggedEvent } from "../../../src/protocol/events.ts";
-import type { IndexedEntry, PresentationSnapshot, PresentationUpdate } from "../../../src/protocol/presentation.ts";
+import { OutcomeProvenance, type IndexedEntry, type PresentationSnapshot, type PresentationUpdate } from "../../../src/protocol/presentation.ts";
 import { entryKey } from "../presentation/entry-key.ts";
 import type { AgentSessionView, Chrome, TranscriptHistory } from "./contract.ts";
 import { coalesce, scheduleFrame, type FrameScheduler } from "./frame-scheduler.ts";
@@ -51,14 +51,17 @@ export function createAgentSessionView(
   let keys: readonly string[] = [];
   let keysStale = false;
   let index: Map<string, Entry> | undefined;
+  let outcomeIndex = new Map<string, number>();
+  const rawOutcomes = new OutcomeProvenance();
 
   let chromeDirty = false;
   let transcriptDirty = false;
   const chromeListeners = new Set<() => void>();
+  const beforeTranscriptListeners = new Set<(earlier?: number) => void>();
   const transcriptListeners = new Set<() => void>();
   let unsubscribe: (() => void) | undefined;
   let windowStart: number | undefined;
-  const positioned = new Map<number, { entry: Entry; seq: number }>();
+  const positioned = new Map<number, { entry: Entry; seq: number; outcomeSeq?: number }>();
   let activityKeys: readonly string[] = [];
   let positionedKeysStale = true;
   let history: TranscriptHistory = { earlier: 0, loading: !!transport.subscribePresentation, loadingOlder: false, error: undefined };
@@ -72,6 +75,8 @@ export function createAgentSessionView(
     transcriptDirty = false;
     // Copied before iterating: a listener that unsubscribes while being notified must not shorten
     // the set being walked.
+    // DOM measurements must happen before either reactive surface can synchronously commit.
+    if (transcriptChanged) for (const listener of [...beforeTranscriptListeners]) listener();
     if (chromeChanged) for (const listener of [...chromeListeners]) listener();
     if (transcriptChanged) for (const listener of [...transcriptListeners]) listener();
   }, options.schedule ?? scheduleFrame);
@@ -90,7 +95,7 @@ export function createAgentSessionView(
       // A backward page may have left the host before a newer live patch arrived.
       if (previous && previous.seq > seq) continue;
       if (!previous || entryKey(previous.entry) !== entryKey(item.entry)) positionedKeysStale = true;
-      positioned.set(item.index, { entry: item.entry, seq });
+      positioned.set(item.index, { entry: item.entry, seq, ...(item.outcomeSeq === undefined ? {} : { outcomeSeq: item.outcomeSeq }) });
     }
   }
 
@@ -111,6 +116,9 @@ export function createAgentSessionView(
   }
 
   function snapshot(incoming: PresentationSnapshot): void {
+    if (incoming.start < (windowStart ?? 0)) {
+      for (const listener of [...beforeTranscriptListeners]) listener(incoming.start);
+    }
     positioned.clear();
     positionedKeysStale = true;
     windowStart = incoming.start;
@@ -146,8 +154,15 @@ export function createAgentSessionView(
     publishHistory({ ...history, loadingOlder: true, error: undefined });
     olderPromise = transport.readPresentation(sessionId, before, controller.signal).then(page => {
       if (controller.signal.aborted) return;
+      const earlier = Math.min(windowStart ?? before, page.start);
+      // React can read external snapshots during unrelated renders before the coalesced notify.
+      // Capture the old DOM before exposing the prefix, then allow notification-time recapture
+      // if it has not committed yet and the reader moved in the intervening frame.
+      if (earlier < (windowStart ?? before)) {
+        for (const listener of [...beforeTranscriptListeners]) listener(earlier);
+      }
       mergePositioned(page.entries, page.seq);
-      windowStart = Math.min(windowStart ?? before, page.start);
+      windowStart = earlier;
       positionedKeysStale = true;
       publishPositioned();
       publishHistory({ ...history, earlier: windowStart });
@@ -172,8 +187,9 @@ export function createAgentSessionView(
     if (next === view) return;
 
     const entriesChanged = next.entries !== view.entries;
+    const proofChanged = rawOutcomes.advance(logged, view.entries, next.entries).length > 0;
     view = next;
-    if (entriesChanged) {
+    if (entriesChanged || proofChanged) {
       index = undefined;
       // Length alone decides whether the key list changed, and that is sound only because the
       // Presentation Transcript is append-only (ADR 0001): `upsert` replaces an entry in place or
@@ -226,8 +242,21 @@ export function createAgentSessionView(
   function currentIndex(): Map<string, Entry> {
     if (!index) {
       index = new Map();
-      const entries = transport.subscribePresentation ? [...positioned.values()].map(item => item.entry) : view.entries;
-      for (const entry of entries) index.set(entryKey(entry), entry);
+      outcomeIndex = new Map();
+      if (transport.subscribePresentation) {
+        for (const item of positioned.values()) {
+          const key = entryKey(item.entry);
+          index.set(key, item.entry);
+          if (item.outcomeSeq !== undefined) outcomeIndex.set(key, item.outcomeSeq);
+        }
+      } else {
+        view.entries.forEach((entry, ordinal) => {
+          const key = entryKey(entry);
+          index!.set(key, entry);
+          const outcomeSeq = rawOutcomes.get(ordinal);
+          if (outcomeSeq !== undefined) outcomeIndex.set(key, outcomeSeq);
+        });
+      }
     }
     return index;
   }
@@ -249,6 +278,7 @@ export function createAgentSessionView(
     subscribeChrome: (listener) => subscribeTo(chromeListeners, listener),
     getChrome: () => chrome,
 
+    subscribeBeforeTranscript: (listener) => subscribeTo(beforeTranscriptListeners, listener),
     subscribeTranscript: (listener) => subscribeTo(transcriptListeners, listener),
     getKeys,
     getActivityKeys: () => {
@@ -261,6 +291,14 @@ export function createAgentSessionView(
 
     getEntry: (key) => currentIndex().get(key),
     getLastSeq: () => view.lastSeq,
+    canObserveThrough(requiredOutcomeSeq, renderedKeys): boolean {
+      // Delivery and paint are distinct. Only the exact host-supplied outcome boundary on a
+      // rendered row proves observation; metadata, producer chatter and older outcomes do not.
+      if (!Number.isSafeInteger(requiredOutcomeSeq) || requiredOutcomeSeq < 1 ||
+        requiredOutcomeSeq > view.lastSeq || history.loading) return false;
+      currentIndex();
+      return renderedKeys.some(key => outcomeIndex.get(key) === requiredOutcomeSeq);
+    },
 
     start(): void {
       if (unsubscribe) return;

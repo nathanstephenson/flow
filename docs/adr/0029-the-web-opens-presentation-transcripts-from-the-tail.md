@@ -49,7 +49,23 @@ events. Authenticated pages and streams are marked `no-store`.
 Mounting a transcript does not automatically fetch the rest of it. Reading earlier entries is an
 explicit backward-page operation. Search also explicitly loads missing pages when asked to search
 beyond the loaded portion, and reports the boundary honestly: a match count over loaded rows is
-not a claim that the whole Presentation Transcript has been searched.
+not a claim that the whole Presentation Transcript has been searched. A page failure stops the
+search without automatic retries; a successful explicit retry resumes the remaining pages of the
+same query. Before exposing a backward extension to React, and again before notifying either
+reactive surface if it remains uncommitted, the store exposes a measurement phase. Backward
+loading from any pane preserves the main transcript's visible row, without accumulating fractional
+scroll rounding over successive search pages or overriding subsequent reader movement.
+
+A snapshot's event cursor proves delivery, not observation of a qualifying outcome. Indexed rows
+carry an optional `outcomeSeq`, derived alongside the full reducer, for the exact outcome boundary
+represented by that row. A metadata-only turn ending still publishes this proof. Reused or
+reopened rows revoke superseded proofs. Late tool progress or independent Workflow notices cannot
+replace the parent answer (or actual tool-only result) as its completion proof. Unread is
+acknowledged only when that exact boundary is present on a rendered parent row and the existing
+paint, focus, visibility and latest-follow checks pass. Producer-only tails, hidden old-row upserts,
+and newer input requests cannot silently acknowledge an unseen answer. Needs input is not
+auto-acknowledged: its cursor can coincide with an unrelated outcome's proof. Visible latest answers can
+still be acknowledged without downloading unrelated older history.
 
 Subagent cards cannot depend solely on the tail: their spawning rows may be much older while their
 work is still running. The snapshot's `related` entries retain those older cards and unresolved

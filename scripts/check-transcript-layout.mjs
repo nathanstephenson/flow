@@ -35,7 +35,8 @@ try {
     const view = {
       sessionId: 'layout-fixture', getKeys: () => keys, getActivityKeys: () => keys,
       getLastSeq: () => 0, getHistory: () => history, getChrome: () => chrome, subscribeChrome: () => () => {}, loadOlder: async () => {},
-      getEntry: (key) => entries[keys.indexOf(key)], subscribeTranscript: () => () => {},
+      getEntry: (key) => entries[keys.indexOf(key)], subscribeBeforeTranscript: () => () => {}, subscribeTranscript: () => () => {},
+      canObserveThrough: () => false,
     };
     document.getElementById('root').style.display = 'none';
     const fixture = document.createElement('section');

@@ -1,5 +1,6 @@
 import type { AgentEvent, LoggedEvent } from "../protocol/events.ts";
-import { reduce, reduceAll, type Entry, type ViewState } from "../client/reduce.ts";
+import { initialState, reduce, type Entry, type ViewState } from "../client/reduce.ts";
+import { OutcomeProvenance } from "../protocol/presentation.ts";
 import type { IndexedEntry, PresentationPage, PresentationSnapshot, PresentationState, PresentationUpdate } from "../protocol/presentation.ts";
 
 export type LogListener = (entry: LoggedEvent) => void;
@@ -19,6 +20,7 @@ export class SessionLog {
   private readonly sink: LogListener | undefined;
   // Never reduced until a reader asks. Once viewed, appends keep this full-log projection current.
   private presentation: ViewState | undefined;
+  private readonly outcomes = new OutcomeProvenance();
   private readonly presentationListeners = new Set<PresentationListener>();
 
   constructor(sessionId: string, options: { sink?: LogListener; existing?: LoggedEvent[] } = {}) {
@@ -40,6 +42,7 @@ export class SessionLog {
     if (this.presentation) {
       const previous = this.presentation;
       this.presentation = reduce(previous, entry);
+      const proofChanges = new Set(this.outcomes.advance(entry, previous.entries, this.presentation.entries));
       if (this.presentationListeners.size > 0) {
         const state = metadata(this.presentation);
         const oldState = metadata(previous);
@@ -48,7 +51,7 @@ export class SessionLog {
         update = {
           type: "update", seq: entry.seq, total: this.presentation.entries.length,
           entries: this.presentation.entries.flatMap((item, index) =>
-            item === previous.entries[index] ? [] : [{ index, entry: item }]),
+            item === previous.entries[index] && !proofChanges.has(index) ? [] : [this.indexed(index, item)]),
           ...(changed ? { state } : {}),
         };
       }
@@ -82,12 +85,12 @@ export class SessionLog {
       if (item.kind === "subagent" || item.kind === "background_call" ||
           (item.kind === "tool" && (item.authorisation === "asked" || item.id === view.authorising?.callId)) ||
           (item.kind === "enquiry" && item.status === "asked")) {
-        related.push({ index, entry: item });
+        related.push(this.indexed(index, item));
       }
     }
     return {
       type: "snapshot", seq: this.lastSeq, state: metadata(view),
-      entries: indexed(view.entries, first, total), related, start: first, total,
+      entries: this.indexedRange(view.entries, first, total), related, start: first, total,
     };
   }
 
@@ -99,7 +102,7 @@ export class SessionLog {
     const end = before ?? total;
     validateOrdinal(end, total);
     const start = Math.max(0, end - limit);
-    return { seq: this.lastSeq, entries: indexed(view.entries, start, end), start, total };
+    return { seq: this.lastSeq, entries: this.indexedRange(view.entries, start, end), start, total };
   }
 
   subscribePresentation(listener: PresentationListener): () => void {
@@ -109,7 +112,27 @@ export class SessionLog {
   }
 
   private presentationView(): ViewState {
-    return this.presentation ??= reduceAll(this.entries);
+    if (!this.presentation) {
+      let view = initialState();
+      for (const logged of this.entries) {
+        const previous = view;
+        // Read each stored event once, shared by reduction and provenance derivation.
+        const replay = { seq: logged.seq, sessionId: logged.sessionId, at: logged.at, event: logged.event };
+        view = reduce(view, replay);
+        this.outcomes.advance(replay, previous.entries, view.entries);
+      }
+      this.presentation = view;
+    }
+    return this.presentation;
+  }
+
+  private indexed(index: number, entry: Entry): IndexedEntry {
+    const outcomeSeq = this.outcomes.get(index);
+    return { index, entry, ...(outcomeSeq === undefined ? {} : { outcomeSeq }) };
+  }
+
+  private indexedRange(entries: Entry[], start: number, end: number): IndexedEntry[] {
+    return entries.slice(start, end).map((entry, offset) => this.indexed(start + offset, entry));
   }
 
   /**
@@ -124,10 +147,6 @@ export class SessionLog {
 
 function metadata({ entries: _entries, lastSeq: _lastSeq, ...state }: ViewState): PresentationState {
   return state;
-}
-
-function indexed(entries: Entry[], start: number, end: number): IndexedEntry[] {
-  return entries.slice(start, end).map((entry, offset) => ({ index: start + offset, entry }));
 }
 
 function validateLimit(limit: number): void {

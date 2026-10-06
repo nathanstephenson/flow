@@ -102,6 +102,279 @@ describe("reduced Presentation Transcript", () => {
     assert.equal(log.presentationSnapshot(full.entries.length).entries.length, 0);
   });
 
+  it("keeps a Subagent-heavy tail bounded without pretending its seq proves parent outcome coverage", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "message", id: "parent", text: "Parent answer", final: true }, AT);
+    const outcome = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+    for (let index = 0; index < 450; index++) {
+      log.append({ type: "message", id: `child-${index}`, text: "Subagent output", final: true, producer: { subagentId: "sub" } }, AT);
+    }
+    const snapshot = log.presentationSnapshot();
+    assert.equal(snapshot.entries.length, 400);
+    assert.ok(snapshot.seq > outcome.seq);
+    assert.ok(snapshot.entries.every(item => item.entry.kind === "assistant" && item.entry.producer !== undefined));
+    assert.ok(!snapshot.related.some(item => item.entry.id === "parent"));
+    const older = log.presentationPage(snapshot.start);
+    assert.equal(older.entries[0]?.entry.id, "parent");
+    assert.equal(older.entries[0]?.outcomeSeq, outcome.seq);
+    assert.ok(snapshot.entries.every(item => item.outcomeSeq === undefined), "producer rows never substitute for the parent result");
+    assert.equal(older.start, 0);
+    assert.equal(log.since(0).length, 452, "raw replay remains unchanged");
+  });
+
+  it("patches proof on the last parent row even when a turn ending changes no Entry identity", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "turn_started", turnId: "parent" }, AT);
+    log.append({ type: "message", id: "parent", text: "answer", final: true }, AT);
+    log.append({ type: "message", id: "child", text: "delegated", final: true, producer: { subagentId: "sub" } }, AT);
+    const before = log.presentationSnapshot();
+    const updates: PresentationUpdate[] = [];
+    log.subscribePresentation(update => updates.push(update));
+    const outcome = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+    const patch = updates.at(-1)!;
+    assert.equal(patch.entries.length, 1);
+    assert.strictEqual(patch.entries[0]?.entry, before.entries[0]?.entry);
+    assert.equal(patch.entries[0]?.index, 0);
+    assert.equal(patch.entries[0]?.outcomeSeq, outcome.seq);
+    assert.equal(log.presentationPage().entries[0]?.outcomeSeq, outcome.seq);
+    assert.equal(log.presentationSnapshot().entries[1]?.outcomeSeq, undefined);
+    const replay = new SessionLog("s1", { existing: log.since(0) });
+    assert.deepEqual(replay.presentationSnapshot(), log.presentationSnapshot(), "lazy replay derives the same proof as live cache maintenance");
+    log.append({ type: "turn_started", turnId: "next" }, AT);
+    log.append({ type: "message", id: "parent", text: "new outcome", final: true }, AT);
+    const newer = log.append({ type: "turn_ended", turnId: "next", reason: "error" }, AT);
+    assert.equal(log.presentationSnapshot().entries[0]?.outcomeSeq, newer.seq, "proof storage is bounded to the latest outcome per row");
+  });
+
+  it("revokes a reused answer before the next turn ends, while preserving duplicate outcome snapshots", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "turn_started", turnId: "A" }, AT);
+    log.append({ type: "message", id: "x", text: "old unseen", final: true }, AT);
+    const old = log.append({ type: "turn_ended", turnId: "A", reason: "complete" }, AT);
+    assert.equal(old.seq, 3);
+    log.presentationSnapshot();
+    const updates: PresentationUpdate[] = [];
+    log.subscribePresentation(update => updates.push(update));
+    log.append({ type: "message", id: "x", text: "old unseen", final: true }, AT);
+    assert.equal(log.presentationPage().entries[0]?.outcomeSeq, old.seq, "same outcome remains observable");
+    log.append({ type: "turn_started", turnId: "B" }, AT);
+    log.append({ type: "message", id: "x", text: "new partial", final: false }, AT);
+    assert.equal(log.presentationPage().entries[0]?.outcomeSeq, undefined);
+    assert.equal(updates.at(-1)?.entries[0]?.outcomeSeq, undefined);
+    const end = log.append({ type: "turn_ended", turnId: "B", reason: "complete" }, AT);
+    assert.equal(log.presentationPage().entries[0]?.outcomeSeq, end.seq);
+    assert.deepEqual(new SessionLog("s1", { existing: log.since(0) }).presentationSnapshot(), log.presentationSnapshot());
+  });
+
+  it("revokes independent failure proofs on restart but preserves duplicate failures", () => {
+    for (const kind of ["subagent", "background_call"] as const) {
+      const log = new SessionLog("s1");
+      const event = (state: "running" | "error"): AgentEvent => kind === "subagent"
+        ? { type: kind, subagentId: "x", name: "reviewer", state }
+        : { type: kind, callId: "x", tool: "Bash", state };
+      log.append(event("running"), AT);
+      const failed = log.append(event("error"), AT);
+      assert.equal(failed.seq, 2);
+      log.presentationSnapshot();
+      log.append(event("error"), AT);
+      assert.equal(log.presentationPage().entries[0]?.outcomeSeq, failed.seq);
+      log.append(event("running"), AT);
+      assert.equal(log.presentationPage().entries[0]?.outcomeSeq, undefined);
+      assert.deepEqual(new SessionLog("s1", { existing: log.since(0) }).presentationSnapshot(), log.presentationSnapshot());
+    }
+  });
+
+  it("revokes reused tool and Enquiry proofs, including unchanged replacement rows", () => {
+    for (const restart of ["tool", "enquiry"] as const) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "A" }, AT);
+      log.append({ type: "tool_started", callId: "x", name: "Ask", input: {} }, AT);
+      log.append({ type: "enquiry", askId: "x", state: "answered", questions: [], answers: [["yes"]] }, AT);
+      log.append({ type: "tool_ended", callId: "x", result: "yes", isError: false }, AT);
+      const end = log.append({ type: "turn_ended", turnId: "A", reason: "complete" }, AT);
+      const before = log.presentationSnapshot();
+      assert.deepEqual(before.entries.map(item => item.outcomeSeq), [end.seq, end.seq]);
+      const updates: PresentationUpdate[] = [];
+      log.subscribePresentation(update => updates.push(update));
+      log.append({ type: "tool_ended", callId: "x", result: "yes", isError: false }, AT);
+      log.append({ type: "enquiry", askId: "x", state: "answered", questions: [], answers: [["yes"]] }, AT);
+      assert.deepEqual(log.presentationPage().entries.map(item => item.outcomeSeq), [end.seq, end.seq]);
+      log.append({ type: "turn_started", turnId: "B" }, AT);
+      const unchanged = log.presentationSnapshot().entries[restart === "tool" ? 1 : 0]?.entry;
+      log.append(restart === "tool"
+        ? { type: "tool_started", callId: "x", name: "Ask", input: {} }
+        : { type: "enquiry", askId: "x", state: "asked", questions: [] }, AT);
+      assert.deepEqual(log.presentationPage().entries.map(item => item.outcomeSeq), [undefined, undefined]);
+      const patch = updates.at(-1)!;
+      assert.deepEqual(patch.entries.map(item => item.index), [0, 1]);
+      assert.strictEqual(patch.entries[restart === "tool" ? 1 : 0]?.entry, unchanged, "proof-only revocation must publish an unchanged row");
+    }
+  });
+
+  it("never substitutes independent Workflow notices for an off-tail tool result", () => {
+    for (const text of ["Workflow completed. The parent will prepare the result when free.", "Workflow requires recovery. The parent will inspect it when free."]) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "parent" }, AT);
+      log.append({ type: "tool_started", callId: "result", name: "Read", input: {} }, AT);
+      log.append({ type: "tool_ended", callId: "result", result: "parent result", isError: false }, AT);
+      for (let i = 0; i < 400; i++) log.append({ type: "message", id: `child-${i}`, text: "child", final: true, producer: { subagentId: "sub" } }, AT);
+      const workflow = log.append({ type: "notice", level: "info", text }, AT);
+      log.presentationSnapshot();
+      const end = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+      const snapshot = log.presentationSnapshot();
+      assert.equal(snapshot.entries.at(-1)?.outcomeSeq, workflow.seq);
+      assert.ok(snapshot.entries.every(item => item.outcomeSeq !== end.seq));
+      assert.equal(log.presentationPage(snapshot.start).entries[0]?.outcomeSeq, end.seq);
+      assert.deepEqual(new SessionLog("s1", { existing: log.since(0) }).presentationSnapshot(), snapshot);
+    }
+  });
+
+  it("selects the latest still-valid own answer or failure after candidates are superseded", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "turn_started", turnId: "parent" }, AT);
+    log.append({ type: "message", id: "a", text: "parent answer", final: true }, AT);
+    log.append({ type: "message", id: "b", text: "later answer", final: true }, AT);
+    log.append({ type: "message", id: "b", text: "child answer", final: true, producer: { subagentId: "sub" } }, AT);
+    const end = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+    assert.deepEqual(log.presentationPage().entries.map(item => item.outcomeSeq), [end.seq, undefined]);
+    log.append({ type: "turn_started", turnId: "failure" }, AT);
+    log.append({ type: "tool_started", callId: "first", name: "Bash", input: {} }, AT);
+    log.append({ type: "tool_ended", callId: "first", result: "failed", isError: true }, AT);
+    log.append({ type: "tool_started", callId: "second", name: "Bash", input: {} }, AT);
+    log.append({ type: "tool_ended", callId: "second", result: "failed", isError: true }, AT);
+    log.append({ type: "tool_started", callId: "second", name: "Bash", input: {} }, AT);
+    log.append({ type: "message", id: "partial", text: "partial", final: false }, AT);
+    const failed = log.append({ type: "turn_ended", turnId: "failure", reason: "error" }, AT);
+    assert.equal(log.presentationPage().entries.find(item => item.entry.id === "first")?.outcomeSeq, failed.seq);
+    assert.equal(log.presentationPage().entries.find(item => item.entry.id === "partial")?.outcomeSeq, undefined);
+  });
+
+  it("does not stamp a running tool or asked Enquiry as a completed result", () => {
+    for (const kind of ["tool", "enquiry"] as const) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "parent" }, AT);
+      log.append({ type: "tool_started", callId: "result", name: "Read", input: {} }, AT);
+      log.append({ type: "tool_ended", callId: "result", result: "result", isError: false }, AT);
+      log.append(kind === "tool"
+        ? { type: "tool_started", callId: "pending", name: "Read", input: {} }
+        : { type: "enquiry", askId: "pending", state: "asked", questions: [] }, AT);
+      const end = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+      assert.deepEqual(log.presentationPage().entries.map(item => item.outcomeSeq), [end.seq, undefined]);
+    }
+  });
+
+  it("keeps hidden parent answers as the proof candidate despite later visible tool chatter or notices", () => {
+    for (const chatter of ["tool", "notice", "enquiry", "compacted"] as const) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "parent" }, AT);
+      log.append({ type: "message", id: "answer", text: "parent answer", final: false }, AT);
+      for (let i = 0; i < 400; i++) {
+        log.append({ type: "message", id: `child-${i}`, text: "delegated", final: true, producer: { subagentId: "sub" } }, AT);
+      }
+      log.append({ type: "tool_started", callId: "background", name: "Bash", input: "work" }, AT);
+      log.append({ type: "background_call", callId: "background", tool: "Bash", state: "running" }, AT);
+      log.append({ type: "tool_ended", callId: "background", result: "launch receipt", isError: false }, AT);
+      log.append({ type: "message", id: "answer", text: "final parent answer", final: true }, AT);
+      if (chatter === "tool") log.append({ type: "tool_updated", callId: "background", update: "late progress" }, AT);
+      if (chatter === "notice") log.append({ type: "notice", level: "info", text: "Workflow completed. The parent will prepare the result when free." }, AT);
+      if (chatter === "enquiry") log.append({ type: "enquiry", askId: "old-question", questions: [], state: "answered", answers: [["yes"]] }, AT);
+      if (chatter === "compacted") log.append({ type: "compacted", trigger: "auto", before: 100, after: 50 }, AT);
+      log.presentationSnapshot();
+      const ended = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
+      const snapshot = log.presentationSnapshot();
+      assert.ok(!snapshot.entries.some(item => item.outcomeSeq === ended.seq), `${chatter} cannot stand in for the missing answer`);
+      assert.equal(log.presentationPage(snapshot.start).entries.find(item => item.entry.id === "answer")?.outcomeSeq, ended.seq);
+      assert.deepEqual(new SessionLog("s1", { existing: log.since(0) }).presentationSnapshot(), snapshot);
+    }
+  });
+
+  it("does not let old Background Call progress or duplicate receipts replace a hidden tool-only result", () => {
+    for (const duplicate of [false, true]) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "old" }, AT);
+      log.append({ type: "tool_started", callId: "answer", name: "Bash", input: "old" }, AT);
+      log.append({ type: "tool_ended", callId: "answer", result: "old", isError: false }, AT);
+      for (let i = 0; i < 400; i++) log.append({ type: "message", id: `child-${i}`, text: "delegated", final: true, producer: { subagentId: "sub" } }, AT);
+      log.append({ type: "tool_started", callId: "background", name: "Bash", input: "background job" }, AT);
+      log.append({ type: "background_call", callId: "background", tool: "Bash", state: "running" }, AT);
+      log.append({ type: "tool_ended", callId: "background", result: "launch receipt", isError: false }, AT);
+      log.append({ type: "turn_ended", turnId: "old", reason: "complete" }, AT);
+      log.append({ type: "turn_started", turnId: "next" }, AT);
+      log.append({ type: "tool_started", callId: "answer", name: "Bash", input: "new" }, AT);
+      log.append({ type: "tool_ended", callId: "answer", result: "unseen new parent result", isError: false }, AT);
+      if (duplicate) log.append({ type: "tool_ended", callId: "background", result: "launch receipt", isError: false }, AT);
+      else log.append({ type: "tool_updated", callId: "background", update: "late progress" }, AT);
+      const ended = log.append({ type: "turn_ended", turnId: "next", reason: "complete" }, AT);
+      const snapshot = log.presentationSnapshot();
+      assert.ok(!snapshot.entries.some(item => item.outcomeSeq === ended.seq));
+      assert.equal(log.presentationPage(snapshot.start).entries.find(item => item.entry.id === "answer")?.outcomeSeq, ended.seq);
+    }
+  });
+
+  it("requires the explicit failure row on errored turns rather than a preceding partial answer", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "turn_started", turnId: "parent" }, AT);
+    log.append({ type: "message", id: "answer", text: "attempting work", final: false }, AT);
+    log.append({ type: "notice", level: "error", text: "work failed" }, AT);
+    log.append({ type: "notice", level: "info", text: "unrelated later notice" }, AT);
+    const ended = log.append({ type: "turn_ended", turnId: "parent", reason: "error" }, AT);
+    assert.deepEqual(log.presentationSnapshot().entries.map(item => item.outcomeSeq), [undefined, ended.seq, undefined]);
+  });
+
+  it("associates parent tool results with the tool and its human-facing replacement card", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "turn_started", turnId: "spawn" }, AT);
+    log.append({ type: "tool_started", callId: "sub", name: "Agent", input: "review" }, AT);
+    log.append({ type: "subagent", subagentId: "sub", name: "reviewer", state: "running" }, AT);
+    log.append({ type: "tool_ended", callId: "sub", result: "spawned", isError: false }, AT);
+    const outcome = log.append({ type: "turn_ended", turnId: "spawn", reason: "complete" }, AT);
+    assert.deepEqual(log.presentationSnapshot().entries.map(item => [item.entry.kind, item.outcomeSeq]), [["tool", outcome.seq], ["subagent", outcome.seq]]);
+    log.append({ type: "turn_started", turnId: "notice" }, AT);
+    log.append({ type: "notice", level: "info", text: "result explanation" }, AT);
+    const ended = log.append({ type: "turn_ended", turnId: "notice", reason: "error" }, AT);
+    assert.equal(log.presentationPage().entries.at(-1)?.outcomeSeq, ended.seq);
+  });
+
+  it("proves only qualifying independent failures, not successful, duplicate, or unopened terminal snapshots", () => {
+    const log = new SessionLog("s1");
+    log.append({ type: "subagent", subagentId: "sub", name: "reviewer", state: "running" }, AT);
+    log.append({ type: "subagent", subagentId: "sub", name: "reviewer", state: "waiting", on: "provider" }, AT);
+    log.append({ type: "background_call", callId: "bg", tool: "Bash", state: "running", producer: { subagentId: "sub" } }, AT);
+    log.presentationSnapshot();
+    const subFailure = log.append({ type: "subagent", subagentId: "sub", name: "reviewer", state: "error" }, AT);
+    const bgFailure = log.append({ type: "background_call", callId: "bg", tool: "Bash", state: "error", producer: { subagentId: "sub" } }, AT);
+    log.append({ type: "background_call", callId: "bg", tool: "Bash", state: "error", producer: { subagentId: "sub" } }, AT);
+    log.append({ type: "subagent", subagentId: "unopened", name: "missing", state: "error" }, AT);
+    log.append({ type: "background_call", callId: "ok", tool: "Bash", state: "running" }, AT);
+    log.append({ type: "background_call", callId: "ok", tool: "Bash", state: "complete" }, AT);
+    assert.deepEqual(log.presentationPage().entries.map(item => item.outcomeSeq), [subFailure.seq, bgFailure.seq, undefined, undefined]);
+    assert.deepEqual(new SessionLog("s1", { existing: log.since(0) }).presentationSnapshot(), log.presentationSnapshot());
+  });
+
+  it("associates workflow, dispatch and backend-loss boundaries but not input or ordinary lifecycle metadata", () => {
+    const log = new SessionLog("s1");
+    const failure = log.append({ type: "notice", level: "error", text: "dispatch failed" }, AT);
+    const recovery = log.append({ type: "notice", level: "info", text: "Workflow requires recovery. The parent will inspect it when free." }, AT);
+    const complete = log.append({ type: "notice", level: "info", text: "Workflow completed. The parent will prepare the result when free." }, AT);
+    log.append({ type: "notice", level: "info", text: "ordinary notice" }, AT);
+    const lost = log.append({ type: "session_dormant", reason: "backend worker lost" }, AT);
+    log.append({ type: "revived", fromSeq: lost.seq }, AT);
+    log.append({ type: "turn_started", turnId: "ask" }, AT);
+    log.append({ type: "tool_started", callId: "ask", name: "Write", input: "x" }, AT);
+    const input = log.append({ type: "permission", callId: "ask", tool: "Write", state: "asked" }, AT);
+    assert.ok(log.presentationSnapshot().entries.every(item => item.outcomeSeq !== input.seq));
+    log.append({ type: "turn_ended", turnId: "ask", reason: "aborted" }, AT);
+    log.append({ type: "turn_started", turnId: "empty" }, AT);
+    const empty = log.append({ type: "turn_ended", turnId: "empty", reason: "complete" }, AT);
+    const proof = log.presentationSnapshot().entries.map(item => item.outcomeSeq);
+    assert.deepEqual(proof, [failure.seq, recovery.seq, complete.seq, undefined, lost.seq, undefined, undefined]);
+    assert.ok(!proof.includes(empty.seq), "a previous turn's row cannot prove an empty later turn");
+    log.append({ type: "turn_started", turnId: "producer-only" }, AT);
+    log.append({ type: "message", id: "child-only", text: "delegated", final: true, producer: { subagentId: "sub" } }, AT);
+    const childOnly = log.append({ type: "turn_ended", turnId: "producer-only", reason: "complete" }, AT);
+    assert.ok(log.presentationSnapshot().entries.every(item => item.outcomeSeq !== childOnly.seq), "producer-only output cannot borrow a previous parent row");
+  });
+
   it("publishes exact full-log Idle, Running and Awaiting state, not replay chrome", () => {
     const log = populated();
     const check = (status: PresentationState["status"]) => {

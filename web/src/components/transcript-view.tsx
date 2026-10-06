@@ -29,12 +29,15 @@ export function TranscriptView({
   view,
   query,
   visible = true,
+  observedBoundary,
   onObserved,
 }: {
   view: AgentSessionView;
   query: string;
   /** False when mobile is showing a Dock over the still-mounted transcript. */
   visible?: boolean;
+  /** Qualifying attention boundary, not the transport cursor. */
+  observedBoundary?: number | undefined;
   /** Called only once the transcript is painted, focused, visible, and pinned to its newest row. */
   onObserved?: (throughSeq: number) => void;
 }) {
@@ -50,6 +53,7 @@ export function TranscriptView({
   const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
 
   const restore = useRef<{ height: number; top: number; anchor: Element | undefined; offset: number } | undefined>(undefined);
+  const restored = useRef<{ top: number; anchor: Element; offset: number; viewportTop: number } | undefined>(undefined);
 
   // After the loaded tail and the filter: a Tool Chain says "these rows are adjacent",
   // and the only list it can say that about honestly is the one the reader is looking at.
@@ -68,8 +72,10 @@ export function TranscriptView({
   const [atBottom, setAtBottom] = useState(true);
   const reportObserved = useCallback((throughSeq: number) => {
     if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
+    if (observedBoundary !== undefined &&
+      (throughSeq < observedBoundary || !view.canObserveThrough(observedBoundary, shown))) return;
     onObserved?.(throughSeq);
-  }, [onObserved, visible]);
+  }, [onObserved, visible, observedBoundary, view, shown]);
   const reportObservedRef = useRef(reportObserved);
   reportObservedRef.current = reportObserved;
   const paintFrames = useRef<[number, number]>([0, 0]);
@@ -170,29 +176,35 @@ export function TranscriptView({
    */
   useLayoutEffect(() => {
     restore.current = undefined;
+    restored.current = undefined;
     pinned.current = true;
     followBottom();
     setAtBottom(true);
   }, [query, view, followBottom]);
 
-  const readOlder = useCallback((unpin: boolean) => {
-    const before = view.getHistory().earlier;
-    if (unpin) {
-      pinned.current = false;
-      setAtBottom(false);
-    }
-    return view.loadOlder().then(() => {
-      // The store publishes on the next frame. Capture the reader's current position *after* the
-      // request, not at click time: they may have kept scrolling while the page was in flight.
-      const element = scroller.current;
-      if (!pinned.current && element && view.getHistory().earlier < before) {
-        const top = element.getBoundingClientRect().top;
-        const anchor = [...(content.current?.children ?? [])].find(child => child.tagName === "DIV" && child.getBoundingClientRect().bottom > top);
-        restore.current = { height: element.scrollHeight, top: element.scrollTop, anchor, offset: anchor?.getBoundingClientRect().top ?? 0 };
-      }
-    });
+  const renderedHistory = useRef({ view, earlier: history.earlier });
+  useLayoutEffect(() => { renderedHistory.current = { view, earlier: history.earlier }; }, [view, keys, history.earlier]);
+  useEffect(() => view.subscribeBeforeTranscript((earlier = view.getHistory().earlier) => {
+    // Any surface can extend the shared suffix. Capture before exposing it to React, then
+    // recapture at notification time if still uncommitted and the reader has kept moving.
+    const element = scroller.current;
+    if (pinned.current || !element || renderedHistory.current.view !== view ||
+      earlier >= renderedHistory.current.earlier) return;
+    const top = element.getBoundingClientRect().top;
+    const previous = restored.current;
+    const samePosition = previous?.top === element.scrollTop && previous.viewportTop === top &&
+      previous.anchor.isConnected && previous.anchor.getBoundingClientRect().bottom > top;
+    const anchor = samePosition ? previous.anchor : [...(content.current?.children ?? [])].find(child => child.tagName === "DIV" && child.getBoundingClientRect().bottom > top);
+    // Keep the intended offset until the reader moves, rather than accumulating fractional-scroll
+    // rounding on each page of an automatic search backfill.
+    const offset = samePosition ? previous.offset : anchor?.getBoundingClientRect().top ?? 0;
+    restore.current = { height: element.scrollHeight, top: element.scrollTop, anchor, offset };
+  }), [view]);
+  const loadOlder = useCallback(() => {
+    pinned.current = false;
+    setAtBottom(false);
+    void view.loadOlder();
   }, [view]);
-  const loadOlder = useCallback(() => { void readOlder(true); }, [readOlder]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -203,25 +215,20 @@ export function TranscriptView({
     const delta = saved.anchor?.isConnected ? saved.anchor.getBoundingClientRect().top - saved.offset : element.scrollHeight - saved.height;
     element.scrollTop = saved.top + delta;
     lastScrollTop.current = element.scrollTop;
+    restored.current = saved.anchor?.isConnected ? { top: element.scrollTop, anchor: saved.anchor, offset: saved.offset, viewportTop: element.getBoundingClientRect().top } : undefined;
     restore.current = undefined;
   }, [keys]);
 
   useEffect(() => {
-    if (!query || history.loading || link !== "live") return;
-    let cancelled = false;
-    // Search means the whole Presentation Transcript, not just the tail. Load missing pages only
-    // on this explicit reader action, and keep the incompleteness visible while doing so.
-    void (async () => {
-      while (!cancelled && view.getHistory().earlier > 0) {
-        const before = view.getHistory().earlier;
-        await readOlder(false);
-        if (view.getHistory().error || view.getHistory().earlier >= before) break;
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [query, view, history.loading, link, readOlder]);
+    // One page per successful transition: a failed read remains stopped, but an explicit retry
+    // that clears the error and advances the boundary resumes the same whole-record search.
+    if (!query || history.loading || history.loadingOlder || history.error ||
+      history.earlier === 0 || link !== "live") return;
+    void view.loadOlder();
+  }, [query, view, history.loading, history.loadingOlder, history.error, history.earlier, link]);
 
   const toBottom = useCallback(() => {
+    restored.current = undefined;
     pinned.current = true;
     followBottom();
     setAtBottom(true);

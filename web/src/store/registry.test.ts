@@ -16,6 +16,7 @@ function fakeView(sessionId: string): FakeView {
     getChrome: (): Chrome => {
       throw new Error("the registry does not read chrome");
     },
+    subscribeBeforeTranscript: () => () => {},
     subscribeTranscript: () => () => {},
     getKeys: () => [],
     getActivityKeys: () => [],
@@ -23,6 +24,7 @@ function fakeView(sessionId: string): FakeView {
     loadOlder: async () => {},
     getEntry: () => undefined,
     getLastSeq: () => 0,
+    canObserveThrough: () => false,
     start() {
       view.starts += 1;
     },
