@@ -32,6 +32,20 @@ try {
   assert.ok(await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision)) - revision <= 2, 'Material-owned style writes must not create a continuous redraw loop');
   await page.screenshot({ path: join(out, 'real-ui-dark.png') });
   const activeRow = page.locator('[data-sidebar="menu-button"][data-nat91-selected="true"]');
+  const statusLines = await page.locator('[data-sidebar="menu-button"][data-nat91-activity]').evaluateAll(rows => rows.map(row => {
+    const dot = row.querySelector('.nat91-activity-dot');
+    return { dotDisplay: getComputedStyle(dot).display, color: getComputedStyle(dot).color, line: getComputedStyle(row).borderLeftColor, selected: row.dataset.nat91Selected === 'true', animation: getComputedStyle(row, '::before').animationName };
+  }));
+  assert.equal(statusLines.length, ids.length, 'Every fixture status dot must have a left-edge replacement');
+  assert.equal(statusLines.filter(row => row.animation === 'nat91-rail-flow').length, 1, 'Only the selected Agent Session gets a flowing gradient');
+  for (const row of statusLines) {
+    assert.equal(row.dotDisplay, 'none', 'Activity dots must leave the visible layout');
+    assert.equal(row.line, row.color, 'Each solid status edge must match its original activity hue');
+    assert.equal(row.animation, row.selected ? 'nat91-rail-flow' : 'none', 'Inactive Agent Sessions must not animate');
+  }
+  const flowBefore = await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition);
+  await page.waitForTimeout(250);
+  assert.notEqual(await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition), flowBefore, 'Selected gradient must actually flow over time');
   const idleRailAlpha = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
     const pixels = texture.getContext('2d').getImageData(0, 0, texture.width, texture.height).data;
     let max = 0;
@@ -100,6 +114,18 @@ try {
   await page.screenshot({ path: join(out, 'real-ui-git-hover.png') });
   await page.screenshot({ path: join(out, 'real-ui-control-detail.png'), clip: { x: 1090, y: 50, width: 350, height: 380 } });
   await page.getByRole('tab', { name: 'Agents' }).click();
+  // Selection, not Running status, owns the animation. Its hue follows the real
+  // status indicator on Running and Awaiting rows without animating their peers.
+  for (const [index, label, colorClass] of [[1, 'Review the adapter contract', 'text-status-active'], [4, 'Confirm migration', 'text-status-awaiting']]) {
+    await page.locator('[data-sidebar="menu-button"]').filter({ hasText: label }).click();
+    await page.waitForFunction(id => location.hash.includes(id), ids[index]);
+    await activeRow.locator(`.nat91-activity-dot.${colorClass}`).waitFor({ state: 'attached' });
+    assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
+    assert.ok(await activeRow.evaluate(node => node.style.getPropertyValue('--nat91-activity') === getComputedStyle(node.querySelector('.nat91-activity-dot')).color));
+    await page.mouse.move(570, 220);
+    await page.waitForTimeout(100);
+    await page.screenshot({ path: join(out, index === 1 ? 'real-ui-running-flow.png' : 'real-ui-awaiting-flow.png') });
+  }
   const rail = page.locator('[data-sidebar="menu-button"]').filter({ hasText: 'Polish keyboard navigation' });
   await rail.click();
   await page.waitForFunction(id => location.hash.includes(id), ids[2]);
@@ -115,6 +141,10 @@ try {
     const light = window.nat91Material.getLight();
     return Math.abs(light.x - innerWidth * .56) < .01 && Math.abs(light.y - innerHeight * .3) < .01;
   });
+  assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'none', 'Reduced motion stops the flowing gradient');
+  const flowStill = await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition);
+  await page.waitForTimeout(250);
+  assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition), flowStill, 'Reduced-motion gradient remains static');
   const stableLight = await page.evaluate(() => window.nat91Material.getLight());
   await page.mouse.move(1300, 850);
   await page.waitForTimeout(100);
@@ -140,7 +170,29 @@ try {
   const taskTitle = page.locator('.nat91-subagent-notice > .font-mono.text-sm').filter({ hasText: 'Interaction review' });
   assert.ok(await taskTitle.evaluate(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().height <= parseFloat(getComputedStyle(node).lineHeight) + 1), 'Narrow-layout task title must fit on one readable line');
   await page.screenshot({ path: join(out, 'real-ui-mobile-dark.png') });
+  await page.locator('[data-sidebar="trigger"]').click();
+  const drawerRows = page.locator('[data-sidebar="menu-button"][data-nat91-activity]');
+  await drawerRows.first().waitFor();
+  assert.equal(await drawerRows.count(), ids.length, 'The portalled mobile drawer must also replace every status dot');
+  for (const dark of [true, false]) {
+    await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
+    await page.waitForTimeout(200);
+    const linesMatch = await drawerRows.evaluateAll(rows => rows.every(row => getComputedStyle(row).borderLeftColor === getComputedStyle(row.querySelector('.nat91-activity-dot')).color && getComputedStyle(row.querySelector('.nat91-activity-dot')).display === 'none'));
+    assert.ok(linesMatch, 'Status edges must follow theme changes in the portalled mobile drawer');
+    assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
+    await page.screenshot({ path: join(out, dark ? 'real-ui-mobile-rail-dark.png' : 'real-ui-mobile-rail-light.png') });
+  }
+  // Exercise a status-colour update entirely inside the body portal: the old
+  // root-only observer missed these changes until another interaction occurred.
+  const portalHueBefore = await activeRow.evaluate(node => node.style.getPropertyValue('--nat91-activity'));
+  await activeRow.locator('.nat91-activity-dot').evaluate(dot => { dot.style.color = 'var(--status-active)'; });
+  await page.waitForFunction(before => {
+    const row = document.querySelector('[data-sidebar="menu-button"][data-nat91-selected="true"]');
+    return row.style.getPropertyValue('--nat91-activity') !== before && getComputedStyle(row).borderLeftColor === getComputedStyle(row.querySelector('.nat91-activity-dot')).color;
+  }, portalHueBefore);
+  await activeRow.locator('.nat91-activity-dot').evaluate(dot => dot.style.removeProperty('color'));
+  await page.waitForFunction(before => document.querySelector('[data-sidebar="menu-button"][data-nat91-selected="true"]').style.getPropertyValue('--nat91-activity') === before, portalHueBefore);
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: quiet native rail / transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: status-coloured edge lines / selected-only flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }

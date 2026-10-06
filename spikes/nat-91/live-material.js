@@ -1,6 +1,6 @@
 // Dev-only reference-led chrome study on the real Flow DOM. A shared reflected
-// environment and fine brushing on tabs; the session rail uses native flat fills
-// with a transparent, cursor-local gloss overlay. No repeated fade masks.
+// environment and fine brushing on tabs; the rail uses status-coloured edge lines,
+// a selected-only flowing tint, and cursor-local gloss. No repeated fade masks.
 // No source artwork or production component changes.
 const style = document.createElement('style');
 style.textContent = `
@@ -35,7 +35,20 @@ style.textContent = `
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
-  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] { background: var(--sidebar-accent) !important; border-left-color: var(--primary) !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-activity] { border-left-color: var(--nat91-activity) !important; }
+  .nat91-activity-dot { display: none !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] { background: var(--sidebar-accent) !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] > span.flex-1 .text-muted-foreground { color: color-mix(in srgb, var(--sidebar-foreground) 80%, var(--sidebar-accent)) !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-activity][data-nat91-selected="true"]::before {
+    content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none;
+    background-image: linear-gradient(110deg, transparent 0% 10%, color-mix(in srgb, var(--nat91-activity) 16%, transparent) 22%, transparent 46%, color-mix(in srgb, var(--nat91-activity) 8%, transparent) 72%, transparent 90% 100%);
+    background-size: 200% 100%; background-repeat: repeat-x;
+    animation: nat91-rail-flow 7s linear infinite;
+  }
+  @keyframes nat91-rail-flow { from { background-position: 0% 50%; } to { background-position: 200% 50%; } }
+  @media (prefers-reduced-motion: reduce) {
+    [data-sidebar="menu-button"].nat91-control[data-nat91-activity][data-nat91-selected="true"]::before { animation: none; background-position: 50% 50%; }
+  }
   [data-sidebar="menu-action"] { background: transparent !important; color: var(--sidebar-foreground) !important; }
   [data-sidebar="header"] { padding: 0 !important; }
   [data-sidebar="header"] [data-slot="button"] { border-radius: 0 !important; min-height: 42px; padding-inline: 12px; }
@@ -69,7 +82,7 @@ canvas.setAttribute('aria-hidden', 'true');
 document.body.append(canvas);
 const note = document.createElement('div');
 note.className = 'nat91-note';
-note.textContent = 'DEV STUDY · quiet session rail / cursor-local gloss';
+note.textContent = 'DEV STUDY · status edges / selected flow / cursor-local gloss';
 document.body.append(note);
 const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
 if (!gl) throw new Error('This dev material study requires WebGL.');
@@ -141,11 +154,12 @@ const fragment = `
     float gloss = exp(-dot(delta, delta));
     vec3 hover = mix(vec3(.08), vec3(-.05), uLightTheme) * gloss;
     hover += (mix(uBlue, uPurple, phase) - vec3(.5)) * gloss * .07;
-    // Rail fills and ink stay native. Only the pointer-local gloss is composited
-    // over them; no static chrome or opaque canvases over the Settle action.
+    // A low-alpha sheen preserves the flowing CSS tint beneath the pointer,
+    // rather than replacing it with a solid patch. Settle owns no canvas.
     if (uRail > .5) {
-      vec3 sheen = uBackdrop + hover / max(gloss, .0001);
-      gl_FragColor = vec4(clamp(sheen, 0.0, 1.0), gloss * uHover * (1.0 - uDisabled));
+      vec3 sheen = mix(vec3(1.0), vec3(0.0), uLightTheme);
+      sheen += (mix(uBlue, uPurple, phase) - vec3(.5)) * .07;
+      gl_FragColor = vec4(clamp(sheen, 0.0, 1.0), gloss * uHover * mix(.09, .055, uLightTheme) * (1.0 - uDisabled));
       return;
     }
     vec3 color = mix(base + hover * uHover + vec3(grain * .35), chrome + vec3(gloss * uHover * .018), uSelected);
@@ -298,10 +312,23 @@ function collect() {
     if (target.dataset.nat91Selected !== String(selected)) target.dataset.nat91Selected = String(selected);
     const group = target.closest('[role="tablist"], .nat91-action-strip, [data-sidebar="menu"]');
     const rail = target.matches('[data-sidebar="menu-button"]');
+    if (rail) {
+      // Reuse the real status indicator's presentation mapping, including working
+      // Subagents and theme changes. Hide its shape without rewriting React DOM.
+      const dot = target.querySelector(':scope > span[aria-hidden].size-2.rounded-full');
+      if (dot) {
+        const color = getComputedStyle(dot).color;
+        if (!dot.classList.contains('nat91-activity-dot')) dot.classList.add('nat91-activity-dot');
+        if (target.style.getPropertyValue('--nat91-activity') !== color) target.style.setProperty('--nat91-activity', color);
+        if (!target.hasAttribute('data-nat91-activity')) target.dataset.nat91Activity = 'true';
+      }
+    }
     surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, texture, backdrop: rail ? rgbaOf(computed.backgroundColor).slice(0, 3) : backdropOf(target, rect) });
   });
 }
-const root = document.getElementById('root');
+// Sidebar drawers live in body portals on narrow layouts. Their status changes
+// need the same updates as desktop rows; draw() isolates all material-owned writes.
+const observationRoot = document.body;
 const observerOptions = { subtree: true, childList: true, attributes: true };
 let domObserver;
 function draw() {
@@ -353,7 +380,7 @@ function draw() {
   canvas.dataset.surfaces = String(surfaces.length);
   document.body.dataset.materialReady = 'true';
   } finally {
-    domObserver?.observe(root, observerOptions);
+    domObserver?.observe(observationRoot, observerOptions);
   }
 }
 function schedule() { if (!frame) frame = requestAnimationFrame(draw); }
@@ -373,7 +400,7 @@ reduced.addEventListener('change', () => { pointer = { x: innerWidth * .56, y: i
 domObserver = new MutationObserver(records => {
   if (records.some(record => record.target !== canvas && record.target !== note)) schedule();
 });
-domObserver.observe(root, observerOptions);
+domObserver.observe(observationRoot, observerOptions);
 new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 window.nat91Material = { canvas, redraw: schedule, getLight: () => ({ ...pointer }) };
 schedule();
