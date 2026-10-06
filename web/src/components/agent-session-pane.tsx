@@ -245,7 +245,9 @@ function AttachedPane({
   const acknowledged = useRef(0);
   const observe = useCallback((throughSeq: number) => {
     const attention = summary?.attention;
-    if (!attention || attention.version <= acknowledged.current || throughSeq < attention.observedSeq) return;
+    // Needs input can reuse an outcome's cursor or supersede an unseen one. Seeing a current
+    // prompt is not proof that the underlying result was read; acknowledge Unread only.
+    if (!attention || attention.group !== "unread" || attention.version <= acknowledged.current || throughSeq < attention.observedSeq) return;
     // Reserve before the request leaves. A poll may keep the old summary for one interval, but it
     // must not turn one observation into a command storm.
     acknowledged.current = attention.version;
@@ -304,6 +306,7 @@ function AttachedPane({
           // qualifying output. Neither is an observation: wait until the unfiltered transcript is
           // the surface the reader can actually see.
           visible={query === "" && (!mobile || (shownMobileView.kind === "transcript" && !openMobile))}
+          observedBoundary={summary?.attention?.observedSeq}
           onObserved={observe}
         />
       </SubagentOpenProvider>

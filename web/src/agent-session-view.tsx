@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import type { Entry } from "@client/reduce.ts";
-import type { AgentSessionView, AgentSessionViewRegistry, Chrome } from "@/store/contract.ts";
+import type { AgentSessionView, AgentSessionViewRegistry, Chrome, TranscriptHistory } from "@/store/contract.ts";
 import { agentSessionViews } from "@/store/registry.ts";
 
 /**
@@ -80,6 +80,18 @@ export function useChrome(view: AgentSessionView): Chrome {
 export function useTranscriptKeys(view: AgentSessionView): readonly string[] {
   const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
   const snapshot = useCallback(() => view.getKeys(), [view]);
+  return useSyncExternalStore(subscribe, snapshot);
+}
+
+export function useTranscriptHistory(view: AgentSessionView): TranscriptHistory {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => view.getHistory(), [view]);
+  return useSyncExternalStore(subscribe, snapshot);
+}
+
+export function useActivityKeys(view: AgentSessionView): readonly string[] {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => view.getActivityKeys(), [view]);
   return useSyncExternalStore(subscribe, snapshot);
 }
 

@@ -30,9 +30,13 @@ try {
       { kind: 'background_call', tool: long, status: 'complete', startedAt: '2026-09-18T10:00:00Z', endedAt: '2026-09-18T10:01:00Z' },
     ];
     const keys = entries.map((_, index) => `fixture-${index}`);
+    const history = { earlier: 0, loading: false, loadingOlder: false, error: undefined };
+    const chrome = { link: 'live' };
     const view = {
-      sessionId: 'layout-fixture', getKeys: () => keys,
-      getEntry: (key) => entries[keys.indexOf(key)], subscribeTranscript: () => () => {},
+      sessionId: 'layout-fixture', getKeys: () => keys, getActivityKeys: () => keys,
+      getLastSeq: () => 0, getHistory: () => history, getChrome: () => chrome, subscribeChrome: () => () => {}, loadOlder: async () => {},
+      getEntry: (key) => entries[keys.indexOf(key)], subscribeBeforeTranscript: () => () => {}, subscribeTranscript: () => () => {},
+      canObserveThrough: () => false,
     };
     document.getElementById('root').style.display = 'none';
     const fixture = document.createElement('section');

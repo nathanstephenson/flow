@@ -106,6 +106,14 @@ export type Chrome = {
  * StrictMode's double mount and by every switch to another Agent Session, and each disposal replays
  * the whole transcript. `subscribe` must be idempotent and must never start the transport — `acquire` does.
  */
+export type TranscriptHistory = {
+  /** Number of reduced entries before the loaded suffix (not filtered parent-only rows). */
+  earlier: number;
+  loading: boolean;
+  loadingOlder: boolean;
+  error: string | undefined;
+};
+
 export type AgentSessionView = {
   readonly sessionId: string;
 
@@ -116,14 +124,32 @@ export type AgentSessionView = {
    * Identity-stable while entries only grow, so a transcript that is merely streaming does not
    * re-render. A new array is published only when an entry is added.
    */
+  /**
+   * Measure before reactive subscribers commit. Prefix extensions additionally call before
+   * mutation, with the impending oldest ordinal, since unrelated React work can read ahead.
+   */
+  subscribeBeforeTranscript(listener: (earlier?: number) => void): () => void;
   subscribeTranscript(listener: () => void): () => void;
   getKeys(): readonly string[];
+  /** Loaded rows plus related activity cards outside the tail, for the Agents surface. */
+  getActivityKeys(): readonly string[];
+  getHistory(): TranscriptHistory;
+  /** Load one backward page. Concurrent readers share the same request. */
+  loadOlder(): Promise<void>;
 
   /** Keyed by `entryKey(entry)` — kind and id, because an id is only unique within a kind. */
   getEntry(key: string): Entry | undefined;
 
-  /** Sequence boundary actually delivered to this transcript view; not part of reactive chrome. */
+  /** Sequence boundary delivered by the transport, not proof that its outcome was rendered. */
   getLastSeq(): number;
+  /**
+   * Call after paint with the keys actually rendered (after search/producer filtering) and
+   * summary.attention.observedSeq, not the latest transport seq. Requires an exact outcome proof
+   * on a rendered row and delivery through that boundary. Unloaded unrelated history is irrelevant;
+   * older pages remain explicit. Only auto-acknowledge Unread: Needs input has no proof of its own,
+   * but the host can report the latest outcome boundary while an older input remains unresolved.
+   */
+  canObserveThrough(requiredOutcomeSeq: number, renderedKeys: readonly string[]): boolean;
 };
 
 /**

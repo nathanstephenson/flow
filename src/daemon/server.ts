@@ -15,6 +15,7 @@ import type { WorkflowStore } from '../workflows/store.ts';
 import type { SecretStore } from './secret-store.ts';
 import type { ConfigStore } from "./config-store.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
+import type { PresentationSnapshot, PresentationUpdate } from "../protocol/presentation.ts";
 import type { Project } from "../protocol/projects.ts";
 import { discoverProjects, includedProjects, searchDirectories } from "./projects.ts";
 import type { ShellClientFrame, ShellServerFrame } from "../protocol/shells.ts";
@@ -583,6 +584,17 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  const presentationMatch = /^\/api\/sessions\/([^/]+)\/presentation(\/events)?$/.exec(url.pathname);
+  if (request.method === "GET" && presentationMatch) {
+    servePresentation(
+      response, options.host, presentationMatch[1]!, url.searchParams,
+      presentationMatch[2] !== undefined,
+      authentication.kind === "browser" ? options.oidc : undefined,
+      authentication.kind === "browser" ? authentication.sessionId : undefined,
+    );
+    return;
+  }
+
   const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
@@ -931,6 +943,73 @@ function sendAttachment(
     "cache-control": "private, max-age=31536000, immutable",
   });
   response.end(bytes);
+}
+
+/** No await between the snapshot write and subscription: appends cannot fall into that gap. */
+function servePresentation(
+  response: ServerResponse,
+  host: SessionHost,
+  sessionId: string,
+  params: URLSearchParams,
+  stream: boolean,
+  oidc?: OidcGate,
+  browserSessionId?: string,
+): void {
+  let log;
+  try {
+    log = host.logFor(sessionId);
+  } catch (error) {
+    send(response, 404, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+
+  // Reduced pages are mutable as old rows receive patches; never cache authenticated history.
+  response.setHeader("cache-control", "no-store");
+  let snapshot: PresentationSnapshot;
+  try {
+    const limit = presentationInteger(params, "limit") ?? 400;
+    const ordinal = presentationInteger(params, stream ? "start" : "before");
+    if (!stream) {
+      send(response, 200, log.presentationPage(ordinal, limit));
+      return;
+    }
+    snapshot = log.presentationSnapshot(ordinal, limit);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    send(response, 400, { error: error.message });
+    return;
+  }
+
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  const write = (frame: PresentationSnapshot | PresentationUpdate): void => {
+    response.write(`id: ${frame.seq}\ndata: ${JSON.stringify(frame)}\n\n`);
+  };
+  write(snapshot);
+  const unsubscribe = log.subscribePresentation(write);
+  // Idle is healthy. Keep the watchdog/proxies alive without resending a potentially large suffix.
+  const heartbeat = setInterval(() => response.write(": keepalive\n\n"), 15_000);
+  heartbeat.unref();
+  const detachAuth = oidc && browserSessionId
+    ? oidc.registerConnection(browserSessionId, () => response.end())
+    : undefined;
+  response.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    detachAuth?.();
+  });
+}
+
+function presentationInteger(params: URLSearchParams, key: string): number | undefined {
+  const value = params.get(key);
+  if (value === null) return undefined;
+  if (params.getAll(key).length !== 1 || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw new RangeError(`${key} must be a non-negative integer`);
+  }
+  return Number(value);
 }
 
 function streamEvents(

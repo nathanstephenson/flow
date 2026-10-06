@@ -1,13 +1,14 @@
-import { ArrowDown } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { ArrowDown, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
 import { toolChains } from "@client/tool-chains.ts";
 import { isPinned } from "@/presentation/stick-to-bottom.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
-import { useEntry, useTranscriptKeys } from "@/agent-session-view.tsx";
+import { useChrome, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { ToolChain } from "@/components/tool-chain.tsx";
+import { Button } from "@/components/ui/button.tsx";
 import { ownKeys } from "@/presentation/subagent-rows.ts";
 
 /**
@@ -20,25 +21,29 @@ import { ownKeys } from "@/presentation/subagent-rows.ts";
  * the key index, `memo` and the store's per-frame coalescing already reduce a streaming tick to one
  * row re-rendering. Growing, variable-height content is the worst case for every virtualiser anyway.
  *
- * The mitigation for a very long transcript is a tail window with a visible boundary, below. Nothing
- * is dropped once shown, and the boundary is honest that there is more.
+ * The Session Host supplies a bounded tail first, with older pages available at the visible boundary
+ * below. Nothing is dropped once loaded; search explicitly fills in the missing earlier pages.
  */
-const TAIL_WINDOW = 400;
 
 export function TranscriptView({
   view,
   query,
   visible = true,
+  observedBoundary,
   onObserved,
 }: {
   view: AgentSessionView;
   query: string;
   /** False when mobile is showing a Dock over the still-mounted transcript. */
   visible?: boolean;
+  /** Qualifying attention boundary, not the transport cursor. */
+  observedBoundary?: number | undefined;
   /** Called only once the transcript is painted, focused, visible, and pinned to its newest row. */
   onObserved?: (throughSeq: number) => void;
 }) {
   const keys = useTranscriptKeys(view);
+  const history = useTranscriptHistory(view);
+  const { link } = useChrome(view);
   const matching = useFilteredKeys(view, keys, query);
 
   // A Subagent's own rows belong to the Agents tab, not here (ADR 0015). This filters *keys*, never
@@ -47,27 +52,30 @@ export function TranscriptView({
   const getEntry = useCallback((key: string) => view.getEntry(key), [view]);
   const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
 
-  const [showAll, setShowAll] = useState(false);
-  // Memoised so the slice keeps its identity across an unrelated re-render: a Tool Chain subscribes
-  // to the transcript through its own key array, and a fresh array every frame would resubscribe it
-  // every frame.
-  const windowed = useMemo(
-    () => (showAll || shown.length <= TAIL_WINDOW ? shown : shown.slice(-TAIL_WINDOW)),
-    [showAll, shown],
-  );
-  const earlier = shown.length - windowed.length;
+  const restore = useRef<{ height: number; top: number; anchor: Element | undefined; offset: number } | undefined>(undefined);
+  const restored = useRef<{ top: number; anchor: Element; offset: number; viewportTop: number } | undefined>(undefined);
 
-  // After the window and after the filter, never before: a Tool Chain says "these rows are adjacent",
+  // After the loaded tail and the filter: a Tool Chain says "these rows are adjacent",
   // and the only list it can say that about honestly is the one the reader is looking at.
-  const segments = useMemo(() => toolChains(windowed), [windowed]);
+  const segments = useMemo(() => toolChains(shown), [shown]);
 
   const scroller = useRef<HTMLDivElement | null>(null);
+  const content = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
+  const lastScrollTop = useRef(0);
+  const followBottom = useCallback(() => {
+    const element = scroller.current;
+    if (!element || !pinned.current) return;
+    element.scrollTop = element.scrollHeight;
+    lastScrollTop.current = element.scrollTop;
+  }, []);
   const [atBottom, setAtBottom] = useState(true);
   const reportObserved = useCallback((throughSeq: number) => {
     if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
+    if (observedBoundary !== undefined &&
+      (throughSeq < observedBoundary || !view.canObserveThrough(observedBoundary, shown))) return;
     onObserved?.(throughSeq);
-  }, [onObserved, visible]);
+  }, [onObserved, visible, observedBoundary, view, shown]);
   const reportObservedRef = useRef(reportObserved);
   reportObservedRef.current = reportObserved;
   const paintFrames = useRef<[number, number]>([0, 0]);
@@ -104,8 +112,8 @@ export function TranscriptView({
    * commit can be invalidated by the very content change that prompted it.
    *
    * Passive, because this handler never calls `preventDefault` and the browser should not have to
-   * wait to find out. The React state is throttled separately — a programmatic scroll re-fires this
-   * listener, so writing state from it directly would thrash.
+   * wait to find out. The React state is throttled separately: reader scrolling can fire on every
+   * animation frame, so publishing state from every event would thrash.
    */
   useEffect(() => {
     const element = scroller.current;
@@ -113,6 +121,11 @@ export function TranscriptView({
     let throttle: ReturnType<typeof setTimeout> | undefined;
 
     const onScroll = (): void => {
+      // A scroll we requested can arrive after an image/font has grown the document again. Its
+      // distance from the bottom is no longer zero, but the reader has not moved. Only a changed
+      // position may release the pin; the content observer will catch up with the new height.
+      if (element.scrollTop === lastScrollTop.current) return;
+      lastScrollTop.current = element.scrollTop;
       pinned.current = isPinned(element);
       if (throttle) return;
       throttle = setTimeout(() => {
@@ -130,7 +143,7 @@ export function TranscriptView({
   }, [scheduleObserved]);
 
   /**
-   * Hold the pin while the Composer changes height.
+   * Hold the pin while either the viewport or the document changes height.
    *
    * The Composer floats over this scroller and pads it clear of itself with `--composer-inset`, so
    * anything that changes the Composer's height changes this element's padding: the `/` menu opening,
@@ -139,41 +152,88 @@ export function TranscriptView({
    * the padding grew underneath the content and nothing put the reader back at the bottom until the
    * next unrelated tick. Against an animated menu that reads as the chat lagging behind it.
    *
-   * A ResizeObserver on the scroller catches all of them at once, because padding is what changes
-   * and `contentRect` is the box inside it. Setting `scrollTop` changes no layout, so this cannot
-   * feed itself.
+   * Observe the scroller for those inset/viewport changes, and the document for late image loads,
+   * font swaps, and row disclosures. Those can grow a freshly opened transcript *after* its last
+   * React commit, including an Idle Agent Session that will never get another streaming tick.
+   * Setting `scrollTop` changes neither box's size, so this cannot feed itself.
    */
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
 
     const observer = new ResizeObserver(() => {
-      if (pinned.current) element.scrollTop = element.scrollHeight;
+      followBottom();
+      scheduleObserved();
     });
     observer.observe(element);
+    if (content.current) observer.observe(content.current);
     return () => observer.disconnect();
-  }, []);
+  }, [followBottom, scheduleObserved]);
 
   /**
    * A search changes the visible set wholesale, so the distance from the bottom jumps without the
    * reader touching anything. Going to the bottom is the only interpretation that is never wrong.
    */
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
+    restore.current = undefined;
+    restored.current = undefined;
     pinned.current = true;
+    followBottom();
     setAtBottom(true);
-  }, [query, view]);
+  }, [query, view, followBottom]);
+
+  const renderedHistory = useRef({ view, earlier: history.earlier });
+  useLayoutEffect(() => { renderedHistory.current = { view, earlier: history.earlier }; }, [view, keys, history.earlier]);
+  useEffect(() => view.subscribeBeforeTranscript((earlier = view.getHistory().earlier) => {
+    // Any surface can extend the shared suffix. Capture before exposing it to React, then
+    // recapture at notification time if still uncommitted and the reader has kept moving.
+    const element = scroller.current;
+    if (pinned.current || !element || renderedHistory.current.view !== view ||
+      earlier >= renderedHistory.current.earlier) return;
+    const top = element.getBoundingClientRect().top;
+    const previous = restored.current;
+    const samePosition = previous?.top === element.scrollTop && previous.viewportTop === top &&
+      previous.anchor.isConnected && previous.anchor.getBoundingClientRect().bottom > top;
+    const anchor = samePosition ? previous.anchor : [...(content.current?.children ?? [])].find(child => child.tagName === "DIV" && child.getBoundingClientRect().bottom > top);
+    // Keep the intended offset until the reader moves, rather than accumulating fractional-scroll
+    // rounding on each page of an automatic search backfill.
+    const offset = samePosition ? previous.offset : anchor?.getBoundingClientRect().top ?? 0;
+    restore.current = { height: element.scrollHeight, top: element.scrollTop, anchor, offset };
+  }), [view]);
+  const loadOlder = useCallback(() => {
+    pinned.current = false;
+    setAtBottom(false);
+    void view.loadOlder();
+  }, [view]);
+
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    const saved = restore.current;
+    if (!element || !saved) return;
+    // Prefer a retained visible row: live output may also have grown *below* it while the backward
+    // page arrived. A total-height delta alone would count that growth and move the reader.
+    const delta = saved.anchor?.isConnected ? saved.anchor.getBoundingClientRect().top - saved.offset : element.scrollHeight - saved.height;
+    element.scrollTop = saved.top + delta;
+    lastScrollTop.current = element.scrollTop;
+    restored.current = saved.anchor?.isConnected ? { top: element.scrollTop, anchor: saved.anchor, offset: saved.offset, viewportTop: element.getBoundingClientRect().top } : undefined;
+    restore.current = undefined;
+  }, [keys]);
+
+  useEffect(() => {
+    // One page per successful transition: a failed read remains stopped, but an explicit retry
+    // that clears the error and advances the boundary resumes the same whole-record search.
+    if (!query || history.loading || history.loadingOlder || history.error ||
+      history.earlier === 0 || link !== "live") return;
+    void view.loadOlder();
+  }, [query, view, history.loading, history.loadingOlder, history.error, history.earlier, link]);
 
   const toBottom = useCallback(() => {
-    const element = scroller.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
+    restored.current = undefined;
     pinned.current = true;
+    followBottom();
     setAtBottom(true);
     scheduleObserved();
-  }, [scheduleObserved]);
+  }, [followBottom, scheduleObserved]);
 
   return (
     <div className="relative min-h-0 min-w-0">
@@ -188,19 +248,21 @@ export function TranscriptView({
         // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
         className="transcript-scroller h-full px-3 pt-2 pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
-        <div className="pane-measure">
-          {earlier > 0 ? (
-            <button
-              type="button"
-              onClick={() => setShowAll(true)}
-              className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+        <div ref={content} className="pane-measure">
+          {history.earlier > 0 ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={loadOlder}
+              disabled={history.loadingOlder || link !== "live"}
+              className="mb-2 h-auto w-full whitespace-normal py-1 text-muted-foreground"
             >
-              <span className="h-px flex-1 bg-border" aria-hidden />
-              {earlier.toLocaleString()} earlier entries · show all
-              <span className="h-px flex-1 bg-border" aria-hidden />
-            </button>
+              {history.loadingOlder ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
+              {history.loadingOlder ? "Loading earlier transcript entries…" : `${history.earlier.toLocaleString()} earlier transcript entries · load earlier`}
+            </Button>
           ) : null}
-
+          {history.error ? <p role="alert" className="px-1 py-2 text-xs text-destructive">Could not load transcript entries: {history.error}</p> : null}
+          {query && history.earlier > 0 ? <p role="status" className="px-1 py-2 text-xs text-muted-foreground">{history.error ? "Search covers loaded entries only; earlier entries could not be loaded." : "Searching earlier transcript entries…"}</p> : null}
           {segments.map((segment) =>
             segment.kind === "entry" ? (
               <TranscriptRow key={segment.key} view={view} entryKey={segment.key} query={query} />
@@ -215,11 +277,11 @@ export function TranscriptView({
 
           {shown.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">
-              {keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
+              {history.loading ? "Loading latest transcript entries…" : history.error && keys.length === 0 ? "Transcript unavailable." : history.earlier > 0 ? "No matching entries in the loaded tail." : keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
             </p>
           ) : null}
 
-          <StickToBottom view={view} scroller={scroller} pinned={pinned} scheduleObserved={scheduleObserved} />
+          <StickToBottom view={view} followBottom={followBottom} scheduleObserved={scheduleObserved} />
         </div>
       </div>
 
@@ -258,13 +320,11 @@ function TranscriptRow({ view, entryKey, query }: { view: AgentSessionView; entr
  */
 function StickToBottom({
   view,
-  scroller,
-  pinned,
+  followBottom,
   scheduleObserved,
 }: {
   view: AgentSessionView;
-  scroller: RefObject<HTMLDivElement | null>;
-  pinned: RefObject<boolean>;
+  followBottom: () => void;
   scheduleObserved: (throughSeq?: number) => void;
 }) {
   const [, setTick] = useState(0);
@@ -272,8 +332,7 @@ function StickToBottom({
   useEffect(() => view.subscribeTranscript(() => setTick((tick) => tick + 1)), [view]);
 
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    followBottom();
     scheduleObserved(view.getLastSeq());
   });
 
@@ -332,5 +391,15 @@ function useFilteredKeys(view: AgentSessionView, keys: readonly string[], query:
     return view.subscribeTranscript(recompute);
   }, [view, query, cache]);
 
-  return query === "" ? keys : filtered;
+  // A backward page changes keys before the notification's filtered state is committed. Derive
+  // that new set in this render so scroll restoration measures the actual prepended DOM, not the
+  // previous filter. Ordinary text ticks still bail out in recompute when their match set is equal.
+  return useMemo(() => {
+    if (query === "") return keys;
+    const next = keys.filter(key => {
+      const entry = view.getEntry(key);
+      return entry !== undefined && cache.matches(entry, query);
+    });
+    return filtered.length === next.length && filtered.every((key, index) => key === next[index]) ? filtered : next;
+  }, [view, keys, query, cache, filtered]);
 }

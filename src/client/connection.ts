@@ -1,6 +1,7 @@
 import type { Command, SessionSummary } from "../protocol/commands.ts";
 import type { BranchList } from "../protocol/git.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
+import type { PresentationPage, PresentationSnapshot, PresentationUpdate } from "../protocol/presentation.ts";
 
 /**
  * A client's view of the Session Host. The TUI and the web UI both reach the daemon through this
@@ -19,6 +20,21 @@ export type Connection = {
   branches(scope: string): Promise<BranchList>;
   /** Replay from `since`, then follow. Returns an unsubscribe. */
   subscribe(options: SubscribeOptions): () => void;
+  /** Reduced entries, backward from an exclusive ordinal; never historical activity replay. */
+  readPresentation(sessionId: string, before: number, signal?: AbortSignal): Promise<PresentationPage>;
+  /** Current state and a tail snapshot first, then reduced changes. Reconnect refreshes loaded rows. */
+  subscribePresentation(options: PresentationSubscribeOptions): () => void;
+};
+
+export type PresentationSubscribeOptions = {
+  sessionId: string;
+  /** Evaluated on each connection attempt, including after older pages have been loaded. */
+  start: () => number | undefined;
+  onSnapshot: (snapshot: PresentationSnapshot) => void;
+  onUpdate: (update: PresentationUpdate) => void;
+  onError?: (error: Error) => void;
+  onLink?: (link: LinkState) => void;
+  silenceMs?: number;
 };
 
 /**
@@ -93,6 +109,72 @@ export function connect(options: { url: string; token?: string | undefined; auth
       const response = await fetch(url, { headers, ...credentials });
       await requireOk(response, options.token, options.authenticationRequired);
       return (await response.json()) as BranchList;
+    },
+
+    async readPresentation(sessionId, before, signal) {
+      const response = await fetch(`${options.url}/api/sessions/${encodeURIComponent(sessionId)}/presentation?before=${before}&limit=400`, {
+        headers, ...credentials, ...(signal ? { signal } : {}),
+      });
+      await requireOk(response, options.token, options.authenticationRequired);
+      return await response.json() as PresentationPage;
+    },
+
+    subscribePresentation({ sessionId, start, onSnapshot, onUpdate, onError, onLink, silenceMs }) {
+      const events = `${options.url}/api/sessions/${encodeURIComponent(sessionId)}/presentation/events`;
+      let stopped = false;
+      let stream: AbortController | undefined;
+      let wake: (() => void) | undefined;
+      let attempt = 0;
+      void (async () => {
+        while (!stopped) {
+          onLink?.("connecting");
+          const controller = new AbortController();
+          stream = controller;
+          let silent = false;
+          const arm = () => setTimeout(() => { silent = true; controller.abort(); }, silenceMs ?? SILENCE_MS);
+          let watchdog = arm();
+          const receivedChunk = () => { clearTimeout(watchdog); watchdog = arm(); };
+          const openedAt = Date.now();
+          try {
+            const from = start();
+            const response = await fetch(`${events}?limit=400${from === undefined ? "" : `&start=${from}`}`, {
+              headers, ...credentials, signal: controller.signal,
+            });
+            if (!response.ok || !response.body) {
+              const error = await responseError(response, options.token, options.authenticationRequired);
+              if (FATAL_STATUS.has(response.status)) { onLink?.("gone"); onError?.(error); return; }
+              throw error;
+            }
+            let ready = false;
+            for await (const frame of readEventStream<PresentationSnapshot | PresentationUpdate>(response.body, receivedChunk)) {
+              if (stopped) return;
+              if (frame.type === "snapshot") {
+                onSnapshot(frame);
+                ready = true;
+                // A 200 response is not current activity until its snapshot has actually arrived.
+                onLink?.("live");
+              } else {
+                if (!ready) throw new Error("Presentation stream did not begin with a snapshot");
+                onUpdate(frame);
+              }
+            }
+          } catch (error) {
+            if (stopped) return;
+            if (!silent) onError?.(error instanceof Error ? error : new Error(String(error)));
+          } finally {
+            clearTimeout(watchdog);
+          }
+          if (stopped) return;
+          attempt = Date.now() - openedAt >= BACKOFF_MIN_MS ? 1 : attempt + 1;
+          onLink?.("retrying");
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, backoffMs(attempt));
+            wake = () => { clearTimeout(timer); resolve(); };
+          });
+          wake = undefined;
+        }
+      })();
+      return () => { stopped = true; stream?.abort(); wake?.(); };
     },
 
     subscribe({ sessionId, since, onEntry, onError, onLink, silenceMs }: SubscribeOptions): () => void {
@@ -193,11 +275,12 @@ function backoffMs(attempt: number): number {
 }
 
 /** Minimal SSE reader: enough for `id:`/`data:` frames, which is all the host emits. */
-async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerator<LoggedEvent> {
+async function* readEventStream<T = LoggedEvent>(body: ReadableStream<Uint8Array>, onChunk?: () => void): AsyncGenerator<T> {
   const decoder = new TextDecoder();
   let buffer = "";
 
   for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+    onChunk?.();
     buffer += decoder.decode(chunk, { stream: true });
     let split = buffer.indexOf("\n\n");
     while (split !== -1) {
@@ -208,7 +291,7 @@ async function* readEventStream(body: ReadableStream<Uint8Array>): AsyncGenerato
         .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice("data:".length).trim())
         .join("");
-      if (data) yield JSON.parse(data) as LoggedEvent;
+      if (data) yield JSON.parse(data) as T;
       split = buffer.indexOf("\n\n");
     }
   }

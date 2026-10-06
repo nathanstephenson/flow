@@ -2,8 +2,9 @@ import type { Connection, LinkState, SubscribeOptions } from "../../../src/clien
 import type { Entry, ViewState } from "../../../src/client/reduce.ts";
 import { initialState, reduce } from "../../../src/client/reduce.ts";
 import type { LoggedEvent } from "../../../src/protocol/events.ts";
+import { OutcomeProvenance, type IndexedEntry, type PresentationSnapshot, type PresentationUpdate } from "../../../src/protocol/presentation.ts";
 import { entryKey } from "../presentation/entry-key.ts";
-import type { AgentSessionView, Chrome } from "./contract.ts";
+import type { AgentSessionView, Chrome, TranscriptHistory } from "./contract.ts";
 import { coalesce, scheduleFrame, type FrameScheduler } from "./frame-scheduler.ts";
 
 /**
@@ -16,7 +17,7 @@ import { coalesce, scheduleFrame, type FrameScheduler } from "./frame-scheduler.
  */
 
 /** All this needs of a Connection. Narrow, so a test's fake is three lines rather than four methods. */
-export type TranscriptTransport = Pick<Connection, "subscribe">;
+export type TranscriptTransport = Pick<Connection, "subscribe"> & Partial<Pick<Connection, "subscribePresentation" | "readPresentation">>;
 
 export type AgentSessionViewOptions = {
   /** Injected so a test can drive frames synchronously. Defaults to one per animation frame. */
@@ -50,12 +51,22 @@ export function createAgentSessionView(
   let keys: readonly string[] = [];
   let keysStale = false;
   let index: Map<string, Entry> | undefined;
+  let outcomeIndex = new Map<string, number>();
+  const rawOutcomes = new OutcomeProvenance();
 
   let chromeDirty = false;
   let transcriptDirty = false;
   const chromeListeners = new Set<() => void>();
+  const beforeTranscriptListeners = new Set<(earlier?: number) => void>();
   const transcriptListeners = new Set<() => void>();
   let unsubscribe: (() => void) | undefined;
+  let windowStart: number | undefined;
+  const positioned = new Map<number, { entry: Entry; seq: number; outcomeSeq?: number }>();
+  let activityKeys: readonly string[] = [];
+  let positionedKeysStale = true;
+  let history: TranscriptHistory = { earlier: 0, loading: !!transport.subscribePresentation, loadingOlder: false, error: undefined };
+  let olderRequest: AbortController | undefined;
+  let olderPromise: Promise<void> | undefined;
 
   const notify = coalesce(() => {
     const chromeChanged = chromeDirty;
@@ -64,9 +75,107 @@ export function createAgentSessionView(
     transcriptDirty = false;
     // Copied before iterating: a listener that unsubscribes while being notified must not shorten
     // the set being walked.
+    // DOM measurements must happen before either reactive surface can synchronously commit.
+    if (transcriptChanged) for (const listener of [...beforeTranscriptListeners]) listener();
     if (chromeChanged) for (const listener of [...chromeListeners]) listener();
     if (transcriptChanged) for (const listener of [...transcriptListeners]) listener();
   }, options.schedule ?? scheduleFrame);
+
+  function publishHistory(next: TranscriptHistory): void {
+    if (history.earlier === next.earlier && history.loading === next.loading &&
+      history.loadingOlder === next.loadingOlder && history.error === next.error) return;
+    history = next;
+    transcriptDirty = true;
+    notify();
+  }
+
+  function mergePositioned(incoming: IndexedEntry[], seq: number): void {
+    for (const item of incoming) {
+      const previous = positioned.get(item.index);
+      // A backward page may have left the host before a newer live patch arrived.
+      if (previous && previous.seq > seq) continue;
+      if (!previous || entryKey(previous.entry) !== entryKey(item.entry)) positionedKeysStale = true;
+      positioned.set(item.index, { entry: item.entry, seq, ...(item.outcomeSeq === undefined ? {} : { outcomeSeq: item.outcomeSeq }) });
+    }
+  }
+
+  function refreshPositionedKeys(): void {
+    if (!positionedKeysStale) return;
+    positionedKeysStale = false;
+    const ordered = [...positioned].sort(([a], [b]) => a - b);
+    const nextKeys = ordered.filter(([ordinal]) => ordinal >= (windowStart ?? Infinity)).map(([, item]) => entryKey(item.entry));
+    const nextActivityKeys = ordered.map(([, item]) => entryKey(item.entry));
+    if (!sameKeys(keys, nextKeys)) keys = nextKeys;
+    if (!sameKeys(activityKeys, nextActivityKeys)) activityKeys = nextActivityKeys;
+  }
+
+  function publishPositioned(): void {
+    index = undefined;
+    transcriptDirty = true;
+    notify();
+  }
+
+  function snapshot(incoming: PresentationSnapshot): void {
+    if (incoming.start < (windowStart ?? 0)) {
+      for (const listener of [...beforeTranscriptListeners]) listener(incoming.start);
+    }
+    positioned.clear();
+    positionedKeysStale = true;
+    windowStart = incoming.start;
+    mergePositioned(incoming.related, incoming.seq);
+    mergePositioned(incoming.entries, incoming.seq);
+    view = { ...incoming.state, entries: [], lastSeq: incoming.seq };
+    publishPositioned();
+    publishHistory({ ...history, earlier: incoming.start, loading: false, error: undefined });
+    publishChrome();
+  }
+
+  function update(incoming: PresentationUpdate): void {
+    if (incoming.seq <= view.lastSeq) return;
+    mergePositioned(incoming.entries, incoming.seq);
+    view = { ...(incoming.state ?? view), entries: [], lastSeq: incoming.seq };
+    publishPositioned();
+    publishChrome();
+  }
+
+  function cancelOlder(): void {
+    olderRequest?.abort();
+    olderRequest = undefined;
+    olderPromise = undefined;
+    publishHistory({ ...history, loadingOlder: false });
+  }
+
+  function loadOlder(): Promise<void> {
+    if (olderPromise) return olderPromise;
+    const before = windowStart;
+    if (before === undefined || before === 0 || link !== "live" || !transport.readPresentation) return Promise.resolve();
+    const controller = new AbortController();
+    olderRequest = controller;
+    publishHistory({ ...history, loadingOlder: true, error: undefined });
+    olderPromise = transport.readPresentation(sessionId, before, controller.signal).then(page => {
+      if (controller.signal.aborted) return;
+      const earlier = Math.min(windowStart ?? before, page.start);
+      // React can read external snapshots during unrelated renders before the coalesced notify.
+      // Capture the old DOM before exposing the prefix, then allow notification-time recapture
+      // if it has not committed yet and the reader moved in the intervening frame.
+      if (earlier < (windowStart ?? before)) {
+        for (const listener of [...beforeTranscriptListeners]) listener(earlier);
+      }
+      mergePositioned(page.entries, page.seq);
+      windowStart = earlier;
+      positionedKeysStale = true;
+      publishPositioned();
+      publishHistory({ ...history, earlier: windowStart });
+    }).catch(error => {
+      if (!controller.signal.aborted) publishHistory({ ...history, error: error instanceof Error ? error.message : String(error) });
+    }).finally(() => {
+      if (olderRequest !== controller) return;
+      olderRequest = undefined;
+      olderPromise = undefined;
+      publishHistory({ ...history, loadingOlder: false });
+    });
+    return olderPromise;
+  }
 
   function apply(logged: LoggedEvent): void {
     const next = reduce(view, logged);
@@ -78,8 +187,9 @@ export function createAgentSessionView(
     if (next === view) return;
 
     const entriesChanged = next.entries !== view.entries;
+    const proofChanged = rawOutcomes.advance(logged, view.entries, next.entries).length > 0;
     view = next;
-    if (entriesChanged) {
+    if (entriesChanged || proofChanged) {
       index = undefined;
       // Length alone decides whether the key list changed, and that is sound only because the
       // Presentation Transcript is append-only (ADR 0001): `upsert` replaces an entry in place or
@@ -110,12 +220,15 @@ export function createAgentSessionView(
   }
 
   function setLink(next: LinkState): void {
+    if (next === "connecting" && transport.subscribePresentation) cancelOlder();
+    if (next === "gone" && transport.subscribePresentation) publishHistory({ ...history, loading: false });
     if (next === link) return;
     link = next;
     publishChrome();
   }
 
   function getKeys(): readonly string[] {
+    if (transport.subscribePresentation) { refreshPositionedKeys(); return keys; }
     // Rebuilt on read rather than on write: a replay appends a thousand times before anything reads,
     // and rebuilding per append would be quadratic in the length of the transcript. Reads happen
     // once per frame, after the notify, so this runs once per frame at most.
@@ -129,7 +242,21 @@ export function createAgentSessionView(
   function currentIndex(): Map<string, Entry> {
     if (!index) {
       index = new Map();
-      for (const entry of view.entries) index.set(entryKey(entry), entry);
+      outcomeIndex = new Map();
+      if (transport.subscribePresentation) {
+        for (const item of positioned.values()) {
+          const key = entryKey(item.entry);
+          index.set(key, item.entry);
+          if (item.outcomeSeq !== undefined) outcomeIndex.set(key, item.outcomeSeq);
+        }
+      } else {
+        view.entries.forEach((entry, ordinal) => {
+          const key = entryKey(entry);
+          index!.set(key, entry);
+          const outcomeSeq = rawOutcomes.get(ordinal);
+          if (outcomeSeq !== undefined) outcomeIndex.set(key, outcomeSeq);
+        });
+      }
     }
     return index;
   }
@@ -151,14 +278,44 @@ export function createAgentSessionView(
     subscribeChrome: (listener) => subscribeTo(chromeListeners, listener),
     getChrome: () => chrome,
 
+    subscribeBeforeTranscript: (listener) => subscribeTo(beforeTranscriptListeners, listener),
     subscribeTranscript: (listener) => subscribeTo(transcriptListeners, listener),
     getKeys,
+    getActivityKeys: () => {
+      if (!transport.subscribePresentation) return getKeys();
+      refreshPositionedKeys();
+      return activityKeys;
+    },
+    getHistory: () => history,
+    loadOlder,
 
     getEntry: (key) => currentIndex().get(key),
     getLastSeq: () => view.lastSeq,
+    canObserveThrough(requiredOutcomeSeq, renderedKeys): boolean {
+      // Delivery and paint are distinct. Only the exact host-supplied outcome boundary on a
+      // rendered row proves observation; metadata, producer chatter and older outcomes do not.
+      if (!Number.isSafeInteger(requiredOutcomeSeq) || requiredOutcomeSeq < 1 ||
+        requiredOutcomeSeq > view.lastSeq || history.loading) return false;
+      currentIndex();
+      return renderedKeys.some(key => outcomeIndex.get(key) === requiredOutcomeSeq);
+    },
 
     start(): void {
       if (unsubscribe) return;
+      if (transport.subscribePresentation) {
+        unsubscribe = transport.subscribePresentation({
+          sessionId,
+          start: () => windowStart,
+          onSnapshot: snapshot,
+          onUpdate: update,
+          onLink: setLink,
+          onError: error => {
+            publishHistory({ ...history, error: error.message });
+            options.onError?.(error);
+          },
+        });
+        return;
+      }
       const subscription: SubscribeOptions = {
         sessionId,
         // Resume, never replay. connection.ts keeps its own lastSeq from here and reconnects
@@ -175,10 +332,15 @@ export function createAgentSessionView(
     },
 
     stop(): void {
+      cancelOlder();
       unsubscribe?.();
       unsubscribe = undefined;
     },
   };
+}
+
+function sameKeys(previous: readonly string[], next: readonly string[]): boolean {
+  return previous.length === next.length && previous.every((key, index) => key === next[index]);
 }
 
 function chromeOf(view: ViewState, link: LinkState): Chrome {
