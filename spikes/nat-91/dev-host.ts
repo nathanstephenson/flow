@@ -39,12 +39,12 @@ for (const title of titles) {
     session.completeTurn();
     await host.send(id, 'Keep the texture primarily on controls. Make the lighting respond across the interface.', 'now');
     const contrast = session.beginSubagent('Contrast audit', 'Check selected controls in both themes');
-    contrast.say('Labels and status colours remain legible on graphite and cobalt controls.');
+    contrast.say('Check the dark labels over silver faces and the status colours on graphite.');
     contrast.finish();
     const interaction = session.beginSubagent('Interaction review', 'Check hover, focus, tabs, and reduced motion');
-    interaction.say('The same page-space grain and pointer-driven light are shared by every control.');
+    interaction.say('The same reflected environment and page-space brushing unify the controls; button gloss follows the cursor locally.');
     interaction.finish();
-    session.say('This dev study uses the real Flow components. Brushed grain stays anchored; a shared light moves with the pointer. Selected controls catch cobalt reflections, hover catches silver, and the transcript stays quiet.\n\n- One grain scale across every control.\n- One shared light position, not separate button artwork.\n- Selection, hover, and keyboard focus remain distinct.');
+    session.say('This dev study uses the real Flow components. Active faces reflect silver, near-black, and the app\'s blue/purple spectrum. Fine brushing stays anchored; button gloss follows the cursor locally. The transcript stays quiet.\n\n- Full-surface selection, without a repeated left-to-right fade.\n- Connected tab and action strips, not isolated button tiles.\n- Selection, hover, and keyboard focus remain distinct.');
     session.completeTurn();
   } else if (ids.length === 2) {
     session.say('Checking the event boundaries and the adapter contract.', false);

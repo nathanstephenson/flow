@@ -24,29 +24,50 @@ try {
   await page.getByText('This dev study uses the real Flow components.', { exact: false }).last().waitFor();
   await page.locator('body[data-material-ready=true]').waitFor();
   await page.getByRole('tab', { name: 'Agents' }).waitFor();
+  await page.evaluate(() => document.fonts.ready);
   await page.mouse.move(570, 220);
   await page.waitForTimeout(150);
-  const before = await page.evaluate(() => window.nat91Material.canvas.toDataURL());
-  await page.mouse.move(90, 570);
-  await page.waitForTimeout(150);
-  const after = await page.evaluate(() => window.nat91Material.canvas.toDataURL());
-  assert.notEqual(before, after, 'Shared material light must respond to cursor movement');
+  const revision = await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision));
+  await page.waitForTimeout(200);
+  assert.ok(await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision)) - revision <= 2, 'Material-owned style writes must not create a continuous redraw loop');
   await page.screenshot({ path: join(out, 'real-ui-dark.png') });
   const activeRow = page.locator('[data-sidebar="menu-button"][data-nat91-selected="true"]');
-  const gradient = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
+  const material = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
     const context = texture.getContext('2d');
-    const sample = x => [...context.getImageData(Math.floor(texture.width * x), Math.floor(texture.height * .65), 1, 1).data];
-    return { core: sample(.16), tail: sample(.92) };
+    const pixels = context.getImageData(0, 0, texture.width, texture.height).data;
+    let min = 255, max = 0, rightChroma = 0, rightCount = 0;
+    for (let y = 1; y < texture.height - 1; y += 2) {
+      for (let x = 1; x < texture.width - 1; x += 2) {
+        const i = (y * texture.width + x) * 4;
+        if (pixels[i + 3] < 250) continue;
+        const value = pixels[i] * .2126 + pixels[i + 1] * .7152 + pixels[i + 2] * .0722;
+        min = Math.min(min, value); max = Math.max(max, value);
+        if (x > texture.width * .8) { rightChroma += pixels[i + 2] - pixels[i]; rightCount++; }
+      }
+    }
+    return { min, max, rightChroma: rightChroma / rightCount };
   });
-  assert.ok(gradient.core[2] - gradient.core[0] > 80, 'Active core must be visibly saturated blue');
-  assert.ok(gradient.tail[2] - gradient.tail[0] < 20, 'Active accent must fade back to neutral, not fill a blue rectangle');
+  assert.ok(material.rightChroma > 20, 'Selected material must cover the right side, not fade to the neutral backdrop');
+  assert.ok(material.max - material.min > 150, 'Chrome needs genuine bright silver / black reflection contrast, not capped blue glow');
   const activeBounds = await activeRow.boundingBox();
   await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 } });
 
   // Real tabs and session navigation, not simulated mockup handlers.
   await page.getByRole('tab', { name: 'Git' }).click();
-  await page.getByRole('tab', { name: 'Git' }).getAttribute('aria-selected').then(value => assert.equal(value, 'true'));
-  await page.getByRole('button', { name: 'Refresh', exact: true }).hover();
+  await page.getByRole('tab', { name: 'Git', exact: true }).getAttribute('aria-selected').then(value => assert.equal(value, 'true'));
+  await page.getByRole('tab', { name: 'Diff', exact: true }).waitFor();
+  const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
+  const refreshBounds = await refresh.boundingBox();
+  const rowBefore = await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  await page.mouse.move(refreshBounds.x + 10, refreshBounds.y + refreshBounds.height * .5);
+  await page.waitForTimeout(100);
+  const glossBefore = await refresh.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  await page.mouse.move(refreshBounds.x + refreshBounds.width - 10, refreshBounds.y + refreshBounds.height * .5);
+  await page.waitForTimeout(100);
+  const glossAfter = await refresh.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  assert.notEqual(glossBefore, glossAfter, 'Button gloss must follow the pointer within that control');
+  assert.equal(await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL()), rowBefore, 'Hovering a remote button must not relight the selected rail');
+  await refresh.hover();
   await page.waitForTimeout(200);
   await page.screenshot({ path: join(out, 'real-ui-git-hover.png') });
   await page.screenshot({ path: join(out, 'real-ui-control-detail.png'), clip: { x: 1090, y: 50, width: 350, height: 380 } });
@@ -81,8 +102,10 @@ try {
   await page.screenshot({ path: join(out, 'real-ui-mobile-light.png') });
   await page.evaluate(() => document.documentElement.classList.add('dark'));
   await page.waitForTimeout(100);
+  const taskTitle = page.locator('.nat91-subagent-notice > .font-mono.text-sm').filter({ hasText: 'Interaction review' });
+  assert.ok(await taskTitle.evaluate(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().height <= parseFloat(getComputedStyle(node).lineHeight) + 1), 'Narrow-layout task title must fit on one readable line');
   await page.screenshot({ path: join(out, 'real-ui-mobile-dark.png') });
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: vivid active core / neutral gradient tail, shared light, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: full-face selection, silver / black reflection contrast, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }
