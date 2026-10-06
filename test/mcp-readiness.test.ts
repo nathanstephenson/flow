@@ -118,19 +118,23 @@ test("Workflow Steps wait for registration and block Retry until stopped", { tim
 });
 
 test("failed bounded discovery does not prevent the first prompt", { timeout: 15_000 }, async () => {
-  const host = new SessionHost({ mcpConnections: () => [{ ...connection, args: ["-e", "setInterval(() => {}, 1000)"] }] });
+  // Exercise discovery even without Bubblewrap: this inert fixture runs no tools, and an
+  // immediate isolation failure would hide regressions in waiting for the discovery deadline.
+  const host = new SessionHost({ filesystemIsolationEnabled: () => false,
+    mcpConnections: () => [{ ...connection, args: ["-e", "setInterval(() => {}, 1000)"] }] });
   const fake = new FakeBackend();
-  let prompted = false;
+  const prompted = deferred<string | undefined>();
   host.registerBackend({ name: "fake", create: async (options) => {
     const session = await fake.create(options);
-    session.prompt = async () => { prompted = true; assert.equal(options.mcp?.status()[0]?.state, "failed"); };
+    session.prompt = async () => { prompted.resolve(options.mcp?.status()[0]?.state); };
     return session;
   } });
   try {
     const id = await host.create({ scope: process.cwd() });
     await host.send(id, "first", "now");
-    await until(() => prompted);
-    assert.equal(prompted, true);
+    // Discovery intentionally waits up to 10 seconds for this unresponsive server. Await the
+    // actual prompt callback under the test's 15-second deadline, not the 2-second polling helper.
+    assert.equal(await prompted.promise, "failed");
   } finally { await host.shutdown(); }
 });
 
