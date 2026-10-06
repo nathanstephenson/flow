@@ -5,6 +5,7 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type JsonSchema = boolean | { [key: string]: Json };
 export type ArgumentTemplate = { kind: 'literal'; value: Json } | { kind: 'reference'; reference: InputReference } | { kind: 'object'; fields: Record<string, ArgumentTemplate> } | { kind: 'array'; items: ArgumentTemplate[] };
 export interface McpToolSnapshot { connectionId: string; connectionName: string; identity: string; serverIdentity: string; toolName: string; inputSchema: JsonSchema; outputSchema?: JsonSchema }
+export interface McpToolDiscovery { tools: McpToolSnapshot[]; errors: Array<{ toolName: string; message: string }> }
 
 export type VisualSchema =
   | { type: 'null' }
