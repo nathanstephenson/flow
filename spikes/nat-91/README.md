@@ -1,6 +1,6 @@
 # NAT-91 — interactive material study on the real UI
 
-Round three runs the **actual Flow React UI under Vite**, with a dev-only brushed material layer. Production UI files are unchanged. Earlier standalone round-two sources (`index.html`, `mockup.css`, `mockup.js`) remain as reference, but are not served by this preview.
+Round four runs the **actual Flow React UI under Vite**, with a dev-only brushed material layer. Active accents now have a vivid cobalt/cyan core that gradients into the surrounding surface; inactive controls recede instead of looking like boxed metal tiles. Production UI files are unchanged. Earlier standalone round-two sources (`index.html`, `mockup.css`, `mockup.js`) remain as reference, but are not served by this preview.
 
 ## Run
 
@@ -17,7 +17,7 @@ Open **http://127.0.0.1:5191/study**. The loopback-only handoff authenticates ag
 - **Real controls:** session navigation, tabs, menus, composer, and Settings use the existing components and handlers.
 - **Simulated model activity:** `FakeBackend` seeds input-needed, working, idle, and completed Subagent states. New model prompts stay in flight until aborted; there is no live model connection or automatic response.
 - **Isolated state and repositories:** fixtures live beneath `MOCKUP_STATE_DIR`. They have no remote, so GitHub and update services are intentionally unavailable. No real Session Host is restarted or used, and no operator credentials are copied.
-- **Shared material:** one procedural WebGL atlas, page-coordinate grain, anisotropic silver highlights, and a common pointer-driven light. Local canvas layers respect control stacking/clipping and do not replace React text nodes. No baked material images, ribbons, or textured wallpaper.
+- **Shared material:** one procedural WebGL atlas, page-coordinate grain, anisotropic silver highlights, and a common pointer-driven light. Each control samples its real ancestor backdrop (including translucent and OKLCH colours) so active colour fades back to the correct page/panel tone rather than ending at a hard rectangle. Local canvas layers respect control stacking/clipping and do not replace React text nodes. No baked material images, ribbons, or textured wallpaper.
 - **Restrained interaction:** selected controls catch cobalt; ordinary controls stay graphite/silver. Reduced-motion and touch keep the light stable. Native keyboard focus treatment stays in place.
 
 The preview-only Vite plugin injects `live-material.js`; the normal build never includes it. Edit that file while the preview runs to iterate.
@@ -32,4 +32,4 @@ MOCKUP_STATE_DIR=/tmp/nat91-preview-1 node spikes/nat-91/capture.mjs
 
 `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_EXECUTABLE_PATH` can point to existing installations. Do not install browser binaries. `CAPTURE_DIR` defaults to `/tmp/nat91-live-captures`; `MOCKUP_URL` defaults to `http://127.0.0.1:5191`.
 
-Checks cover the handoff, changing shared-light pixels, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds, and browser script errors. Temporary captures stay outside the tree. For PR publication, commit captures, embed their commit URLs, then remove the files in a follow-up commit.
+Checks cover the handoff, a saturated active core with a neutral gradient tail, changing shared-light pixels, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds, and browser script errors. Temporary captures stay outside the tree. For PR publication, commit captures, embed their commit URLs, then remove the files in a follow-up commit.

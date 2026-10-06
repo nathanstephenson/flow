@@ -4,9 +4,13 @@ const style = document.createElement('style');
 style.textContent = `
   .nat91-control { isolation: isolate !important; border-radius: 3px !important; background: transparent !important; color: var(--foreground) !important; }
   .nat91-control-static { position: relative; }
-  .nat91-control[data-nat91-selected="true"], .nat91-tab-surface[data-nat91-selected="true"] > [role="tab"] { color: #edf2ff !important; }
-  .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: #bac8e5 !important; }
-  .nat91-control[data-nat91-selected="true"] .bg-foreground { background-color: #edf2ff !important; }
+  .nat91-control { border-color: transparent !important; }
+  .nat91-control:focus-visible, .nat91-tab-surface:has(> [role="tab"]:focus-visible) { outline: 2px solid var(--ring); outline-offset: -2px; }
+  .nat91-tab-surface > [role="tab"] { background: transparent !important; }
+  .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: var(--foreground) !important; }
+  .dark .nat91-control[data-nat91-selected="true"], .dark .nat91-tab-surface[data-nat91-selected="true"] > [role="tab"] { color: #edf2ff !important; }
+  .dark .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: #c2d4eb !important; }
+  .dark .nat91-control[data-nat91-selected="true"] .bg-foreground { background-color: #edf2ff !important; }
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; }
@@ -52,6 +56,7 @@ const fragment = `
   uniform float uLightTheme;
   uniform float uRadius;
   uniform float uDisabled;
+  uniform vec3 uBackdrop;
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   void main() {
     vec2 halfSize = uRect.zw * .5;
@@ -60,7 +65,7 @@ const fragment = `
     if (shape > 0.0) discard;
     // Brushing lives in page-space CSS pixels: changing control size doesn't stretch it.
     float line = hash(vec2(4.0, floor(vPage.y * 2.0)));
-    float grain = (line - .5) * .034 + (hash(floor(vPage * 2.0)) - .5) * .009;
+    float grain = (line - .5) * .026 + (hash(floor(vPage * 2.0)) - .5) * .012;
     grain *= .7 + .3 * sin(vPage.x * .007 + line * 5.0);
     float edge = 1.0 - smoothstep(0.0, 3.0, -shape);
     vec2 side = (vUv - .5) * uRect.zw;
@@ -74,20 +79,30 @@ const fragment = `
     vec2 anisotropy = (H.xy - normal.xy) / vec2(.42, .12);
     float silver = exp(-dot(anisotropy, anisotropy));
     float tight = pow(max(dot(normal, H), 0.0), 100.0);
-    float grazing = pow(1.0 - normal.z, .3) * edge;
-    vec3 darkMetal = mix(vec3(.105, .115, .135), vec3(.055, .092, .175), uSelected);
-    vec3 lightMetal = mix(vec3(.71, .73, .76), vec3(.11, .19, .32), uSelected);
-    vec3 base = mix(darkMetal, lightMetal, uLightTheme);
-    // Environmental blue is kept to selected surfaces; ordinary controls stay graphite/silver.
-    vec3 cobalt = vec3(.035, .14, .47) * uSelected * (.34 + broad * .5);
-    vec3 color = base + cobalt + vec3(grain);
-    color += vec3(.22, .24, .27) * silver * (.27 + uHover * .65 + uSelected * .45);
-    color += vec3(.7, .76, .84) * tight * (.025 + uHover * .06);
-    color += vec3(.16, .19, .24) * grazing * (.3 + .7 * max(L.y, 0.0));
-    // Narrow edge reflection and a dark lower edge establish the surface, without drawing a border.
-    color -= vec3(.045) * edge * max(-normal.y, 0.0);
-    color += vec3(.03) * broad;
-    color = mix(color, base, uDisabled * .65);
+    // Resting controls recede into the actual surface behind them, not grey metal tiles.
+    vec3 steel = mix(vec3(.14, .16, .19), vec3(.77, .80, .85), uLightTheme);
+    vec3 base = mix(uBackdrop, steel, .075);
+    float feather = smoothstep(0.0, min(12.0, uRect.w * .32), -shape);
+    float fadeRight = 1.0 - smoothstep(.32, 1.0, vUv.x);
+    float inlet = smoothstep(0.0, .07, vUv.x);
+    float pool = exp(-pow((vUv.x - .12) / .46, 2.0)) * fadeRight * inlet * feather;
+    // A vivid reflected core fades through cobalt, navy, and finally the page itself.
+    // This is illumination on the whole control, not a hard blue fill or outlined card.
+    float reflection = exp(-pow((vUv.y - .62 - vUv.x * .12) / .29, 2.0));
+    float lead = exp(-pow((vUv.x - .035) / .028, 2.0)) * sin(vUv.y * 3.14159);
+    vec3 darkAccent = vec3(.015, .075, .29) + vec3(.015, .14, .56) * reflection;
+    vec3 lightAccent = vec3(.28, .61, .98);
+    vec3 color = base;
+    vec3 active = mix(base + darkAccent * pool * 1.15, mix(base, lightAccent, pool * .83), uLightTheme);
+    active += mix(vec3(.025, .38, .57), vec3(.02, .07, .03), uLightTheme) * lead * feather;
+    color = mix(color, active, uSelected);
+    // The brushed silver response remains subdued on hover; the active core is stronger.
+    float sheen = silver * (.055 + uHover * .38) * feather;
+    color += mix(vec3(.17, .21, .28), vec3(.025), uLightTheme) * sheen;
+    color += vec3(.15, .25, .38) * tight * feather * uSelected * pool;
+    color += vec3(.06, .09, .13) * silver * pool * uSelected * feather;
+    color += vec3(grain * (.14 + pool * uSelected * 1.2 + uHover * .28)) * feather;
+    color = mix(color, base, uDisabled * .85);
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   }
 `;
@@ -110,12 +125,35 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1
 const attribute = gl.getAttribLocation(program, 'aPosition');
 gl.enableVertexAttribArray(attribute);
 gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
-const uniforms = Object.fromEntries(['uViewport', 'uRect', 'uLight', 'uSelected', 'uHover', 'uLightTheme', 'uRadius', 'uDisabled'].map(name => [name, gl.getUniformLocation(program, name)]));
+const uniforms = Object.fromEntries(['uViewport', 'uRect', 'uLight', 'uSelected', 'uHover', 'uLightTheme', 'uRadius', 'uDisabled', 'uBackdrop'].map(name => [name, gl.getUniformLocation(program, name)]));
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 let pointer = { x: innerWidth * .56, y: innerHeight * .3 };
 let surfaces = [];
 let frame;
 let revision = 0;
+const swatch = document.createElement('canvas');
+swatch.width = swatch.height = 1;
+const sampler = swatch.getContext('2d', { willReadFrequently: true });
+const colorCache = new Map();
+function backdropOf(target) {
+  const layers = [];
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+    const css = getComputedStyle(parent).backgroundColor;
+    let rgba = colorCache.get(css);
+    if (!rgba) {
+      sampler.clearRect(0, 0, 1, 1);
+      sampler.fillStyle = css;
+      sampler.fillRect(0, 0, 1, 1);
+      rgba = [...sampler.getImageData(0, 0, 1, 1).data].map(channel => channel / 255);
+      colorCache.set(css, rgba);
+    }
+    if (rgba[3]) layers.push(rgba);
+    if (rgba[3] === 1) break;
+  }
+  let color = document.documentElement.classList.contains('dark') ? [.035, .035, .035] : [1, 1, 1];
+  for (const rgba of layers.reverse()) color = color.map((value, index) => value * (1 - rgba[3]) + rgba[index] * rgba[3]);
+  return color;
+}
 
 function collect() {
   const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"]');
@@ -148,7 +186,7 @@ function collect() {
     }
     const selected = node.getAttribute('aria-selected') === 'true' || node.hasAttribute('aria-current') || node.getAttribute('data-active') === 'true' || node.getAttribute('data-state') === 'active' || node.getAttribute('aria-pressed') === 'true';
     if (target.dataset.nat91Selected !== String(selected)) target.dataset.nat91Selected = String(selected);
-    surfaces.push({ node, target, rect, selected, texture });
+    surfaces.push({ node, target, rect, selected, texture, backdrop: backdropOf(target) });
   });
 }
 function draw() {
@@ -163,7 +201,8 @@ function draw() {
   gl.uniform2f(uniforms.uViewport, innerWidth, innerHeight);
   gl.uniform2f(uniforms.uLight, pointer.x, pointer.y);
   gl.uniform1f(uniforms.uLightTheme, document.documentElement.classList.contains('dark') ? 0 : 1);
-  surfaces.forEach(({ node, target, rect, selected }) => {
+  surfaces.forEach(({ node, target, rect, selected, backdrop }) => {
+    gl.uniform3f(uniforms.uBackdrop, ...backdrop);
     gl.uniform4f(uniforms.uRect, rect.left, rect.top, rect.width, rect.height);
     gl.uniform1f(uniforms.uSelected, selected ? 1 : 0);
     gl.uniform1f(uniforms.uHover, target.matches(':hover') || target.contains(document.activeElement) ? 1 : 0);

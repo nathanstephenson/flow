@@ -32,6 +32,16 @@ try {
   const after = await page.evaluate(() => window.nat91Material.canvas.toDataURL());
   assert.notEqual(before, after, 'Shared material light must respond to cursor movement');
   await page.screenshot({ path: join(out, 'real-ui-dark.png') });
+  const activeRow = page.locator('[data-sidebar="menu-button"][data-nat91-selected="true"]');
+  const gradient = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
+    const context = texture.getContext('2d');
+    const sample = x => [...context.getImageData(Math.floor(texture.width * x), Math.floor(texture.height * .65), 1, 1).data];
+    return { core: sample(.16), tail: sample(.92) };
+  });
+  assert.ok(gradient.core[2] - gradient.core[0] > 80, 'Active core must be visibly saturated blue');
+  assert.ok(gradient.tail[2] - gradient.tail[0] < 20, 'Active accent must fade back to neutral, not fill a blue rectangle');
+  const activeBounds = await activeRow.boundingBox();
+  await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 } });
 
   // Real tabs and session navigation, not simulated mockup handlers.
   await page.getByRole('tab', { name: 'Git' }).click();
@@ -61,7 +71,7 @@ try {
   await page.waitForTimeout(100);
   assert.deepEqual(await page.evaluate(() => window.nat91Material.getLight()), stableLight, 'Reduced motion fixes the shared light');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.evaluate(() => document.documentElement.classList.remove('dark'));
+  await page.evaluate(() => { document.activeElement?.blur(); document.documentElement.classList.remove('dark'); });
   await page.waitForTimeout(100);
   await page.screenshot({ path: join(out, 'real-ui-light.png') });
   assert.ok(await page.locator('.nat91-control-texture').count() > 15);
@@ -73,6 +83,6 @@ try {
   await page.waitForTimeout(100);
   await page.screenshot({ path: join(out, 'real-ui-mobile-dark.png') });
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: shared light, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: vivid active core / neutral gradient tail, shared light, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }
