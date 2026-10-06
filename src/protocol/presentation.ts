@@ -144,8 +144,13 @@ export class OutcomeProvenance {
         const index = row("tool", event.callId);
         const old = previous[index];
         const item = entries[index];
-        if (reusedInTurn(index) || (old?.kind === "tool" && item?.kind === "tool" &&
-          (old.status !== item.status || old.producer?.subagentId !== item.producer?.subagentId))) supersede(index);
+        // A newer turn does not make an old receipt a new result. Progress and equivalent
+        // terminal snapshots preserve its proof; a restart, attribution or outcome change does not.
+        if ((event.type === "tool_started" && reusedInTurn(index)) ||
+          (old?.kind === "tool" && item?.kind === "tool" &&
+            (old.status !== item.status || old.producer?.subagentId !== item.producer?.subagentId ||
+              (event.type === "tool_ended" && old.result !== item.result &&
+                outcomePayload(old.result) !== outcomePayload(item.result))))) supersede(index);
         if (event.type === "tool_started") {
           touch(this.parentTools, index, item?.kind === "tool" && !item.producer);
           parent(index);
@@ -241,4 +246,13 @@ export class OutcomeProvenance {
     }
     return [...changed];
   }
+}
+
+/** Agent Event payloads are JSON data; property insertion order is not a changed tool outcome. */
+function outcomePayload(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map(key => [key, (item as Record<string, unknown>)[key]]))
+      : item,
+  );
 }

@@ -59,7 +59,9 @@ scroll rounding over successive search pages or overriding subsequent reader mov
 A snapshot's event cursor proves delivery, not observation of a qualifying outcome. Indexed rows
 carry an optional `outcomeSeq`, derived alongside the full reducer, for the exact outcome boundary
 represented by that row. A metadata-only turn ending still publishes this proof. Reused or
-reopened rows revoke superseded proofs. Late tool progress or independent Workflow notices cannot
+reopened rows revoke superseded proofs. Unchanged old receipts and late progress retain their
+existing proofs across newer turns, including an abort; actual outcome changes do not. Late tool
+progress or independent Workflow notices cannot
 replace the parent answer (or actual tool-only result) as its completion proof. Unread is
 acknowledged only when that exact boundary is present on a rendered parent row and the existing
 paint, focus, visibility and latest-follow checks pass. Producer-only tails, hidden old-row upserts,

@@ -63,6 +63,31 @@ function liveViews(log: SessionLog) {
 }
 
 describe("tail-first Presentation Transcript view", () => {
+  it("keeps an unchanged previous tool outcome observable after progress, duplicate receipts and a newer abort", () => {
+    for (const result of ["old receipt", { content: [{ type: "text", text: "old receipt" }] }]) {
+      const log = new SessionLog("s1");
+      log.append({ type: "turn_started", turnId: "A" });
+      log.append({ type: "tool_started", callId: "old", name: "Bash", input: "old call" });
+      log.append({ type: "tool_ended", callId: "old", result, isError: false });
+      const outcome = log.append({ type: "turn_ended", turnId: "A", reason: "complete" });
+      const { h, views } = liveViews(log);
+      log.append({ type: "turn_started", turnId: "B" });
+      log.append({ type: "tool_updated", callId: "old", update: "late progress" });
+      for (const view of views) assert.equal(view.canObserveThrough(outcome.seq, ["tool:old"]), true);
+      log.append({ type: "tool_ended", callId: "old", result: structuredClone(result), isError: false });
+      for (const view of views) assert.equal(view.canObserveThrough(outcome.seq, ["tool:old"]), true);
+      // JSON object key order can change between equivalent terminal snapshots.
+      const reordered = typeof result === "string" ? result : { content: [{ text: "old receipt", type: "text" }] };
+      log.append({ type: "tool_ended", callId: "old", result: reordered, isError: false });
+      for (const view of views) assert.equal(view.canObserveThrough(outcome.seq, ["tool:old"]), true);
+      log.append({ type: "turn_ended", turnId: "B", reason: "aborted" });
+      h.snapshot(log.presentationSnapshot());
+      for (const view of views) assert.equal(view.canObserveThrough(outcome.seq, ["tool:old"]), true);
+      log.append({ type: "tool_ended", callId: "old", result: "genuinely changed result", isError: false });
+      for (const view of views) assert.equal(view.canObserveThrough(outcome.seq, ["tool:old"]), false);
+    }
+  });
+
   it("cannot observe an unseen answer after its row is reused, before the new turn ends", () => {
     const log = new SessionLog("s1");
     log.append({ type: "turn_started", turnId: "A" });

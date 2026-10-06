@@ -288,6 +288,39 @@ describe("reduced Presentation Transcript", () => {
     }
   });
 
+  it("preserves a real qualifying tool-only outcome through late progress, duplicate receipts and a newer abort", async () => {
+    const host = new SessionHost();
+    const backend = new FakeBackend();
+    host.registerBackend(backend);
+    try {
+      const id = await host.create({ scope: "/tmp", backend: "fake" });
+      await host.send(id, "A", "now");
+      const result = { content: [{ type: "text", text: "original receipt" }] };
+      const callId = backend.latest.useTool("Bash", "original call", result);
+      backend.latest.completeTurn();
+      await new Promise(resolve => setImmediate(resolve));
+      const attention = host.list().find(summary => summary.id === id)!.attention!;
+      assert.equal(attention.group, "unread");
+      const log = host.logFor(id)!;
+      const proof = (source: SessionLog) => source.presentationSnapshot().entries.find(item => item.entry.kind === "tool" && item.entry.id === callId)?.outcomeSeq;
+      assert.equal(proof(log), attention.observedSeq); // Warm the incremental projection.
+      await host.send(id, "B", "now");
+      log.append({ type: "tool_updated", callId, update: "late progress" });
+      assert.equal(proof(log), attention.observedSeq);
+      log.append({ type: "tool_ended", callId, result: structuredClone(result), isError: false });
+      assert.equal(proof(log), attention.observedSeq);
+      backend.latest.completeTurn("aborted");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(host.list().find(summary => summary.id === id)!.attention, attention);
+      assert.equal(proof(log), attention.observedSeq);
+      assert.equal(proof(new SessionLog(id, { existing: log.since(0) })), attention.observedSeq);
+      host.acknowledge(id, attention.version);
+      assert.equal(host.list().find(summary => summary.id === id)!.attention, undefined);
+    } finally {
+      await host.shutdown();
+    }
+  });
+
   it("does not let old Background Call progress or duplicate receipts replace a hidden tool-only result", () => {
     for (const duplicate of [false, true]) {
       const log = new SessionLog("s1");
