@@ -9,7 +9,7 @@ style.textContent = `
   .nat91-tab-surface > [role="tab"] { background: transparent !important; }
   .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: var(--foreground) !important; }
   .dark .nat91-control[data-nat91-selected="true"], .dark .nat91-tab-surface[data-nat91-selected="true"] > [role="tab"] { color: #edf2ff !important; }
-  .dark .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: #c2d4eb !important; }
+  .dark .nat91-control[data-nat91-selected="true"] .text-muted-foreground { color: #d4e1f4 !important; }
   .dark .nat91-control[data-nat91-selected="true"] .bg-foreground { background-color: #edf2ff !important; }
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
@@ -17,7 +17,12 @@ style.textContent = `
   [data-sidebar="header"] { padding: 0 !important; }
   [data-sidebar="header"] [data-slot="button"] { border-radius: 0 !important; min-height: 42px; padding-inline: 12px; }
   .nat91-tab-surface { border-radius: 0 !important; background: transparent !important; align-self: stretch; }
-  .nat91-tab-surface > [role="tab"] { align-self: stretch; }
+  .nat91-tab-rail { align-self: stretch; align-items: stretch !important; gap: 0 !important; min-height: 34px; }
+  .nat91-tab-surface { padding-inline: 8px !important; gap: 2px !important; }
+  .nat91-tab-surface > [role="tab"] { align-self: stretch; padding-inline: 4px; }
+  .nat91-tab-surface > button:not([role="tab"]) { background: transparent !important; }
+  .nat91-segmented-surface { width: 100% !important; padding: 0 !important; gap: 0 !important; border-radius: 0 !important; background: transparent !important; }
+  .nat91-segmented-surface > [data-slot="tabs-trigger"] { flex: 1; height: 34px; box-shadow: none !important; }
   .nat91-material-canvas { display: none; }
   @media (max-width: 640px) { .nat91-note { display: none; } }
   .nat91-note { position: fixed; bottom: 8px; right: 12px; z-index: 50; font: 9px/1.5 Inter, sans-serif; color: var(--muted-foreground); pointer-events: none; background: var(--background); padding: 3px 7px; }
@@ -63,13 +68,13 @@ const fragment = `
     vec2 q = abs((vUv - .5) * uRect.zw) - halfSize + uRadius;
     float shape = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - uRadius;
     if (shape > 0.0) discard;
-    // Brushing lives in page-space CSS pixels: changing control size doesn't stretch it.
-    float line = hash(vec2(4.0, floor(vPage.y * 2.0)));
-    float grain = (line - .5) * .026 + (hash(floor(vPage * 2.0)) - .5) * .012;
-    grain *= .7 + .3 * sin(vPage.x * .007 + line * 5.0);
-    float edge = 1.0 - smoothstep(0.0, 3.0, -shape);
-    vec2 side = (vUv - .5) * uRect.zw;
-    vec3 normal = normalize(vec3(side / max(halfSize, vec2(1.0)) * edge * .26, 1.0));
+    // Fine, elongated micro-scratches in page-space CSS pixels, not whole-row bands.
+    float brushX = vPage.x / 24.0;
+    float brushY = floor(vPage.y * 1.7);
+    float line = mix(hash(vec2(floor(brushX), brushY)), hash(vec2(floor(brushX) + 1.0, brushY)), smoothstep(0.0, 1.0, fract(brushX)));
+    float grain = (line - .5) * .028 + (hash(floor(vPage * 2.0)) - .5) * .006;
+    // A shallow face produces directional reflections, not a blurred perimeter glow.
+    vec3 normal = normalize(vec3(0.0, (vUv.y - .5) * .24 + (line - .5) * .032, 1.0));
     // The same area light follows the cursor across the whole UI. Only controls reflect it.
     vec2 toLight = (uLight - vPage) / vec2(300.0, 180.0);
     vec3 L = normalize(vec3(toLight, 1.15));
@@ -79,29 +84,31 @@ const fragment = `
     vec2 anisotropy = (H.xy - normal.xy) / vec2(.42, .12);
     float silver = exp(-dot(anisotropy, anisotropy));
     float tight = pow(max(dot(normal, H), 0.0), 100.0);
-    // Resting controls recede into the actual surface behind them, not grey metal tiles.
     vec3 steel = mix(vec3(.14, .16, .19), vec3(.77, .80, .85), uLightTheme);
-    vec3 base = mix(uBackdrop, steel, .075);
-    float feather = smoothstep(0.0, min(12.0, uRect.w * .32), -shape);
-    float fadeRight = 1.0 - smoothstep(.32, 1.0, vUv.x);
-    float inlet = smoothstep(0.0, .07, vUv.x);
-    float pool = exp(-pow((vUv.x - .12) / .46, 2.0)) * fadeRight * inlet * feather;
-    // A vivid reflected core fades through cobalt, navy, and finally the page itself.
-    // This is illumination on the whole control, not a hard blue fill or outlined card.
-    float reflection = exp(-pow((vUv.y - .62 - vUv.x * .12) / .29, 2.0));
-    float lead = exp(-pow((vUv.x - .035) / .028, 2.0)) * sin(vUv.y * 3.14159);
-    vec3 darkAccent = vec3(.015, .075, .29) + vec3(.015, .14, .56) * reflection;
-    vec3 lightAccent = vec3(.28, .61, .98);
-    vec3 color = base;
-    vec3 active = mix(base + darkAccent * pool * 1.15, mix(base, lightAccent, pool * .83), uLightTheme);
-    active += mix(vec3(.025, .38, .57), vec3(.02, .07, .03), uLightTheme) * lead * feather;
-    color = mix(color, active, uSelected);
-    // The brushed silver response remains subdued on hover; the active core is stronger.
-    float sheen = silver * (.055 + uHover * .38) * feather;
-    color += mix(vec3(.17, .21, .28), vec3(.025), uLightTheme) * sheen;
-    color += vec3(.15, .25, .38) * tight * feather * uSelected * pool;
-    color += vec3(.06, .09, .13) * silver * pool * uSelected * feather;
-    color += vec3(grain * (.14 + pool * uSelected * 1.2 + uHover * .28)) * feather;
+    vec3 base = mix(uBackdrop, steel, .18);
+    // Millimetre-like edge rolloff, not the previous 12px airbrushed halo.
+    float face = smoothstep(0.0, 1.5, -shape);
+    float fadeStart = mix(.32, .64, 1.0 - smoothstep(130.0, 240.0, uRect.z));
+    float fadeRight = 1.0 - smoothstep(fadeStart, .99, vUv.x);
+    float coverage = fadeRight * face;
+    // Broad directional studio reflection: cobalt in shadow, steel-blue in the light.
+    // It spans the control face; there is no cyan seam or local Gaussian light blob.
+    float studio = smoothstep(.10, .38, vUv.y) - smoothstep(.40, .89, vUv.y);
+    float reflectionY = .28 + clamp((uLight.y - (uRect.y + uRect.w * .5)) / 1200.0, -.08, .08);
+    float polished = smoothstep(reflectionY - .018, reflectionY, vUv.y)
+      * (1.0 - smoothstep(reflectionY + .014, reflectionY + .11, vUv.y));
+    polished *= (.65 + broad * .35) * (.78 + line * .34);
+    vec3 cobalt = vec3(.025, .085, .22) + vec3(.035, .13, .32) * studio;
+    vec3 activeDark = base + cobalt + vec3(.11, .15, .19) * silver + vec3(.18, .20, .24) * polished;
+    vec3 activeLight = mix(vec3(.62, .76, .90), vec3(.43, .66, .91), studio) + vec3(.045) * polished;
+    vec3 active = mix(activeDark, activeLight, uLightTheme);
+    vec3 color = mix(base, active, coverage * uSelected);
+    float sheen = silver * uHover * .20 * face;
+    color += mix(vec3(.20, .24, .30), vec3(.035), uLightTheme) * sheen;
+    color += vec3(.04, .06, .09) * tight * uSelected * coverage;
+    color += vec3(grain * (.55 + coverage * uSelected * 1.3 + uHover * .30)) * face;
+    // Cap the dark-theme silver catch so it doesn't wash out the labels crossing it.
+    color = min(color, mix(vec3(.32, .42, .76), vec3(1.0), uLightTheme));
     color = mix(color, base, uDisabled * .85);
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   }
@@ -135,9 +142,14 @@ const swatch = document.createElement('canvas');
 swatch.width = swatch.height = 1;
 const sampler = swatch.getContext('2d', { willReadFrequently: true });
 const colorCache = new Map();
-function backdropOf(target) {
+function backdropOf(target, rect) {
+  // Absolute controls can sit over a sibling region (the mobile rail trigger sits
+  // over the header, but belongs to main). Sample the visual underlay, not just
+  // the DOM parent, so their material doesn't turn into a mismatched dark square.
+  const underlay = document.elementsFromPoint(rect.left + rect.width * .5, rect.top + rect.height * .5)
+    .find(element => element instanceof HTMLElement && !target.contains(element) && !element.closest('.nat91-control'));
   const layers = [];
-  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+  for (let parent = underlay ?? target.parentElement; parent; parent = parent.parentElement) {
     const css = getComputedStyle(parent).backgroundColor;
     let rgba = colorCache.get(css);
     if (!rgba) {
@@ -159,6 +171,10 @@ function collect() {
   const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
+    const segmented = node.closest('[data-slot="tabs-list"]');
+    if (segmented && !segmented.classList.contains('nat91-segmented-surface')) segmented.classList.add('nat91-segmented-surface');
+    const tabRail = node.closest('[role="tablist"]:not([data-slot="tabs-list"])');
+    if (tabRail && !tabRail.classList.contains('nat91-tab-rail')) tabRail.classList.add('nat91-tab-rail');
     // Dock tabs include their close action in a single material region.
     const parent = node.parentElement;
     const target = node.getAttribute('role') === 'tab' && parent?.querySelectorAll('[role="tab"]').length === 1 && parent.querySelector('[data-slot="button"]') ? parent : node;
@@ -186,7 +202,7 @@ function collect() {
     }
     const selected = node.getAttribute('aria-selected') === 'true' || node.hasAttribute('aria-current') || node.getAttribute('data-active') === 'true' || node.getAttribute('data-state') === 'active' || node.getAttribute('aria-pressed') === 'true';
     if (target.dataset.nat91Selected !== String(selected)) target.dataset.nat91Selected = String(selected);
-    surfaces.push({ node, target, rect, selected, texture, backdrop: backdropOf(target) });
+    surfaces.push({ node, target, rect, selected, texture, backdrop: backdropOf(target, rect) });
   });
 }
 function draw() {
