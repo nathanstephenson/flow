@@ -74,15 +74,32 @@ try {
   });
   assert.ok(material.rightChroma > 20, 'Selected material must cover the right side, not fade to the neutral backdrop');
   assert.ok(material.max - material.min > 150, 'Chrome needs genuine bright silver / black reflection contrast, not capped blue glow');
+  // Cached ink must survive native class resets and direct Text-node updates,
+  // not just selection changes or replacement of the whole label element.
+  const cachedTab = page.locator('.nat91-tab-surface[data-nat91-selected="true"] > [role="tab"]').first();
+  const inkBeforeReset = await page.evaluate(() => window.nat91Material.getStats().inkBuilds);
+  await cachedTab.evaluate(node => node.classList.remove('nat91-adaptive-ink'));
+  await page.waitForFunction(() => document.querySelector('.nat91-tab-surface[data-nat91-selected="true"] > [role="tab"]')?.classList.contains('nat91-adaptive-ink'));
+  assert.ok(await page.evaluate(() => window.nat91Material.getStats().inkBuilds) > inkBeforeReset, 'Native class resets must rebuild cached ink');
+  const originalLabel = await cachedTab.evaluate(node => [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()).nodeValue);
+  const setLabel = value => cachedTab.evaluate((node, value) => { [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()).nodeValue = value; }, value);
+  const cachedTexture = cachedTab.locator('..').locator(':scope > .nat91-control-texture');
+  const waitForInkRevision = before => page.waitForFunction(before => Number(document.querySelector('.nat91-tab-surface[data-nat91-selected="true"] > .nat91-control-texture')?.dataset.revision) > before, before);
+  const beforeText = Number(await cachedTexture.getAttribute('data-revision'));
+  await setLabel(`${originalLabel} cache probe`);
+  await waitForInkRevision(beforeText);
+  const beforeRestore = Number(await cachedTexture.getAttribute('data-revision'));
+  await setLabel(originalLabel);
+  await waitForInkRevision(beforeRestore);
   const activeBounds = await activeRow.boundingBox();
   const railClip = { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 };
   await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: railClip });
   await page.mouse.move(activeBounds.x + 30, activeBounds.y + activeBounds.height * .5);
   await page.waitForTimeout(100);
-  const railGlossBefore = await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  const railGlossBefore = await activeRow.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform);
   await page.mouse.move(activeBounds.x + activeBounds.width - 50, activeBounds.y + activeBounds.height * .5);
   await page.waitForTimeout(100);
-  assert.notEqual(await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL()), railGlossBefore, 'Rail gloss must still follow the pointer');
+  assert.notEqual(await activeRow.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform), railGlossBefore, 'Composited rail gloss must still follow the pointer');
   await page.screenshot({ path: join(out, 'real-ui-rail-hover.png'), clip: railClip });
   await settle.hover();
   await page.waitForTimeout(100);
@@ -103,10 +120,10 @@ try {
   const rowBefore = await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
   await page.mouse.move(refreshBounds.x + 10, refreshBounds.y + refreshBounds.height * .5);
   await page.waitForTimeout(100);
-  const glossBefore = await refresh.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  const glossBefore = await refresh.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform);
   await page.mouse.move(refreshBounds.x + refreshBounds.width - 10, refreshBounds.y + refreshBounds.height * .5);
   await page.waitForTimeout(100);
-  const glossAfter = await refresh.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  const glossAfter = await refresh.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform);
   assert.notEqual(glossBefore, glossAfter, 'Button gloss must follow the pointer within that control');
   assert.equal(await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL()), rowBefore, 'Hovering a remote button must not relight the selected rail');
   await refresh.hover();

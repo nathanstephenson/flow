@@ -4,9 +4,12 @@
 // No source artwork or production component changes.
 const style = document.createElement('style');
 style.textContent = `
-  .nat91-control { isolation: isolate !important; border-radius: 3px !important; background: transparent !important; color: var(--foreground) !important; }
+  .nat91-control { isolation: isolate !important; }
   .nat91-control-static { position: relative; }
-  .nat91-control { border-color: transparent !important; }
+  /* Keep the native trigger/popup radii and fills in every open/closed state. */
+  .nat91-gloss { position: absolute; inset: 0; z-index: -1; overflow: hidden; border-radius: inherit; pointer-events: none; opacity: 0; }
+  .nat91-gloss-spot { position: absolute; left: -50%; top: -50%; width: 200%; height: 200%; background: radial-gradient(ellipse at center, rgb(255 255 255 / .09), transparent 55%); }
+  :root:not(.dark) .nat91-gloss-spot { background: radial-gradient(ellipse at center, rgb(0 0 0 / .055), transparent 55%); }
   .nat91-control:focus-visible, .nat91-tab-surface:has(> [role="tab"]:focus-visible) { outline: 2px solid var(--ring); outline-offset: -2px; }
   .nat91-tab-surface > [role="tab"] { background: transparent !important; }
   :root { --nat91-chrome-ink: var(--background); }
@@ -25,7 +28,7 @@ style.textContent = `
   }
   .nat91-control[data-nat91-selected="true"].nat91-adaptive-root::after {
     content: attr(data-nat91-type-text) / ""; position: absolute; inset: 0; z-index: 1;
-    display: flex; align-items: center; justify-content: center; pointer-events: none;
+    display: flex; align-items: center; justify-content: inherit; pointer-events: none;
     color: transparent; background-image: var(--nat91-type-image);
     background-clip: text; -webkit-background-clip: text; background-origin: border-box;
     background-size: var(--nat91-type-size); background-position: var(--nat91-type-position);
@@ -162,9 +165,10 @@ const fragment = `
       gl_FragColor = vec4(clamp(sheen, 0.0, 1.0), gloss * uHover * mix(.09, .055, uLightTheme) * (1.0 - uDisabled));
       return;
     }
-    vec3 color = mix(base + hover * uHover + vec3(grain * .35), chrome + vec3(gloss * uHover * .018), uSelected);
-    color = mix(color, base, uDisabled * .95);
-    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+    vec3 color = mix(chrome, base, uDisabled * .95);
+    // Inactive controls retain their actual native fill, including popup items.
+    // The moving gloss is a separate compositor layer, never a GPU readback.
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), uSelected * (1.0 - uDisabled));
   }
 `;
 function shader(type, source) {
@@ -207,14 +211,11 @@ function rgbaOf(css) {
   }
   return rgba;
 }
-function backdropOf(target, rect) {
-  // Absolute controls can sit over a sibling region (the mobile rail trigger sits
-  // over the header, but belongs to main). Sample the visual underlay, not just
-  // the DOM parent, so their material doesn't turn into a mismatched dark square.
-  const underlay = document.elementsFromPoint(rect.left + rect.width * .5, rect.top + rect.height * .5)
-    .find(element => element instanceof HTMLElement && !target.contains(element) && !element.closest('.nat91-control'));
+function backdropOf(target) {
+  // A portal/backdrop over this control must never become its material input.
+  // Native inactive fills remain visible; selected chrome uses its DOM surface.
   const layers = [];
-  for (let parent = underlay ?? target.parentElement; parent; parent = parent.parentElement) {
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
     const rgba = rgbaOf(getComputedStyle(parent).backgroundColor);
     if (rgba[3]) layers.push(rgba);
     if (rgba[3] === 1) break;
@@ -225,6 +226,8 @@ function backdropOf(target, rect) {
 }
 
 const typeSurfaces = new WeakMap();
+const materialCache = new WeakMap();
+const stats = { draws: 0, lastDrawMs: 0, pointerFrames: 0, lastPointerMs: 0, inkBuilds: 0, materialBuilds: 0 };
 function adaptiveInk(target, rect, texture) {
   // Preserve real DOM text / shaping / accessibility. Its foreground samples the
   // material at the black/white contrast crossover. No label-shaped dark patches.
@@ -234,6 +237,7 @@ function adaptiveInk(target, rect, texture) {
     surface = { canvas, context: canvas.getContext('2d') };
     typeSurfaces.set(target, surface);
   }
+  stats.inkBuilds++;
   const pixels = texture.getContext('2d').getImageData(0, 0, texture.width, texture.height);
   const linear = value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
   for (let i = 0; i < pixels.data.length; i += 4) {
@@ -270,7 +274,7 @@ function adaptiveInk(target, rect, texture) {
   });
 }
 function collect() {
-  const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"]');
+  const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"], [data-slot="select-item"], [data-slot="combobox-item"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-sub-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
     // The overlaid Settle action must reveal its row, not repaint the sidebar.
@@ -308,7 +312,18 @@ function collect() {
       texture.setAttribute('aria-hidden', 'true');
       target.prepend(texture);
     }
-    const selected = node.getAttribute('aria-selected') === 'true' || node.hasAttribute('aria-current') || node.getAttribute('data-active') === 'true' || node.getAttribute('data-state') === 'active' || node.getAttribute('aria-pressed') === 'true';
+    let gloss = target.querySelector(':scope > .nat91-gloss');
+    if (!gloss) {
+      gloss = document.createElement('span');
+      gloss.className = 'nat91-gloss';
+      gloss.setAttribute('aria-hidden', 'true');
+      const spot = document.createElement('span');
+      spot.className = 'nat91-gloss-spot';
+      gloss.append(spot);
+      texture.after(gloss);
+    }
+    const current = node.getAttribute('aria-current');
+    const selected = node.getAttribute('aria-selected') === 'true' || (!!current && current !== 'false') || node.getAttribute('data-active') === 'true' || node.getAttribute('data-state') === 'active' || node.getAttribute('aria-pressed') === 'true' || (node.hasAttribute('data-selected') && node.getAttribute('data-selected') !== 'false') || node.getAttribute('data-state') === 'checked' || node.getAttribute('aria-checked') === 'true';
     if (target.dataset.nat91Selected !== String(selected)) target.dataset.nat91Selected = String(selected);
     const group = target.closest('[role="tablist"], .nat91-action-strip, [data-sidebar="menu"]');
     const rail = target.matches('[data-sidebar="menu-button"]');
@@ -323,84 +338,139 @@ function collect() {
         if (!target.hasAttribute('data-nat91-activity')) target.dataset.nat91Activity = 'true';
       }
     }
-    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, texture, backdrop: rail ? rgbaOf(computed.backgroundColor).slice(0, 3) : backdropOf(target, rect) });
+    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, texture, gloss, radius: parseFloat(computed.borderTopLeftRadius) || 0, backdrop: backdropOf(target) });
   });
 }
 // Sidebar drawers live in body portals on narrow layouts. Their status changes
 // need the same updates as desktop rows; draw() isolates all material-owned writes.
 const observationRoot = document.body;
-const observerOptions = { subtree: true, childList: true, attributes: true };
+const observerOptions = { subtree: true, childList: true, attributes: true, characterData: true };
+function cachedOwnerOf(node) {
+  for (let owner = node; owner; owner = owner.parentElement) if (materialCache.has(owner)) return owner;
+}
 let domObserver;
 function draw() {
   frame = undefined;
+  const started = performance.now();
   domObserver?.disconnect();
   try {
-  collect();
-  const scale = Math.min(devicePixelRatio || 1, 1.5);
-  const width = Math.round(innerWidth * scale), height = Math.round(innerHeight * scale);
-  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
-  gl.viewport(0, 0, width, height);
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.uniform2f(uniforms.uViewport, innerWidth, innerHeight);
-  gl.uniform1f(uniforms.uLightTheme, document.documentElement.classList.contains('dark') ? 0 : 1);
-  const theme = getComputedStyle(document.documentElement);
-  gl.uniform3f(uniforms.uBlue, ...rgbaOf(theme.getPropertyValue('--trigger-command').trim()).slice(0, 3));
-  gl.uniform3f(uniforms.uPurple, ...rgbaOf(theme.getPropertyValue('--trigger-skill').trim()).slice(0, 3));
-  gl.enable(gl.SCISSOR_TEST);
-  surfaces.forEach(({ node, target, rect, groupRect, selected, rail, backdrop, texture }) => {
-    const hovered = rail ? target.closest('[data-sidebar="menu-item"]').matches(':hover') : target.matches(':hover');
-    const light = hovered && !reduced.matches ? pointer : { x: rect.left + rect.width * .5, y: rect.top + rect.height * .5 };
-    gl.uniform2f(uniforms.uLight, light.x, light.y);
-    gl.uniform3f(uniforms.uBackdrop, ...backdrop);
-    gl.uniform4f(uniforms.uRect, rect.left, rect.top, rect.width, rect.height);
-    gl.uniform4f(uniforms.uSurface, groupRect.left, groupRect.top, groupRect.width, groupRect.height);
-    gl.uniform1f(uniforms.uSelected, selected ? 1 : 0);
-    gl.uniform1f(uniforms.uRail, rail ? 1 : 0);
-    gl.uniform1f(uniforms.uHover, hovered ? 1 : 0);
-    gl.uniform1f(uniforms.uDisabled, node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true' ? 1 : 0);
-    gl.uniform1f(uniforms.uRadius, target.matches('[data-sidebar="menu-button"], .nat91-tab-surface, [role="tab"], .nat91-action-strip > button, .nat91-dock-strip > button') ? 0 : 3);
-    const x = Math.max(0, Math.floor(rect.left * scale)), y = Math.max(0, Math.floor((innerHeight - rect.bottom) * scale));
-    gl.scissor(x, y, Math.max(0, Math.min(width, Math.ceil(rect.right * scale)) - x), Math.max(0, Math.min(height, Math.ceil((innerHeight - rect.top) * scale)) - y));
+    collect();
+    const scale = Math.min(devicePixelRatio || 1, 1.5);
+    const width = Math.round(innerWidth * scale), height = Math.round(innerHeight * scale);
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    gl.viewport(0, 0, width, height);
+    gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    // Copy each surface before drawing another; overlapping DOM controls must not
-    // accidentally inherit another control's material from the shared GPU canvas.
-    const w = Math.max(1, Math.round(rect.width * scale)), h = Math.max(1, Math.round(rect.height * scale));
-    if (texture.width !== w || texture.height !== h) { texture.width = w; texture.height = h; }
-    const context = texture.getContext('2d');
-    context.clearRect(0, 0, w, h);
-    context.drawImage(canvas, rect.left * scale, rect.top * scale, rect.width * scale, rect.height * scale, 0, 0, w, h);
-    if (selected && !rail) adaptiveInk(target, rect, texture);
-    else target.querySelectorAll('[data-nat91-ink-icon]').forEach(node => { node.style.removeProperty('color'); delete node.dataset.nat91InkIcon; });
-  });
-  gl.disable(gl.SCISSOR_TEST);
-  revision++;
-  canvas.dataset.revision = String(revision);
-  canvas.dataset.surfaces = String(surfaces.length);
-  document.body.dataset.materialReady = 'true';
+    gl.uniform2f(uniforms.uViewport, innerWidth, innerHeight);
+    const dark = document.documentElement.classList.contains('dark');
+    gl.uniform1f(uniforms.uLightTheme, dark ? 0 : 1);
+    const theme = getComputedStyle(document.documentElement);
+    const blue = theme.getPropertyValue('--trigger-command').trim(), purple = theme.getPropertyValue('--trigger-skill').trim();
+    gl.uniform3f(uniforms.uBlue, ...rgbaOf(blue).slice(0, 3));
+    gl.uniform3f(uniforms.uPurple, ...rgbaOf(purple).slice(0, 3));
+    gl.enable(gl.SCISSOR_TEST);
+    surfaces.forEach(({ node, target, rect, groupRect, selected, rail, backdrop, texture, radius }) => {
+      const disabled = node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true';
+      const signature = JSON.stringify([scale, dark, blue, purple, rect.x, rect.y, rect.width, rect.height, groupRect.x, groupRect.y, groupRect.width, groupRect.height, selected, rail, backdrop, radius, disabled, target.textContent, getComputedStyle(target).font]);
+      if (materialCache.get(target) === signature) return;
+      materialCache.set(target, signature);
+      const w = Math.max(1, Math.round(rect.width * scale)), h = Math.max(1, Math.round(rect.height * scale));
+      if (texture.width !== w || texture.height !== h) { texture.width = w; texture.height = h; }
+      const context = texture.getContext('2d');
+      context.clearRect(0, 0, w, h);
+      if (selected && !rail && !disabled) {
+        gl.uniform2f(uniforms.uLight, rect.left + rect.width * .5, rect.top + rect.height * .5);
+        gl.uniform3f(uniforms.uBackdrop, ...backdrop);
+        gl.uniform4f(uniforms.uRect, rect.left, rect.top, rect.width, rect.height);
+        gl.uniform4f(uniforms.uSurface, groupRect.left, groupRect.top, groupRect.width, groupRect.height);
+        gl.uniform1f(uniforms.uSelected, 1);
+        gl.uniform1f(uniforms.uRail, 0);
+        gl.uniform1f(uniforms.uHover, 0);
+        gl.uniform1f(uniforms.uDisabled, 0);
+        gl.uniform1f(uniforms.uRadius, Math.min(radius, rect.width / 2, rect.height / 2));
+        const x = Math.max(0, Math.floor(rect.left * scale)), y = Math.max(0, Math.floor((innerHeight - rect.bottom) * scale));
+        gl.scissor(x, y, Math.max(0, Math.min(width, Math.ceil(rect.right * scale)) - x), Math.max(0, Math.min(height, Math.ceil((innerHeight - rect.top) * scale)) - y));
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        context.drawImage(canvas, rect.left * scale, rect.top * scale, rect.width * scale, rect.height * scale, 0, 0, w, h);
+        stats.materialBuilds++;
+        texture.dataset.revision = String(stats.materialBuilds);
+        adaptiveInk(target, rect, texture);
+      } else {
+        for (const text of [target, ...target.querySelectorAll('.nat91-adaptive-ink, .nat91-adaptive-root')]) text.classList.remove('nat91-adaptive-ink', 'nat91-adaptive-root');
+        target.querySelectorAll('[data-nat91-ink-icon]').forEach(icon => { icon.style.removeProperty('color'); delete icon.dataset.nat91InkIcon; });
+      }
+    });
+    gl.disable(gl.SCISSOR_TEST);
+    revision++;
+    stats.draws = revision;
+    canvas.dataset.revision = String(revision);
+    canvas.dataset.surfaces = String(surfaces.length);
+    document.body.dataset.materialReady = 'true';
   } finally {
+    stats.lastDrawMs = performance.now() - started;
     domObserver?.observe(observationRoot, observerOptions);
   }
+  scheduleGloss();
 }
 function schedule() { if (!frame) frame = requestAnimationFrame(draw); }
+let glossFrame, hoveredTarget, activeGloss;
+function scheduleGloss() { if (!glossFrame) glossFrame = requestAnimationFrame(moveGloss); }
+function moveGloss() {
+  glossFrame = undefined;
+  const started = performance.now();
+  const hoverRegion = hoveredTarget?.matches('[data-sidebar="menu-button"]') ? hoveredTarget.closest('[data-sidebar="menu-item"]') : hoveredTarget;
+  const target = hoveredTarget?.isConnected && hoverRegion?.matches(':hover') ? hoveredTarget : null;
+  const gloss = target?.querySelector(':scope > .nat91-gloss');
+  if (activeGloss && activeGloss !== gloss) {
+    activeGloss.style.opacity = '0';
+    activeGloss.firstElementChild.style.willChange = 'auto';
+  }
+  activeGloss = gloss;
+  if (gloss) {
+    const rect = target.getBoundingClientRect();
+    const disabled = target.matches(':disabled, [aria-disabled="true"]');
+    const light = reduced.matches ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : pointer;
+    const spot = gloss.firstElementChild;
+    spot.style.willChange = 'transform';
+    spot.style.transform = `translate3d(${Math.max(0, Math.min(rect.width, light.x - rect.left)) - rect.width / 2}px, ${Math.max(0, Math.min(rect.height, light.y - rect.top)) - rect.height / 2}px, 0)`;
+    gloss.style.opacity = disabled ? '0' : target.dataset.nat91Selected === 'true' && !target.matches('[data-sidebar="menu-button"]') ? '.2' : '1';
+  }
+  stats.pointerFrames++;
+  stats.lastPointerMs = performance.now() - started;
+}
 window.addEventListener('pointermove', event => {
-  if (event.pointerType === 'touch' || reduced.matches) return;
-  pointer = { x: event.clientX, y: event.clientY };
-  schedule();
+  if (event.pointerType === 'touch') return;
+  if (!reduced.matches) pointer = { x: event.clientX, y: event.clientY };
+  const hit = event.target instanceof Element ? event.target : null;
+  const action = hit?.closest('[data-sidebar="menu-action"]');
+  hoveredTarget = action ? action.closest('[data-sidebar="menu-item"]')?.querySelector('[data-sidebar="menu-button"]') : hit?.closest('.nat91-control');
+  // Pointer frames perform one local rect read and compositor transform only.
+  // No collection, underlay sampling, GPU copy, pixel loop or PNG encoding.
+  scheduleGloss();
 });
+document.documentElement.addEventListener('pointerleave', () => { hoveredTarget = null; scheduleGloss(); });
+function invalidateMaterials() { surfaces.forEach(({ target }) => materialCache.delete(target)); schedule(); }
+document.fonts.addEventListener('loadingdone', invalidateMaterials);
 window.addEventListener('resize', schedule);
 document.fonts.ready.then(schedule);
 document.addEventListener('scroll', schedule, true);
 document.addEventListener('focusin', schedule);
 document.addEventListener('focusout', schedule);
-document.addEventListener('pointerdown', schedule);
-document.addEventListener('pointerup', schedule);
-reduced.addEventListener('change', () => { pointer = { x: innerWidth * .56, y: innerHeight * .3 }; schedule(); });
+reduced.addEventListener('change', () => { pointer = { x: innerWidth * .56, y: innerHeight * .3 }; scheduleGloss(); });
 domObserver = new MutationObserver(records => {
-  if (records.some(record => record.target !== canvas && record.target !== note)) schedule();
+  const meaningful = records.filter(record => record.target !== canvas && record.target !== note && !record.target.closest?.('.nat91-gloss') && !['data-highlighted', 'aria-activedescendant'].includes(record.attributeName) && (record.type !== 'characterData' || cachedOwnerOf(record.target)));
+  // A native re-render can replace a label/canvas or reset its classes while
+  // leaving the outer rect/text unchanged. Invalidate only that control; ARIA
+  // and selection changes are already covered by the material signature.
+  for (const record of meaningful) {
+    if (record.type === 'attributes' && !['class', 'style'].includes(record.attributeName)) continue;
+    const owner = cachedOwnerOf(record.target);
+    if (owner) materialCache.delete(owner);
+  }
+  if (meaningful.length) schedule();
 });
 domObserver.observe(observationRoot, observerOptions);
 new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-window.nat91Material = { canvas, redraw: schedule, getLight: () => ({ ...pointer }) };
+window.nat91Material = { canvas, redraw: invalidateMaterials, getLight: () => ({ ...pointer }), getStats: () => ({ ...stats }) };
 schedule();
