@@ -35,7 +35,7 @@ The step completes only when its Subagent and all background work it owns have f
 
 Executes a shell command in the Agent Session's Scope. This is not Flow's existing Command concept.
 
-Receives input as JSON text through the `$OUTPUT` environment variable, never through insertion into command text. Standard output schema: `{ exitCode, stdout, stderr }`.
+Receives input as JSON text through the `$OUTPUT` shell variable, populated via stdin and not exported, never through insertion into command text. Standard output schema: `{ exitCode, stdout, stderr }`.
 
 Steps can declare accepted exit codes; the default is `0`. This lets a failing test result become valid input for a repair step rather than necessarily failing the workflow.
 
@@ -43,9 +43,15 @@ Steps can declare accepted exit codes; the default is `0`. This lets a failing t
 
 Receives parsed JSON as typed `input` and returns JSON validated against its output schema. Generated input types reflect preceding outputs and configured mappings.
 
-Supports filesystem access within the Agent Session's Scope and network access through `fetch`. Filesystem restrictions must prevent escape through symlinks. Imports and process access are not supported; use Shell steps for process operations or broader filesystem access.
+Supports filesystem access within the Agent Session's Scope and HTTP(S) network access through `fetch`, including local services. The closed compiler rejects imports and supplies no Node or DOM declarations; guest code runs in QuickJS WASM without a module loader or process APIs. These restrictions and the scoped filesystem API remain active even when filesystem isolation is off. Use Shell steps for process operations; Shell and the trusted Node supervisor have unrestricted host authority when isolation is off, not an OS-enforced boundary.
 
-External sandboxing is optional, configured explicitly in Settings. When enabled, execution requires an available external sandbox and must not silently fall back to execution without it. Users can disable it when Flow already runs inside a sandbox. Disabling it does not expose imports or process APIs to TypeScript steps; Flow retains its scoped filesystem API checks, but operating-system isolation then depends on the surrounding environment. The UI must state this distinction.
+Shell and TypeScript execute locally with host Node 22 or later. **Settings → General → Filesystem isolation** governs the machine-wide policy, separately from the optional absolute `workflowRuntime.nodePath` override. The stored `filesystemIsolation?: boolean` selects required enforcement (`true`), unrestricted execution (`false`), or capability-dependent automatic mode (omitted). PUT `/api/config` accepts `null` to reset automatic mode; an omitted patch key leaves the override unchanged. The config view reports `supported`, `enabled`, `automatic`, `checking` and `reason`; Settings shows the support reason and a clear unrestricted warning.
+
+The initial actual Linux Bubblewrap capability check defaults ON when enforcement is available and UNRESTRICTED when unsupported or unavailable, including missing Bubblewrap or unavailable namespaces. This automatic choice is latched for the Session Host's lifetime. Explicit enable fails closed, and an enabled launch failure never silently downgrades. Changes apply to new Backend Sessions/Revive, new Workflow Executions and new local stdio MCP clients; existing work is unchanged. Executions capture the policy for local code; Agent steps inherit their owning Backend Session's boundary. Worker process separation remains on in both modes. HTTP MCP and network access are unchanged.
+
+When isolation is enabled, Linux Bubblewrap makes host files read-only or masked; only Scope and private execution state are writable. Host-owned descriptors pin mount sources before launch. One boundary covers the local supervisor, QuickJS worker and all Shell descendants; the inherited PID namespace enforces descendant cleanup even for detached processes. When off, Scope is only a working directory: agent tools, Shell commands and local stdio MCP servers can read, write or delete elsewhere, including credentials and host state. Process-group cleanup remains but detached processes lack PID-namespace containment.
+
+Scoped filesystem APIs reject escaping paths and symlink traversal in both modes. Enabled isolation does not provide network isolation, rollback or file-conflict locking, and cannot undo pre-existing hard links or other data aliases. Keep protected-file aliases out of Scope. See ADR 0028 for credential masks, descriptor-pinned runtime/dependency assets and enforcement limits.
 
 Shell and TypeScript steps have default execution timeouts with per-step overrides. Stopping execution does not undo filesystem changes or network requests.
 
@@ -153,7 +159,7 @@ These checks guided the implementation and remain review criteria:
 
 1. Confirm each Backend Adapter can select Subagent model and Effort, supply isolated input, track owned background work, and route permissions and Enquiries independently of the parent turn. Define unsupported-capability behaviour.
 2. Define durable execution records and restart reconciliation. Existing Subagents belong to a Backend Session and cannot survive it. Confirm how Shell and TypeScript execution is stopped after host loss.
-3. Select a TypeScript execution boundary that can enforce filesystem, symlink, import, process, network, and cancellation rules. TypeScript types alone provide no security boundary.
+3. Preserve the optional machine-wide filesystem policy: actual capability-dependent automatic choice latched for the Session Host lifetime, clear unrestricted warnings, policy capture by new work and fail-closed enabled launches. Preserve Linux descriptor-pinned enforcement when enabled, worker process separation in both modes, scoped API symlink checks, closed compilation, QuickJS restrictions and descendant cancellation. Off mode has no OS-enforced host filesystem or detached-process containment. Network access remains available, including local services; TypeScript types alone provide no security boundary.
 4. Define graph validation for conditional joins, handled errors, terminal outputs, stable step identity, and duplicate or renamed step names.
 5. Define schema representation, supported Zod subset, generated editor types, and field-mapping validation.
 6. Specify secret storage, access controls, injection, and redaction. Reconcile retained inputs with secret references so execution history never stores resolved credentials as configuration.

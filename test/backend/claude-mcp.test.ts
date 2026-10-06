@@ -8,6 +8,7 @@ import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { McpSession } from "../../src/backend/mcp.ts";
 import { claudeMcpServers, refreshClaudeMcp } from "../../src/backend/claude/mcp.ts";
 import { workflowParentServer } from "../../src/backend/claude/workflow-parent.ts";
+import { prepareFilesystemIsolation } from "../../src/isolation/filesystem.ts";
 
 test("Claude registration waits for startup and can retry a rejected registration", async () => {
   const mcp = new McpSession([{ id: "fixture", name: "Fixture", enabledByDefault: true,
@@ -52,7 +53,10 @@ test("a failed external MCP refresh restores the parent workflow tools", async (
   assert.deepEqual(calls, [[], ["fixture", "flow_workflow"], ["flow_workflow"]]);
 });
 
-test("real Claude SDK refreshes tools after delayed discovery and Retry without a model request", { timeout: 30_000 }, async () => {
+test("real Claude SDK refreshes tools after delayed discovery and Retry without a model request", { timeout: 30_000 }, async (t) => {
+  try {
+    (await prepareFilesystemIsolation({ scope: process.cwd(), command: process.execPath, args: [], credentials: "none" })).cleanup();
+  } catch (error) { t.skip(`Filesystem isolation unavailable: ${(error as Error).message}`); return; }
   const scope = await mkdtemp(join(tmpdir(), "flow-claude-mcp-"));
   const mcp = new McpSession([{ id: "fixture", name: "Fixture", enabledByDefault: true,
     transport: "stdio", command: process.execPath, args: ["--experimental-strip-types", resolve("test/fixtures/mcp-server.ts")] }], scope);

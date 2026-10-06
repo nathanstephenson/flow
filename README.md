@@ -36,10 +36,35 @@ do not start another host against that state directory. Inspect the log and reso
 operation before attempting recovery.
 Configure credentials for the Backend Adapter you use.
 
-Pi Backend Sessions run in separate worker processes, including their ordinary Subagents and
-Background Calls. The Session Host retains transcripts and services; worker failure interrupts work
-rather than replaying it. **Process separation is not filesystem confinement:** without an OS-level
-filesystem policy, tools still have the launching user's filesystem access.
+Claude and Pi Backend Sessions run in owned workers in **both** filesystem modes. Machine-wide
+**Settings → General → Filesystem isolation** defaults to ON when a real Linux Bubblewrap launch
+check succeeds, and **UNRESTRICTED** when enforcement is unsupported or unavailable (including on
+macOS, missing Bubblewrap or unavailable namespaces). Settings shows the support reason and a
+clear unrestricted warning. The initial automatic choice is latched for the Session Host's lifetime.
+
+When isolation is enabled, Bubblewrap makes the host filesystem read-only, with writable mounts
+only for the selected Scope, dedicated backend state and private scratch. Subagents and Background
+Calls inherit that boundary. Local Workflow Shell and TypeScript steps and local stdio MCP servers
+receive the policy too. One boundary covers the local supervisor, QuickJS worker and all Shell
+descendants; its inherited PID namespace enforces cleanup even for detached processes. Local code
+steps require host Node 22 or later; `workflowRuntime` Settings contain only an optional absolute
+`nodePath` override. HTTP MCP and network access are unchanged in either mode.
+
+For Linux enforcement, install Bubblewrap (for example, `sudo apt install bubblewrap`) with
+descriptor-backed bind mounts (`--bind-fd` and `--ro-bind-fd`) to pin mount sources, and working
+user, mount and PID namespaces. **Explicit enable fails closed**: unavailable enforcement, unsafe
+Scopes and failed restricted launches refuse work, never silently downgrading to unrestricted.
+After installing or fixing enforcement, restart the Session Host to refresh its automatic choice.
+
+With isolation off, Scope is only a working directory. Agent tools, Shell commands and local stdio
+MCP servers can read, write or delete elsewhere as the host user, including credentials and Flow
+state. Detached processes lack PID-namespace containment. QuickJS, closed compilation and scoped
+filesystem APIs still restrict direct TypeScript guest access, but Shell and the trusted Node
+supervisor have unrestricted host authority, not an OS-enforced boundary.
+
+The Session Host retains transcripts and authorisation; worker failure interrupts rather than replays
+work. Neither mode protects Scope from damage or fully mediates pre-existing hard links and data
+aliases. See [the policy and its limits](docs/adr/0028-local-model-work-has-a-fail-closed-filesystem-boundary.md).
 
 To check a release from source, run `npm ci` and `npm run test:package`.
 This builds, packs, and installs the archive into a temporary prefix, then checks it
@@ -482,6 +507,7 @@ Settings are machine-wide: they govern every Agent Session on the machine, not o
 
 | Setting | Meaning | Default |
 | --- | --- | --- |
+| `filesystemIsolation` | Machine-wide filesystem enforcement: `true` requires isolation; `false` selects unrestricted execution. | automatic: ON when actual Linux Bubblewrap enforcement is available, otherwise UNRESTRICTED |
 | `retention.settled` | How long a Settled Agent Session survives before it is reaped. A duration — `90m`, `36h`, `1d` — or `never`. | `1d` |
 | `fonts.chrome` | The interface typeface: labels, transcript prose, buttons. | `'Inter Variable', sans-serif` |
 | `fonts.monospace` | The Shell's terminal, and the chrome that aligns character by character. | a Nerd Font stack (below) |
@@ -495,6 +521,17 @@ sent from the browser is refused with the field named, because there is someone 
 it. The Session Host reads the file through one owner (`src/daemon/config-store.ts`) rather than
 copying values at startup, so an edit applies to the running daemon: retention takes effect at the
 next hourly sweep, and a typeface immediately.
+
+The **General → Filesystem isolation** group shows support status/reason and warns clearly when
+execution is unrestricted. The optional stored key is `filesystemIsolation?: boolean`; leaving it
+out selects automatic mode, and PUT `/api/config` with `filesystemIsolation: null` resets to that
+mode. Omitting the key in a PUT leaves the current override unchanged. The config view reports
+isolation status with `supported`, `enabled`, `automatic`, `checking` and `reason`. The initial
+capability-dependent automatic choice remains fixed until the Session Host restarts; a failed
+enabled launch never changes it to unrestricted. Checking must finish before automatic work launches.
+Settings changes apply to new Backend Sessions (including Revive), new Workflow Executions and new
+local stdio MCP clients, not existing work. Agent Workflow Steps inherit their Backend Session's
+policy. Worker process separation stays on in both modes; HTTP MCP and network access do not change.
 
 Shortening `retention.settled` arms a delete. Nothing is removed on save — the sweep does it, within
 the hour — but the Settings page counts the Agent Sessions the new window newly reaches and makes you
@@ -630,8 +667,10 @@ explicitly; no constraint is silently discarded. Supported dialects are draft-07
 2020-12 (the MCP default).
 
 Direct steps support both stdio and Streamable HTTP, including existing OAuth sign-in. They make
-no model call, create no Subagent and add no model tokens. Code-runtime sandbox settings do not
-apply: a stdio server runs as the host user, and HTTP calls use the configured remote service.
+no model call, create no Subagent and add no model tokens. New local stdio clients capture the
+machine-wide filesystem isolation policy: servers are restricted when enabled and otherwise run
+with unrestricted host-user filesystem authority. Existing clients retain their policy; HTTP calls
+use the configured remote service unchanged.
 Credentials belong in MCP Settings, never in workflow arguments. Expired/missing authentication
 requires signing in there and a manual Retry; executions never launch a login flow or replay an
 HTTP tool request after a 401.

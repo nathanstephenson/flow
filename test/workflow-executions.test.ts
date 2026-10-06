@@ -28,8 +28,9 @@ async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if 
 
 async function fixture(options: { naming?: boolean; automaticNaming?: boolean; backendName?: 'fake' | 'claude' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'flow-executions-'));
-  const store = new TranscriptStore(root), workflows = new WorkflowStore(root), secrets = new SecretStore(root), config = new ConfigStore(root);
-  config.update({ workflowRuntime: { externalSandbox: false, nodePath: process.execPath } });
+  const stateRoot = mkdtempSync(join(tmpdir(), 'flow-executions-state-'));
+  const store = new TranscriptStore(stateRoot), workflows = new WorkflowStore(stateRoot), secrets = new SecretStore(stateRoot), config = new ConfigStore(stateRoot);
+  config.update({ workflowRuntime: { nodePath: process.execPath } });
   const backend = new FakeBackend();
   const summary = new FakeBackend();
   summary.autoReply = 'Name the actual workflow work';
@@ -48,7 +49,7 @@ async function fixture(options: { naming?: boolean; automaticNaming?: boolean; b
   const server = await serve({ host, store, workflows, secrets, config, workflowExecutions: service, token: 'test', assets: {} });
   const request = (path: string, method = 'GET', body?: unknown) => fetch(server.url + path, { method, headers: { authorization: 'Bearer test' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const base = `/api/sessions/${id}/workflows`;
-  return { root, store, workflows, secrets, config, backend, summary, host, service, id, request, base, setAutomaticNaming(value: boolean) { automaticNaming = value; }, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); } };
+  return { root, stateRoot, store, workflows, secrets, config, backend, summary, host, service, id, request, base, setAutomaticNaming(value: boolean) { automaticNaming = value; }, async close() { await host.shutdown(); await server.close(); rmSync(root, { recursive: true, force: true }); rmSync(stateRoot, { recursive: true, force: true }); } };
 }
 
 it('deduplicates concurrent ambiguous launches by their durable launch id', async () => {
@@ -539,7 +540,7 @@ it('tests only the selected step, validates model/backend/Project, and keeps fix
     assert.equal(view.execution.steps.later?.status, 'skipped');
     assert.equal(f.backend.latest.prompts.length, 0, 'step tests never notify the parent');
     await f.host.settle(f.id); await f.host.reap(Date.now() + 10);
-    assert.equal(existsSync(join(f.root, 'sessions', f.id)), false);
+    assert.equal(existsSync(join(f.stateRoot, 'sessions', f.id)), false);
     assert.equal(f.service.scheduler.occupied(f.id), false);
   } finally { await f.close(); }
 });
@@ -716,7 +717,7 @@ it('redacts quote/newline secrets in private Agent activity and output; cancella
     const view = await (await f.request(f.base + '/' + started.execution.id)).json() as WorkflowExecutionView;
     assert.equal(view.execution.result, '[REDACTED]');
     assert.ok(!JSON.stringify(view).includes('secret-'));
-    const activity = readFileSync(join(f.root, 'sessions', f.id, 'workflow-activity', started.execution.id + '.json'), 'utf8');
+    const activity = readFileSync(join(f.stateRoot, 'sessions', f.id, 'workflow-activity', started.execution.id + '.json'), 'utf8');
     assert.ok(!activity.includes('secret-'));
     assert.ok(!JSON.stringify(f.host.logFor(f.id).since(0)).includes('secret-'));
     const second = await (await f.request(f.base, 'POST', { workflowId: definition.id, input: {} })).json() as WorkflowExecutionView;
@@ -776,7 +777,7 @@ for (const secret of ['type', 'asked', 'raw', 'question', 'options', 'header', '
       const result = await f.service.scheduler.wait(f.id, executionId);
       assert.equal(result.result, '[REDACTED]');
       assert.equal(f.workflows.getExecution(f.id, executionId).result, '[REDACTED]');
-      const saved = readFileSync(join(f.root, 'sessions', f.id, 'workflow-activity', executionId + '.json'), 'utf8');
+      const saved = readFileSync(join(f.stateRoot, 'sessions', f.id, 'workflow-activity', executionId + '.json'), 'utf8');
       assert.ok(!saved.includes(`${secret}-call-`)); assert.ok(!saved.includes(`${secret}-ask-`));
       const persisted = JSON.parse(saved);
       assert.deepEqual(persisted.activity, view().activity);
@@ -833,7 +834,7 @@ it('recovers activity sequences when the durable log is ahead of the preview', a
     const started = await f.service.start({ sessionId: f.id, definition, input: {} });
     const eid = started.execution.id;
     await until(() => f.backend.latest.workflowSubagents.length === 1);
-    const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
+    const path = join(f.stateRoot, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
     const stalePreview = readFileSync(path, 'utf8');
     f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'durable before crash' });
     await f.host.shutdown();
@@ -1119,7 +1120,7 @@ it('reports unavailable legacy history honestly while keeping retained events in
     f.backend.latest.workflowSubagents[0]!.emit({ type: 'notice', level: 'info', text: 'retained legacy activity' });
     f.backend.latest.workflowSubagents[0]!.complete('done');
     await f.service.scheduler.wait(f.id, eid);
-    const path = join(f.root, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
+    const path = join(f.stateRoot, 'sessions', f.id, 'workflow-activity', `${eid}.json`);
     const saved = JSON.parse(readFileSync(path, 'utf8'));
     delete saved.historyComplete;
     for (const item of saved.activity) delete item.attempt;

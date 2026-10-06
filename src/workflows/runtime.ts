@@ -18,39 +18,11 @@ lines.on('line', line => {
   lease = setTimeout(() => stop(), 3000);
   if (started) return;
   started = true;
-  void (process.argv.includes('--docker-supervisor') ? dockerSupervisor(JSON.parse(line)) : run(JSON.parse(line))).then(output => finish({ output }), error => finish({ error: error instanceof Error ? error.message : String(error) }));
+  void run(JSON.parse(line)).then(output => finish({ output }), error => finish({ error: error instanceof Error ? error.message : String(error) }));
 });
 function finish(result: unknown) {
   clearTimeout(lease);
   process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
-}
-
-async function dockerSupervisor(config: { docker: string; args: string[]; name: string; request: { timeout: number } }) {
-  const child = spawn(config.docker, config.args, { stdio: ['pipe', 'pipe', 'pipe'] });
-  let output = '', error = '', stopped = false;
-  stop = () => { stopped = true; controller.abort(); child.kill('SIGKILL'); };
-  const deadline = setTimeout(stop, config.request.timeout);
-  child.stdin.on('error', () => {});
-  child.stdin.write(JSON.stringify(config.request) + '\n');
-  const heartbeat = setInterval(() => { if (!stopped) child.stdin.write('\n'); }, 500);
-  child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
-  child.stderr.setEncoding('utf8').on('data', (chunk: string) => { error = (error + chunk).slice(-1000); });
-  try {
-    const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-    if (stopped || code !== 0) throw new Error(`Docker runtime stopped (${code}): ${error}`);
-    const result = JSON.parse(output);
-    if (Object.hasOwn(result, 'error')) throw new Error(result.error);
-    return result.output;
-  } finally {
-    clearInterval(heartbeat); clearTimeout(deadline); clearTimeout(lease);
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = spawn(config.docker, ['--host', 'unix:///var/run/docker.sock', 'rm', '--force', config.name], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 5000, killSignal: 'SIGKILL' });
-      let error = '';
-      cleanup.stderr.on('data', (chunk: Buffer) => { error = (error + chunk.toString()).slice(-1000); });
-      cleanup.once('error', reject);
-      cleanup.once('close', code => code === 0 || error.includes('No such container') ? resolve() : reject(new Error(`Docker container cleanup failed: ${error}`)));
-    });
-  }
 }
 
 async function run(request: { kind: string; scope: string; command?: string; code?: string; input: unknown; inputType: string; outputType: string; secrets: Record<string, string>; timeout: number }) {

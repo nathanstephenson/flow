@@ -2,13 +2,44 @@ import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { SessionHost } from '../src/daemon/host.ts';
 import { serve } from '../src/daemon/server.ts';
 import { ConfigStore } from '../src/daemon/config-store.ts';
 import { SecretStore } from '../src/daemon/secret-store.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
 import { workflowRuntimeOptions } from '../src/workflows/runtime-settings.ts';
+
+it('discovers only executable Node files without discovering or executing Docker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-node-path-'));
+  const previous = process.env.PATH;
+  const marker = join(root, 'docker-ran');
+  const planted = join(root, 'docker');
+  writeFileSync(planted, `#!/bin/sh\n: > '${marker}'\n`, { mode: 0o700 });
+  process.env.PATH = root;
+  try {
+    assert.deepEqual(workflowRuntimeOptions(), { nodePath: undefined });
+    assert.deepEqual(workflowRuntimeOptions(undefined, root), { nodePath: undefined });
+    // Even a stale in-memory settings object cannot carry retired fields into execution options.
+    for (const externalSandbox of [true, false]) {
+      assert.deepEqual(workflowRuntimeOptions({ externalSandbox, dockerImage: 'node:22', dockerPath: planted } as never, root), { nodePath: undefined });
+    }
+    assert.throws(() => statSync(marker), { code: 'ENOENT' });
+    const directory = join(root, 'directory');
+    const nonExecutable = join(root, 'non-executable');
+    const executable = join(root, 'executable');
+    for (const path of [directory, nonExecutable, executable]) mkdirSync(path);
+    mkdirSync(join(directory, 'node'));
+    writeFileSync(join(nonExecutable, 'node'), '', { mode: 0o600 });
+    const node = join(executable, 'node');
+    writeFileSync(node, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    assert.deepEqual(workflowRuntimeOptions(undefined, ['.', directory, nonExecutable, executable].join(delimiter)), { nodePath: node });
+    assert.deepEqual(workflowRuntimeOptions({ nodePath: '/override/node' }, executable), { nodePath: '/override/node' });
+  } finally {
+    if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 it('serves private machine-wide workflow and secret CRUD through authenticated HTTP', async () => {
   const root = mkdtempSync(join(tmpdir(), 'flow-workflow-api-'));
@@ -55,22 +86,23 @@ it('serves private machine-wide workflow and secret CRUD through authenticated H
     assert.equal((await request('/api/workflows/example')).status, 404);
     assert.deepEqual(JSON.parse(readFileSync(join(history, 'snapshot.json'), 'utf8')), { definition });
     const initial = await (await request('/api/config')).json() as { workflowRuntime: unknown };
-    assert.deepEqual(initial.workflowRuntime, { externalSandbox: true, dockerImage: 'flow-workflow-runtime:local' });
-    assert.equal((await request('/api/config', 'PUT', { workflowRuntime: { externalSandbox: false, nodePath: '/opt/node' } })).status, 200);
-    await request('/api/config', 'PUT', { workflowRuntime: { dockerImage: 'node:22' } });
-    assert.deepEqual(new ConfigStore(root).view().workflowRuntime, { externalSandbox: false, dockerImage: 'node:22', nodePath: '/opt/node' });
-    assert.equal((await request('/api/config', 'PUT', { workflowRuntime: { externalSandbox: 'false' } })).status, 400);
-    await request('/api/config', 'PUT', { workflowRuntime: { nodePath: '' } });
-    assert.equal(config.view().workflowRuntime?.nodePath, undefined);
+    assert.deepEqual(initial.workflowRuntime, {});
+    assert.equal((await request('/api/config', 'PUT', { workflowRuntime: { nodePath: '/opt/node' } })).status, 200);
+    assert.deepEqual(new ConfigStore(root).view().workflowRuntime, { nodePath: '/opt/node' });
+    for (const patch of [{ externalSandbox: true }, { externalSandbox: false }, { dockerImage: 'node:22' }, { dockerPath: '/opt/docker' }]) {
+      const response = await request('/api/config', 'PUT', { workflowRuntime: { nodePath: '/changed/node', ...patch } });
+      assert.equal(response.status, 400);
+      assert.match(await response.text(), /Unknown workflowRuntime field/);
+      assert.deepEqual(config.view().workflowRuntime, { nodePath: '/opt/node' });
+      assert.deepEqual(new ConfigStore(root).view().workflowRuntime, { nodePath: '/opt/node' });
+    }
+    for (const nodePath of ['relative/node', 7, '/node\u0000bad']) {
+      assert.equal((await request('/api/config', 'PUT', { workflowRuntime: { nodePath } })).status, 400);
+    }
+    assert.equal((await request('/api/config', 'PUT', { workflowRuntime: { nodePath: '' } })).status, 200);
+    assert.deepEqual(config.view().workflowRuntime, {});
     assert.equal(workflowRuntimeOptions(undefined, '').nodePath, undefined);
-    assert.equal(workflowRuntimeOptions({ externalSandbox: true, dockerImage: 'node:22', nodePath: '/override/node' }, '').nodePath, '/override/node');
-    writeFileSync(join(root, 'config.json'), JSON.stringify({ unknown: 3, workflowRuntime: { externalSandbox: 'invalid', dockerImage: 'node:22' } }));
-    const reloaded = new ConfigStore(root);
-    assert.equal(reloaded.view().workflowRuntime?.externalSandbox, true);
-    assert.equal(reloaded.view().workflowRuntime?.dockerImage, 'node:22');
-    assert.ok(reloaded.warning);
-    reloaded.update({ workflowRuntime: { externalSandbox: false } });
-    assert.equal(JSON.parse(readFileSync(join(root, 'config.json'), 'utf8')).unknown, 3);
+    assert.equal(workflowRuntimeOptions({ nodePath: '/override/node' }, '').nodePath, '/override/node');
     assert.ok(!readFileSync(join(root, 'config.json'), 'utf8').includes('replacement'));
     await request('/api/secrets/key', 'DELETE');
     assert.deepEqual(new SecretStore(root).list(), []);

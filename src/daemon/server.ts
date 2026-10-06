@@ -443,6 +443,7 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
       // one piece of presentation whose right answer depends on the machine (src/daemon/config.ts).
       // Spread rather than nested so `fonts` stays where it was on the wire.
       ...(options.config?.view() ?? {}),
+      ...(options.config ? { filesystemIsolationStatus: options.config.filesystemIsolationStatus() } : {}),
     });
     return;
   }
@@ -727,7 +728,8 @@ async function handleSettingsUpdate(
   }
 
   try {
-    send(response, 200, config.update(patch));
+    const settings = config.update(patch);
+    send(response, 200, { ...settings, filesystemIsolationStatus: config.filesystemIsolationStatus() });
   } catch (error) {
     // A rejected value is the client's fault and its message names the field, so it is safe and
     // useful to pass back. Anything else is ours, and `handle`'s caller turns it into a 500.

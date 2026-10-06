@@ -223,6 +223,8 @@ type SessionRecord = {
 };
 
 export type SessionHostOptions = {
+  /** Operator-owned machine policy, read only when starting a Backend Session or local MCP client. */
+  filesystemIsolationEnabled?: () => boolean;
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
@@ -462,11 +464,13 @@ export class SessionHost {
     (kept: { path: string; branch: string; reason: string }) => void
   >();
 
+  private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationEnabled"];
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
   private readonly resolveSecret: SessionHostOptions["resolveSecret"];
 
   constructor(options: SessionHostOptions = {}) {
+    this.filesystemIsolation = options.filesystemIsolationEnabled;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
     this.resolveSecret = options.resolveSecret;
@@ -812,7 +816,7 @@ export class SessionHost {
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
-    const scope = worktree?.path ?? options.scope;
+    const scope = scopeKey(worktree?.path ?? options.scope);
     const id = randomUUID();
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
@@ -1823,7 +1827,9 @@ export class SessionHost {
   workflowSession(sessionId: string) {
     const record = this.record(sessionId);
     if (record.lifecycle === 'ended') throw new CommandRefused('Agent Session has ended');
-    return { sessionId, backend: record.backendName, scope: scopeKey(record.scope), projectId: scopeKey(record.worktree?.repo ?? record.scope), session: record.session };
+    const scope = scopeKey(record.scope);
+    if (scope !== resolve(record.scope)) throw new Error('Scope changed since selection; refusing redirected execution');
+    return { sessionId, backend: record.backendName, scope, projectId: scopeKey(record.worktree?.repo ?? record.scope), session: record.session };
   }
 
   assertWorkflowSession(sessionId: string, session: BackendSession | undefined): void {
@@ -2204,12 +2210,18 @@ export class SessionHost {
     return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
   }
 
-  async openWorkflowMcp(id: string, connectionId: string) {
+  /** Include an SDK-supplied owning root in every local execution's filesystem policy. */
+  filesystemStateRoot(): string | undefined { return this.store?.root; }
+
+  /** A host without configured Settings keeps the safe, restricted library default. */
+  filesystemIsolationEnabled(): boolean { return this.filesystemIsolation?.() ?? true; }
+
+  async openWorkflowMcp(id: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled()) {
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret);
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled);
   }
 
   mcpStatus(id: string) {
@@ -2259,7 +2271,7 @@ export class SessionHost {
   private async startPermissionBackend(record: SessionRecord): Promise<BackendSession> {
     try { return await this.startBackendSession(record); }
     catch (error) {
-      if (record.backendName !== "claude" || record.permissionMode !== "auto" || !(error instanceof (await import("../backend/claude/index.ts")).AutoPermissionUnavailable)) throw error;
+      if (record.backendName !== "claude" || record.permissionMode !== "auto" || !(error instanceof (await import("../backend/permission-errors.ts")).AutoPermissionUnavailable)) throw error;
       record.permissionMode = "ask";
       const fallback: BackendEvent[] = [
         { type: "notice", level: "warn", text: `Claude Auto permissions unavailable: ${String(error)}. Using Ask.` },
@@ -2278,7 +2290,7 @@ export class SessionHost {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
-      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret);
+      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret, undefined, this.filesystemStateRoot(), this.filesystemIsolationEnabled());
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);

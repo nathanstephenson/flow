@@ -9,20 +9,27 @@ export type WorkerLaunchOptions = {
   entry?: string;
   execArgv?: string[];
   env?: NodeJS.ProcessEnv;
+  /** Host-owned mount descriptors consumed by the isolation launcher before worker exec. */
+  stdioFds?: number[];
   shutdownTimeoutMs?: number;
   startupTimeoutMs?: number;
 };
 
-export function launchWorker(options: WorkerLaunchOptions = {}) {
+export function workerCommand(options: WorkerLaunchOptions = {}): { command: string; args: string[] } {
   const source = import.meta.url.endsWith(".ts");
   const entry = options.entry ?? fileURLToPath(new URL(source ? "./entry.ts" : "./entry.js", import.meta.url));
   const args = options.args ?? (isSea() && !options.entry
     ? ["--flow-backend-worker"]
     : [...(options.execArgv ?? (source ? ["--experimental-strip-types"] : [])), entry]);
-  const child = spawn(options.command ?? process.execPath, args, {
+  return { command: options.command ?? process.execPath, args };
+}
+
+export function launchWorker(options: WorkerLaunchOptions = {}) {
+  const { command, args } = workerCommand(options);
+  const child = spawn(command, args, {
     env: { ...process.env, ...options.env, FLOW_BACKEND_WORKER: "1" },
     detached: process.platform !== "win32",
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
+    stdio: ["ignore", "ignore", "pipe", "ipc", ...(options.stdioFds ?? [])],
     serialization: "advanced",
   });
   // Drain diagnostics so a chatty SDK cannot block on stderr. Keep only a bounded failure tail.

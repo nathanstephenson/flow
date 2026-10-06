@@ -1,6 +1,8 @@
+import { AutoPermissionUnavailable } from "../permission-errors.ts";
+
 export type WireMessage =
   | { kind: "call"; id: number; method: string; args: unknown[] }
-  | { kind: "reply"; id: number; value?: unknown; error?: string }
+  | { kind: "reply"; id: number; value?: unknown; error?: string; errorCode?: "auto_permission_unavailable" }
   | { kind: "cancel"; id: number }
   | { kind: "notification"; name: string; value: unknown };
 
@@ -59,7 +61,8 @@ export class WorkerRpc {
       case "reply": {
         const pending = this.pending.get(message.id);
         this.pending.delete(message.id);
-        if (message.error !== undefined) pending?.reject(new Error(message.error));
+        if (message.error !== undefined) pending?.reject(message.errorCode === "auto_permission_unavailable"
+          ? new AutoPermissionUnavailable(message.error) : new Error(message.error));
         else pending?.resolve(message.value);
         break;
       }
@@ -72,7 +75,8 @@ export class WorkerRpc {
         // Deliberately do not queue: prompt may be awaiting an answer from another RPC.
         void Promise.resolve().then(() => this.dispatch(message.method, message.args, controller.signal)).then(
           (value) => this.reply({ kind: "reply", id: message.id, value }),
-          (error: unknown) => this.reply({ kind: "reply", id: message.id, error: errorText(error) }),
+          (error: unknown) => this.reply({ kind: "reply", id: message.id, error: errorText(error),
+            ...(error instanceof AutoPermissionUnavailable ? { errorCode: "auto_permission_unavailable" as const } : {}) }),
         ).finally(() => this.incoming.delete(message.id));
         break;
       }

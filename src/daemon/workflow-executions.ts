@@ -75,7 +75,8 @@ export class WorkflowExecutionService {
   private readonly newestRelayBySession = new Map<string, RelayRequest>();
   private relayOrder = 0;
   private readonly secretValues = new Map<string, string[]>();
-  private readonly runtimeSnapshots = new Map<string, ReturnType<typeof workflowRuntimeOptions>>();
+  private readonly runtimeSnapshots = new Map<string, { nodePath?: string; isolationEnabled: boolean }>();
+  private runtimeOptions!: { nodePath?: string; isolationEnabled: boolean };
   private checkingCode: WorkflowExecutors | undefined;
   private readonly cancelling = new Map<string, { sessionId: string; done: Promise<WorkflowExecution> }>();
 
@@ -127,17 +128,23 @@ export class WorkflowExecutionService {
     this.refresh();
   }
 
+  private filesystemPolicy() {
+    const stateRoot = this.host.filesystemStateRoot();
+    return stateRoot ? { stateRoot } : {};
+  }
+
   refresh(): void {
     const discovered = workflowRuntimeOptions(this.config.view().workflowRuntime);
-    const options = { externalSandbox: discovered.externalSandbox, dockerImage: discovered.dockerImage, ...(discovered.nodePath ? { nodePath: discovered.nodePath } : {}), ...(discovered.dockerPath ? { dockerPath: discovered.dockerPath } : {}) };
+    const options = { ...(discovered.nodePath ? { nodePath: discovered.nodePath } : {}), isolationEnabled: this.config.filesystemIsolationEnabled() };
     const key = JSON.stringify(options);
     if (key === this.runtimeKey) return;
     this.runtimeKey = key;
+    this.runtimeOptions = options;
     this.runtime = { ...options, available: false, error: 'Workflow runtime readiness check in progress' };
     this.code = {};
     this.ready = (async () => {
       try {
-        const executors = await createCodeExecutors({ runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
+        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), isolationEnabled: options.isolationEnabled, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
         if (key !== this.runtimeKey) return;
         this.code = executors;
         executors.shell.check({ id: 'probe', name: 'probe', kind: 'shell', command: 'true' }, { sessionId: 'probe', backend: 'probe', scope: '/' });
@@ -146,6 +153,15 @@ export class WorkflowExecutionService {
         if (key === this.runtimeKey) this.runtime = { ...options, available: false, error: 'Configured workflow runtime is unavailable' };
       }
     })();
+  }
+
+  /** Keep a Start's policy and executors paired even if Settings change during a readiness probe. */
+  private async codeSnapshot() {
+    for (;;) {
+      const ready = this.ready;
+      await ready;
+      if (ready === this.ready) return { runtime: this.runtimeOptions, code: this.code };
+    }
   }
 
   reconcile(): void {
@@ -417,7 +433,9 @@ export class WorkflowExecutionService {
     if (definition.backend !== identity.backend) throw new Error('Backend Adapter mismatch');
     if (definition.projectId && !sameProject(definition.projectId, identity.projectId)) throw new Error('Workflow is restricted to another Project');
     if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    if (definition.steps.some(step => (!stepId || step.id === stepId) && ['shell', 'typescript'].includes(step.kind))) { this.refresh(); await this.ready; }
+    this.refresh();
+    const needsCode = definition.steps.some(step => (!stepId || step.id === stepId) && ['shell', 'typescript'].includes(step.kind));
+    const snapshot = needsCode ? await this.codeSnapshot() : { runtime: this.runtimeOptions, code: this.code };
     const values = this.referencedSecrets(definition, stepId);
     assertNoSecrets(publicDefinition(definition), values);
     assertNoSecrets(input, values, true);
@@ -440,7 +458,7 @@ export class WorkflowExecutionService {
       tools.push(step.tool);
       pinned.set(step.tool.connectionId, tools);
     }
-    for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools);
+    for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools, snapshot.runtime.isolationEnabled);
     this.host.assertWorkflowSession(sessionId, session.session);
     // All setup above may yield. Resolve an overlapping retry by its durable identity before
     // treating the session as occupied, then make occupancy the final check before the synchronous
@@ -450,12 +468,15 @@ export class WorkflowExecutionService {
       if (existing) return this.view(sessionId, existing.id);
     }
     if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    const record = this.scheduler.start(preparedDefinition, session, input, stepId, launchId, nameSession && !stepId);
+    let record: WorkflowExecution;
+    this.checkingCode = snapshot.code;
+    try { record = this.scheduler.start(preparedDefinition, session, input, stepId, launchId, nameSession && !stepId); }
+    finally { this.checkingCode = undefined; }
     this.secretValues.set(record.id, values);
-    this.runtimeSnapshots.set(record.id, workflowRuntimeOptions(this.config.view().workflowRuntime));
+    this.runtimeSnapshots.set(record.id, snapshot.runtime);
     this.privateView(sessionId, record.id).historyComplete = true;
     this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
-    this.snapshots.set(record.id, this.code);
+    this.snapshots.set(record.id, snapshot.code);
     this.watch(record);
     return this.view(sessionId, record.id);
   }
@@ -465,9 +486,10 @@ export class WorkflowExecutionService {
     const saved = this.scheduler.get(sessionId, executionId);
     if (saved.status !== 'recovery-required') throw new WorkflowConflict();
     this.privateView(sessionId, executionId);
-    const options = this.runtimeSnapshots.get(executionId) ?? workflowRuntimeOptions(this.config.view().workflowRuntime);
+    // Pre-toggle records were always restricted. Missing historical policy must never downgrade them.
+    const options = this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationEnabled: true };
     const needsCode = saved.definition.steps.some(step => ['shell', 'typescript'].includes(step.kind));
-    const code = needsCode ? await createCodeExecutors({ runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', sandbox: options.externalSandbox ? { enabled: true, available: !!options.dockerPath, image: options.dockerImage, ...(options.dockerPath ? { dockerPath: options.dockerPath } : {}) } : { enabled: false }, resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
+    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), isolationEnabled: options.isolationEnabled, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
     if (saved.definition.projectId && !sameProject(saved.definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
     const values = this.referencedSecrets(saved.definition, saved.testStepId);
     assertNoSecrets({ ...saved, definition: publicDefinition(saved.definition), action }, values);
@@ -622,10 +644,10 @@ export class WorkflowExecutionService {
     validateMcpSchemas(tool);
   }
 
-  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[]): Promise<McpToolDiscovery> {
+  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[], isolationEnabled = this.config.filesystemIsolationEnabled()): Promise<McpToolDiscovery> {
     const pinned = expected ? (Array.isArray(expected) ? expected : [expected]) : [];
     for (const tool of pinned) this.checkMcp(sessionId, tool);
-    const session = await this.host.openWorkflowMcp(sessionId, connectionId);
+    const session = await this.host.openWorkflowMcp(sessionId, connectionId, isolationEnabled);
     try {
       await session.open();
       if (session.status()[0]?.state !== 'connected') throw new Error('MCP connection unavailable. Sign in in MCP Settings or reconfigure the server, then retry manually.');
@@ -703,7 +725,8 @@ export class WorkflowExecutionService {
     await this.mcpPermission(context);
     this.checkMcp(context.sessionId, expected);
     context.signal.throwIfAborted();
-    const session = await this.host.openWorkflowMcp(context.sessionId, expected.connectionId);
+    const isolationEnabled = this.runtimeSnapshots.get(context.executionId)?.isolationEnabled ?? true;
+    const session = await this.host.openWorkflowMcp(context.sessionId, expected.connectionId, isolationEnabled);
     const abort = () => { void session.dispose(); };
     context.signal.addEventListener('abort', abort, { once: true });
     const values = () => [...(this.secretValues.get(context.executionId) ?? []), ...this.host.workflowMcpCredentials()];
@@ -901,7 +924,9 @@ export class WorkflowExecutionService {
       try {
         const saved = JSON.parse(readFileSync(this.privatePath(sessionId, executionId), 'utf8'));
         const { runtime, ...activity } = saved;
-        if (runtime) this.runtimeSnapshots.set(executionId, runtime);
+        if (runtime && typeof runtime === 'object') {
+          this.runtimeSnapshots.set(executionId, { nodePath: runtime.nodePath, isolationEnabled: runtime.isolationEnabled !== false });
+        }
         view = activity as PrivateView; view.enquiries = []; view.permissions = [];
       }
       catch { view = { activity: [], enquiries: [], permissions: [], stepSpend: {} }; }
