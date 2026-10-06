@@ -36,6 +36,11 @@ do not start another host against that state directory. Inspect the log and reso
 operation before attempting recovery.
 Configure credentials for the Backend Adapter you use.
 
+Pi Backend Sessions run in separate worker processes, including their ordinary Subagents and
+Background Calls. The Session Host retains transcripts and services; worker failure interrupts work
+rather than replaying it. **Process separation is not filesystem confinement:** without an OS-level
+filesystem policy, tools still have the launching user's filesystem access.
+
 To check a release from source, run `npm ci` and `npm run test:package`.
 This builds, packs, and installs the archive into a temporary prefix, then checks it
 from an unrelated directory. Build outputs are not tracked in Git.

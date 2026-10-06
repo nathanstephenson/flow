@@ -51,7 +51,27 @@ const result = await build({
   // Bundled dependencies call createRequire(import.meta.url), which esbuild lowers to undefined in
   // a CommonJS build. Point it at a real file URL for this bundle instead.
   banner: {
-    js: "const __flowMetaUrl = require('node:url').pathToFileURL(__filename).href;",
+    // SEA's injected require only accepts built-ins. Use normal filesystem resolution for optional
+    // dependencies beside the executable. Pi exposes only an import condition, so resolve its
+    // declared ESM entry explicitly before using Node's require(esm) support (Node 22+).
+    js: `const __flowMetaUrl = require('node:url').pathToFileURL(__filename).href;
+const __flowFilesystemRequire = require('node:module').createRequire(__filename);
+require = function(specifier) {
+  if (specifier === '@earendil-works/pi-coding-agent') {
+    const fs = __flowFilesystemRequire('node:fs');
+    const path = __flowFilesystemRequire('node:path');
+    for (const search of __flowFilesystemRequire.resolve.paths(specifier) || []) {
+      const root = path.join(search, specifier);
+      const manifestPath = path.join(root, 'package.json');
+      if (!fs.existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const entry = manifest.exports?.['.']?.import ?? manifest.main;
+      if (typeof entry !== 'string') throw new Error('Pi package has no loadable ESM entry');
+      return __flowFilesystemRequire(path.resolve(root, entry));
+    }
+  }
+  return __flowFilesystemRequire(specifier);
+};`,
   },
   define: { "import.meta.url": "__flowMetaUrl" },
   outfile: join(out, "flow.cjs"),
