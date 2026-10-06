@@ -24,6 +24,18 @@ Open **http://127.0.0.1:5191/study**. The loopback-only handoff authenticates ag
 
 The preview-only Vite plugin injects `live-material.js`; the normal build never includes it. Edit that file while the preview runs to iterate.
 
+### Frontend only, against an existing backend
+
+When explicitly testing live Sessions instead of fixtures:
+
+```sh
+MOCKUP_STATE_DIR="${FLOW_STATE_DIR:-$HOME/.flow}" MOCKUP_LIVE_BACKEND=1 \
+  MOCKUP_BIND_HOST=0.0.0.0 MOCKUP_PORT=3069 \
+  MOCKUP_ALLOWED_HOSTS=testing.nathanstephenson.dev node spikes/nat-91/preview.mjs
+```
+
+This starts only Vite and proxies to the existing `daemon.json` URL. A backend configured with OIDC may redirect to its registered public address; this preview does not alter that auth configuration. Prefer fixture mode above for portable local testing. It does not start/restart a Session Host, seed Sessions, install fixture layouts, or offer the token-bearing `/study` handoff. Open `/` using the backend's normal authentication. **Actions now target the live backend**, not `FakeBackend`. The default binding remains loopback unless `MOCKUP_BIND_HOST` is explicitly set. `MOCKUP_ALLOWED_HOSTS` accepts a comma-separated list of exact hostnames for reverse proxies; Vite's hostname protection is not disabled.
+
 ## Capture and checks
 
 With both processes running:
