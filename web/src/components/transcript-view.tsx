@@ -1,5 +1,5 @@
 import { ArrowDown } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
 import { toolChains } from "@client/tool-chains.ts";
@@ -62,7 +62,15 @@ export function TranscriptView({
   const segments = useMemo(() => toolChains(windowed), [windowed]);
 
   const scroller = useRef<HTMLDivElement | null>(null);
+  const content = useRef<HTMLDivElement | null>(null);
   const pinned = useRef(true);
+  const lastScrollTop = useRef(0);
+  const followBottom = useCallback(() => {
+    const element = scroller.current;
+    if (!element || !pinned.current) return;
+    element.scrollTop = element.scrollHeight;
+    lastScrollTop.current = element.scrollTop;
+  }, []);
   const [atBottom, setAtBottom] = useState(true);
   const reportObserved = useCallback((throughSeq: number) => {
     if (!visible || !pinned.current || document.hidden || !document.hasFocus()) return;
@@ -104,8 +112,8 @@ export function TranscriptView({
    * commit can be invalidated by the very content change that prompted it.
    *
    * Passive, because this handler never calls `preventDefault` and the browser should not have to
-   * wait to find out. The React state is throttled separately — a programmatic scroll re-fires this
-   * listener, so writing state from it directly would thrash.
+   * wait to find out. The React state is throttled separately: reader scrolling can fire on every
+   * animation frame, so publishing state from every event would thrash.
    */
   useEffect(() => {
     const element = scroller.current;
@@ -113,6 +121,11 @@ export function TranscriptView({
     let throttle: ReturnType<typeof setTimeout> | undefined;
 
     const onScroll = (): void => {
+      // A scroll we requested can arrive after an image/font has grown the document again. Its
+      // distance from the bottom is no longer zero, but the reader has not moved. Only a changed
+      // position may release the pin; the content observer will catch up with the new height.
+      if (element.scrollTop === lastScrollTop.current) return;
+      lastScrollTop.current = element.scrollTop;
       pinned.current = isPinned(element);
       if (throttle) return;
       throttle = setTimeout(() => {
@@ -130,7 +143,7 @@ export function TranscriptView({
   }, [scheduleObserved]);
 
   /**
-   * Hold the pin while the Composer changes height.
+   * Hold the pin while either the viewport or the document changes height.
    *
    * The Composer floats over this scroller and pads it clear of itself with `--composer-inset`, so
    * anything that changes the Composer's height changes this element's padding: the `/` menu opening,
@@ -139,41 +152,40 @@ export function TranscriptView({
    * the padding grew underneath the content and nothing put the reader back at the bottom until the
    * next unrelated tick. Against an animated menu that reads as the chat lagging behind it.
    *
-   * A ResizeObserver on the scroller catches all of them at once, because padding is what changes
-   * and `contentRect` is the box inside it. Setting `scrollTop` changes no layout, so this cannot
-   * feed itself.
+   * Observe the scroller for those inset/viewport changes, and the document for late image loads,
+   * font swaps, and row disclosures. Those can grow a freshly opened transcript *after* its last
+   * React commit, including an Idle Agent Session that will never get another streaming tick.
+   * Setting `scrollTop` changes neither box's size, so this cannot feed itself.
    */
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
 
     const observer = new ResizeObserver(() => {
-      if (pinned.current) element.scrollTop = element.scrollHeight;
+      followBottom();
+      scheduleObserved();
     });
     observer.observe(element);
+    if (content.current) observer.observe(content.current);
     return () => observer.disconnect();
-  }, []);
+  }, [followBottom, scheduleObserved]);
 
   /**
    * A search changes the visible set wholesale, so the distance from the bottom jumps without the
    * reader touching anything. Going to the bottom is the only interpretation that is never wrong.
    */
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
     pinned.current = true;
+    followBottom();
     setAtBottom(true);
-  }, [query, view]);
+  }, [query, view, followBottom]);
 
   const toBottom = useCallback(() => {
-    const element = scroller.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
     pinned.current = true;
+    followBottom();
     setAtBottom(true);
     scheduleObserved();
-  }, [scheduleObserved]);
+  }, [followBottom, scheduleObserved]);
 
   return (
     <div className="relative min-h-0 min-w-0">
@@ -188,7 +200,7 @@ export function TranscriptView({
         // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
         className="transcript-scroller h-full px-3 pt-2 pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
-        <div className="pane-measure">
+        <div ref={content} className="pane-measure">
           {earlier > 0 ? (
             <button
               type="button"
@@ -219,7 +231,7 @@ export function TranscriptView({
             </p>
           ) : null}
 
-          <StickToBottom view={view} scroller={scroller} pinned={pinned} scheduleObserved={scheduleObserved} />
+          <StickToBottom view={view} followBottom={followBottom} scheduleObserved={scheduleObserved} />
         </div>
       </div>
 
@@ -258,13 +270,11 @@ function TranscriptRow({ view, entryKey, query }: { view: AgentSessionView; entr
  */
 function StickToBottom({
   view,
-  scroller,
-  pinned,
+  followBottom,
   scheduleObserved,
 }: {
   view: AgentSessionView;
-  scroller: RefObject<HTMLDivElement | null>;
-  pinned: RefObject<boolean>;
+  followBottom: () => void;
   scheduleObserved: (throughSeq?: number) => void;
 }) {
   const [, setTick] = useState(0);
@@ -272,8 +282,7 @@ function StickToBottom({
   useEffect(() => view.subscribeTranscript(() => setTick((tick) => tick + 1)), [view]);
 
   useLayoutEffect(() => {
-    const element = scroller.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
+    followBottom();
     scheduleObserved(view.getLastSeq());
   });
 
