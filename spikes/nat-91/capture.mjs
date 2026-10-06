@@ -32,7 +32,18 @@ try {
   assert.ok(await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision)) - revision <= 2, 'Material-owned style writes must not create a continuous redraw loop');
   await page.screenshot({ path: join(out, 'real-ui-dark.png') });
   const activeRow = page.locator('[data-sidebar="menu-button"][data-nat91-selected="true"]');
-  const material = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
+  const idleRailAlpha = await activeRow.locator('.nat91-control-texture').evaluate(texture => {
+    const pixels = texture.getContext('2d').getImageData(0, 0, texture.width, texture.height).data;
+    let max = 0;
+    for (let i = 3; i < pixels.length; i += 4) max = Math.max(max, pixels[i]);
+    return max;
+  });
+  assert.equal(idleRailAlpha, 0, 'The rail must have no static chrome: its gloss overlay is transparent at rest');
+  assert.notEqual(await activeRow.evaluate(node => getComputedStyle(node).backgroundColor), await page.locator('[data-sidebar="menu-button"][data-nat91-selected="false"]').first().evaluate(node => getComputedStyle(node).backgroundColor), 'Quiet rows must still have a distinct, full-face selected fill');
+  assert.equal(await activeRow.locator('.nat91-adaptive-ink').count(), 0, 'Rail text stays native, not fragmented by material-dependent ink');
+  const settle = activeRow.locator('..').getByRole('button', { name: 'Settle', exact: true });
+  assert.equal(await settle.locator('.nat91-control-texture').count(), 0, 'Settle must not have an opaque material canvas');
+  const material = await page.locator('.nat91-tab-surface[data-nat91-selected="true"] > .nat91-control-texture').first().evaluate(texture => {
     const context = texture.getContext('2d');
     const pixels = context.getImageData(0, 0, texture.width, texture.height).data;
     let min = 255, max = 0, rightChroma = 0, rightCount = 0;
@@ -50,7 +61,24 @@ try {
   assert.ok(material.rightChroma > 20, 'Selected material must cover the right side, not fade to the neutral backdrop');
   assert.ok(material.max - material.min > 150, 'Chrome needs genuine bright silver / black reflection contrast, not capped blue glow');
   const activeBounds = await activeRow.boundingBox();
-  await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 } });
+  const railClip = { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 };
+  await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: railClip });
+  await page.mouse.move(activeBounds.x + 30, activeBounds.y + activeBounds.height * .5);
+  await page.waitForTimeout(100);
+  const railGlossBefore = await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
+  await page.mouse.move(activeBounds.x + activeBounds.width - 50, activeBounds.y + activeBounds.height * .5);
+  await page.waitForTimeout(100);
+  assert.notEqual(await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL()), railGlossBefore, 'Rail gloss must still follow the pointer');
+  await page.screenshot({ path: join(out, 'real-ui-rail-hover.png'), clip: railClip });
+  await settle.hover();
+  await page.waitForTimeout(100);
+  assert.equal(await settle.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)', 'Settle stays transparent even on hover');
+  await page.screenshot({ path: join(out, 'real-ui-settle-hover.png'), clip: railClip });
+  await activeRow.focus();
+  await page.keyboard.press('ArrowRight');
+  assert.ok(await settle.evaluate(node => node === document.activeElement && node.matches(':focus-visible') && getComputedStyle(node).boxShadow !== 'none'), 'The native Settle keyboard focus ring must survive');
+  await page.mouse.move(570, 220);
+  await page.waitForTimeout(100);
 
   // Real tabs and session navigation, not simulated mockup handlers.
   await page.getByRole('tab', { name: 'Git' }).click();
@@ -95,6 +123,13 @@ try {
   await page.evaluate(() => { document.activeElement?.blur(); document.documentElement.classList.remove('dark'); });
   await page.waitForTimeout(100);
   await page.screenshot({ path: join(out, 'real-ui-light.png') });
+  const lightSettle = activeRow.locator('..').getByRole('button', { name: 'Settle', exact: true });
+  await lightSettle.hover();
+  await page.waitForTimeout(100);
+  assert.equal(await lightSettle.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)', 'Settle stays transparent in light mode too');
+  const lightBounds = await activeRow.boundingBox();
+  await page.screenshot({ path: join(out, 'real-ui-settle-hover-light.png'), clip: { x: 0, y: lightBounds.y - 12, width: lightBounds.width + 4, height: lightBounds.height + 24 } });
+  await page.mouse.move(570, 220);
   assert.ok(await page.locator('.nat91-control-texture').count() > 15);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(250);
@@ -106,6 +141,6 @@ try {
   assert.ok(await taskTitle.evaluate(node => node.scrollWidth <= node.clientWidth && node.getBoundingClientRect().height <= parseFloat(getComputedStyle(node).lineHeight) + 1), 'Narrow-layout task title must fit on one readable line');
   await page.screenshot({ path: join(out, 'real-ui-mobile-dark.png') });
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: full-face selection, silver / black reflection contrast, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: quiet native rail / transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }

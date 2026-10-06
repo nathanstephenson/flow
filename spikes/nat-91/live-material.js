@@ -1,5 +1,6 @@
 // Dev-only reference-led chrome study on the real Flow DOM. A shared reflected
-// environment and fine brushing; cursor-local button gloss, not repeated fade masks.
+// environment and fine brushing on tabs; the session rail uses native flat fills
+// with a transparent, cursor-local gloss overlay. No repeated fade masks.
 // No source artwork or production component changes.
 const style = document.createElement('style');
 style.textContent = `
@@ -11,8 +12,8 @@ style.textContent = `
   :root { --nat91-chrome-ink: var(--background); }
   .dark { --nat91-chrome-ink: var(--foreground); }
   .nat91-control[data-nat91-selected="true"], .nat91-tab-surface[data-nat91-selected="true"] > button { color: var(--nat91-chrome-ink) !important; }
-  .nat91-control[data-nat91-selected="true"] .text-muted-foreground, .nat91-control[data-nat91-selected="true"] .text-foreground { color: var(--nat91-chrome-ink) !important; opacity: 1; }
-  .nat91-control[data-nat91-selected="true"] .bg-foreground { background-color: var(--nat91-chrome-ink) !important; }
+  .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .text-muted-foreground, .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .text-foreground { color: var(--nat91-chrome-ink) !important; opacity: 1; }
+  .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .bg-foreground { background-color: var(--nat91-chrome-ink) !important; }
   .nat91-control[data-nat91-selected="true"].nat91-adaptive-ink,
   .nat91-control[data-nat91-selected="true"] .nat91-adaptive-ink {
     color: transparent !important;
@@ -33,7 +34,9 @@ style.textContent = `
   .nat91-control[data-nat91-selected="true"]:focus-visible, .nat91-tab-surface[data-nat91-selected="true"]:has(> [role="tab"]:focus-visible) { outline-color: var(--nat91-chrome-ink); }
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
-  [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; }
+  [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] { background: var(--sidebar-accent) !important; border-left-color: var(--primary) !important; }
+  [data-sidebar="menu-action"] { background: transparent !important; color: var(--sidebar-foreground) !important; }
   [data-sidebar="header"] { padding: 0 !important; }
   [data-sidebar="header"] [data-slot="button"] { border-radius: 0 !important; min-height: 42px; padding-inline: 12px; }
   .nat91-dock-strip { padding-inline: 0 !important; gap: 0 !important; background: var(--card); }
@@ -66,7 +69,7 @@ canvas.setAttribute('aria-hidden', 'true');
 document.body.append(canvas);
 const note = document.createElement('div');
 note.className = 'nat91-note';
-note.textContent = 'DEV STUDY · reflected silver / app-token spectrum / local gloss';
+note.textContent = 'DEV STUDY · quiet session rail / cursor-local gloss';
 document.body.append(note);
 const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
 if (!gl) throw new Error('This dev material study requires WebGL.');
@@ -90,6 +93,7 @@ const fragment = `
   uniform vec4 uSurface;
   uniform vec2 uLight;
   uniform float uSelected;
+  uniform float uRail;
   uniform float uHover;
   uniform float uLightTheme;
   uniform float uRadius;
@@ -137,6 +141,13 @@ const fragment = `
     float gloss = exp(-dot(delta, delta));
     vec3 hover = mix(vec3(.08), vec3(-.05), uLightTheme) * gloss;
     hover += (mix(uBlue, uPurple, phase) - vec3(.5)) * gloss * .07;
+    // Rail fills and ink stay native. Only the pointer-local gloss is composited
+    // over them; no static chrome or opaque canvases over the Settle action.
+    if (uRail > .5) {
+      vec3 sheen = uBackdrop + hover / max(gloss, .0001);
+      gl_FragColor = vec4(clamp(sheen, 0.0, 1.0), gloss * uHover * (1.0 - uDisabled));
+      return;
+    }
     vec3 color = mix(base + hover * uHover + vec3(grain * .35), chrome + vec3(gloss * uHover * .018), uSelected);
     color = mix(color, base, uDisabled * .95);
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
@@ -161,7 +172,7 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1
 const attribute = gl.getAttribLocation(program, 'aPosition');
 gl.enableVertexAttribArray(attribute);
 gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
-const uniforms = Object.fromEntries(['uViewport', 'uRect', 'uSurface', 'uLight', 'uSelected', 'uHover', 'uLightTheme', 'uRadius', 'uDisabled', 'uBackdrop', 'uBlue', 'uPurple'].map(name => [name, gl.getUniformLocation(program, name)]));
+const uniforms = Object.fromEntries(['uViewport', 'uRect', 'uSurface', 'uLight', 'uSelected', 'uRail', 'uHover', 'uLightTheme', 'uRadius', 'uDisabled', 'uBackdrop', 'uBlue', 'uPurple'].map(name => [name, gl.getUniformLocation(program, name)]));
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 let pointer = { x: innerWidth * .56, y: innerHeight * .3 };
 let surfaces = [];
@@ -248,6 +259,8 @@ function collect() {
   const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
+    // The overlaid Settle action must reveal its row, not repaint the sidebar.
+    if (node.matches('[data-sidebar="menu-action"]')) return;
     const segmented = node.closest('[data-slot="tabs-list"]');
     if (segmented && !segmented.classList.contains('nat91-segmented-surface')) segmented.classList.add('nat91-segmented-surface');
     if (segmented?.getAttribute('aria-label') === 'Git views' && !segmented.parentElement.classList.contains('nat91-view-strip')) segmented.parentElement.classList.add('nat91-view-strip');
@@ -284,7 +297,8 @@ function collect() {
     const selected = node.getAttribute('aria-selected') === 'true' || node.hasAttribute('aria-current') || node.getAttribute('data-active') === 'true' || node.getAttribute('data-state') === 'active' || node.getAttribute('aria-pressed') === 'true';
     if (target.dataset.nat91Selected !== String(selected)) target.dataset.nat91Selected = String(selected);
     const group = target.closest('[role="tablist"], .nat91-action-strip, [data-sidebar="menu"]');
-    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, texture, backdrop: backdropOf(target, rect) });
+    const rail = target.matches('[data-sidebar="menu-button"]');
+    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, texture, backdrop: rail ? rgbaOf(computed.backgroundColor).slice(0, 3) : backdropOf(target, rect) });
   });
 }
 const root = document.getElementById('root');
@@ -307,14 +321,15 @@ function draw() {
   gl.uniform3f(uniforms.uBlue, ...rgbaOf(theme.getPropertyValue('--trigger-command').trim()).slice(0, 3));
   gl.uniform3f(uniforms.uPurple, ...rgbaOf(theme.getPropertyValue('--trigger-skill').trim()).slice(0, 3));
   gl.enable(gl.SCISSOR_TEST);
-  surfaces.forEach(({ node, target, rect, groupRect, selected, backdrop, texture }) => {
-    const hovered = target.matches(':hover');
+  surfaces.forEach(({ node, target, rect, groupRect, selected, rail, backdrop, texture }) => {
+    const hovered = rail ? target.closest('[data-sidebar="menu-item"]').matches(':hover') : target.matches(':hover');
     const light = hovered && !reduced.matches ? pointer : { x: rect.left + rect.width * .5, y: rect.top + rect.height * .5 };
     gl.uniform2f(uniforms.uLight, light.x, light.y);
     gl.uniform3f(uniforms.uBackdrop, ...backdrop);
     gl.uniform4f(uniforms.uRect, rect.left, rect.top, rect.width, rect.height);
     gl.uniform4f(uniforms.uSurface, groupRect.left, groupRect.top, groupRect.width, groupRect.height);
     gl.uniform1f(uniforms.uSelected, selected ? 1 : 0);
+    gl.uniform1f(uniforms.uRail, rail ? 1 : 0);
     gl.uniform1f(uniforms.uHover, hovered ? 1 : 0);
     gl.uniform1f(uniforms.uDisabled, node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true' ? 1 : 0);
     gl.uniform1f(uniforms.uRadius, target.matches('[data-sidebar="menu-button"], .nat91-tab-surface, [role="tab"], .nat91-action-strip > button, .nat91-dock-strip > button') ? 0 : 3);
@@ -329,7 +344,7 @@ function draw() {
     const context = texture.getContext('2d');
     context.clearRect(0, 0, w, h);
     context.drawImage(canvas, rect.left * scale, rect.top * scale, rect.width * scale, rect.height * scale, 0, 0, w, h);
-    if (selected) adaptiveInk(target, rect, texture);
+    if (selected && !rail) adaptiveInk(target, rect, texture);
     else target.querySelectorAll('[data-nat91-ink-icon]').forEach(node => { node.style.removeProperty('color'); delete node.dataset.nat91InkIcon; });
   });
   gl.disable(gl.SCISSOR_TEST);
