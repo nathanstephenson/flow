@@ -40,15 +40,19 @@ style.textContent = `
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
   [data-sidebar="menu-button"].nat91-control[data-nat91-activity] { border-left-color: var(--nat91-activity) !important; }
   .nat91-activity-dot { display: none !important; }
+  /* Native Dormant is a foreground-coloured hollow ring. With shape removed,
+     give that indicator a muted grey so it remains distinct from filled Idle. */
+  [aria-hidden].size-2.rounded-full.text-foreground.border-current { color: var(--muted-foreground) !important; }
   [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] { background: var(--sidebar-accent) !important; }
   [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] > span.flex-1 .text-muted-foreground { color: color-mix(in srgb, var(--sidebar-foreground) 80%, var(--sidebar-accent)) !important; }
   [data-sidebar="menu-button"].nat91-control[data-nat91-activity][data-nat91-selected="true"]::before {
     content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none;
-    background-image: linear-gradient(110deg, transparent 0% 10%, color-mix(in srgb, var(--nat91-activity) 16%, transparent) 22%, transparent 46%, color-mix(in srgb, var(--nat91-activity) 8%, transparent) 72%, transparent 90% 100%);
+    background-image: linear-gradient(90deg, transparent 0% 10%, color-mix(in srgb, var(--nat91-activity) 16%, transparent) 22%, transparent 46%, color-mix(in srgb, var(--nat91-activity) 8%, transparent) 72%, transparent 90% 100%);
     background-size: 200% 100%; background-repeat: repeat-x;
     animation: nat91-rail-flow 7s linear infinite;
   }
-  @keyframes nat91-rail-flow { from { background-position: 0% 50%; } to { background-position: 200% 50%; } }
+  /* A 200%-wide image moves RIGHT as percentage positioning decreases. */
+  @keyframes nat91-rail-flow { from { background-position: 0% 50%; } to { background-position: -200% 50%; } }
   @media (prefers-reduced-motion: reduce) {
     [data-sidebar="menu-button"].nat91-control[data-nat91-activity][data-nat91-selected="true"]::before { animation: none; background-position: 50% 50%; }
   }
@@ -328,12 +332,13 @@ function collect() {
     const group = target.closest('[role="tablist"], .nat91-action-strip, [data-sidebar="menu"]');
     const rail = target.matches('[data-sidebar="menu-button"]');
     if (rail) {
-      // Reuse the real status indicator's presentation mapping, including working
-      // Subagents and theme changes. Hide its shape without rewriting React DOM.
+      // Reuse the indicator's presentation mapping, including working and theme
+      // changes, plus the preview's Dormant-grey override. One colour drives
+      // both the solid edge and selected gradient; no separate animation palette.
       const dot = target.querySelector(':scope > span[aria-hidden].size-2.rounded-full');
       if (dot) {
-        const color = getComputedStyle(dot).color;
         if (!dot.classList.contains('nat91-activity-dot')) dot.classList.add('nat91-activity-dot');
+        const color = getComputedStyle(dot).color;
         if (target.style.getPropertyValue('--nat91-activity') !== color) target.style.setProperty('--nat91-activity', color);
         if (!target.hasAttribute('data-nat91-activity')) target.dataset.nat91Activity = 'true';
       }

@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { FakeBackend } from '../../src/backend/fake/index.ts';
 import { SessionHost } from '../../src/daemon/host.ts';
 import { TranscriptStore } from '../../src/daemon/store.ts';
@@ -29,6 +29,14 @@ const ids: string[] = [];
 for (const title of titles) {
   const sessionScope = ids.length === 0 ? scope : join(root, 'workspace', `fixture-${ids.length}`, 'flow');
   if (sessionScope !== scope) await cp(scope, sessionScope, { recursive: true });
+  if (ids.length === 3) {
+    // Load a genuine detached Lifecycle, not an Idle row with simulated classes.
+    const id = randomUUID(), now = new Date().toISOString();
+    store.writeMeta({ id, scope: sessionScope, backend: 'fake', title, titleSource: 'first-line', lifecycle: 'dormant', createdAt: now, updatedAt: now, outputPreview: 'No Backend Session is attached. This Agent Session can be Revived.' });
+    await host.load();
+    ids.push(id);
+    continue;
+  }
   const id = await host.create({ scope: sessionScope, backend: 'fake', effort: 'high' });
   ids.push(id);
   await host.send(id, title, 'now');

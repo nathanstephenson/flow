@@ -43,6 +43,44 @@ try {
     assert.equal(row.line, row.color, 'Each solid status edge must match its original activity hue');
     assert.equal(row.animation, row.selected ? 'nat91-rail-flow' : 'none', 'Inactive Agent Sessions must not animate');
   }
+  async function checkStatusPalette(rows) {
+    const palette = await rows.evaluateAll(rows => {
+      const context = document.createElement('canvas').getContext('2d');
+      const rgb = color => { context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1); return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+      const muted = rgb(getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim());
+      return rows.map(row => {
+        const dot = row.querySelector('.nat91-activity-dot');
+        const gradient = getComputedStyle(row, '::before').backgroundImage;
+        const stops = [...gradient.matchAll(/color\(srgb ([^)]+)\)/g)].map(match => match[1].split(/[ /]+/).slice(0, 3).map(value => Math.round(Math.max(0, Math.min(1, Number(value))) * 255)));
+        return { idle: dot.matches('.text-foreground.bg-current'), dormant: dot.matches('.text-foreground.border-current'), rgb: rgb(getComputedStyle(dot).color), muted, gradient, stops, selected: row.dataset.nat91Selected === 'true', linked: row.style.getPropertyValue('--nat91-activity') === getComputedStyle(dot).color };
+      });
+    });
+    const idle = palette.find(row => row.idle), dormant = palette.find(row => row.dormant);
+    assert.ok(idle && dormant, 'Fixture must contain genuine Idle and Dormant rows');
+    assert.notDeepEqual(idle.rgb, dormant.rgb, 'Idle and Dormant must not share a colour');
+    assert.deepEqual(dormant.rgb, dormant.muted, 'Dormant indicator uses the theme muted grey');
+    for (const row of palette.filter(row => row.selected)) {
+      assert.ok(row.linked, 'The gradient and edge share the indicator colour variable');
+      assert.ok(row.gradient.startsWith('linear-gradient(90deg,'), 'Flow bands must be horizontal');
+      assert.equal(row.stops.length, 2, 'Selected gradient must contain both activity-coloured reflection stops');
+      for (const stop of row.stops) assert.ok(stop.every((channel, index) => Math.abs(channel - row.rgb[index]) <= 1), 'Both rendered gradient stops must match the indicator RGB');
+    }
+  }
+  await checkStatusPalette(page.locator('[data-sidebar="menu-button"][data-nat91-activity]'));
+  const direction = await activeRow.evaluate(node => {
+    const animation = node.getAnimations({ subtree: true }).find(animation => animation.animationName === 'nat91-rail-flow');
+    const original = animation.currentTime;
+    animation.pause();
+    animation.currentTime = 1000;
+    const first = parseFloat(getComputedStyle(node, '::before').backgroundPositionX);
+    animation.currentTime = 2000;
+    const second = parseFloat(getComputedStyle(node, '::before').backgroundPositionX);
+    const width = node.getBoundingClientRect().width;
+    const imageWidth = width * parseFloat(getComputedStyle(node, '::before').backgroundSize) / 100;
+    animation.currentTime = original; animation.play();
+    return { firstOffset: (width - imageWidth) * first / 100, secondOffset: (width - imageWidth) * second / 100 };
+  });
+  assert.ok(direction.secondOffset > direction.firstOffset, 'Selected activity reflection must move physically LEFT to RIGHT, not just change its CSS position');
   const flowBefore = await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition);
   await page.waitForTimeout(250);
   assert.notEqual(await activeRow.evaluate(node => getComputedStyle(node, '::before').backgroundPosition), flowBefore, 'Selected gradient must actually flow over time');
@@ -133,15 +171,23 @@ try {
   await page.getByRole('tab', { name: 'Agents' }).click();
   // Selection, not Running status, owns the animation. Its hue follows the real
   // status indicator on Running and Awaiting rows without animating their peers.
-  for (const [index, label, colorClass] of [[1, 'Review the adapter contract', 'text-status-active'], [4, 'Confirm migration', 'text-status-awaiting']]) {
+  for (const [index, label, colorClass] of [[1, 'Review the adapter contract', 'text-status-active'], [4, 'Confirm migration', 'text-status-awaiting'], [3, 'Inspect workflow retries', 'text-foreground']]) {
     await page.locator('[data-sidebar="menu-button"]').filter({ hasText: label }).click();
     await page.waitForFunction(id => location.hash.includes(id), ids[index]);
     await activeRow.locator(`.nat91-activity-dot.${colorClass}`).waitFor({ state: 'attached' });
     assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
     assert.ok(await activeRow.evaluate(node => node.style.getPropertyValue('--nat91-activity') === getComputedStyle(node.querySelector('.nat91-activity-dot')).color));
+    await checkStatusPalette(page.locator('[data-sidebar="menu-button"][data-nat91-activity]'));
     await page.mouse.move(570, 220);
     await page.waitForTimeout(100);
-    await page.screenshot({ path: join(out, index === 1 ? 'real-ui-running-flow.png' : 'real-ui-awaiting-flow.png') });
+    await page.screenshot({ path: join(out, index === 1 ? 'real-ui-running-flow.png' : index === 4 ? 'real-ui-awaiting-flow.png' : 'real-ui-dormant-flow.png') });
+    if (index === 3) {
+      await page.evaluate(() => document.documentElement.classList.remove('dark'));
+      await page.waitForTimeout(100);
+      await checkStatusPalette(page.locator('[data-sidebar="menu-button"][data-nat91-activity]'));
+      await page.screenshot({ path: join(out, 'real-ui-dormant-flow-light.png') });
+      await page.evaluate(() => document.documentElement.classList.add('dark'));
+    }
   }
   const rail = page.locator('[data-sidebar="menu-button"]').filter({ hasText: 'Polish keyboard navigation' });
   await rail.click();
@@ -196,6 +242,7 @@ try {
     await page.waitForTimeout(200);
     const linesMatch = await drawerRows.evaluateAll(rows => rows.every(row => getComputedStyle(row).borderLeftColor === getComputedStyle(row.querySelector('.nat91-activity-dot')).color && getComputedStyle(row.querySelector('.nat91-activity-dot')).display === 'none'));
     assert.ok(linesMatch, 'Status edges must follow theme changes in the portalled mobile drawer');
+    await checkStatusPalette(drawerRows);
     assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
     await page.screenshot({ path: join(out, dark ? 'real-ui-mobile-rail-dark.png' : 'real-ui-mobile-rail-light.png') });
   }
@@ -210,6 +257,6 @@ try {
   await activeRow.locator('.nat91-activity-dot').evaluate(dot => dot.style.removeProperty('color'));
   await page.waitForFunction(before => document.querySelector('[data-sidebar="menu-button"][data-nat91-selected="true"]').style.getPropertyValue('--nat91-activity') === before, portalHueBefore);
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: status-coloured edge lines / selected-only flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }
