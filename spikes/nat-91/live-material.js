@@ -79,6 +79,11 @@ style.textContent = `
   .nat91-tab-surface > [role="tab"] { align-self: stretch; min-width: 0; flex: 1; text-align: left; padding-inline: 0; }
   .nat91-segmented-surface { width: 100% !important; padding: 0 !important; gap: 0 !important; border-radius: 0 !important; }
   .nat91-segmented-surface > [data-slot="tabs-trigger"] { flex: 1; height: 36px; border-radius: 0 !important; }
+  /* A flush mode strip loses the native inset-pill context: putting muted on
+     the whole track makes the inactive tab look selected. Fill only the actual
+     active mode, retaining its native foreground, selection ring and shadow. */
+  .nat91-segmented-surface[aria-label="New Agent Session mode"] { background: transparent !important; }
+  .nat91-segmented-surface[aria-label="New Agent Session mode"] > [data-slot="tabs-trigger"][aria-selected="true"] { background: var(--muted) !important; }
   .nat91-view-strip { margin: -16px -16px 0; padding: 0 !important; }
   .nat91-action-strip { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 !important; background: var(--card); }
   .nat91-action-strip > strong { grid-column: 1 / -1; padding-bottom: 10px; background: var(--background); }

@@ -557,6 +557,57 @@ try {
       check(`${mode}: native accordion collapses with Enter`, () => assert.equal(collapsed, 'false'));
     }
   });
+  await run('New Agent Session mode fill follows selection', async () => {
+    const modes = page.getByRole('tablist', { name: 'New Agent Session mode', exact: true });
+    for (const [size, viewport] of [['desktop', { width: 1440, height: 980 }], ['mobile', { width: 390, height: 844 }]]) {
+      await page.setViewportSize(viewport); await page.waitForTimeout(250);
+      const overlay = page.locator('[data-slot="sheet-overlay"]');
+      if (await overlay.isVisible()) await overlay.click({ position: { x: viewport.width - 10, y: 200 } });
+      for (const dark of [true, false]) {
+        const label = `${size}-${dark ? 'dark' : 'light'}`;
+        await theme(dark);
+        for (const mode of ['chat', 'workflow']) {
+          const active = modes.getByRole('tab', { name: new RegExp(`^${mode}$`, 'i') });
+          await active.click(); await page.mouse.move(5, 5); await settle();
+          const state = await modes.evaluate(track => {
+            const tabs = [...track.querySelectorAll('[role="tab"]')];
+            const selected = tabs.find(node => node.getAttribute('aria-selected') === 'true');
+            const inactive = tabs.find(node => node !== selected);
+            const appearance = node => { const css = getComputedStyle(node); return { color: css.color, shadow: css.boxShadow, font: css.font }; };
+            const actual = appearance(selected);
+            const sheet = document.querySelector('style[data-nat91-material]').sheet;
+            let native;
+            try { sheet.disabled = true; native = appearance(selected); } finally { sheet.disabled = false; }
+            const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--muted)'; track.append(probe);
+            const muted = getComputedStyle(probe).backgroundColor; probe.remove();
+            return { count: tabs.filter(node => node.getAttribute('aria-selected') === 'true').length,
+              active: selected.textContent, fill: getComputedStyle(selected).backgroundColor, muted,
+              inactive: getComputedStyle(inactive).backgroundColor, track: getComputedStyle(track).backgroundColor, actual, native,
+              chrome: tabs.map(node => node.dataset.nat91Chrome), adaptive: tabs.some(node => node.matches('.nat91-adaptive-ink, .nat91-adaptive-root')) };
+          });
+          check(`${label}: ${mode} owns the fill and native selection ring/ink`, () => {
+            assert.equal(state.count, 1); assert.equal(state.active.trim().toLowerCase(), mode);
+            assert.equal(state.fill, state.muted); assert.equal(state.inactive, 'rgba(0, 0, 0, 0)'); assert.equal(state.track, 'rgba(0, 0, 0, 0)');
+            assert.deepEqual(state.actual, state.native); assert.notEqual(state.actual.shadow, 'none');
+            assert.ok(state.chrome.every(value => value === 'false')); assert.equal(state.adaptive, false);
+          });
+          const panel = page.locator('[data-new-session]').getByRole('tabpanel', { name: new RegExp(`^${mode}$`, 'i') });
+          await panel.waitFor();
+          const panelCount = await page.locator('[data-new-session]').getByRole('tabpanel').count();
+          check(`${label}: ${mode} matches the only visible panel`, () => assert.equal(panelCount, 1));
+          const other = modes.getByRole('tab', { name: mode === 'chat' ? /^workflow$/i : /^chat$/i });
+          await other.hover(); await page.waitForTimeout(80);
+          const fills = await modes.locator('[role="tab"]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
+          check(`${label}: hovering the inactive mode does not reverse selection`, () => assert.notEqual(fills[0], fills[1]));
+          await page.mouse.move(5, 5); await page.waitForTimeout(180);
+          await capture(`new-mode-${label}-${mode}`);
+        }
+        await modes.getByRole('tab', { name: /^workflow$/i }).focus(); await page.keyboard.press('ArrowLeft');
+        const keyboard = await modes.getByRole('tab', { name: /^chat$/i }).evaluate(node => ({ selected: node.getAttribute('aria-selected'), focus: node === document.activeElement && node.matches(':focus-visible') }));
+        check(`${label}: native arrow-key activation and focus remain`, () => { assert.equal(keyboard.selected, 'true'); assert.ok(keyboard.focus); });
+      }
+    }
+  });
   check('No mutating API requests', () => assert.deepEqual(mutations, []));
   check('No browser script failures', () => assert.deepEqual(errors, []));
 } catch (error) {
