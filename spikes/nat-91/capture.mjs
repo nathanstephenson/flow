@@ -5,7 +5,7 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? '/usr/local/s
 const root = process.env.MOCKUP_STATE_DIR;
 if (!root) throw new Error('Set MOCKUP_STATE_DIR to the running dev-host.ts state root.');
 const token = await readFile(join(root, 'token'), 'utf8');
-const { ids } = JSON.parse(await readFile(join(root, 'study.json'), 'utf8'));
+const { ids, settledId } = JSON.parse(await readFile(join(root, 'study.json'), 'utf8'));
 const out = process.env.CAPTURE_DIR ?? '/tmp/nat91-live-captures';
 const url = process.env.MOCKUP_URL ?? 'http://127.0.0.1:5191';
 await mkdir(out, { recursive: true });
@@ -30,6 +30,16 @@ try {
   const revision = await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision));
   await page.waitForTimeout(200);
   assert.ok(await page.evaluate(() => Number(window.nat91Material.canvas.dataset.revision)) - revision <= 2, 'Material-owned style writes must not create a continuous redraw loop');
+  async function checkRailHeadings() {
+    const labels = await page.locator('.nat91-session-band [data-sidebar="group-label"]').evaluateAll(labels => labels.map(label => ({ summary: label.tagName === 'SUMMARY', text: label.textContent.trim(), display: getComputedStyle(label).display, height: label.getBoundingClientRect().height })));
+    assert.equal(labels.filter(label => !label.summary).length, 4, 'Fixture must exercise all four unfiled status groups');
+    assert.ok(labels.filter(label => !label.summary).every(label => label.display === 'none' && label.height === 0), 'Non-Settled headings must be hidden without retaining layout space');
+    assert.equal(labels.filter(label => label.summary).length, 1, 'Only the Settled disclosure heading remains');
+    assert.match(labels.find(label => label.summary).text, /^Settled\s*·\s*1$/, 'The real disclosure label retains its count');
+    assert.equal(await page.locator('[data-sidebar="menu"][aria-label="Settled Agent Sessions"]').count(), 1, 'Settled list must be renamed accessibly as well');
+    assert.equal(await page.locator('[data-sidebar="menu"][aria-label="Filed away Agent Sessions"]').count(), 0);
+  }
+  await checkRailHeadings();
   await page.screenshot({ path: join(out, 'real-ui-dark.png') });
   const activeRow = page.locator('[data-sidebar="menu-button"][data-nat91-selected="true"]');
   const statusLines = await page.locator('[data-sidebar="menu-button"][data-nat91-activity]').evaluateAll(rows => rows.map(row => {
@@ -243,6 +253,7 @@ try {
     const linesMatch = await drawerRows.evaluateAll(rows => rows.every(row => getComputedStyle(row).borderLeftColor === getComputedStyle(row.querySelector('.nat91-activity-dot')).color && getComputedStyle(row.querySelector('.nat91-activity-dot')).display === 'none'));
     assert.ok(linesMatch, 'Status edges must follow theme changes in the portalled mobile drawer');
     await checkStatusPalette(drawerRows);
+    await checkRailHeadings();
     assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
     await page.screenshot({ path: join(out, dark ? 'real-ui-mobile-rail-dark.png' : 'real-ui-mobile-rail-light.png') });
   }
@@ -256,7 +267,45 @@ try {
   }, portalHueBefore);
   await activeRow.locator('.nat91-activity-dot').evaluate(dot => dot.style.removeProperty('color'));
   await page.waitForFunction(before => document.querySelector('[data-sidebar="menu-button"][data-nat91-selected="true"]').style.getPropertyValue('--nat91-activity') === before, portalHueBefore);
+  assert.ok(settledId, 'Use a fresh dev-host fixture with a genuine Settled Agent Session');
+  const disclosure = page.locator('.nat91-session-band summary');
+  const settledMenu = page.locator('[data-sidebar="menu"][aria-label="Settled Agent Sessions"]');
+  assert.equal(await settledMenu.isVisible(), false, 'Settled rows start collapsed');
+  await disclosure.focus(); await page.keyboard.press('Space');
+  await settledMenu.waitFor();
+  assert.equal(await settledMenu.getByRole('button', { name: /Review complete/ }).count(), 1, 'Opening the original disclosure reveals the real Settled row');
+  await disclosure.focus(); await page.keyboard.press('Space');
+  await settledMenu.waitFor({ state: 'hidden' });
+  // Simulate React updating the native summary's text/count. No API mutation:
+  // the observer must rename it again without replacing its chevron or text nodes.
+  const originals = await disclosure.evaluate(summary => {
+    const texts = [...summary.childNodes].filter(node => node.nodeType === Node.TEXT_NODE);
+    const original = texts.map(node => node.nodeValue);
+    texts.find(node => node.nodeValue.includes('Settled')).nodeValue = 'Filed away · ';
+    texts.find(node => node.nodeValue.trim() === '1').nodeValue = '2';
+    return original;
+  });
+  await page.waitForFunction(() => /Settled\s*·\s*2/.test(document.querySelector('.nat91-session-band summary').textContent));
+  await disclosure.evaluate((summary, originals) => [...summary.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).forEach((node, index) => { node.nodeValue = originals[index]; }), originals);
+  await checkRailHeadings();
+  await disclosure.click(); await settledMenu.waitFor();
+  await page.waitForFunction(() => !document.querySelector('.nat91-session-band summary svg').classList.contains('-rotate-90'));
+  await disclosure.evaluate(summary => summary.blur());
+  await page.screenshot({ path: join(out, 'real-ui-settled-mobile-light.png') });
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.waitForTimeout(250);
+  if (!await settledMenu.isVisible()) await disclosure.click();
+  for (const dark of [true, false]) {
+    await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
+    await page.waitForTimeout(150);
+    await checkRailHeadings();
+    await page.screenshot({ path: join(out, dark ? 'real-ui-settled-dark.png' : 'real-ui-settled-light.png') });
+  }
+  await page.locator('[data-sidebar="footer"]').getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.locator('[data-sidebar="menu"][aria-label="Settings sections"]').waitFor();
+  assert.equal(await page.locator('.nat91-session-band').count(), 0, 'Session heading treatment must not mark Settings navigation');
+  assert.ok(await page.locator('[data-sidebar="header"]').getByText('Settings', { exact: true }).isVisible(), 'Settings header stays visible');
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: status headings removed without gaps / native Settled disclosure and accessible list name / keyboard collapse and live count updates, distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }

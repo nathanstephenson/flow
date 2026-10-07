@@ -40,6 +40,8 @@ style.textContent = `
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
   [data-sidebar="menu-button"].nat91-control[data-nat91-activity] { border-left-color: var(--nat91-activity) !important; }
   .nat91-activity-dot { display: none !important; }
+  /* Keep Band ordering/list names, but let the status edges carry visual state. */
+  .nat91-session-band > [data-sidebar="group-label"] { display: none !important; }
   /* Native Dormant is a foreground-coloured hollow ring. With shape removed,
      give that indicator a muted grey so it remains distinct from filled Idle. */
   [aria-hidden].size-2.rounded-full.text-foreground.border-current { color: var(--muted-foreground) !important; }
@@ -278,6 +280,17 @@ function adaptiveInk(target, rect, texture) {
   });
 }
 function collect() {
+  // Scope this to Agent Session menus, never the Settings navigation. The native
+  // disclosure, count, keyboard handling and cursor protection stay untouched.
+  for (const menu of document.querySelectorAll('[data-sidebar="menu"][aria-label$="Agent Sessions"]')) {
+    const group = menu.closest('[data-sidebar="group"]');
+    if (group && !group.classList.contains('nat91-session-band')) group.classList.add('nat91-session-band');
+    if (menu.getAttribute('aria-label') === 'Filed away Agent Sessions') menu.setAttribute('aria-label', 'Settled Agent Sessions');
+    const summary = group?.querySelector(':scope > details > summary');
+    for (const text of summary?.childNodes ?? []) {
+      if (text.nodeType === Node.TEXT_NODE && text.nodeValue.includes('Filed away')) text.nodeValue = text.nodeValue.replace('Filed away', 'Settled');
+    }
+  }
   const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"], [data-slot="select-item"], [data-slot="combobox-item"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-sub-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
@@ -301,6 +314,10 @@ function collect() {
   });
   surfaces = [];
   targets.forEach((node, target) => {
+    // Closed details may still expose cached child rects (content-visibility).
+    // Only their native summary is a visible surface until expanded.
+    const closed = target.closest('details:not([open])');
+    if (closed && !closed.querySelector(':scope > summary')?.contains(target)) return;
     const rect = target.getBoundingClientRect();
     const computed = getComputedStyle(target);
     if (!rect.width || !rect.height || computed.visibility === 'hidden' || Number(computed.opacity) === 0) return;
@@ -464,7 +481,7 @@ document.addEventListener('focusin', schedule);
 document.addEventListener('focusout', schedule);
 reduced.addEventListener('change', () => { pointer = { x: innerWidth * .56, y: innerHeight * .3 }; scheduleGloss(); });
 domObserver = new MutationObserver(records => {
-  const meaningful = records.filter(record => record.target !== canvas && record.target !== note && !record.target.closest?.('.nat91-gloss') && !['data-highlighted', 'aria-activedescendant'].includes(record.attributeName) && (record.type !== 'characterData' || cachedOwnerOf(record.target)));
+  const meaningful = records.filter(record => record.target !== canvas && record.target !== note && !record.target.closest?.('.nat91-gloss') && !['data-highlighted', 'aria-activedescendant'].includes(record.attributeName) && (record.type !== 'characterData' || cachedOwnerOf(record.target) || record.target.parentElement?.closest('.nat91-session-band summary')));
   // A native re-render can replace a label/canvas or reset its classes while
   // leaving the outer rect/text unchanged. Invalidate only that control; ARIA
   // and selection changes are already covered by the material signature.

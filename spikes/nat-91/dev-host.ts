@@ -66,11 +66,19 @@ for (const title of titles) {
   const summary = host.list().find(s => s.id === id);
   if (summary?.attention?.group === 'unread') host.acknowledge(id, summary.attention.version);
 }
+const settledScope = join(root, 'workspace', 'fixture-settled', 'flow');
+await cp(scope, settledScope, { recursive: true });
+const settledId = await host.create({ scope: settledScope, backend: 'fake' });
+await host.send(settledId, 'Review complete', 'now');
+backend.latest.say('This review is Settled. It remains readable and Revivable.');
+backend.latest.completeTurn();
+await new Promise(resolve => setImmediate(resolve));
+await host.settle(settledId);
 const token = randomBytes(32).toString('hex');
 const server = await serve({ host, store, config, token, scope, port: Number(process.env.MOCKUP_HOST_PORT ?? 4392), assets: {} });
 await writeFile(join(root, 'token'), token, { mode: 0o600 });
 await writeFile(join(root, 'daemon.json'), JSON.stringify({ url: server.url, token }), { mode: 0o600 });
-await writeFile(join(root, 'study.json'), JSON.stringify({ ids }), { mode: 0o600 });
+await writeFile(join(root, 'study.json'), JSON.stringify({ ids, settledId }), { mode: 0o600 });
 console.log(`NAT-91 isolated dev host: ${server.url}\nState root: ${root}`);
 const stop = async () => { await server.close(); await host.shutdown(); process.exit(0); };
 process.on('SIGTERM', () => void stop());
