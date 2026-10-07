@@ -26,6 +26,20 @@ jobs:
       - run: node scripts/check-release.mjs
       - run: npm ci
       - run: npm run typecheck
+      # Match CI's disposable-runner setup so isolation tests exercise enforcement.
+      # Never relax namespace policy on a production Session Host.
+      - name: Enable and verify local filesystem isolation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          sudo sysctl -w user.max_user_namespaces=28633
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          node --experimental-strip-types scripts/test-ci-isolation.mjs
       - run: npm test
       - name: Build and test the release archive
         run: |
