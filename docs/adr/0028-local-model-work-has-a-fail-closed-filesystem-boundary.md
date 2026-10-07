@@ -43,9 +43,11 @@ modes, so changing the policy on Revive does not change their storage location. 
 Claude uses an ephemeral config view but retains its normal shared credential store and refresh
 locks through `CLAUDE_SECURESTORAGE_CONFIG_DIR`, including normal CLI/concurrent-session sharing.
 Restricted Claude reuses its narrowly staged view and never receives a host auth-root override.
-Credentials are not persisted in the durable project-record directory. Legacy resume IDs whose
-records exist only in the global Claude projects directory require a separate, narrowly scoped
-migration; Flow does not bulk import other Agent Sessions' records.
+Credentials are not persisted in the durable project-record directory. On Revive, legacy resume IDs
+whose records exist only in the global Claude projects directory are migrated by the host before
+worker launch. Only the saved UUID's transcript and UUID-owned sidecars under the selected Scope
+are copied; linked records are refused. Existing owned conversations remain authoritative. Flow
+never bulk imports other Agent Sessions' records or exposes the global projects tree to workers.
 
 Local stdio MCP transports own ordinary subprocess groups in both modes. Shutdown is bounded and
 drains already-written stdout with a bounded EOF wait before closing inherited pipes, so a final

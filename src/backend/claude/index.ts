@@ -382,7 +382,7 @@ class ClaudeSession implements BackendSession {
       models = await this.stream.supportedModels();
     } catch (error) {
       this.emit({ type: "notice", level: "warn", text: `Could not list models: ${message(error)}` });
-      return;
+      throw new Error(`Claude model capabilities are unavailable: ${message(error)}`, { cause: error });
     }
     if (this.disposed) return;
 
@@ -1106,7 +1106,7 @@ export class ClaudeBackend implements AgentBackend {
     // Do not await the init message: streaming input yields none until the first prompt. The
     // supportedModels control request does answer before that prompt, however. Returning while it
     // is still in flight lets the first send race the empty provisional capabilities.
-    const claudeState = prepareClaudeState(options.stateDir, process.env, options.scope);
+    const claudeState = prepareClaudeState(options.stateDir, process.env, options.scope, options.resume);
     let session: ClaudeSession;
     try { session = new ClaudeSession(options, this.options, claudeState); }
     catch (error) { claudeState.cleanup(); throw error; }

@@ -302,7 +302,7 @@ it("refuses a Claude Backend Session when model discovery fails", async () => {
     getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
     close: () => { closed = true; messages.close(); },
   } as unknown as Query)) as typeof query });
-  await assert.rejects(backend.create({ scope: "/tmp", emit: () => {} }), /model capabilities are unavailable/);
+  await assert.rejects(backend.create({ scope: "/tmp", emit: () => {} }), /model capabilities are unavailable: CLI unavailable/);
   assert.equal(closed, true);
 });
 
