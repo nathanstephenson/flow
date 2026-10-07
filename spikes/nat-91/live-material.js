@@ -62,6 +62,15 @@ style.textContent = `
   [data-sidebar="menu-action"] { background: transparent !important; color: var(--sidebar-foreground) !important; }
   [data-sidebar="header"] { padding: 0 !important; }
   [data-sidebar="header"] [data-slot="button"] { border-radius: 0 !important; min-height: 42px; padding-inline: 12px; }
+  /* A dedicated rail action occupies its whole row, not an inset pill. Keep
+     compact mixed footers (Settings icon + live status) in their native layout. */
+  .nat91-action-footer { padding: 0 !important; gap: 0 !important; }
+  .nat91-action-footer > form { display: flex; width: 100%; margin: 0; }
+  .nat91-action-footer > [data-slot="button"],
+  .nat91-action-footer > form > [data-slot="button"] {
+    width: 100%; height: 42px; min-height: 42px; border-radius: 0 !important;
+    justify-content: flex-start; padding-inline: 12px;
+  }
   .nat91-dock-strip { padding-inline: 0 !important; gap: 0 !important; }
   .nat91-dock-strip > button { align-self: stretch; width: 34px; height: auto; border-radius: 0 !important; }
   .nat91-tab-surface { border-radius: 0 !important; align-self: stretch; flex: 1 1 0; min-width: 80px; justify-content: space-between; padding-inline: 10px !important; gap: 2px !important; }
@@ -280,6 +289,9 @@ function adaptiveInk(target, rect, texture) {
   });
 }
 function collect() {
+  const settingsMenu = document.querySelector('[data-sidebar="menu"][aria-label="Settings sections"]');
+  const actionFooter = settingsMenu?.closest('[data-sidebar="sidebar"]')?.querySelector('[data-sidebar="footer"]');
+  if (actionFooter && !actionFooter.classList.contains('nat91-action-footer')) actionFooter.classList.add('nat91-action-footer');
   // Scope this to Agent Session menus, never the Settings navigation. The native
   // disclosure, count, keyboard handling and cursor protection stay untouched.
   for (const menu of document.querySelectorAll('[data-sidebar="menu"][aria-label$="Agent Sessions"]')) {
@@ -291,7 +303,7 @@ function collect() {
       if (text.nodeType === Node.TEXT_NODE && text.nodeValue.includes('Filed away')) text.nodeValue = text.nodeValue.replace('Filed away', 'Settled');
     }
   }
-  const nodes = document.querySelectorAll('#root button, [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"], [data-slot="select-item"], [data-slot="combobox-item"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-sub-trigger"]');
+  const nodes = document.querySelectorAll('#root button, .nat91-action-footer [data-slot="button"], [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"], [data-slot="select-item"], [data-slot="combobox-item"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-sub-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
     // The overlaid Settle action must reveal its row, not repaint the sidebar.

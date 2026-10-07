@@ -118,6 +118,54 @@ async function optionGloss(option, label) {
   });
   await nativeDropdown(option, `${label}-hovered`);
 }
+async function footerActions(mode, logout = false) {
+  const footer = page.locator('.nat91-action-footer');
+  await footer.waitFor();
+  const actions = footer.locator(':scope > [data-slot="button"], :scope > form > [data-slot="button"]');
+  assert.equal(await actions.count(), logout ? 2 : 1);
+  const geometry = await footer.evaluate(node => {
+    const box = node.getBoundingClientRect(), css = getComputedStyle(node);
+    const buttons = [...node.querySelectorAll('[data-slot="button"]')].map(button => {
+      const rect = button.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, bottom: rect.bottom, radius: getComputedStyle(button).borderRadius };
+    });
+    return { x: box.x, y: box.y, width: box.width, bottom: box.bottom, border: parseFloat(css.borderTopWidth), padding: css.padding, gap: css.gap, buttons };
+  });
+  check(`${mode}: footer actions fill every pixel of their rows`, () => {
+    assert.equal(geometry.padding, '0px'); assert.equal(geometry.gap, '0px');
+    for (const button of geometry.buttons) {
+      assert.ok(Math.abs(button.x - geometry.x) < 1);
+      assert.ok(Math.abs(button.width - geometry.width) < 1);
+      assert.ok(button.height >= 42); assert.equal(button.radius, '0px');
+    }
+    assert.ok(Math.abs(geometry.buttons[0].y - geometry.y - geometry.border) < 1);
+    for (let i = 1; i < geometry.buttons.length; i++) assert.ok(Math.abs(geometry.buttons[i].y - geometry.buttons[i - 1].bottom) < 1);
+    assert.ok(Math.abs(geometry.buttons.at(-1).bottom - geometry.bottom) < 1);
+  });
+  for (const action of await actions.all()) {
+    const name = await action.textContent();
+    const hits = await action.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      // Keep the native rail resize strip (8px inside the right edge) usable.
+      return [[box.x + 2, box.y + 2], [box.right - 12, box.bottom - 2]].every(([x, y]) => node.contains(document.elementFromPoint(x, y)));
+    });
+    check(`${mode}: ${name.trim()} fills the hit area outside the native resize strip`, () => assert.ok(hits));
+    await action.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+    const focus = await action.evaluate(node => ({ active: node === document.activeElement, visible: node.matches(':focus-visible'), shadow: getComputedStyle(node).boxShadow, focusedName: document.activeElement?.textContent }));
+    check(`${mode}: ${name.trim()} keeps native keyboard focus`, () => assert.ok(focus.active && focus.visible && focus.shadow !== 'none', JSON.stringify(focus)));
+  }
+  const back = footer.getByRole('button', { name: 'Back to Agent Sessions', exact: true });
+  const bounds = await back.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width - 12, bounds.y + bounds.height / 2);
+  await settle();
+  const hover = await back.evaluate(node => ({ hover: node.matches(':hover'), fill: getComputedStyle(node).backgroundColor, radius: getComputedStyle(node).borderRadius, chrome: node.dataset.nat91Chrome }));
+  check(`${mode}: rectangular native hover fill reaches the edge`, () => {
+    assert.ok(hover.hover); assert.notEqual(hover.fill, 'rgba(0, 0, 0, 0)');
+    assert.equal(hover.radius, '0px'); assert.equal(hover.chrome, 'false');
+  });
+  await footer.screenshot({ path: join(out, `footer-${mode}.png`) });
+  report.screenshots.push(join(out, `footer-${mode}.png`));
+}
 async function inspectOpen(trigger, popup, label) {
   await popup.waitFor();
   await settle();
@@ -385,7 +433,15 @@ try {
       await escape(trigger, `${mode}-${name}-selected`);
     });
 
-    await page.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).click();
+    await footerActions(mode);
+    await page.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).focus();
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => !location.hash.includes('/settings'));
+    await page.waitForFunction(() => !document.querySelector('.nat91-action-footer'));
+    const mixedFooter = await page.locator('[data-sidebar="footer"]').evaluate(node => ({ direction: getComputedStyle(node).flexDirection, padding: parseFloat(getComputedStyle(node).paddingLeft) }));
+    check(`${mode}: Back keyboard activation works and mixed Agent Session footer stays compact`, () => {
+      assert.equal(mixedFooter.direction, 'row'); assert.ok(mixedFooter.padding > 0);
+    });
     // A full Vite reload on a Settings deep link forgets the return point. Use
     // the seeded Agent Session explicitly, not a newly-created/live session.
     await page.goto(`${url}/#/s/${ids[0]}`, { waitUntil: 'domcontentloaded' });
@@ -418,6 +474,39 @@ try {
       await escape(trigger, `${mode}-composer`);
     });
   }
+  // Browser-only OIDC discovery fixture: render the existing logout form,
+  // without configuring OIDC on the host or submitting its POST action.
+  await page.route('**/api/config', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), authentication: 'oidc' } });
+  });
+  await page.route('**/oauth/logout', async route => {
+    mutations.push(`${route.request().method()} /oauth/logout`);
+    await route.abort('blockedbyclient');
+  });
+  for (const dark of [true, false]) await run(`OIDC ${dark ? 'dark' : 'light'} footer`, async () => {
+    await page.goto(`${url}/#/settings/providers`, { waitUntil: 'domcontentloaded' });
+    // Hash navigation doesn't remount HostProvider or fetch the config again.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Sign out of Flow', exact: true }).waitFor();
+    await theme(dark);
+    await footerActions(`oidc-${dark ? 'dark' : 'light'}`, true);
+  });
+  await run('Portalled mobile footer', async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(250);
+    await page.locator('[data-sidebar="trigger"]').click();
+    await page.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).waitFor();
+    for (const dark of [true, false]) {
+      await theme(dark);
+      await footerActions(`mobile-${dark ? 'dark' : 'light'}`, true);
+    }
+    await page.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).focus();
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() => !location.hash.includes('/settings'));
+    check('Mobile Back retains native return behaviour', () => assert.ok(true));
+  });
   check('No mutating API requests', () => assert.deepEqual(mutations, []));
   check('No browser script failures', () => assert.deepEqual(errors, []));
 } catch (error) {
