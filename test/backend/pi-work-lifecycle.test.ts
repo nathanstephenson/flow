@@ -23,6 +23,8 @@ it("delivers a background completion after the current turn and queued human mes
   const id = await host.create({ scope: fixture.scope, backend: "pi", modelId: "flow-test/parent" });
   const events = () => host.logFor(id).since(0).map((entry) => entry.event);
   await host.send(id, "Launch", "now");
+  // Send acknowledges acceptance, not SDK turn completion.
+  await until(() => events().some(event => event.type === "turn_ended"));
   assert.equal(host.list()[0]?.status, "idle");
   assert.equal(host.list()[0]?.activeSubagents, 1);
   const sending = host.send(id, "Working", "now");

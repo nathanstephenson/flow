@@ -108,6 +108,10 @@ export interface BackendSession {
   /** Opaque token allowing a later Revive to continue this Conversation Context. */
   resumeToken(): string | undefined;
   /**
+   * The promise may span the entire turn, depending on the SDK. The Session Host acknowledges
+   * accepted human messages without awaiting it; turn events own occupancy and completion.
+   * One-shot callers such as the Summary Model may still await this promise directly.
+   *
    * `attachments` reach only the model a turn actually runs on. An adapter is handed them without
    * being asked whether it can use them: whether the selected model accepts an image is already
    * declared on `ModelInfo.acceptsImages`, and the host refuses a send that contradicts it, so an

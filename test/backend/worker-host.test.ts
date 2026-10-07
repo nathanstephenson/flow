@@ -36,6 +36,7 @@ test("fatal worker loss makes its Agent Session Dormant, closes owned work, and 
   assert.equal(events.filter((event) => event.type === "session_started").length, 1);
   await host.revive(id);
   await host.send(id, "hello", "now");
+  await waitFor(() => host.list()[0]!.status === "idle");
   assert.equal(host.list()[0]!.status, "idle");
   assert.ok(host.logFor(id).since(0).some(({ event }) => event.type === "revived"));
 });
@@ -46,7 +47,8 @@ test("a worker crash during a prompt is recorded once and shutdown waits for tea
   t.after(async () => { await host.shutdown(); await rm(scope, { recursive: true, force: true }); });
   host.registerBackend(new WorkerBackend({ backendModule: new URL("./worker-fixture.ts", import.meta.url).href }));
   const id = await host.create({ scope, backend: "pi" });
-  await assert.rejects(host.send(id, "crash", "now"), /worker (disconnected|exited)/i);
+  await host.send(id, "crash", "now");
+  await waitFor(() => host.list()[0]!.status === "dormant");
   await host.shutdown();
   const events = host.logFor(id).since(0).map(({ event }) => event);
   assert.equal(events.filter((event) => event.type === "notice" && event.level === "error").length, 1);

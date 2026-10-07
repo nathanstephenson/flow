@@ -105,6 +105,10 @@ type SessionRecord = {
    * is very much still open.
    */
   turnInFlight: boolean;
+  /** Invalidates late prompt rejections after a turn ends, including backend-initiated turns. */
+  turnGeneration?: number;
+  /** Terminal events already recorded in this Backend Session, including host-synthesized ends. */
+  endedTurnIds?: Set<string>;
   /**
    * The Permission Prompts, Enquiries, Subagents and Background Calls the transcript has open,
    * indexed by id so the rail can be answered without reading it.
@@ -1052,12 +1056,7 @@ export class SessionHost {
       this.touch(record);
       return;
     }
-    try {
-      await this.dispatch(record, { text, attachments: ids });
-    } catch (error) {
-      this.recordDispatchFailure(record, error);
-      throw error;
-    }
+    await this.dispatch(record, { text, attachments: ids });
   }
 
   /**
@@ -1702,17 +1701,20 @@ export class SessionHost {
       record.turnInFlight = false;
       return false;
     }
-    try {
-      await record.session.prompt(text);
-      return true;
-    } catch (error) {
-      record.turnInFlight = false;
+    const session = record.session;
+    const generation = record.turnGeneration = (record.turnGeneration ?? 0) + 1;
+    const failed = (error: unknown): void => {
+      if (record.lifecycle !== 'live' || record.session !== session || record.turnGeneration !== generation) return;
       if (kind === 'input') this.workflowOwner?.rearmInput?.(record.id);
-      record.log.append({ type: 'notice', level: 'warn', text: `Could not notify parent: ${errorMessage(error)}` });
-      // The notification was consumed but no turn began. Keep draining in case another workflow
-      // event is ready; returning false when there is not one lets drain() release the Steering Queue.
-      return this.drainWorkflowNotification(record);
+      this.recordDispatchFailure(record, new Error(`Could not notify parent: ${errorMessage(error)}`));
+    };
+    try {
+      void session.prompt(text).catch(failed);
+    } catch (error) {
+      failed(error);
     }
+    // Consumed, not completed: turn events (or the guarded rejection) release subsequent work.
+    return true;
   }
 
   /** Confirmation belongs to this exact action, never a standing grant or model assertion. */
@@ -2287,6 +2289,7 @@ export class SessionHost {
   }
 
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
+    record.endedTurnIds = new Set();
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
@@ -2311,7 +2314,9 @@ export class SessionHost {
         relayPermission: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayPermission(input, signal); },
       },
       scope: record.scope,
-      emit: (event) => this.onBackendEvent(record.id, event),
+      emit: (event) => {
+        if (!attached || record.session === attached) this.onBackendEvent(record.id, event);
+      },
       ...(autoCompaction === undefined ? {} : { autoCompaction }),
       ...(compactionModelId === undefined ? {} : { compactionModelId }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
@@ -2527,6 +2532,9 @@ export class SessionHost {
      */
     const sent = note === undefined ? text : `${text}\n\n${note}`;
 
+    const session = record.session;
+    const startingTurn = !record.turnInFlight;
+    const generation = record.turnGeneration = (record.turnGeneration ?? 0) + (startingTurn ? 1 : 0);
     record.turnInFlight = true;
     record.log.append({
       type: "user_message",
@@ -2554,7 +2562,18 @@ export class SessionHost {
     }
     this.touch(record);
     const workflowContext = this.workflowOwner?.context(record.id);
-    await record.session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments));
+    // Acceptance is durable now. SDK prompt promises may last for the entire turn (including
+    // human input), so never keep the HTTP command open awaiting one. Outcomes belong to the
+    // Presentation Transcript, not to the response that acknowledged this message.
+    const failed = (error: unknown): void => {
+      if (record.lifecycle !== "live" || record.session !== session || record.turnGeneration !== generation) return;
+      this.recordDispatchFailure(record, error, startingTurn);
+    };
+    try {
+      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments)).catch(failed);
+    } catch (error) {
+      failed(error);
+    }
   }
 
   /**
@@ -2590,6 +2609,13 @@ export class SessionHost {
       return;
     }
     if (record.lifecycle === "dormant") return;
+    if (event.type === "turn_ended") {
+      const ended = record.endedTurnIds ??= new Set();
+      if (ended.has(event.turnId)) return;
+      // A delayed SDK terminal event after our synthetic end must not end a newer turn,
+      // cancel its human requests or release its Steering Queue a second time.
+      ended.add(event.turnId);
+    }
 
     if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
       record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;
@@ -2634,10 +2660,12 @@ export class SessionHost {
      * dispatch into it, which is the very thing holding the turn open used to prevent.
      */
     if (event.type === "turn_started") {
+      if (!record.turnInFlight) record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       record.turnInFlight = true;
     }
 
     if (event.type === "turn_ended") {
+      record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       this.workflowOwner?.rearmInput?.(sessionId);
       for (const pending of this.workflowConfirmations.values()) if (pending.sessionId === sessionId) pending.finish();
       for (const pending of this.workflowEnquiryRelays.values()) if (pending.sessionId === sessionId) pending.cancel();
@@ -2732,14 +2760,28 @@ export class SessionHost {
     }
   }
 
-  private recordDispatchFailure(record: SessionRecord, error: unknown): void {
+  private recordDispatchFailure(record: SessionRecord, error: unknown, endTurn = true): void {
     if (record.lifecycle === "dormant") return; // Fatal worker loss already recorded the failure.
     const before = this.activityOf(record);
     const failure = record.log.append({ type: "notice", level: "error", text: errorMessage(error) });
+    if (!endTurn) {
+      // A rejected steering request does not stop the already-running original prompt.
+      this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
+      this.touch(record);
+      return;
+    }
+    const turnId = openTurnId(record.log.since(0));
+    if (turnId) {
+      // A backend can reject without sending turn_ended. Close the visible turn too, otherwise
+      // the host is Idle while the composer remains Running forever.
+      this.onBackendEvent(record.id, { type: "turn_ended", turnId, reason: "error" });
+      return;
+    }
     record.turnInFlight = false;
     this.markAttention(record, "Failed", `dispatch-failure:${failure.seq}`, failure.at);
     this.noteResting(record, before);
     this.touch(record);
+    void this.drain(record);
   }
 
   private async drain(record: SessionRecord): Promise<void> {
