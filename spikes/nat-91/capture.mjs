@@ -18,6 +18,13 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1.5, colorScheme: 'dark' });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  // Read-only browser discovery fixture: expose the real PR tab without a git
+  // remote, credentials, publication or any GitHub request.
+  await page.route('**/api/command', route => {
+    const command = route.request().postDataJSON();
+    if (command?.type !== 'pull_request' || command.sessionId !== ids[0]) return route.continue();
+    return route.fulfill({ json: { result: { repo: 'example/fixture', id: 'nat91-tab-fixture', number: 1, url: 'https://github.com/example/fixture/pull/1', title: 'Read-only native tab fixture', isDraft: false, body: 'Browser-local fixture for tab appearance. No GitHub connection.', state: 'CLOSED', author: 'Preview', headRefName: 'preview', baseRefName: 'main', createdAt: '', updatedAt: '', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', viewerCanComment: false, comments: [], reviews: [], threads: [], reviewDecision: '', statusCheckRollup: [] } } });
+  });
   await page.goto(`${url}/auth?token=${token}`, { waitUntil: 'domcontentloaded' });
   await page.goto(`${url}/study`, { waitUntil: 'domcontentloaded' });
   assert.ok(page.url().includes(ids[0]), 'Study handoff opens the seeded Agent Session');
@@ -105,40 +112,75 @@ try {
   assert.equal(await activeRow.locator('.nat91-adaptive-ink').count(), 0, 'Rail text stays native, not fragmented by material-dependent ink');
   const settle = activeRow.locator('..').getByRole('button', { name: 'Settle', exact: true });
   assert.equal(await settle.locator('.nat91-control-texture').count(), 0, 'Settle must not have an opaque material canvas');
-  const material = await page.locator('.nat91-tab-surface[data-nat91-selected="true"] > .nat91-control-texture').first().evaluate(texture => {
-    const context = texture.getContext('2d');
-    const pixels = context.getImageData(0, 0, texture.width, texture.height).data;
-    let min = 255, max = 0, rightChroma = 0, rightCount = 0;
-    for (let y = 1; y < texture.height - 1; y += 2) {
-      for (let x = 1; x < texture.width - 1; x += 2) {
-        const i = (y * texture.width + x) * 4;
-        if (pixels[i + 3] < 250) continue;
-        const value = pixels[i] * .2126 + pixels[i + 1] * .7152 + pixels[i + 2] * .0722;
-        min = Math.min(min, value); max = Math.max(max, value);
-        if (x > texture.width * .8) { rightChroma += pixels[i + 2] - pixels[i]; rightCount++; }
-      }
+  async function checkNativeTabs() {
+    const results = await page.locator('.nat91-tab-surface > [role="tab"], [role="tab"].nat91-control').evaluateAll(tabs => {
+      const sheet = document.querySelector('style[data-nat91-material]').sheet;
+      const targetOf = tab => tab.parentElement.classList.contains('nat91-tab-surface') ? tab.parentElement : tab;
+      const appearance = tab => ({ fill: getComputedStyle(targetOf(tab)).backgroundColor, image: getComputedStyle(targetOf(tab)).backgroundImage, ink: getComputedStyle(tab).color });
+      const actual = tabs.map(appearance);
+      let native;
+      try { sheet.disabled = true; native = tabs.map(appearance); } finally { sheet.disabled = false; }
+      return tabs.map((tab, index) => {
+        const target = targetOf(tab), texture = target.querySelector(':scope > .nat91-control-texture');
+        const pixels = texture.getContext('2d').getImageData(0, 0, texture.width, texture.height).data;
+        let alpha = 0;
+        for (let i = 3; i < pixels.length; i += 4) alpha = Math.max(alpha, pixels[i]);
+        return { actual: actual[index], native: native[index], alpha, chrome: target.dataset.nat91Chrome, adaptive: target.matches('.nat91-adaptive-ink, .nat91-adaptive-root') || !!target.querySelector('.nat91-adaptive-ink, .nat91-adaptive-root, [data-nat91-ink-icon]') };
+      });
+    });
+    assert.ok(results.length >= 2, 'Native-fill checks must exercise real tabs');
+    for (const tab of results) {
+      assert.equal(tab.alpha, 0, 'Selected and inactive tabs must have fully transparent material canvases');
+      assert.equal(tab.chrome, 'false', 'Tab selection must never enable chrome');
+      assert.equal(tab.adaptive, false, 'Tab text/icons must stay native, not use adaptive chrome ink');
+      assert.deepEqual(tab.actual, tab.native, 'Tab fills and text must match the app with the preview stylesheet disabled');
     }
-    return { min, max, rightChroma: rightChroma / rightCount };
-  });
-  assert.ok(material.rightChroma > 20, 'Selected material must cover the right side, not fade to the neutral backdrop');
-  assert.ok(material.max - material.min > 150, 'Chrome needs genuine bright silver / black reflection contrast, not capped blue glow');
-  // Cached ink must survive native class resets and direct Text-node updates,
-  // not just selection changes or replacement of the whole label element.
+  }
+  await checkNativeTabs();
+  await page.getByRole('tab', { name: 'Git', exact: true }).click();
+  await page.getByRole('tab', { name: 'Diff', exact: true }).waitFor();
+  for (const name of ['Diff', 'Stack', 'PR']) {
+    await page.getByRole('tab', { name, exact: true }).click();
+    await page.waitForTimeout(100);
+    await checkNativeTabs();
+  }
+  for (const dark of [true, false]) {
+    await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
+    await page.waitForTimeout(150);
+    await checkNativeTabs();
+    await page.locator('[data-dock="right"]').screenshot({ path: join(out, dark ? 'real-ui-git-tabs-dark.png' : 'real-ui-git-tabs-light.png') });
+  }
+  const prTab = page.getByRole('tab', { name: 'PR', exact: true });
+  const prBounds = await prTab.boundingBox();
+  await page.mouse.move(prBounds.x + 10, prBounds.y + prBounds.height / 2);
+  await page.waitForTimeout(100);
+  const tabGlossBefore = await prTab.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform);
+  const tabStatsBefore = await page.evaluate(() => window.nat91Material.getStats());
+  await page.mouse.move(prBounds.x + prBounds.width - 10, prBounds.y + prBounds.height / 2);
+  await page.waitForTimeout(100);
+  assert.notEqual(await prTab.locator('.nat91-gloss-spot').evaluate(spot => spot.style.transform), tabGlossBefore, 'Native-fill tab gloss still follows the pointer');
+  const tabStatsAfter = await page.evaluate(() => window.nat91Material.getStats());
+  assert.equal(tabStatsAfter.materialBuilds, tabStatsBefore.materialBuilds, 'Tab pointer movement must not rebuild material');
+  assert.equal(tabStatsAfter.inkBuilds, tabStatsBefore.inkBuilds, 'Tab pointer movement must not rebuild ink');
+  await page.mouse.move(570, 220);
+  await page.evaluate(() => document.documentElement.classList.add('dark'));
+  await page.getByRole('tab', { name: 'Diff', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.getByRole('tab', { name: 'Stack', exact: true }).getAttribute('aria-selected'), 'true', 'Native view-tab keyboard selection survives without chrome');
+  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await page.waitForTimeout(100);
   const cachedTab = page.locator('.nat91-tab-surface[data-nat91-selected="true"] > [role="tab"]').first();
   const inkBeforeReset = await page.evaluate(() => window.nat91Material.getStats().inkBuilds);
-  await cachedTab.evaluate(node => node.classList.remove('nat91-adaptive-ink'));
-  await page.waitForFunction(() => document.querySelector('.nat91-tab-surface[data-nat91-selected="true"] > [role="tab"]')?.classList.contains('nat91-adaptive-ink'));
-  assert.ok(await page.evaluate(() => window.nat91Material.getStats().inkBuilds) > inkBeforeReset, 'Native class resets must rebuild cached ink');
+  await cachedTab.evaluate(node => node.classList.add('nat91-adaptive-ink'));
+  await page.waitForFunction(() => !document.querySelector('.nat91-tab-surface[data-nat91-selected="true"] > [role="tab"]').classList.contains('nat91-adaptive-ink'));
   const originalLabel = await cachedTab.evaluate(node => [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()).nodeValue);
   const setLabel = value => cachedTab.evaluate((node, value) => { [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.nodeValue.trim()).nodeValue = value; }, value);
-  const cachedTexture = cachedTab.locator('..').locator(':scope > .nat91-control-texture');
-  const waitForInkRevision = before => page.waitForFunction(before => Number(document.querySelector('.nat91-tab-surface[data-nat91-selected="true"] > .nat91-control-texture')?.dataset.revision) > before, before);
-  const beforeText = Number(await cachedTexture.getAttribute('data-revision'));
-  await setLabel(`${originalLabel} cache probe`);
-  await waitForInkRevision(beforeText);
-  const beforeRestore = Number(await cachedTexture.getAttribute('data-revision'));
+  await setLabel(`${originalLabel} native probe`);
+  await page.waitForTimeout(100);
+  await checkNativeTabs();
   await setLabel(originalLabel);
-  await waitForInkRevision(beforeRestore);
+  await page.waitForTimeout(100);
+  assert.equal(await page.evaluate(() => window.nat91Material.getStats().inkBuilds), inkBeforeReset, 'Tab class/text changes must not rebuild adaptive chrome ink');
   const activeBounds = await activeRow.boundingBox();
   const railClip = { x: 0, y: activeBounds.y - 12, width: activeBounds.width + 4, height: activeBounds.height + 24 };
   await page.screenshot({ path: join(out, 'real-ui-active-detail.png'), clip: railClip });
@@ -162,7 +204,7 @@ try {
   // Real tabs and session navigation, not simulated mockup handlers.
   await page.getByRole('tab', { name: 'Git' }).click();
   await page.getByRole('tab', { name: 'Git', exact: true }).getAttribute('aria-selected').then(value => assert.equal(value, 'true'));
-  await page.getByRole('tab', { name: 'Diff', exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'Diff', exact: true }).click();
   const refresh = page.getByRole('button', { name: 'Refresh', exact: true });
   const refreshBounds = await refresh.boundingBox();
   const rowBefore = await activeRow.locator('.nat91-control-texture').evaluate(texture => texture.toDataURL());
@@ -225,6 +267,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.evaluate(() => { document.activeElement?.blur(); document.documentElement.classList.remove('dark'); });
   await page.waitForTimeout(100);
+  await checkNativeTabs();
   await page.screenshot({ path: join(out, 'real-ui-light.png') });
   const lightSettle = activeRow.locator('..').getByRole('button', { name: 'Settle', exact: true });
   await lightSettle.hover();
@@ -299,6 +342,7 @@ try {
     await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
     await page.waitForTimeout(150);
     await checkRailHeadings();
+    await checkNativeTabs();
     await page.screenshot({ path: join(out, dark ? 'real-ui-settled-dark.png' : 'real-ui-settled-light.png') });
   }
   await page.locator('[data-sidebar="footer"]').getByRole('button', { name: 'Settings', exact: true }).click();
@@ -306,6 +350,6 @@ try {
   assert.equal(await page.locator('.nat91-session-band').count(), 0, 'Session heading treatment must not mark Settings navigation');
   assert.ok(await page.locator('[data-sidebar="header"]').getByText('Settings', { exact: true }).isVisible(), 'Settings header stays visible');
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: status headings removed without gaps / native Settled disclosure and accessible list name / keyboard collapse and live count updates, distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, full-face chrome tabs, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  console.log(`Passed: status headings removed without gaps / native Settled disclosure and accessible list name / keyboard collapse and live count updates, distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, native tab fills/ink with zero chrome alpha, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }

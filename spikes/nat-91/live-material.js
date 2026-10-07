@@ -1,8 +1,9 @@
 // Dev-only reference-led chrome study on the real Flow DOM. A shared reflected
-// environment and fine brushing on tabs; the rail uses status-coloured edge lines,
+// environment on selected non-tab controls; tabs keep native fills/ink. The rail uses status-coloured edge lines,
 // a selected-only flowing tint, and cursor-local gloss. No repeated fade masks.
 // No source artwork or production component changes.
 const style = document.createElement('style');
+style.dataset.nat91Material = 'true';
 style.textContent = `
   .nat91-control { isolation: isolate !important; }
   .nat91-control-static { position: relative; }
@@ -11,14 +12,13 @@ style.textContent = `
   .nat91-gloss-spot { position: absolute; left: -50%; top: -50%; width: 200%; height: 200%; background: radial-gradient(ellipse at center, rgb(255 255 255 / .09), transparent 55%); }
   :root:not(.dark) .nat91-gloss-spot { background: radial-gradient(ellipse at center, rgb(0 0 0 / .055), transparent 55%); }
   .nat91-control:focus-visible, .nat91-tab-surface:has(> [role="tab"]:focus-visible) { outline: 2px solid var(--ring); outline-offset: -2px; }
-  .nat91-tab-surface > [role="tab"] { background: transparent !important; }
   :root { --nat91-chrome-ink: var(--background); }
   .dark { --nat91-chrome-ink: var(--foreground); }
-  .nat91-control[data-nat91-selected="true"], .nat91-tab-surface[data-nat91-selected="true"] > button { color: var(--nat91-chrome-ink) !important; }
-  .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .text-muted-foreground, .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .text-foreground { color: var(--nat91-chrome-ink) !important; opacity: 1; }
-  .nat91-control[data-nat91-selected="true"]:not([data-sidebar="menu-button"]) .bg-foreground { background-color: var(--nat91-chrome-ink) !important; }
-  .nat91-control[data-nat91-selected="true"].nat91-adaptive-ink,
-  .nat91-control[data-nat91-selected="true"] .nat91-adaptive-ink {
+  .nat91-control[data-nat91-chrome="true"] { color: var(--nat91-chrome-ink) !important; }
+  .nat91-control[data-nat91-chrome="true"] .text-muted-foreground, .nat91-control[data-nat91-chrome="true"] .text-foreground { color: var(--nat91-chrome-ink) !important; opacity: 1; }
+  .nat91-control[data-nat91-chrome="true"] .bg-foreground { background-color: var(--nat91-chrome-ink) !important; }
+  .nat91-control[data-nat91-chrome="true"].nat91-adaptive-ink,
+  .nat91-control[data-nat91-chrome="true"] .nat91-adaptive-ink {
     color: transparent !important;
     background-image: var(--nat91-type-image) !important;
     background-clip: text !important; -webkit-background-clip: text !important;
@@ -26,7 +26,7 @@ style.textContent = `
     background-size: var(--nat91-type-size) !important;
     background-position: var(--nat91-type-position) !important;
   }
-  .nat91-control[data-nat91-selected="true"].nat91-adaptive-root::after {
+  .nat91-control[data-nat91-chrome="true"].nat91-adaptive-root::after {
     content: attr(data-nat91-type-text) / ""; position: absolute; inset: 0; z-index: 1;
     display: flex; align-items: center; justify-content: inherit; pointer-events: none;
     color: transparent; background-image: var(--nat91-type-image);
@@ -34,7 +34,7 @@ style.textContent = `
     background-size: var(--nat91-type-size); background-position: var(--nat91-type-position);
     background-repeat: no-repeat;
   }
-  .nat91-control[data-nat91-selected="true"]:focus-visible, .nat91-tab-surface[data-nat91-selected="true"]:has(> [role="tab"]:focus-visible) { outline-color: var(--nat91-chrome-ink); }
+  .nat91-control[data-nat91-chrome="true"]:focus-visible { outline-color: var(--nat91-chrome-ink); }
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
@@ -61,15 +61,14 @@ style.textContent = `
   [data-sidebar="menu-action"] { background: transparent !important; color: var(--sidebar-foreground) !important; }
   [data-sidebar="header"] { padding: 0 !important; }
   [data-sidebar="header"] [data-slot="button"] { border-radius: 0 !important; min-height: 42px; padding-inline: 12px; }
-  .nat91-dock-strip { padding-inline: 0 !important; gap: 0 !important; background: var(--card); }
+  .nat91-dock-strip { padding-inline: 0 !important; gap: 0 !important; }
   .nat91-dock-strip > button { align-self: stretch; width: 34px; height: auto; border-radius: 0 !important; }
-  .nat91-tab-surface { border-radius: 0 !important; background: transparent !important; align-self: stretch; flex: 1 1 0; min-width: 80px; justify-content: space-between; padding-inline: 10px !important; gap: 2px !important; }
+  .nat91-tab-surface { border-radius: 0 !important; align-self: stretch; flex: 1 1 0; min-width: 80px; justify-content: space-between; padding-inline: 10px !important; gap: 2px !important; }
   .nat91-tab-rail { align-self: stretch; align-items: stretch !important; gap: 0 !important; min-height: 34px; }
   .nat91-tab-rail > [role="tab"] { flex: 1 1 0; }
   .nat91-tab-surface > [role="tab"] { align-self: stretch; min-width: 0; flex: 1; text-align: left; padding-inline: 0; }
-  .nat91-tab-surface > button:not([role="tab"]) { background: transparent !important; }
-  .nat91-segmented-surface { width: 100% !important; padding: 0 !important; gap: 0 !important; border-radius: 0 !important; background: var(--card) !important; }
-  .nat91-segmented-surface > [data-slot="tabs-trigger"] { flex: 1; height: 36px; border-radius: 0 !important; box-shadow: none !important; }
+  .nat91-segmented-surface { width: 100% !important; padding: 0 !important; gap: 0 !important; border-radius: 0 !important; }
+  .nat91-segmented-surface > [data-slot="tabs-trigger"] { flex: 1; height: 36px; border-radius: 0 !important; }
   .nat91-view-strip { margin: -16px -16px 0; padding: 0 !important; }
   .nat91-action-strip { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 !important; background: var(--card); }
   .nat91-action-strip > strong { grid-column: 1 / -1; padding-bottom: 10px; background: var(--background); }
@@ -360,7 +359,8 @@ function collect() {
         if (!target.hasAttribute('data-nat91-activity')) target.dataset.nat91Activity = 'true';
       }
     }
-    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, texture, gloss, radius: parseFloat(computed.borderTopLeftRadius) || 0, backdrop: backdropOf(target) });
+    const tab = node.matches('[role="tab"], [data-slot="tabs-trigger"]');
+    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, tab, texture, gloss, radius: parseFloat(computed.borderTopLeftRadius) || 0, backdrop: backdropOf(target) });
   });
 }
 // Sidebar drawers live in body portals on narrow layouts. Their status changes
@@ -391,16 +391,18 @@ function draw() {
     gl.uniform3f(uniforms.uBlue, ...rgbaOf(blue).slice(0, 3));
     gl.uniform3f(uniforms.uPurple, ...rgbaOf(purple).slice(0, 3));
     gl.enable(gl.SCISSOR_TEST);
-    surfaces.forEach(({ node, target, rect, groupRect, selected, rail, backdrop, texture, radius }) => {
+    surfaces.forEach(({ node, target, rect, groupRect, selected, rail, tab, backdrop, texture, radius }) => {
       const disabled = node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true';
-      const signature = JSON.stringify([scale, dark, blue, purple, rect.x, rect.y, rect.width, rect.height, groupRect.x, groupRect.y, groupRect.width, groupRect.height, selected, rail, backdrop, radius, disabled, target.textContent, getComputedStyle(target).font]);
+      const chrome = selected && !rail && !tab && !disabled;
+      if (target.dataset.nat91Chrome !== String(chrome)) target.dataset.nat91Chrome = String(chrome);
+      const signature = JSON.stringify([scale, dark, blue, purple, rect.x, rect.y, rect.width, rect.height, groupRect.x, groupRect.y, groupRect.width, groupRect.height, selected, rail, tab, backdrop, radius, disabled, target.textContent, getComputedStyle(target).font]);
       if (materialCache.get(target) === signature) return;
       materialCache.set(target, signature);
       const w = Math.max(1, Math.round(rect.width * scale)), h = Math.max(1, Math.round(rect.height * scale));
       if (texture.width !== w || texture.height !== h) { texture.width = w; texture.height = h; }
       const context = texture.getContext('2d');
       context.clearRect(0, 0, w, h);
-      if (selected && !rail && !disabled) {
+      if (chrome) {
         gl.uniform2f(uniforms.uLight, rect.left + rect.width * .5, rect.top + rect.height * .5);
         gl.uniform3f(uniforms.uBackdrop, ...backdrop);
         gl.uniform4f(uniforms.uRect, rect.left, rect.top, rect.width, rect.height);
