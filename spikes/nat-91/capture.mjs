@@ -8,21 +8,31 @@ const token = await readFile(join(root, 'token'), 'utf8');
 const { ids, settledId } = JSON.parse(await readFile(join(root, 'study.json'), 'utf8'));
 const out = process.env.CAPTURE_DIR ?? '/tmp/nat91-live-captures';
 const url = process.env.MOCKUP_URL ?? 'http://127.0.0.1:5191';
+assert.ok(root.startsWith('/tmp/'), 'Use isolated fixture state, never operator state');
+assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(new URL(url).hostname), 'Use an isolated loopback preview');
 await mkdir(out, { recursive: true });
 const browser = await chromium.launch({
   executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH,
   args: ['--no-sandbox', '--enable-unsafe-swiftshader'],
 });
-const errors = [];
+const errors = [], mutations = [];
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1.5, colorScheme: 'dark' });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/api/**', route => {
+    const request = route.request(), path = new URL(request.url()).pathname;
+    if (request.method() === 'GET') return route.fallback();
+    const command = path === '/api/command' && request.method() === 'POST' ? request.postDataJSON() : null;
+    if (['git_status', 'stack_status', 'pull_request', 'list_skills'].includes(command?.type)) return route.fallback();
+    mutations.push(`${request.method()} ${path} ${command?.type ?? ''}`);
+    return route.abort();
+  });
   // Read-only browser discovery fixture: expose the real PR tab without a git
   // remote, credentials, publication or any GitHub request.
   await page.route('**/api/command', route => {
     const command = route.request().postDataJSON();
-    if (command?.type !== 'pull_request' || command.sessionId !== ids[0]) return route.continue();
+    if (command?.type !== 'pull_request' || command.sessionId !== ids[0]) return route.fallback();
     return route.fulfill({ json: { result: { repo: 'example/fixture', id: 'nat91-tab-fixture', number: 1, url: 'https://github.com/example/fixture/pull/1', title: 'Read-only native tab fixture', isDraft: false, body: 'Browser-local fixture for tab appearance. No GitHub connection.', state: 'CLOSED', author: 'Preview', headRefName: 'preview', baseRefName: 'main', createdAt: '', updatedAt: '', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', viewerCanComment: false, comments: [], reviews: [], threads: [], reviewDecision: '', statusCheckRollup: [] } } });
   });
   await page.goto(`${url}/auth?token=${token}`, { waitUntil: 'domcontentloaded' });
@@ -84,6 +94,71 @@ try {
     }
   }
   await checkStatusPalette(page.locator('[data-sidebar="menu-button"][data-nat91-activity]'));
+  async function selectionPalette(rows) {
+    return rows.evaluateAll(rows => rows.map(row => ({
+      name: row.querySelector('span.flex-1 .truncate').textContent,
+      dot: getComputedStyle(row.querySelector('.nat91-activity-dot')).color,
+      edge: getComputedStyle(row).borderLeftColor, hue: row.style.getPropertyValue('--nat91-activity'),
+      base: getComputedStyle(row).backgroundColor, ink: getComputedStyle(row).color, weight: getComputedStyle(row).fontWeight,
+      muted: [...row.querySelectorAll('.text-muted-foreground')].map(node => getComputedStyle(node).color),
+    })));
+  }
+  async function paintedEdge(row) {
+    // Sample the composited screenshot, not just borderLeftColor: an inset
+    // cursor/focus outline used to cover the coloured bar without changing CSS.
+    const bytes = [...await row.screenshot()];
+    return page.evaluate(async bytes => {
+      const image = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
+      const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+      const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+      const pixel = [...context.getImageData(1, Math.floor(image.height / 2), 1, 1).data]; image.close();
+      return pixel;
+    }, bytes);
+  }
+  async function checkSelectionInvariant(mobile) {
+    const names = ['Refine the session rail', 'Review the adapter contract', 'Polish keyboard navigation', 'Inspect workflow retries', 'Confirm migration'];
+    const rows = page.locator('[data-sidebar="menu-button"][data-nat91-activity]');
+    for (const dark of [true, false]) {
+      await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), dark);
+      await page.waitForTimeout(180);
+      const before = await selectionPalette(rows);
+      const edges = await Promise.all(names.map(name => paintedEdge(rows.filter({ hasText: name }))));
+      for (const [index, name] of names.entries()) {
+        const row = rows.filter({ hasText: name });
+        await row.click(); await page.waitForFunction(id => location.hash.includes(id), ids[index]);
+        if (mobile) { await page.locator('[data-sidebar="trigger"]').click(); await rows.first().waitFor(); }
+        await page.mouse.move(mobile ? 385 : 570, 220); await page.waitForTimeout(180);
+        assert.deepEqual(await selectionPalette(rows), before, 'Selecting any status must preserve all row status hues, base fills, weights and ink');
+        await checkStatusPalette(rows);
+        assert.equal(await row.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
+        assert.equal(await rows.evaluateAll(rows => rows.filter(node => getComputedStyle(node, '::before').animationName === 'nat91-rail-flow').length), 1);
+        assert.deepEqual(await paintedEdge(row), edges[index], 'Selection/cursor must not visually cover or recolour the status bar');
+        await page.keyboard.press('Tab'); await row.focus();
+        const focus = await row.evaluate(node => ({ visible: node.matches(':focus-visible'), offset: parseFloat(getComputedStyle(node).outlineOffset), width: parseFloat(getComputedStyle(node).outlineWidth), border: parseFloat(getComputedStyle(node).borderLeftWidth) }));
+        assert.ok(focus.visible, 'Native keyboard focus remains');
+        assert.ok(-focus.offset >= focus.border + focus.width, 'Focus outline stays clear of the full status bar');
+        assert.deepEqual(await paintedEdge(row), edges[index], 'Keyboard focus must preserve the actual painted status colour');
+        if (index === 1 || index === 4) {
+          await row.evaluate(node => node.blur());
+          await page.locator('[data-sidebar="sidebar"]').screenshot({ path: join(out, `rail-invariant-${mobile ? 'mobile' : 'desktop'}-${dark ? 'dark' : 'light'}-${index === 1 ? 'running' : 'awaiting'}.png`) });
+        }
+      }
+    }
+    await page.evaluate(() => document.documentElement.classList.add('dark'));
+    await rows.filter({ hasText: names[0] }).click();
+    if (mobile) { await page.locator('[data-sidebar="trigger"]').click(); await rows.first().waitFor(); }
+    await page.waitForFunction(id => location.hash.includes(id), ids[0]);
+    if (!mobile) {
+      // Restore a fresh fixture pane after walking unrelated Agent Sessions;
+      // Git's availability probes must not retain another Scope's result.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.getByRole('tab', { name: 'Agents', exact: true }).waitFor();
+      await page.locator('body[data-material-ready=true]').waitFor();
+      await page.evaluate(() => document.fonts.ready);
+    }
+    await page.waitForTimeout(180);
+  }
+  await checkSelectionInvariant(false);
   const direction = await activeRow.evaluate(node => {
     const animation = node.getAnimations({ subtree: true }).find(animation => animation.animationName === 'nat91-rail-flow');
     const original = animation.currentTime;
@@ -108,7 +183,7 @@ try {
     return max;
   });
   assert.equal(idleRailAlpha, 0, 'The rail must have no static chrome: its gloss overlay is transparent at rest');
-  assert.notEqual(await activeRow.evaluate(node => getComputedStyle(node).backgroundColor), await page.locator('[data-sidebar="menu-button"][data-nat91-selected="false"]').first().evaluate(node => getComputedStyle(node).backgroundColor), 'Quiet rows must still have a distinct, full-face selected fill');
+  assert.equal(await activeRow.evaluate(node => getComputedStyle(node).backgroundColor), await page.locator('[data-sidebar="menu-button"][data-nat91-selected="false"]').first().evaluate(node => getComputedStyle(node).backgroundColor), 'Selection must keep the same flat base; only the status gradient distinguishes it');
   assert.equal(await activeRow.locator('.nat91-adaptive-ink').count(), 0, 'Rail text stays native, not fragmented by material-dependent ink');
   const settle = activeRow.locator('..').getByRole('button', { name: 'Settle', exact: true });
   assert.equal(await settle.locator('.nat91-control-texture').count(), 0, 'Settle must not have an opaque material canvas');
@@ -300,6 +375,7 @@ try {
     assert.equal(await activeRow.evaluate(node => getComputedStyle(node, '::before').animationName), 'nat91-rail-flow');
     await page.screenshot({ path: join(out, dark ? 'real-ui-mobile-rail-dark.png' : 'real-ui-mobile-rail-light.png') });
   }
+  await checkSelectionInvariant(true);
   // Exercise a status-colour update entirely inside the body portal: the old
   // root-only observer missed these changes until another interaction occurred.
   const portalHueBefore = await activeRow.evaluate(node => node.style.getPropertyValue('--nat91-activity'));
@@ -350,6 +426,7 @@ try {
   assert.equal(await page.locator('.nat91-session-band').count(), 0, 'Session heading treatment must not mark Settings navigation');
   assert.ok(await page.locator('[data-sidebar="header"]').getByText('Settings', { exact: true }).isVisible(), 'Settings header stays visible');
   assert.deepEqual(errors, [], 'No browser script failures');
-  console.log(`Passed: status headings removed without gaps / native Settled disclosure and accessible list name / keyboard collapse and live count updates, distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, native tab fills/ink with zero chrome alpha, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
+  assert.deepEqual(mutations, [], 'No mutating API requests or commands');
+  console.log(`Passed: status headings removed without gaps / native Settled disclosure and accessible list name / keyboard collapse and live count updates, selection-invariant status hues/base/ink and actual painted bars with keyboard focus / distinct Idle/Dormant hues / indicator-matched gradient stops / physical left-to-right flow / reduced-motion static gradient, transparent Settle / native focus ring, native tab fills/ink with zero chrome alpha, cursor-local gloss / stable remote selection, real tab/session navigation, keyboard focus, reduced motion, both themes, narrow bounds.\nCaptures: ${out}`);
   await context.close();
 } finally { await browser.close(); }

@@ -39,15 +39,22 @@ style.textContent = `
   .nat91-control-texture { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; border-radius: inherit; }
   .nat91-control:active { transform: none !important; translate: none !important; }
   [data-sidebar="menu-button"].nat91-control { border-radius: 0 !important; background: var(--sidebar) !important; --nat91-chrome-ink: var(--sidebar-foreground); }
-  [data-sidebar="menu-button"].nat91-control[data-nat91-activity] { border-left-color: var(--nat91-activity) !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-activity] {
+    border-left-color: var(--nat91-activity) !important;
+    color: var(--sidebar-foreground) !important; font-weight: inherit !important;
+    /* Keep keyboard/cursor outlines inside the face, clear of the status bar. */
+    outline-offset: -4px !important;
+  }
   .nat91-activity-dot { display: none !important; }
   /* Keep Band ordering/list names, but let the status edges carry visual state. */
   .nat91-session-band > [data-sidebar="group-label"] { display: none !important; }
   /* Native Dormant is a foreground-coloured hollow ring. With shape removed,
      give that indicator a muted grey so it remains distinct from filled Idle. */
   [aria-hidden].size-2.rounded-full.text-foreground.border-current { color: var(--muted-foreground) !important; }
-  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] { background: var(--sidebar-accent) !important; }
-  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"] > span.flex-1 .text-muted-foreground { color: color-mix(in srgb, var(--sidebar-foreground) 80%, var(--sidebar-accent)) !important; }
+  /* Settings keeps its native selected fill. Agent Session selection is only
+     the flowing status-coloured layer on the same flat sidebar base/ink. */
+  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"]:not([data-nat91-activity]) { background: var(--sidebar-accent) !important; }
+  [data-sidebar="menu-button"].nat91-control[data-nat91-selected="true"]:not([data-nat91-activity]) > span.flex-1 .text-muted-foreground { color: color-mix(in srgb, var(--sidebar-foreground) 80%, var(--sidebar-accent)) !important; }
   [data-sidebar="menu-button"].nat91-control[data-nat91-activity][data-nat91-selected="true"]::before {
     content: ""; position: absolute; inset: 0; z-index: -2; pointer-events: none;
     background-image: linear-gradient(90deg, transparent 0% 10%, color-mix(in srgb, var(--nat91-activity) 16%, transparent) 22%, transparent 46%, color-mix(in srgb, var(--nat91-activity) 8%, transparent) 72%, transparent 90% 100%);
