@@ -65,6 +65,59 @@ async function capture(name) {
 async function pixels(control) {
   return control.locator(':scope > .nat91-control-texture').evaluate(canvas => canvas.toDataURL());
 }
+async function nativeDropdown(controls, label) {
+  const result = await controls.evaluateAll(nodes => {
+    const sheet = document.querySelector('style[data-nat91-material]').sheet;
+    const visible = nodes.filter(node => node.classList.contains('nat91-control'));
+    const snapshot = () => visible.map(node => [node, ...node.querySelectorAll('span, svg')]
+      .filter(part => !part.closest('.nat91-gloss'))
+      .map(part => {
+        const css = getComputedStyle(part);
+        return [css.backgroundColor, css.backgroundImage, css.color, css.borderRadius, css.font, css.boxShadow];
+      }));
+    const actual = snapshot();
+    let native;
+    try { sheet.disabled = true; native = snapshot(); }
+    finally { sheet.disabled = false; }
+    return {
+      actual, native,
+      surfaces: visible.map(node => {
+        const canvas = node.querySelector(':scope > .nat91-control-texture');
+        const pixels = canvas?.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let alpha = 0;
+        for (let i = 3; pixels && i < pixels.length; i += 4) alpha = Math.max(alpha, pixels[i]);
+        return { chrome: node.dataset.nat91Chrome, canvas: !!canvas, alpha,
+          adaptive: node.matches('.nat91-adaptive-root, .nat91-adaptive-ink') || !!node.querySelector('.nat91-adaptive-root, .nat91-adaptive-ink, [data-nat91-ink-icon]') };
+      }),
+    };
+  });
+  check(`${label}: native dropdown fills, text/icons and geometry`, () => {
+    assert.ok(result.surfaces.length);
+    assert.deepEqual(result.actual, result.native);
+  });
+  check(`${label}: no static chrome or adaptive ink, zero canvas alpha`, () => {
+    assert.ok(result.surfaces.every(surface => surface.chrome === 'false' && surface.canvas && surface.alpha === 0 && !surface.adaptive), JSON.stringify(result.surfaces));
+  });
+}
+async function optionGloss(option, label) {
+  const bounds = await option.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width * .3, bounds.y + bounds.height / 2);
+  await settle();
+  const spot = option.locator(':scope > .nat91-gloss > .nat91-gloss-spot');
+  const before = await spot.evaluate(node => node.style.transform);
+  const stats = await page.evaluate(() => window.nat91Material.getStats());
+  await page.mouse.move(bounds.x + bounds.width * .7, bounds.y + bounds.height / 2);
+  await page.waitForTimeout(80);
+  const after = await spot.evaluate(node => ({ transform: node.style.transform, opacity: getComputedStyle(node.parentElement).opacity }));
+  const next = await page.evaluate(() => window.nat91Material.getStats());
+  check(`${label}: option-local gloss without material/ink rebuilds`, () => {
+    assert.notEqual(after.transform, before);
+    assert.ok(Number(after.opacity) > 0);
+    assert.equal(next.materialBuilds, stats.materialBuilds);
+    assert.equal(next.inkBuilds, stats.inkBuilds);
+  });
+  await nativeDropdown(option, `${label}-hovered`);
+}
 async function inspectOpen(trigger, popup, label) {
   await popup.waitFor();
   await settle();
@@ -125,6 +178,8 @@ async function inspectOpen(trigger, popup, label) {
     assert.ok(native.length, 'Expected a native selected value');
     assert.ok(native.every(item => item.selected), JSON.stringify(native));
   });
+  await nativeDropdown(trigger, `${label}-trigger`);
+  await nativeDropdown(popup.locator(itemSelector), `${label}-options`);
 }
 async function open(trigger, remote, label) {
   await page.mouse.move(800, 40); // no hover changes on either sampled control
@@ -284,7 +339,8 @@ try {
       await capture(`dropdowns-${mode}-workflow-open`);
       await escape(definition, `${mode}-workflow`);
       await keyboardSelect(definition, newWorkflow, `${mode}-workflow`, workflows[1].name);
-      await open(definition, newWorkflow, `${mode}-workflow-selected`);
+      const selectedPopup = await open(definition, newWorkflow, `${mode}-workflow-selected`);
+      await optionGloss(selectedPopup.getByRole('option', { name: workflows[1].name, exact: true }), `${mode}-selected-option`);
       await capture(`dropdowns-${mode}-workflow-selected`);
       await escape(definition, `${mode}-workflow-selected`);
       await page.locator('.workflow-step').filter({ hasText: 'NAT91 model step' }).click();
@@ -300,7 +356,8 @@ try {
       await input.press('ArrowDown');
       await input.press('Enter');
       await page.waitForFunction(expected => document.querySelector('.workflow-inspector [data-slot="combobox-trigger"]')?.textContent.includes(expected), models[1].label);
-      await open(model, remote, `${mode}-combobox-selected`);
+      const selectedModels = await open(model, remote, `${mode}-combobox-selected`);
+      await optionGloss(selectedModels.getByRole('option', { name: models[1].label, exact: true }), `${mode}-selected-combobox-option`);
       await capture(`dropdowns-${mode}-combobox-selected`);
       await escape(model, `${mode}-combobox`);
     });
@@ -334,6 +391,21 @@ try {
     await page.goto(`${url}/#/s/${ids[0]}`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('tab', { name: 'Agents', exact: true }).waitFor();
     await theme(dark);
+    await run(`${mode} action menu`, async () => {
+      const trigger = page.getByRole('button', { name: 'More actions', exact: true });
+      await trigger.click();
+      const popup = page.locator('[data-slot="dropdown-menu-content"]').filter({ visible: true });
+      await popup.waitFor();
+      await settle();
+      await nativeDropdown(trigger, `${mode}-menu-trigger`);
+      await nativeDropdown(popup.locator('[data-slot="dropdown-menu-item"]'), `${mode}-menu-items`);
+      await optionGloss(popup.getByRole('menuitem', { name: 'Copy Agent Session id', exact: true }), `${mode}-menu-item`);
+      await capture(`dropdowns-${mode}-action-menu`);
+      await page.keyboard.press('Escape');
+      await popup.waitFor({ state: 'hidden' });
+      const restored = await trigger.evaluate(node => node === document.activeElement);
+      check(`${mode}: menu Escape restores native focus`, () => assert.ok(restored));
+    });
     await run(`${mode} composer popup`, async () => {
       // Composer capabilities come from the real FakeBackend stream, not the
       // catalogue mock. Escape only: no session model/effort mutation is needed.

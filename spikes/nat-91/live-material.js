@@ -1,5 +1,6 @@
 // Dev-only reference-led chrome study on the real Flow DOM. A shared reflected
-// environment on selected non-tab controls; tabs keep native fills/ink. The rail uses status-coloured edge lines,
+// environment on remaining selected controls; tabs and dropdowns keep native
+// fills/ink. The rail uses status-coloured edge lines,
 // a selected-only flowing tint, and cursor-local gloss. No repeated fade masks.
 // No source artwork or production component changes.
 const style = document.createElement('style');
@@ -360,7 +361,10 @@ function collect() {
       }
     }
     const tab = node.matches('[role="tab"], [data-slot="tabs-trigger"]');
-    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, tab, texture, gloss, radius: parseFloat(computed.borderTopLeftRadius) || 0, backdrop: backdropOf(target) });
+    // Native focus/highlight and checkmarks own dropdown selection, not the
+    // reflected environment. Include triggers, popup items and nested controls.
+    const dropdown = !!node.closest('[data-slot^="select-"], [data-slot^="combobox-"], [data-slot^="dropdown-menu-"]');
+    surfaces.push({ node, target, rect, groupRect: group?.getBoundingClientRect() ?? rect, selected, rail, tab, dropdown, texture, gloss, radius: parseFloat(computed.borderTopLeftRadius) || 0, backdrop: backdropOf(target) });
   });
 }
 // Sidebar drawers live in body portals on narrow layouts. Their status changes
@@ -391,11 +395,11 @@ function draw() {
     gl.uniform3f(uniforms.uBlue, ...rgbaOf(blue).slice(0, 3));
     gl.uniform3f(uniforms.uPurple, ...rgbaOf(purple).slice(0, 3));
     gl.enable(gl.SCISSOR_TEST);
-    surfaces.forEach(({ node, target, rect, groupRect, selected, rail, tab, backdrop, texture, radius }) => {
+    surfaces.forEach(({ node, target, rect, groupRect, selected, rail, tab, dropdown, backdrop, texture, radius }) => {
       const disabled = node.matches(':disabled') || node.getAttribute('aria-disabled') === 'true';
-      const chrome = selected && !rail && !tab && !disabled;
+      const chrome = selected && !rail && !tab && !dropdown && !disabled;
       if (target.dataset.nat91Chrome !== String(chrome)) target.dataset.nat91Chrome = String(chrome);
-      const signature = JSON.stringify([scale, dark, blue, purple, rect.x, rect.y, rect.width, rect.height, groupRect.x, groupRect.y, groupRect.width, groupRect.height, selected, rail, tab, backdrop, radius, disabled, target.textContent, getComputedStyle(target).font]);
+      const signature = JSON.stringify([scale, dark, blue, purple, rect.x, rect.y, rect.width, rect.height, groupRect.x, groupRect.y, groupRect.width, groupRect.height, selected, rail, tab, dropdown, backdrop, radius, disabled, target.textContent, getComputedStyle(target).font]);
       if (materialCache.get(target) === signature) return;
       materialCache.set(target, signature);
       const w = Math.max(1, Math.round(rect.width * scale)), h = Math.max(1, Math.round(rect.height * scale));
