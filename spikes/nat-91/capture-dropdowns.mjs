@@ -142,7 +142,8 @@ async function footerActions(mode, logout = false) {
     for (let i = 1; i < geometry.buttons.length; i++) assert.ok(Math.abs(geometry.buttons[i].y - geometry.buttons[i - 1].bottom) < 1);
     assert.ok(Math.abs(geometry.buttons.at(-1).bottom - geometry.bottom) < 1);
   });
-  for (const action of await actions.all()) {
+  const buttons = await actions.all();
+  for (const [index, action] of buttons.entries()) {
     const name = await action.textContent();
     const hits = await action.evaluate(node => {
       const box = node.getBoundingClientRect();
@@ -150,7 +151,10 @@ async function footerActions(mode, logout = false) {
       return [[box.x + 2, box.y + 2], [box.right - 12, box.bottom - 2]].every(([x, y]) => node.contains(document.elementFromPoint(x, y)));
     });
     check(`${mode}: ${name.trim()} fills the hit area outside the native resize strip`, () => assert.ok(hits));
-    await action.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+    // Enter later actions from their preceding native tab stop. Cycling past
+    // the final button crosses the mobile dialog's asynchronous focus guards.
+    if (index > 0) { await buttons[index - 1].focus(); await page.keyboard.press('Tab'); }
+    else { await action.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab'); }
     const focus = await action.evaluate(node => ({ active: node === document.activeElement, visible: node.matches(':focus-visible'), shadow: getComputedStyle(node).boxShadow, focusedName: document.activeElement?.textContent }));
     check(`${mode}: ${name.trim()} keeps native keyboard focus`, () => assert.ok(focus.active && focus.visible && focus.shadow !== 'none', JSON.stringify(focus)));
   }
@@ -371,7 +375,7 @@ try {
   // selections. Nothing in this regression needs a mutating API request.
   await page.route('**/api/**', async route => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(route.request().method())) return route.fallback();
-    mutations.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+    mutations.push(`${route.request().method()} ${new URL(route.request().url()).pathname} ${route.request().postData() ?? ''}`);
     await route.abort('blockedbyclient');
   });
 
@@ -479,7 +483,10 @@ try {
   await page.route('**/api/config', async route => {
     if (route.request().method() !== 'GET') return route.fallback();
     const response = await route.fetch();
-    await route.fulfill({ json: { ...await response.json(), authentication: 'oidc' } });
+    await route.fulfill({ json: { ...await response.json(), authentication: 'oidc', projectList: [{ path: root, name: 'NAT91 fixture' }], mcp: [
+      { id: 'nat91-mcp-a', name: 'NAT91 connection A', transport: 'stdio', command: 'never-run-nat91-fixture', args: [], enabledByDefault: true },
+      { id: 'nat91-mcp-b', name: 'NAT91 connection B', transport: 'stdio', command: 'never-run-nat91-fixture', args: [], enabledByDefault: true },
+    ] } });
   });
   await page.route('**/oauth/logout', async route => {
     mutations.push(`${route.request().method()} /oauth/logout`);
@@ -506,6 +513,49 @@ try {
     await page.keyboard.press('Space');
     await page.waitForFunction(() => !location.hash.includes('/settings'));
     check('Mobile Back retains native return behaviour', () => assert.ok(true));
+  });
+  await run('Native MCP accordion without hover gloss', async () => {
+    await page.setViewportSize({ width: 1440, height: 980 });
+    await page.goto(`${url}/#/s/${ids[0]}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('[data-sidebar="header"]').getByRole('button', { name: 'New Agent Session', exact: true }).click();
+    // Native navigation records explicit New intent; a cold bare/new URL can
+    // instead select an attention row. Never create or send a new Agent Session.
+    const trigger = page.getByRole('button', { name: /^MCP connections/ });
+    await trigger.waitFor();
+    for (const dark of [true, false]) {
+      const mode = dark ? 'dark' : 'light';
+      await theme(dark);
+      await page.mouse.move(800, 40);
+      const snapshot = () => trigger.evaluate(node => {
+        const css = getComputedStyle(node);
+        return { background: css.backgroundColor, image: css.backgroundImage, color: css.color, radius: css.borderRadius, font: css.font };
+      });
+      const before = await snapshot();
+      const bounds = await trigger.boundingBox();
+      await page.mouse.move(bounds.x + bounds.width * .3, bounds.y + bounds.height / 2);
+      await page.waitForTimeout(80);
+      await page.mouse.move(bounds.x + bounds.width * .7, bounds.y + bounds.height / 2);
+      await page.waitForTimeout(80);
+      const after = await snapshot();
+      const quiet = await trigger.evaluate(node => ({ hover: node.matches(':hover'), material: node.classList.contains('nat91-control'), layers: node.querySelectorAll('.nat91-gloss, .nat91-control-texture, .nat91-adaptive-ink').length }));
+      check(`${mode}: accordion stays native and flat under pointer movement`, () => {
+        assert.ok(quiet.hover); assert.equal(quiet.material, false); assert.equal(quiet.layers, 0);
+        assert.deepEqual(after, before);
+      });
+      await trigger.focus(); await page.keyboard.press('Enter');
+      await page.getByRole('switch').first().waitFor();
+      const opened = await trigger.evaluate(node => ({ expanded: node.getAttribute('aria-expanded'), focus: node === document.activeElement && node.matches(':focus-visible'), shadow: getComputedStyle(node).boxShadow }));
+      check(`${mode}: native accordion Enter, focus ring and contents remain`, () => {
+        assert.equal(opened.expanded, 'true'); assert.ok(opened.focus); assert.notEqual(opened.shadow, 'none');
+      });
+      assert.equal(await page.getByRole('switch').count(), 2);
+      const path = join(out, `accordion-${mode}.png`);
+      await trigger.locator('..').screenshot({ path }); report.screenshots.push(path);
+      await page.keyboard.press('Enter');
+      const collapsed = await trigger.getAttribute('aria-expanded');
+      check(`${mode}: native accordion collapses with Enter`, () => assert.equal(collapsed, 'false'));
+    }
   });
   check('No mutating API requests', () => assert.deepEqual(mutations, []));
   check('No browser script failures', () => assert.deepEqual(errors, []));

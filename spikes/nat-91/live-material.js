@@ -288,6 +288,9 @@ function adaptiveInk(target, rect, texture) {
     node.dataset.nat91InkIcon = 'true';
   });
 }
+// Base UI's native accordion trigger is a heading's expanded-state button;
+// details/summary disclosures are likewise navigation, not gloss surfaces.
+const disclosureSelector = 'summary, [data-slot="accordion-trigger"], h3 > button[aria-expanded]:not([aria-haspopup])';
 function collect() {
   const settingsMenu = document.querySelector('[data-sidebar="menu"][aria-label="Settings sections"]');
   const actionFooter = settingsMenu?.closest('[data-sidebar="sidebar"]')?.querySelector('[data-sidebar="footer"]');
@@ -306,6 +309,7 @@ function collect() {
   const nodes = document.querySelectorAll('#root button, .nat91-action-footer [data-slot="button"], [data-sidebar="menu-button"], [data-sidebar="menu-action"], [data-slot="tabs-trigger"], [role="tab"], [data-slot="select-trigger"], [data-slot="combobox-trigger"], [data-slot="select-item"], [data-slot="combobox-item"], [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"], [data-slot="dropdown-menu-sub-trigger"]');
   const targets = new Map();
   nodes.forEach(node => {
+    if (node.matches(disclosureSelector)) return;
     // The overlaid Settle action must reveal its row, not repaint the sidebar.
     if (node.matches('[data-sidebar="menu-action"]')) return;
     const segmented = node.closest('[data-slot="tabs-list"]');
@@ -484,7 +488,7 @@ window.addEventListener('pointermove', event => {
   if (!reduced.matches) pointer = { x: event.clientX, y: event.clientY };
   const hit = event.target instanceof Element ? event.target : null;
   const action = hit?.closest('[data-sidebar="menu-action"]');
-  hoveredTarget = action ? action.closest('[data-sidebar="menu-item"]')?.querySelector('[data-sidebar="menu-button"]') : hit?.closest('.nat91-control');
+  hoveredTarget = hit?.closest(disclosureSelector) ? null : action ? action.closest('[data-sidebar="menu-item"]')?.querySelector('[data-sidebar="menu-button"]') : hit?.closest('.nat91-control');
   // Pointer frames perform one local rect read and compositor transform only.
   // No collection, underlay sampling, GPU copy, pixel loop or PNG encoding.
   scheduleGloss();
