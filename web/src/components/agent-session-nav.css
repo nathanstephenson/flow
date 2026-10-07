@@ -25,14 +25,23 @@
   background-image: linear-gradient(
     90deg,
     transparent 0% 10%,
-    color-mix(in srgb, var(--agent-session-status) 16%, transparent) 22%,
+    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-peak, 16%), transparent) 22%,
     transparent 46%,
-    color-mix(in srgb, var(--agent-session-status) 8%, transparent) 72%,
+    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-low, 8%), transparent) 72%,
     transparent 90% 100%
   );
   background-size: 200% 100%;
   background-repeat: repeat-x;
   animation: agent-session-rail-flow 7s linear infinite;
+}
+
+/* Lower-lightness dark accents need more pigment in the selected surface, not
+ * brighter edges. Neutral Lifecycles keep their quieter existing tint/contrast.
+ * Light mode keeps the lighter tint so small muted labels do not lose contrast.
+ */
+.dark .agent-session-row[data-status-accent] {
+  --agent-session-flow-peak: 24%;
+  --agent-session-flow-low: 12%;
 }
 
 /* With an image twice the face's width, decreasing percentage positioning moves

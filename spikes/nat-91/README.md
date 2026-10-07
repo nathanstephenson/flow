@@ -4,10 +4,12 @@ The interactive prototype from PR #71 has been replaced by native production com
 Normal `npm run dev`, `npm run build:web`, and packaged builds now include the treatment;
 there is no preview-only Vite plugin, DOM-discovery observer, WebGL requirement, or adaptive text mask.
 
-- Vivid cyan/purple activity and composer accents replace the pastels; diff additions use
-  a stronger green. Light/dark values retain readable small-text contrast, including tinted faces.
+- Richer blue/violet activity and composer accents replace the pastels through more pigment
+  and lower lightness, not luminous or neon colours. Diff additions use a deeper green.
+  Light/dark values retain readable small-text contrast, including tinted faces.
 - Agent Session rows use that shared status palette for full-height edges and the selected
-  row's slow rightward tint. Dormant is muted grey, distinct from Idle. Selection does not
+  row's slow rightward tint. Dark working/awaiting tints carry more pigment while neutral
+  Lifecycles keep their quieter surface. Dormant is muted grey, distinct from Idle. Selection does not
   recolour the status edge or text. Reduced motion keeps selection static; forced colours
   exposes status words rather than relying on colour.
 - Ordinary Band headings no longer take visible space. Ordering, attention, accessible

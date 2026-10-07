@@ -295,6 +295,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
    * the Presentation Transcript.
    */
   const tabIndex = cursored ? 0 : -1;
+  const isWorking = working({ ...summary, status });
+  const statusAccent = status === "running" || status === "awaiting" || (status === "idle" && isWorking);
 
   return (
     /* Upstream's own shape, kept: a `relative` item with the action positioned over the row rather
@@ -307,7 +309,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         // A list with one current row, not a tablist — see this file's header.
         aria-current={selected ? "true" : undefined}
         data-cursor={cursored ? "true" : undefined}
-        style={{ "--agent-session-status": statusIndicatorColor(status, working({ ...summary, status })) } as CSSProperties}
+        data-status-accent={statusAccent ? "true" : undefined}
+        style={{ "--agent-session-status": statusIndicatorColor(status, isWorking) } as CSSProperties}
         tabIndex={tabIndex}
         onClick={() => onFocus(summary.id)}
         className={cn(

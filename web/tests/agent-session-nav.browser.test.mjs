@@ -227,6 +227,22 @@ describe("Agent Session rail DOM focus and material", () => {
     }
   });
 
+  it("deepens the original dark pastels without making them luminous", async () => {
+    const accents = await page.evaluate(() => {
+      document.documentElement.classList.add('dark');
+      const css = getComputedStyle(document.documentElement);
+      return ['--status-active', '--status-awaiting', '--diff-added'].map(token => {
+        const match = css.getPropertyValue(token).trim().match(/^oklch\(([\d.]+)(%)?\s+([\d.]+)/);
+        return { token, lightness: Number(match[1]) / (match[2] ? 100 : 1), chroma: Number(match[3]) };
+      });
+    });
+    const pastels = [{ lightness: .83, chroma: .08 }, { lightness: .79, chroma: .10 }, { lightness: .80, chroma: .09 }];
+    accents.forEach((accent, index) => {
+      assert.ok(accent.lightness <= pastels[index].lightness - .08, `${accent.token}: depth rather than brightness`);
+      assert.ok(accent.chroma >= pastels[index].chroma * 1.5, `${accent.token}: more pigment than the pastel`);
+    });
+  });
+
   for (const mode of ['light', 'dark']) {
     it(`${mode}: status-hued selection preserves base/ink, transparent Settle and inset focus`, async () => {
       await page.evaluate(mode => document.documentElement.classList.toggle('dark', mode === 'dark'), mode);
@@ -234,12 +250,13 @@ describe("Agent Session rail DOM focus and material", () => {
         const style = getComputedStyle(node);
         const flow = getComputedStyle(node, '::before');
         const probe = document.createElement('span');
-        probe.style.color = `color-mix(in srgb, ${style.borderLeftColor} 16%, transparent)`;
+        const peak = style.getPropertyValue('--agent-session-flow-peak').trim() || '16%';
+        probe.style.color = `color-mix(in srgb, ${style.borderLeftColor} ${peak}, transparent)`;
         document.body.append(probe);
         const tint = getComputedStyle(probe).color;
         probe.remove();
         return {
-          tint,
+          tint, peak,
           base: style.backgroundColor, ink: style.color, weight: style.fontWeight,
           muted: getComputedStyle(node.querySelector('.text-muted-foreground')).color,
           edge: style.borderLeftColor, width: style.borderLeftWidth,
@@ -254,6 +271,7 @@ describe("Agent Session rail DOM focus and material", () => {
         assert.notEqual(selected.flow, 'none');
         assert.match(selected.animation, /agent-session-rail-flow/);
         assert.equal(selected.width, '2px');
+        assert.equal(selected.peak, mode === 'dark' && ['running', 'awaiting'].includes(status) ? '24%' : '16%');
         assert.ok(selected.flow.includes(selected.tint), `Selection uses its status edge hue: ${status}`);
         await cursor().hover();
         const hovered = await face();

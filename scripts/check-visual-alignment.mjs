@@ -298,7 +298,7 @@ async function accentContrast(mode) {
       return { token, value: css.getPropertyValue(token).trim(), minimum: Math.min(...contrasts) };
     });
   });
-  report.measurements.push({ label: `${mode} vivid accent contrast`, values });
+  report.measurements.push({ label: `${mode} rich accent contrast`, values });
   for (const value of values) assert.ok(value.minimum >= 4.5, `${mode}: ${value.token} small-text contrast ${value.minimum.toFixed(2)} is below 4.5`);
 }
 async function dockAndGit(mode) {
@@ -359,7 +359,7 @@ try {
 
   for (const mode of ['light', 'dark']) {
     await page.setViewportSize({ width: 1440, height: 980 }); await theme(mode);
-    await check(`${mode}: vivid accents keep small-text contrast`, () => accentContrast(mode));
+    await check(`${mode}: rich accents keep small-text contrast`, () => accentContrast(mode));
     await check(`${mode}: native rail status edges and invariant selection`, async () => {
       // Current agent rows are selected by native navigation, never test-only classes.
       const selectedImages = new Map();

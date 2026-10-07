@@ -12,15 +12,14 @@
  *
  * Three hues are ours — a blue, a purple and a green — spread over five tokens, and they are the
  * only ones. In normal colour rendering, a full-height status edge carries the rail signal,
- * so the states
- * a reader watches for get a hue. It cannot come from the chart tokens: rhea's five are all
+ * so the states a reader watches for get a hue. It cannot come from the chart tokens: rhea's five are all
  * zero-chroma greys, which is exactly why an earlier mapping onto them produced five dots nobody
- * could tell apart. Vivid cyan and purple make activity and input needs unmistakable while
+ * could tell apart. Rich blue and violet make activity and input needs unmistakable while
  * the native control fills, sidebar base and label ink stay neutral. See
  * web/src/components/status-indicator.tsx for which state wears which.
  *
  * Light-mode accents are deeper for readable small text on white and sidebar backgrounds;
- * dark-mode accents carry more lightness, not washed-out pastels. Status and composer triggers
+ * dark-mode accents gain depth and chroma, not luminosity or neon intensity. Status and composer triggers
  * share the same hues. Forced colours exposes the rail's existing textual status instead.
  */
 
@@ -52,8 +51,8 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
 
-  --status-active: oklch(0.46 0.15 235);
-  --status-awaiting: oklch(0.50 0.24 300);
+  --status-active: oklch(0.46 0.14 245);
+  --status-awaiting: oklch(0.50 0.19 300);
 
   /*
    * The composer's two triggers. Same two hues the status dots spend, deliberately: this palette has
@@ -63,8 +62,8 @@
    *
    * Command is the blue, Skill the purple, matching the order they appear in the menu.
    */
-  --trigger-command: oklch(0.46 0.15 235);
-  --trigger-skill: oklch(0.50 0.24 300);
+  --trigger-command: oklch(0.46 0.14 245);
+  --trigger-skill: oklch(0.50 0.19 300);
 
   /*
    * The green half of a diff. The other half is `--destructive`, reused: a diff's removed lines are
@@ -76,7 +75,7 @@
    * everywhere else, and this is the one place in the app where a reader arrives with that
    * expectation already formed.
    */
-  --diff-added: oklch(0.48 0.16 150);
+  --diff-added: oklch(0.48 0.14 150);
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -114,11 +113,11 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
 
-  --status-active: oklch(0.76 0.16 235);
-  --status-awaiting: oklch(0.74 0.22 300);
-  --trigger-command: oklch(0.76 0.16 235);
-  --trigger-skill: oklch(0.74 0.22 300);
-  --diff-added: oklch(0.77 0.17 150);
+  --status-active: oklch(0.70 0.14 245);
+  --status-awaiting: oklch(0.69 0.17 300);
+  --trigger-command: oklch(0.70 0.14 245);
+  --trigger-skill: oklch(0.69 0.17 300);
+  --diff-added: oklch(0.71 0.14 150);
 
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
