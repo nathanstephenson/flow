@@ -92,12 +92,12 @@ export function Dock({
             }}
           />
 
-          <div className="flex h-9 min-w-0 items-center gap-1 border-b px-1.5">
+          <div className="flex h-9 min-w-0 items-stretch border-b">
             <div
               role="tablist"
               aria-label={`${label} tabs`}
               aria-orientation="horizontal"
-              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+              className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
             >
               {dock.tabs.map((tab) => {
                 const status = statuses[tab.id];
@@ -105,7 +105,7 @@ export function Dock({
                   <div
                     key={tab.id}
                     className={cn(
-                      "flex shrink-0 items-center gap-0.5 rounded-2xl pr-0.5 pl-2.5 text-xs",
+                      "cursor-gloss flex min-w-20 flex-1 basis-0 items-center justify-between gap-0.5 px-2.5 text-xs",
                       tab.id === dock.activeId ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50",
                     )}
                   >
@@ -114,7 +114,7 @@ export function Dock({
                       role="tab"
                       aria-selected={tab.id === dock.activeId}
                       onClick={() => dispatch({ type: "activate", side, tabId: tab.id })}
-                      className="max-w-40 truncate py-1 outline-none"
+                      className="min-w-0 flex-1 self-stretch truncate py-1 text-left outline-none focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:ring-inset"
                     >
                       {tabLabel(dock, tab.id)}
                       {status?.state === "gone" ? (
@@ -124,7 +124,7 @@ export function Dock({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      className="rounded-xl"
+                      className="rounded-none"
                       onClick={() => dispatch({ type: "close-tab", side, tabId: tab.id })}
                       title={tab.content?.kind === "shell" ? "Close this tab — ends its Shell" : "Close this tab"}
                       aria-label={`Close ${tabLabel(dock, tab.id)}${tab.content?.kind === "shell" ? " — ends its Shell" : ""}`}
@@ -139,7 +139,7 @@ export function Dock({
             <Button
               variant="ghost"
               size="icon-xs"
-              className="shrink-0 rounded-xl"
+              className="h-auto w-8.5 shrink-0 self-stretch rounded-none"
               onClick={() => dispatch({ type: "add-tab", side })}
               title="New tab"
               aria-label={`New tab in the ${label}`}
@@ -153,7 +153,7 @@ export function Dock({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    className="shrink-0 rounded-xl"
+                    className="h-auto w-8.5 shrink-0 self-stretch rounded-none"
                     onClick={() => dispatch({ type: "toggle", side })}
                     aria-label={`Minimise the ${label}`}
                   />

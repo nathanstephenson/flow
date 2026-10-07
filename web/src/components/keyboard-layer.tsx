@@ -55,6 +55,9 @@ export function KeyboardLayer({
        * those call sites, which is the same rule written once per handler instead of once here.
        */
       if (event.defaultPrevented) return;
+      // Native disclosure activation happens after bubbling. Let summary keep
+      // Enter instead of treating it as the rail's global "focus pane" shortcut.
+      if (event.key === "Enter" && target?.closest("summary")) return;
 
       const binding = resolveBinding(
         {
