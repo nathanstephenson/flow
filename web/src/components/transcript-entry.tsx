@@ -303,17 +303,17 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     <>
       <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
       <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-      <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.name}</span>
+      <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere] max-sm:col-start-3 max-sm:row-start-1 max-sm:truncate">{entry.name}</span>
       {entry.description === undefined ? null : (
-        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground max-sm:col-start-3 max-sm:col-end-5 max-sm:row-start-2">
           <Highlighted text={entry.description} query={query} />
         </span>
       )}
-      <span className="ml-auto shrink-0 text-xs text-muted-foreground">{live ? `${status}…` : status}</span>
+      <span className="ml-auto shrink-0 text-xs text-muted-foreground max-sm:col-start-4 max-sm:row-start-1">{live ? `${status}…` : status}</span>
     </>
   );
 
-  const shell = "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground";
+  const shell = "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground max-sm:grid max-sm:grid-cols-[8px_12px_minmax(0,1fr)_auto] max-sm:gap-y-1";
 
   return (
     <div className="py-0.5">
@@ -321,7 +321,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
         // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
         <div className={shell}>{body}</div>
       ) : (
-        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "text-left hover:bg-accent")}>
+        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-accent")}>
           {body}
         </button>
       )}

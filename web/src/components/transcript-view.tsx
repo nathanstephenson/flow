@@ -350,7 +350,7 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       aria-label="Jump to latest"
-      className="-translate-x-1/2 absolute bottom-[calc(var(--composer-inset,0px)+1.5rem)] left-1/2 rounded-full border bg-popover p-2 text-popover-foreground shadow-md transition-colors hover:bg-muted hover:text-foreground"
+      className="cursor-gloss -translate-x-1/2 absolute bottom-[calc(var(--composer-inset,0px)+1.5rem)] left-1/2 rounded-full border bg-popover p-2 text-popover-foreground shadow-md transition-colors hover:bg-muted hover:text-foreground"
     >
       <ArrowDown className="size-4" />
     </button>

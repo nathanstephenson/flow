@@ -333,10 +333,10 @@ export function NewAgentSessionPage({
           }}
           className="contents"
         >
-          <TabsList aria-label="New Agent Session mode" className="mx-auto">
+          <TabsList aria-label="New Agent Session mode" className="flex w-full gap-0 rounded-none bg-transparent p-0">
             {(["chat", "workflow"] as const).map((mode) => (
-              <TabsTrigger key={mode} value={mode} className="min-w-24 capitalize">
-                {mode}
+              <TabsTrigger key={mode} value={mode} className="h-9 min-w-0 flex-1 rounded-none bg-transparent hover:bg-transparent data-active:bg-muted data-active:hover:bg-muted">
+                {mode === "chat" ? "Chat" : "Workflow"}
               </TabsTrigger>
             ))}
           </TabsList>

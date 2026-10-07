@@ -15,13 +15,15 @@ function attackFixture(t: TestContext) {
   const outside = mkdtempSync(join(process.cwd(), ".flow-denial-test-"));
   writeFileSync(join(outside, "sentinel"), "intact");
   t.after(() => rmSync(outside, { recursive: true, force: true }));
+  // Background probes publish readiness atomically: an existing empty file is not completion.
   const source = `const f=require('fs'),a=require('assert/strict'),p=${JSON.stringify(outside)};
     a.throws(()=>f.writeFileSync(p+'/sentinel','bad'));
     a.throws(()=>f.rmSync(p,{recursive:true,force:true}));
     if(!f.existsSync('escape'))f.symlinkSync(p,'escape');
     a.throws(()=>f.writeFileSync('escape/sentinel','bad'));
     const c=require('child_process').spawnSync(process.execPath,['-e',"require('fs').writeFileSync("+JSON.stringify(p+'/sentinel')+",'bad')"],{stdio:'ignore'});
-    a.notEqual(c.status,0); f.writeFileSync('denial-marker','denied'); console.log('denied');`;
+    a.notEqual(c.status,0); f.writeFileSync('denial-marker.tmp','denied');
+    f.renameSync('denial-marker.tmp','denial-marker'); console.log('denied');`;
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   return { outside, command: `${quote(process.execPath)} -e ${quote(source)}`,
     intact: () => assert.equal(readFileSync(join(outside, "sentinel"), "utf8"), "intact") };

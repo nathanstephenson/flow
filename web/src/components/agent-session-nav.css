@@ -1,0 +1,98 @@
+/* The Agent Session rail is one flat surface. Status owns the edge and the
+ * selected flow; neither selection nor hover changes the base or label ink.
+ * Scoped, unlayered rules intentionally beat SidebarMenuButton's state utilities.
+ */
+.agent-session-band > [data-sidebar="group-label"] {
+  display: none;
+}
+
+.agent-session-row[data-sidebar="menu-button"] {
+  position: relative;
+  isolation: isolate;
+  border-left: 2px solid var(--agent-session-status);
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
+  font-weight: inherit;
+  box-shadow: none;
+}
+
+.agent-session-row[data-sidebar="menu-button"][data-active]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0% 10%,
+    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-peak, 16%), transparent) 22%,
+    transparent 46%,
+    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-low, 8%), transparent) 72%,
+    transparent 90% 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  animation: agent-session-rail-flow 7s linear infinite;
+}
+
+/* Lower-lightness dark accents need more pigment in the selected surface, not
+ * brighter edges. Neutral Lifecycles keep their quieter existing tint/contrast.
+ * Light mode keeps the lighter tint so small muted labels do not lose contrast.
+ */
+.dark .agent-session-row[data-status-accent] {
+  --agent-session-flow-peak: 24%;
+  --agent-session-flow-low: 12%;
+}
+
+/* With an image twice the face's width, decreasing percentage positioning moves
+ * the image RIGHT. One cycle travels a complete image width for a seamless loop.
+ */
+@keyframes agent-session-rail-flow {
+  from { background-position: 0% 50%; }
+  to { background-position: -200% 50%; }
+}
+
+.agent-session-row[data-sidebar="menu-button"][data-cursor="true"] {
+  outline: 1px solid var(--sidebar-ring);
+  outline-offset: -4px;
+}
+
+.agent-session-row[data-sidebar="menu-button"]:focus-visible {
+  outline: 2px solid var(--sidebar-ring);
+  outline-offset: -4px;
+}
+
+/* The delegated pointer helper lights the parent row, not an isolated Settle tile. */
+.agent-session-settle[data-sidebar="menu-action"] {
+  background: transparent;
+  color: var(--sidebar-foreground);
+}
+
+.agent-session-rail-header [data-slot="button"] {
+  background: var(--sidebar);
+  color: var(--sidebar-foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-session-row[data-sidebar="menu-button"][data-active]::before {
+    animation: none;
+    background-position: 50% 50%;
+  }
+}
+
+@media (forced-colors: active) {
+  /* System colours collapse status hues; expose the existing accessible words
+   * so sighted users can still distinguish Lifecycle and independent work. */
+  .agent-session-status-text {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+  .agent-session-row[data-sidebar="menu-button"] { border-left-color: CanvasText; }
+  .agent-session-row[data-sidebar="menu-button"][data-active]::before { display: none; }
+  .agent-session-row[data-sidebar="menu-button"][data-active] { border-left-color: Highlight; }
+}

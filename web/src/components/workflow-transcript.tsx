@@ -239,7 +239,7 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
         {!loading && !entries.length && !compacting && !error ? <p className="p-2 text-xs text-muted-foreground">No activity recorded for this attempt.</p> : null}
       </div>
       {!atBottom && activity.length ? (
-        <button type="button" onClick={toLatest} aria-label="Jump to latest Workflow activity" className="absolute right-3 bottom-3 rounded-full border bg-popover p-2 text-popover-foreground shadow-md hover:bg-muted">
+        <button type="button" onClick={toLatest} aria-label="Jump to latest Workflow activity" className="cursor-gloss absolute right-3 bottom-3 rounded-full border bg-popover p-2 text-popover-foreground shadow-md hover:bg-muted">
           <ArrowDown className="size-4" aria-hidden />
         </button>
       ) : null}

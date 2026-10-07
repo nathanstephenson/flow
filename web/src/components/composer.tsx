@@ -924,7 +924,7 @@ function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void 
     <button
       type="button"
       onClick={onShow}
-      className={cn(shell, "text-muted-foreground hover:bg-accent hover:text-foreground")}
+      className={cn(shell, "cursor-gloss text-muted-foreground hover:bg-accent hover:text-foreground")}
     >
       {dot}
       {label}
