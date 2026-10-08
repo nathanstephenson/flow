@@ -322,7 +322,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           // third; `h-auto` hands the height back to the content, so a row is as tall as it has
           // something to say and a Scope that is not a repository stays two lines. p-2 would clip
           // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
-          // The cursor/focus outline lives inside the face, clear of the solid status edge.
+          // The keyboard-only focus outline lives inside the face, clear of the status edge.
+          // The retained cursor controls tab order, not decoration outside the rail.
           "agent-session-row cursor-gloss h-auto rounded-none py-1.5 pr-8",
         )}
       >

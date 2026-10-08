@@ -52,11 +52,6 @@
   to { background-position: -200% 50%; }
 }
 
-.agent-session-row[data-sidebar="menu-button"][data-cursor="true"] {
-  outline: 1px solid var(--sidebar-ring);
-  outline-offset: -4px;
-}
-
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {
   outline: 2px solid var(--sidebar-ring);
   outline-offset: -4px;

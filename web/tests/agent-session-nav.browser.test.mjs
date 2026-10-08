@@ -106,6 +106,27 @@ describe("Agent Session rail DOM focus and material", () => {
   });
   afterEach(async () => { await page?.close(); });
 
+  for (const mode of ['light', 'dark']) {
+    it(`${mode}: retains a tab stop without a persistent cursor outline`, async () => {
+      await page.evaluate(mode => document.documentElement.classList.toggle('dark', mode === 'dark'), mode);
+      const composer = page.getByRole('textbox', { name: 'Composer' });
+      await composer.focus();
+      for (const cursorId of ['a', 'b']) {
+        await page.evaluate(cursorId => window.renderRail({ cursorId }), cursorId);
+        await focusedIs(composer);
+        assert.equal(await cursor().getAttribute('tabindex'), '0');
+        assert.equal(await cursor().evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+        assert.equal(await cursor().evaluate(node => getComputedStyle(node).boxShadow), 'none');
+        await cursor().focus();
+        await focusedIs(cursor());
+        assert.equal(await cursor().evaluate(node => getComputedStyle(node).outlineStyle), 'solid');
+        assert.equal(await cursor().evaluate(node => getComputedStyle(node).outlineWidth), '2px');
+        await composer.focus();
+        assert.equal(await cursor().evaluate(node => getComputedStyle(node).outlineStyle), 'none');
+      }
+    });
+  }
+
   it("moves DOM focus with repeated arrow cursor changes", async () => {
     await cursor().focus();
     for (const key of ['ArrowDown', 'ArrowUp', 'ArrowDown']) {
