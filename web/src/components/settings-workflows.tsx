@@ -1,5 +1,5 @@
 import { ChevronLeft } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useHost } from "../host.tsx";
 import { resolveDefaultBackend } from "../../../src/protocol/settings.ts";
 import { effortForWorkflowModelSelection, normalizeNoControlEffort } from "../../../src/client/workflow-effort.ts";
@@ -14,6 +14,7 @@ import { validateDefinition } from "../../../src/workflows/graph.ts";
 import { toTypeScript } from "../../../src/workflows/schema.ts";
 import { useModelCatalogue } from "../models.ts";
 import { WorkflowGraph } from "./workflow-graph.tsx";
+import { WorkflowBuilder } from "./workflow-builder.tsx";
 import { SchemaEditor } from "./workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { ConditionEditor } from "./workflow-condition.tsx";
@@ -47,6 +48,9 @@ export default function WorkflowsSettings() {
   const { config } = useHost();
   const mutation = useRef(false);
   const [busy, setBusy] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [builderView, setBuilderView] = useState<"editor" | "builder">("editor");
+  const panelId = useId();
   const [definition, setDefinition] = useState<WorkflowDefinition>();
   const [selected, select] = useState("");
   const [workspaceView, setWorkspaceView] = useState<"graph" | "inspector">("graph");
@@ -157,6 +161,7 @@ export default function WorkflowsSettings() {
           <Select
             value={definition?.id ?? ""}
             onValueChange={(value) => {
+              setBuilderOpen(false);
               setDefinition(normalizeNoControlEffort(list.data?.workflows.find((d) => d.id === value), catalogue));
               select("");
               setWorkspaceView("graph");
@@ -181,6 +186,7 @@ export default function WorkflowsSettings() {
             size="sm"
             variant="outline"
             onClick={() => {
+              setBuilderOpen(false);
               setDefinition({
                 version: 1,
                 id: crypto.randomUUID(),
@@ -209,6 +215,18 @@ export default function WorkflowsSettings() {
         )}
         {definition && (
           <>
+            {mobile && builderOpen && (
+              <div className="flex gap-2" role="group" aria-label="Workflow view">
+                <Button size="sm" variant={builderView === "editor" ? "secondary" : "ghost"} aria-pressed={builderView === "editor"} aria-controls={`${panelId}-editor`} onClick={() => setBuilderView("editor")}>
+                  Editor
+                </Button>
+                <Button size="sm" variant={builderView === "builder" ? "secondary" : "ghost"} aria-pressed={builderView === "builder"} aria-controls={`${panelId}-builder`} onClick={() => setBuilderView("builder")}>
+                  Builder
+                </Button>
+              </div>
+            )}
+            <div className="workflow-layout" data-builder-open={builderOpen}>
+              <section id={`${panelId}-editor`} className="workflow-editor-pane" aria-label="Workflow editor" hidden={mobile && builderOpen && builderView === "builder"}>
             <div className="workflow-metadata">
               <label className="flex flex-col gap-1">
                 <span className="text-sm font-medium">Name</span>
@@ -328,6 +346,12 @@ export default function WorkflowsSettings() {
               />
             </details>
             <div className="workflow-toolbar">
+              <Button size="sm" variant="outline" disabled={busy || !definition.backend} aria-expanded={builderOpen} aria-controls={`${panelId}-builder`} onClick={() => {
+                setBuilderOpen(value => !value);
+                setBuilderView("builder");
+              }}>
+                {builderOpen ? "Hide builder agent" : "Build with agent"}
+              </Button>
               {(
                 ["agent", "mcp", "shell", "typescript", "branch", "join"] as const
               ).map((kind) => (
@@ -538,7 +562,7 @@ export default function WorkflowsSettings() {
                       />
                     </>
                   )}
-                  {step.kind === "mcp" && <McpStepEditor definition={definition} step={step} onChange={update} />}
+                  {step.kind === "mcp" && <McpStepEditor key={step.id} definition={definition} step={step} onChange={update} />}
                   {step.kind === "shell" && (
                     <>
                       <label className="flex flex-col gap-1">
@@ -752,6 +776,23 @@ export default function WorkflowsSettings() {
               {!step && (
                 <aside className="workflow-inspector rounded-lg border p-4 text-sm text-muted-foreground">
                   Select a step to edit its settings.
+                </aside>
+              )}
+            </div>
+              </section>
+              {builderOpen && (
+                <aside id={`${panelId}-builder`} className="workflow-builder-sidebar" aria-label="Workflow builder sidebar" hidden={mobile && builderView === "editor"}>
+                  <WorkflowBuilder
+                    key={`${definition.id}/${definition.backend}/${definition.projectId ?? ""}`}
+                    definition={definition}
+                    onApply={next => {
+                      setDefinition(normalizeNoControlEffort(next, catalogue));
+                      select("");
+                      setWorkspaceView("graph");
+                      setMessage("Builder draft applied. Save workflow to keep it.");
+                    }}
+                    onClose={() => setBuilderOpen(false)}
+                  />
                 </aside>
               )}
             </div>

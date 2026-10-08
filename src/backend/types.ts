@@ -24,6 +24,10 @@ export type PromptAttachment = {
 };
 
 export type BackendCreateOptions = {
+  /** Host-owned startup cancellation; never serialized into a worker or exposed to the model. */
+  signal?: AbortSignal;
+  /** Restricted host-mediated authoring. Overrides all other tool configuration, including tools:none. */
+  workflowBuilder?: import("./workflow-builder.ts").WorkflowBuilder;
   workflow?: import("./workflow-tools.ts").WorkflowParent;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;

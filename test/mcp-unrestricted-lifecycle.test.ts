@@ -97,6 +97,27 @@ test('unrestricted stdio disposal kills non-detached children inheriting stdout 
   await assert.rejects(mcp.retry('fixture'), /stopped/);
 });
 
+test('owned disposal waits for actual stdio exit without changing ordinary bounded disposal', { skip: !posix }, async t => {
+  const f = fixture(t), mcp = f.session();
+  const close = SupervisedStdioTransport.prototype.close;
+  let transport: SupervisedStdioTransport | undefined;
+  // Model a bounded close returning before the leader exits, through the public transport API.
+  t.mock.method(SupervisedStdioTransport.prototype, 'close', async function (this: SupervisedStdioTransport) { transport = this; });
+  try {
+    await within(mcp.open());
+    await within(mcp.dispose());
+    assert.ok(transport);
+    assert.ok(alive(f.pids()[0]!));
+    let settled = false;
+    const owned = mcp.dispose({ waitForExit: true }).then(() => { settled = true; });
+    await delay(25);
+    assert.equal(settled, false);
+    await close.call(transport);
+    await within(owned);
+    await dead(f.pids());
+  } finally { if (transport) await close.call(transport); }
+});
+
 test('Retry tears down the previous stdio process group before launching its replacement', { skip: !posix }, async t => {
   const f = fixture(t), mcp = f.session();
   await within(mcp.open());

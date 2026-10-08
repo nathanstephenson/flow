@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { prepareFilesystemIsolation, type FilesystemIsolation } from "../isolation/filesystem.ts";
 import { SupervisedStdioTransport } from "./mcp-stdio-supervisor.ts";
@@ -56,6 +56,7 @@ export class McpSession {
   private readonly states = new Map<string, McpStatus>();
   private readonly pending = new Map<string, Promise<void>>();
   private readonly activeCalls = new Map<string, number>();
+  private readonly exits = new Set<Promise<void>>();
   private disposed = false;
   private readonly direct: boolean;
   readonly connections: readonly McpConnection[];
@@ -67,6 +68,7 @@ export class McpSession {
   private readonly protectedPaths: string[] | undefined;
   private readonly stateRoot: string | undefined;
   private readonly isolationEnabled: boolean;
+  private readonly expectedScopeIdentity: string | undefined;
   constructor(
     connections: readonly McpConnection[],
     scope: string,
@@ -76,6 +78,7 @@ export class McpSession {
     protectedPaths?: string[],
     stateRoot?: string,
     isolationEnabled = true,
+    expectedScopeIdentity?: string,
   ) {
     this.connections = structuredClone(connections);
     this.scope = scope;
@@ -85,6 +88,7 @@ export class McpSession {
     this.protectedPaths = protectedPaths;
     this.stateRoot = stateRoot;
     this.isolationEnabled = isolationEnabled;
+    this.expectedScopeIdentity = expectedScopeIdentity;
   }
   registrationFailed(): void {
     for (const [id] of this.states) this.states.set(id, { id, state: "failed", tools: 0 });
@@ -141,6 +145,11 @@ export class McpSession {
     );
     this.clients.set(id, client);
     let isolation: FilesystemIsolation | undefined;
+    let scopeFd: number | undefined;
+    const cleanup = () => {
+      isolation?.cleanup();
+      if (scopeFd !== undefined) { closeSync(scopeFd); scopeFd = undefined; }
+    };
     let transport: SupervisedStdioTransport | StreamableHTTPClientTransport | undefined;
     let stopping: Promise<void> | undefined;
     const stop = () => stopping ??= (async () => {
@@ -149,7 +158,7 @@ export class McpSession {
       await transport?.close();
       // A bounded stdio close may return before a kernel-stalled process exits. Its pinned
       // mount state is released only by the actual-exit hook registered below.
-      if (!(transport instanceof SupervisedStdioTransport)) isolation?.cleanup();
+      if (!(transport instanceof SupervisedStdioTransport)) cleanup();
     })();
     this.stops.set(id, stop);
     try {
@@ -161,17 +170,33 @@ export class McpSession {
       }
       const configured = connection.transport === "http" ? this.configuredHeaders(connection.headers) : {};
       if (connection.transport === "stdio" && !this.isolationEnabled) {
+        // Refuse unsupported authoring before touching a potentially stalled Scope path.
+        if (this.expectedScopeIdentity !== undefined && process.platform !== "linux")
+          throw new Error("Descriptor-bound MCP authoring requires Linux");
         const scope = realpathSync(this.scope);
         if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
+        let cwd = scope;
+        if (this.expectedScopeIdentity !== undefined) {
+          if (scope !== resolve(this.scope)) throw new Error("Scope redirected since selection");
+          scopeFd = openSync(scope, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+          const pinned = fstatSync(scopeFd, { bigint: true });
+          cwd = `/proc/${process.pid}/fd/${scopeFd}`;
+          const bound = statSync(cwd, { bigint: true });
+          if (`${pinned.dev}:${pinned.ino}` !== this.expectedScopeIdentity || !pinned.isDirectory()
+            || bound.dev !== pinned.dev || bound.ino !== pinned.ino) {
+            throw new Error("Scope changed since selection");
+          }
+        }
         transport = new SupervisedStdioTransport({
           command: connection.command,
           args: connection.args,
           env: getDefaultEnvironment(),
-          cwd: scope,
+          cwd,
         });
       } else if (connection.transport === "stdio") {
         isolation = await prepareFilesystemIsolation({
           scope: this.scope, expectedScope: resolve(this.scope),
+          ...(this.expectedScopeIdentity !== undefined ? { expectedScopeIdentity: this.expectedScopeIdentity } : {}),
           command: connection.command.includes("/") ? resolve(this.scope, connection.command) : connection.command,
           args: connection.args,
           readablePaths: executionAssets(connection, this.scope),
@@ -193,8 +218,6 @@ export class McpSession {
           env: isolation.env,
           cwd: isolation.scope,
         });
-        const prepared = isolation;
-        void transport.exited.then(() => prepared.cleanup());
       } else {
         // HTTP MCP deliberately retains its external/network authority.
         transport = new StreamableHTTPClientTransport(new URL(connection.url), {
@@ -216,6 +239,12 @@ export class McpSession {
             });
           },
         });
+      }
+      if (transport instanceof SupervisedStdioTransport) {
+        const exited = transport.exited;
+        void exited.then(cleanup);
+        this.exits.add(exited);
+        void exited.then(() => this.exits.delete(exited));
       }
       if (this.disposed) { await stop(); return; }
       const signal = AbortSignal.timeout(10_000);
@@ -289,14 +318,21 @@ export class McpSession {
       await stop();
       this.entries.delete(id);
       this.states.set(id, { id, state: "failed", tools: 0 });
+      if (connection.transport === "stdio" && this.expectedScopeIdentity !== undefined) {
+        throw new Error(process.platform !== "linux"
+          ? "Descriptor-bound MCP authoring requires Linux; launch refused."
+          : "MCP authoring launch failed. Refresh the selected Scope and Retry.");
+      }
     }
   }
-  async dispose(): Promise<void> {
+  /** Ordinary callers retain bounded stdio close; authoring owns capacity until actual exit. */
+  async dispose({ waitForExit = false }: { waitForExit?: boolean } = {}): Promise<void> {
     this.disposed = true;
     this.entries.clear();
     await Promise.all([...this.stops.values()].map((stop) => stop()));
     await Promise.allSettled(this.pending.values());
     // A connect may have been waiting for the previous connection's teardown.
     await Promise.all([...this.stops.values()].map((stop) => stop()));
+    if (waitForExit) await Promise.all(this.exits);
   }
 }

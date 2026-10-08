@@ -2226,6 +2226,15 @@ export class SessionHost {
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled);
   }
 
+  /** Metadata discovery owned by authoring, never by an Agent/Backend Session. */
+  async openWorkflowMcpAuthoring(scope: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled(), expectedScopeIdentity?: string) {
+    const connection = (this.mcpConnections?.() ?? []).find(connection => connection.id === connectionId);
+    if (!connection) throw new Error('MCP connection removed. Refresh the workflow editor.');
+    const { McpSession } = await import('../backend/mcp.ts');
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined,
+      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled, expectedScopeIdentity);
+  }
+
   mcpStatus(id: string) {
     const record = this.sessions.get(id);
     if (!record) throw new Error("Unknown Agent Session");
@@ -2806,6 +2815,12 @@ export class SessionHost {
       ...(existing ? { existing } : {}),
       ...(store ? { sink: (entry) => store.append(entry) } : {}),
     });
+  }
+
+  /** Independent, host-mediated authoring; never inherits Agent Session tools or MCP. */
+  createWorkflowBuilderSession(backend: string, options: Pick<import('../backend/types.ts').BackendCreateOptions, 'scope' | 'stateDir' | 'modelId' | 'effort' | 'priorSpend' | 'workflowBuilder' | 'emit' | 'onFailure' | 'signal'>): Promise<BackendSession> {
+    if (!options.workflowBuilder) throw new Error('Workflow builder capabilities are required');
+    return this.backendFor(backend).create(options);
   }
 
   private backendFor(name: string): AgentBackend {

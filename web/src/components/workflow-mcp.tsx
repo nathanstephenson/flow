@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   McpToolDiscovery,
-  McpToolSnapshot,
   WorkflowDefinition,
   WorkflowStep,
 } from "../../../src/protocol/workflows.ts";
@@ -12,8 +11,8 @@ import {
   initialTemplate,
   templateValue,
 } from "../presentation/workflow-json-schema.ts";
-import { useAgentSessions } from "../agent-sessions.tsx";
-import { useWorkflowResource, workflowApi } from "./workflow-api.ts";
+import type { WorkflowMcpConnections } from "../../../src/protocol/workflow-mcp-authoring.ts";
+import { workflowApi } from "./workflow-api.ts";
 import { JsonSchemaEditor } from "./workflow-json-schema.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -33,28 +32,107 @@ export function McpStepEditor({
   step: Extract<WorkflowStep, { kind: "mcp" }>;
   onChange: (step: WorkflowStep) => void;
 }) {
-  const { sessions } = useAgentSessions();
-  const [sessionId, setSessionId] = useState("");
-  const [connectionId, setConnectionId] = useState("");
-  const [tools, setTools] = useState<McpToolSnapshot[]>([]);
-  const [toolErrors, setToolErrors] = useState<McpToolDiscovery["errors"]>([]);
-  const [discoverySummary, setDiscoverySummary] = useState("");
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
+  const query = definition.projectId
+    ? `?projectId=${encodeURIComponent(definition.projectId)}`
+    : "";
+  const connectionsPath = `/api/workflow-mcp${query}`;
+  const [selection, setSelection] = useState({
+    path: connectionsPath,
+    id: step.tool.connectionId,
+  });
+  const connectionId = selection.path === connectionsPath ? selection.id : "";
+  const [connections, setConnections] = useState<{
+    path: string;
+    data?: WorkflowMcpConnections;
+    error?: string;
+  }>();
+  const [connectionsRefresh, setConnectionsRefresh] = useState(0);
+  const connectionsVersion = useRef(0);
+  const available =
+    connections?.path === connectionsPath ? connections : undefined;
+  useEffect(() => {
+    const controller = new AbortController();
+    const version = ++connectionsVersion.current;
+    setConnections(undefined);
+    setSelection((current) =>
+      current.path === connectionsPath
+        ? current
+        : { path: connectionsPath, id: "" },
+    );
+    void workflowApi<WorkflowMcpConnections>(
+      connectionsPath,
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((data) => {
+        if (version === connectionsVersion.current && !controller.signal.aborted)
+          setConnections({ path: connectionsPath, data });
+      })
+      .catch((error) => {
+        if (version === connectionsVersion.current && !controller.signal.aborted)
+          setConnections({ path: connectionsPath, error: String(error) });
+      });
+    return () => {
+      connectionsVersion.current++;
+      controller.abort();
+    };
+  }, [connectionsPath, connectionsRefresh]);
+  const selectedConnection = available?.data?.connections.find(
+    (connection) => connection.id === connectionId,
+  );
+  const discoveryPath = selectedConnection
+    ? `/api/workflow-mcp/${encodeURIComponent(connectionId)}${query}`
+    : undefined;
+  const [discovery, setDiscovery] = useState<{
+    path: string;
+    data?: McpToolDiscovery;
+    error?: string;
+  }>();
+  const [discoveryRefresh, setDiscoveryRefresh] = useState(0);
+  const consumedDiscoveryRefresh = useRef(0);
   const discoveryVersion = useRef(0);
-  useEffect(() => () => { discoveryVersion.current++; }, []);
-  const resetDiscovery = () => {
-    discoveryVersion.current++;
-    setTools([]);
-    setToolErrors([]);
-    setDiscoverySummary("");
-    setMessage("");
-    setBusy(false);
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    const version = ++discoveryVersion.current;
+    const refresh = discoveryRefresh !== consumedDiscoveryRefresh.current;
+    consumedDiscoveryRefresh.current = discoveryRefresh;
+    setDiscovery(undefined);
+    if (discoveryPath) {
+      void workflowApi<McpToolDiscovery>(
+        refresh ? `${discoveryPath}${query ? "&" : "?"}refresh=1` : discoveryPath,
+        "GET",
+        undefined,
+        controller.signal,
+      )
+        .then((data) => {
+          if (version === discoveryVersion.current && !controller.signal.aborted)
+            setDiscovery({ path: discoveryPath, data });
+        })
+        .catch((error) => {
+          if (version === discoveryVersion.current && !controller.signal.aborted)
+            setDiscovery({ path: discoveryPath, error: String(error) });
+        });
+    }
+    return () => {
+      discoveryVersion.current++;
+      controller.abort();
+    };
+  }, [discoveryPath, discoveryRefresh]);
+  const result = discovery?.path === discoveryPath ? discovery : undefined;
+  const busy = !!discoveryPath && !result;
+  const tools = result?.data?.tools ?? [];
+  const toolErrors = result?.data?.errors ?? [];
+  const compatible = tools.length;
+  const incompatible = toolErrors.length;
+  const discoverySummary = !result?.data
+    ? ""
+    : compatible
+      ? `${compatible} compatible ${compatible === 1 ? "tool" : "tools"} available.${incompatible ? ` ${incompatible} incompatible ${incompatible === 1 ? "tool cannot" : "tools cannot"} be selected.` : ""}`
+      : incompatible
+        ? `No compatible tools. All ${incompatible} discovered ${incompatible === 1 ? "tool is" : "tools are"} incompatible.`
+        : "This server reported no tools.";
   const [phase, setPhase] = useState<"mapping" | "repeatMapping">("mapping");
-  const connections = useWorkflowResource<{
-    connections: { id: string; name: string; transport: string }[];
-  }>(sessionId ? `/api/sessions/${sessionId}/workflow-mcp` : undefined);
   let loop = false;
   try {
     loop = analyzeLoops(definition).loops.some(
@@ -87,47 +165,32 @@ export function McpStepEditor({
           MCP tool · no model tokens
         </legend>
         <p className="text-xs text-muted-foreground">
-          Uses only connections enabled for the executing Agent Session.
-          Credentials stay in MCP Settings. No Shell or TypeScript runtime is
-          used.
+          Discover tools in the Workflow Definition’s Scope without opening an
+          Agent Session. Execution and step testing require this connection to be
+          enabled for the owning Agent Session. Credentials stay in MCP Settings.
+        </p>
+        <p className="break-all text-xs text-muted-foreground">
+          Scope: {available?.data?.scope ?? (available?.error ? "Unavailable" : "Loading…")}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Metadata discovery can start a local stdio server under the usual
+          filesystem-isolation policy. When isolation is disabled, it has the
+          host user’s filesystem access.
         </p>
         <Select
-          value={sessionId}
-          onValueChange={(id) => {
-            setSessionId(id ?? "");
-            setConnectionId("");
-            resetDiscovery();
-          }}
-        >
-          <SelectTrigger aria-label="MCP discovery Agent Session">
-            <SelectValue>
-              {sessionId || "Select Agent Session for discovery"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {sessions.map((session) => (
-              <SelectItem key={session.id} value={session.id}>
-                {session.id} · {session.backend}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
           value={connectionId}
-          onValueChange={(id) => {
-            setConnectionId(id ?? "");
-            resetDiscovery();
-          }}
+          disabled={!available?.data?.connections.length}
+          onValueChange={(id) =>
+            setSelection({ path: connectionsPath, id: id ?? "" })
+          }
         >
           <SelectTrigger aria-label="MCP server">
             <SelectValue>
-              {connections.data?.connections.find(
-                (connection) => connection.id === connectionId,
-              )?.name ?? "Select enabled MCP server"}
+              {selectedConnection?.name ?? "Select configured MCP server"}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {connections.data?.connections.map((connection) => (
+            {available?.data?.connections.map((connection) => (
               <SelectItem key={connection.id} value={connection.id}>
                 {connection.name} · {connection.transport}
               </SelectItem>
@@ -137,39 +200,32 @@ export function McpStepEditor({
         <Button
           size="sm"
           variant="outline"
-          disabled={busy || !connectionId}
-          onClick={async () => {
-            const version = ++discoveryVersion.current;
-            setBusy(true);
-            setTools([]);
-            setToolErrors([]);
-            setDiscoverySummary("");
-            setMessage("");
-            try {
-              const result = await workflowApi<McpToolDiscovery>(
-                `/api/sessions/${sessionId}/workflow-mcp/${connectionId}`,
-              );
-              if (version !== discoveryVersion.current) return;
-              setTools(result.tools);
-              setToolErrors(result.errors);
-              const compatible = result.tools.length;
-              const incompatible = result.errors.length;
-              setDiscoverySummary(
-                compatible
-                  ? `${compatible} compatible ${compatible === 1 ? "tool" : "tools"} available.${incompatible ? ` ${incompatible} incompatible ${incompatible === 1 ? "tool cannot" : "tools cannot"} be selected.` : ""}`
-                  : incompatible
-                    ? `No compatible tools. All ${incompatible} discovered ${incompatible === 1 ? "tool is" : "tools are"} incompatible.`
-                    : "This server reported no tools.",
-              );
-            } catch (error) {
-              if (version === discoveryVersion.current) setMessage(String(error));
-            } finally {
-              if (version === discoveryVersion.current) setBusy(false);
-            }
-          }}
+          disabled={busy || !discoveryPath}
+          onClick={() => setDiscoveryRefresh((current) => current + 1)}
         >
-          {busy ? "Discovering…" : "Discover tools"}
+          {busy
+            ? "Discovering…"
+            : result?.error
+              ? "Retry discovery"
+              : "Refresh tools"}
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!available}
+          onClick={() => setConnectionsRefresh((current) => current + 1)}
+        >
+          {!available
+            ? "Loading servers…"
+            : available.error
+              ? "Retry servers"
+              : "Refresh servers"}
+        </Button>
+        {available?.data?.connections.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No MCP servers configured. Add a connection in MCP Settings.
+          </p>
+        )}
         {discoverySummary && (
           <p
             className={`text-xs ${toolErrors.length ? "text-destructive" : "text-muted-foreground"}`}
@@ -196,10 +252,10 @@ export function McpStepEditor({
           </section>
         )}
         <Select
-          value={step.tool.toolName}
+          value={JSON.stringify(step.tool)}
           disabled={busy || !tools.length}
-          onValueChange={(name) => {
-            const tool = tools.find((tool) => tool.toolName === name);
+          onValueChange={(snapshot) => {
+            const tool = tools.find((tool) => JSON.stringify(tool) === snapshot);
             if (tool)
               onChange({
                 ...step,
@@ -220,7 +276,7 @@ export function McpStepEditor({
           </SelectTrigger>
           <SelectContent>
             {tools.map((tool) => (
-              <SelectItem key={tool.toolName} value={tool.toolName}>
+              <SelectItem key={tool.toolName} value={JSON.stringify(tool)}>
                 {tool.toolName}
               </SelectItem>
             ))}
@@ -230,14 +286,14 @@ export function McpStepEditor({
           Tool identity and original schemas are pinned. Changed servers or
           schemas require explicit reselection, not automatic retargeting.
         </p>
-        {message && (
+        {result?.error && (
           <p className="text-xs text-destructive" role="alert">
-            {message}
+            {result.error}
           </p>
         )}
-        {connections.error && (
+        {available?.error && (
           <p className="text-xs text-destructive" role="alert">
-            {connections.error}
+            {available.error}
           </p>
         )}
       </fieldset>
