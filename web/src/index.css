@@ -243,18 +243,31 @@
   color: var(--status-active);
 }
 
-.composer-activity rect {
-  width: calc(100% - 2px);
-  height: calc(100% - 2px);
+.composer-activity-cutout,
+.composer-activity-shape {
   rx: calc(var(--radius) + 4px);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  filter: drop-shadow(0 0 3px currentColor);
 }
 
-.composer-activity[data-status="running"] rect {
+.composer-activity-shape {
+  width: calc(100% - 2px);
+  height: calc(100% - 2px);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+
+.composer-activity-outline {
+  stroke-width: 0.8px;
+  opacity: 0.65;
+}
+
+.composer-activity-glow {
+  stroke-width: 6px;
+  filter: blur(4px);
+  opacity: 0.45;
+}
+
+.composer-activity[data-status="running"] .composer-activity-shape {
   stroke-dasharray: 12 88;
   animation: composer-orbit 5s linear infinite;
 }
@@ -270,7 +283,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer-activity[data-status="running"] rect {
+  .composer-activity[data-status="running"] .composer-activity-shape {
     animation: none;
   }
 }
