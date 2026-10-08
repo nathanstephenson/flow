@@ -1,4 +1,3 @@
-import { McpConnectionStatus } from "./mcp-status.tsx";
 import { MessageSquare, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
@@ -351,10 +350,7 @@ function AttachedPane({
 
   return (
     <div className={cn("grid min-h-0 min-w-0", mobile ? "mobile-view-height grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
-      <div>
-        <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
-        <McpConnectionStatus sessionId={sessionId} />
-      </div>
+      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
 
       {mobile ? (
         <MobileViewSelector
