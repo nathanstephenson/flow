@@ -33,7 +33,7 @@ export interface WorkflowBuilderServiceOptions {
   /** Additional credential/snapshot validation, e.g. executions.validateDefinitionCredentials. */
   validateDefinition?: (definition: WorkflowDefinition) => void;
   /** Host-owned metadata only; never callable MCP tools or transport credentials. */
-  mcpCatalogue?: (scope: string, projectId?: string) => Promise<WorkflowMcpCatalogue>;
+  mcpCatalogue?: (scope: string, projectId: string | undefined, scopeIdentity: string) => Promise<WorkflowMcpCatalogue>;
   /** Internal lifecycle tuning, primarily for tests. Not an HTTP option. */
   limits?: Partial<Limits>;
 }
@@ -221,11 +221,11 @@ export class WorkflowBuilderService {
           if (path === 'mcp-tools.json') {
             await entry.files!.checkScope();
             live();
-            const catalogue = await this.options.mcpCatalogue?.(entry.view.scope, entry.view.definition.projectId)
-              ?? { scope: entry.view.scope, connections: [], tools: [], errors: [] };
+            const catalogue = await this.options.mcpCatalogue?.(entry.view.scope, entry.view.definition.projectId, entry.files!.scopeIdentity)
+              ?? { scope: entry.view.scope, scopeIdentity: entry.files!.scopeIdentity, connections: [], tools: [], errors: [] };
             await entry.files!.checkScope();
             live();
-            if (catalogue.scope !== entry.view.scope) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
+            if (catalogue.scope !== entry.view.scope || catalogue.scopeIdentity !== entry.files!.scopeIdentity) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
             const content = JSON.stringify(catalogue);
             if (Buffer.byteLength(content) > 192_000) throw new Error('MCP tool catalogue is too large');
             entry.catalogueMcpTools = structuredClone(catalogue.tools);

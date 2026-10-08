@@ -1,15 +1,32 @@
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import type { ConfigStore } from './config-store.ts';
-import { expandHome, includedProjects } from './projects.ts';
+import { isAbsolute, join } from 'node:path';
+import { expandHome } from './projects.ts';
+
+export function workflowAuthoringScopePath(config: Pick<ConfigStore, 'projectRoot' | 'projectInclude'>, fallback: string, projectId?: string): string {
+  const root = config.projectRoot();
+  if (projectId === undefined) return expandHome(root ?? fallback);
+  const base = root === undefined ? undefined : expandHome(root);
+  for (const entry of config.projectInclude()) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const expanded = expandHome(trimmed);
+    if (!isAbsolute(expanded) && base === undefined) continue;
+    const path = (isAbsolute(expanded) ? expanded : join(base!, expanded))
+      .replace(/\/+$/, '').replace(/\/\.(?=\/|$)/g, '') || '/';
+    if (path === projectId) return path;
+  }
+  throw new Error('Workflow Project is not opted in');
+}
 
 export function workflowAuthoringScope(config: Pick<ConfigStore, 'projectRoot' | 'projectInclude'>, fallback: string, projectId?: string): string {
-  let scope = config.projectRoot() ?? fallback;
+  const scope = workflowAuthoringScopePath(config, fallback, projectId);
   if (projectId !== undefined) {
-    const project = includedProjects(config.projectRoot(), config.projectInclude()).find(project => project.path === projectId);
-    if (!project || project.missing) throw new Error('Workflow Project is not opted in');
-    scope = project.path;
+    let directory = false;
+    try { directory = statSync(scope).isDirectory(); } catch {}
+    if (!directory) throw new Error('Workflow Project is not opted in');
   }
-  const canonical = realpathSync(expandHome(scope));
+  const canonical = realpathSync(scope);
   if (!statSync(canonical).isDirectory()) throw new Error('Workflow Scope must be a directory');
   return canonical;
 }

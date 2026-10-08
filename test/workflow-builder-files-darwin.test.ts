@@ -24,6 +24,22 @@ async function pausedHelpers(files: WorkflowBuilderFiles, count: number): Promis
   }
   assert.fail('Disposable readers did not start');
 }
+async function readerResponse(root: FileHandle, cwd: string, request: { scope: string; path: string; operation: string }): Promise<unknown> {
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]));
+  env.FLOW_WORKFLOW_BUILDER_READER = '1';
+  const helper = launchWorker({ entry: fileURLToPath(new URL('../src/daemon/workflow-builder-reader.ts', import.meta.url)),
+    execArgv: ['--experimental-strip-types'], cwd, env, stdioFds: [root.fd], shutdownTimeoutMs: 0 });
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await new Promise<unknown>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Reader did not respond')), 5000);
+      helper.child.once('error', reject);
+      helper.child.once('message', resolve);
+      void helper.exited.then(() => reject(new Error('Reader exited before responding')));
+      helper.child.send(request, error => { if (error) reject(error); });
+    });
+  } finally { clearTimeout(timer); await helper.stop(async () => {}); }
+}
 function fixture() {
   // macOS /tmp is itself a symlink. The production API deliberately refuses aliases.
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-reader-test-')));
@@ -37,6 +53,25 @@ it('the kernel guard fails closed when flags are ignored or only the leaf is gua
   await assert.rejects(probeDarwinNoFollowAny(0), /Scope is unavailable/);
   await assert.rejects(probeDarwinNoFollowAny(constants.O_NOFOLLOW), /Scope is unavailable/);
   if (process.platform === 'linux') await assert.rejects(probeDarwinNoFollowAny(), /Scope is unavailable/);
+});
+
+it('Scope identity comes from the pinned root and remains available after close', { skip: !['linux', 'darwin'].includes(process.platform) }, async () => {
+  const f = fixture();
+  let files: WorkflowBuilderFiles | undefined;
+  try {
+    files = await WorkflowBuilderFiles.create(f.scope, f.state);
+    const owner = files as unknown as ReaderOwner;
+    const stat = await owner.root.stat({ bigint: true });
+    assert.equal(files.scopeIdentity, `${stat.dev}:${stat.ino}`);
+    await files.checkScope();
+    const identity = files.scopeIdentity;
+    renameSync(f.scope, f.scope + '-old'); mkdirSync(f.scope);
+    assert.equal(files.scopeIdentity, identity);
+    await assert.rejects(files.checkScope(), /reference unavailable/);
+    await files.close();
+    assert.equal(files.scopeIdentity, identity);
+    await assert.rejects(files.checkScope(), /reference unavailable/);
+  } finally { await files?.close(); f.cleanup(); }
 });
 
 it('Darwin kernel supports all-ancestor no-follow, read/list and credential/protected filtering', { skip: !darwin }, async () => {
@@ -83,26 +118,49 @@ it('Darwin kernel supports all-ancestor no-follow, read/list and credential/prot
   } finally { await files?.close(); f.cleanup(); }
 });
 
-it('Darwin reader refuses a cwd different from its inherited Scope descriptor', { skip: !darwin, timeout: 6000 }, async () => {
+it('Darwin reader acknowledges checks only for the Scope root', { skip: !darwin, timeout: 10_000 }, async () => {
   const f = fixture();
   const root = await open(f.scope, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
-  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]));
-  env.FLOW_WORKFLOW_BUILDER_READER = '1';
-  const helper = launchWorker({ entry: fileURLToPath(new URL('../src/daemon/workflow-builder-reader.ts', import.meta.url)),
-    execArgv: ['--experimental-strip-types'], cwd: f.state, env, stdioFds: [root.fd], shutdownTimeoutMs: 0 });
-  let timer: NodeJS.Timeout | undefined;
   try {
-    const response = await new Promise<unknown>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('Reader did not respond')), 5000);
-      helper.child.once('error', reject);
-      helper.child.once('message', resolve);
-      void helper.exited.then(() => reject(new Error('Reader exited before responding')));
-      helper.child.send({ scope: f.scope, path: '.', operation: 'list' }, error => { if (error) reject(error); });
-    });
-    assert.deepEqual(response, { ok: false });
-  } finally {
-    clearTimeout(timer); await helper.stop(async () => {}); await root.close(); f.cleanup();
-  }
+    mkdirSync(join(f.scope, 'nested'));
+    assert.deepEqual(await readerResponse(root, f.scope, { scope: f.scope, path: '.', operation: 'check' }),
+      { ok: true, result: { checked: true } });
+    for (const path of ['nested', '../state', f.scope, 'nested/..']) {
+      assert.deepEqual(await readerResponse(root, f.scope, { scope: f.scope, path, operation: 'check' }), { ok: false });
+    }
+    assert.deepEqual(await readerResponse(root, f.scope, { scope: f.state, path: '.', operation: 'check' }), { ok: false });
+    const file = await open(join(f.scope, 'file'), 'w+');
+    try {
+      assert.deepEqual(await readerResponse(file, f.scope, { scope: f.scope, path: '.', operation: 'check' }), { ok: false });
+    } finally { await file.close(); }
+  } finally { await root.close(); f.cleanup(); }
+});
+
+it('Darwin validates the check acknowledgement before accepting metadata', { skip: !darwin, timeout: 10_000 }, async () => {
+  const f = fixture();
+  let files: WorkflowBuilderFiles | undefined;
+  try {
+    files = await WorkflowBuilderFiles.create(f.scope, f.state);
+    for (const result of [null, { checked: false }, { content: '' }, { entries: [], truncated: false }]) {
+      const rejected = assert.rejects(files.checkScope(), /reference unavailable/);
+      const owner = await pausedHelpers(files, 1);
+      const helper = [...owner.helpers][0]!;
+      helper.child.emit('message', { ok: true, result });
+      await rejected; await helper.exited;
+      assert.equal(owner.helpers.size, 0);
+      assert.ok(owner.root.fd >= 0);
+    }
+  } finally { await files?.close(); f.cleanup(); }
+});
+
+it('Darwin reader refuses a cwd different from its inherited Scope descriptor for read, list and check', { skip: !darwin, timeout: 10_000 }, async () => {
+  const f = fixture();
+  const root = await open(f.scope, constants.O_RDONLY | constants.O_DIRECTORY | 0x20000000);
+  try {
+    for (const operation of ['read', 'list', 'check']) {
+      assert.deepEqual(await readerResponse(root, f.state, { scope: f.scope, path: '.', operation }), { ok: false });
+    }
+  } finally { await root.close(); f.cleanup(); }
 });
 
 it('Darwin bounds visits including filtered entries and never changes the host cwd', { skip: !darwin }, async () => {
@@ -133,10 +191,12 @@ it('Darwin refuses a redirected Scope, including aliases to the original directo
     mkdirSync(f.scope); writeFileSync(join(f.scope, 'ok'), 'redirected');
     await assert.rejects(files.read('ok'));
     await assert.rejects(files.list('.'));
+    await assert.rejects(files.checkScope());
     rmSync(f.scope, { recursive: true });
     symlinkSync(f.scope + '-old', f.scope);
     await assert.rejects(files.read('ok'));
     await assert.rejects(files.list('.'));
+    await assert.rejects(files.checkScope());
   } finally { await files?.close(); f.cleanup(); }
 });
 
@@ -150,9 +210,11 @@ it('Darwin uses fixed application code, bounds active readers, kills/reaps on cl
     // A preload injected through the host environment must not reach the helper.
     process.env.NODE_OPTIONS = '--import=data:text/javascript,process.exit(73)';
     assert.equal(await files.read('ok'), 'reference');
-    const pending = Array.from({ length: 8 }, () => files!.read('ok'));
+    await files.checkScope();
+    const pending = Array.from({ length: 8 }, (_, index) => index % 2 ? files!.read('ok') : files!.checkScope());
     const outcomes = Promise.allSettled(pending);
     await assert.rejects(files.read('ok'), /reference unavailable/);
+    await assert.rejects(files.checkScope(), /reference unavailable/);
     // Pause real disposable readers, proving close does not depend on cooperative IPC.
     const owner = await pausedHelpers(files, 8);
     const helpers = [...owner.helpers];
@@ -168,20 +230,21 @@ it('Darwin uses fixed application code, bounds active readers, kills/reaps on cl
     assert.ok(Date.now() - start < 5000);
     await assert.rejects(files.read('ok'));
     await assert.rejects(files.list('.'));
+    await assert.rejects(files.checkScope());
   } finally {
     if (inherited === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = inherited;
     await files?.close(); f.cleanup();
   }
 });
 
-it('Darwin kills and reaps an unresponsive helper at the five-second deadline', { skip: !darwin, timeout: 10_000 }, async () => {
+for (const operation of ['read', 'check'] as const) it(`Darwin kills and reaps an unresponsive ${operation} helper at the five-second deadline`, { skip: !darwin, timeout: 10_000 }, async () => {
   const f = fixture();
   let files: WorkflowBuilderFiles | undefined;
   try {
     writeFileSync(join(f.scope, 'ok'), 'reference');
     files = await WorkflowBuilderFiles.create(f.scope, f.state);
     const start = Date.now();
-    const rejected = assert.rejects(files.read('ok'), /reference unavailable/);
+    const rejected = assert.rejects(operation === 'check' ? files.checkScope() : files.read('ok'), /reference unavailable/);
     const owner = await pausedHelpers(files, 1);
     const helper = [...owner.helpers][0]!;
     await rejected; await helper.exited;

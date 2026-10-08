@@ -86,10 +86,7 @@ export async function startRuntime(options: {
     workflowBuilders = new WorkflowBuilderService({
       host, config, scope: process.cwd(), stateRoot: root,
       validateDefinition: definition => workflowExecutions.validateDefinitionCredentials(definition),
-      mcpCatalogue: (scope, projectId) => {
-        if (workflowMcpAuthoring!.connections(projectId).scope !== scope) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
-        return workflowMcpAuthoring!.catalogue(projectId);
-      },
+      mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
     });
     await host.load();
     workflowExecutions.reconcile();

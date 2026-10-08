@@ -17,10 +17,18 @@ A host-owned authoring service initializes MCP clients, lists tools and validate
 then disposes the clients. It never calls a tool. It uses current credential storage, existing
 noninteractive direct transport behavior, bounded startup, capacity, output and a short Scope/
 directory-identity/transport-identity/isolation-policy cache. Directory identity is checked before
-startup and after discovery/cleanup; replacing the directory at the same path cannot reuse cached
-tools. Concurrent readers share discovery, not callable handles.
+startup and after discovery/cleanup and passed to stdio launch preparation. Linux unrestricted
+stdio starts from a validated, retained directory descriptor; Bubblewrap validates the exact
+Scope descriptor it mounts. Platforms without descriptor-bound stdio launch fail closed for
+stdio authoring discovery; HTTP discovery remains available. Concurrent readers share discovery,
+not callable handles.
 Unavailable connections and incompatible tools carry safe diagnostics; one failure need not hide
-compatible tools. Authoring requests have a bounded response, but stdio capacity and cleanup remain
+compatible tools. The ten-second authoring deadline starts at request admission and includes Scope
+checks, queue wait, initialization and disposal response waits. Expired queued work is removed and
+cannot start later when cleanup capacity becomes free. Darwin canonicalization and directory
+identity checks run in a guarded, bounded metadata helper, not the Session Host; identical pending
+checks share a helper without caching completed identities. Authoring requests have a bounded
+response, but stdio capacity and cleanup remain
 owned until the supervisor reports actual leader exit and process-group cleanup, not merely bounded
 transport close. Host shutdown stops admission and retains ownership through that cleanup.
 
@@ -30,7 +38,10 @@ connections. It contains exact tool snapshots and diagnostics, not URLs, argumen
 MCP clients or invocation functions. Schemas and other service-provided metadata are untrusted data.
 Writes can introduce only snapshots supplied by the host, or preserve original snapshots unchanged;
 the model cannot fabricate or edit their identity/schema fields. The authoring Scope must still
-match the builder's pinned Scope, including directory identity checks before and after catalogue reads. The builder receives no external MCP tools or additional native
+match the builder's pinned Scope. The builder supplies its pinned directory identity to discovery,
+and validates the catalogue's captured identity as well as checking before and after catalogue
+reads. An A → B → A path swap cannot admit tools from B. Darwin per-read Scope checks use the
+bounded, killable reader helper rather than host metadata I/O. The builder receives no external MCP tools or additional native
 capabilities and cannot invoke the discovered services.
 
 ## Consequences

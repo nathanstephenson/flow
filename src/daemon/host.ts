@@ -2227,12 +2227,12 @@ export class SessionHost {
   }
 
   /** Metadata discovery owned by authoring, never by an Agent/Backend Session. */
-  async openWorkflowMcpAuthoring(scope: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled()) {
+  async openWorkflowMcpAuthoring(scope: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled(), expectedScopeIdentity?: string) {
     const connection = (this.mcpConnections?.() ?? []).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection removed. Refresh the workflow editor.');
     const { McpSession } = await import('../backend/mcp.ts');
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined,
-      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled);
+      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled, expectedScopeIdentity);
   }
 
   mcpStatus(id: string) {

@@ -92,11 +92,14 @@ export class WorkflowBuilderFiles {
     } catch { await root.close(); throw new Error('Workflow builder Scope is unavailable'); }
   }
 
+  get scopeIdentity(): string { return `${this.identity.dev}:${this.identity.ino}`; }
+
   protect(path: string): void { this.protectedPaths.push(resolve(path)); }
 
   /** Virtual metadata must obey the same pinned-directory boundary as reference reads. */
   async checkScope(): Promise<void> {
     return this.operation(async () => {
+      if (process.platform === 'darwin') return this.darwinReference('.', 'check');
       const check = await directory(this.scope);
       try {
         const stat = await check.stat({ bigint: true });
@@ -139,7 +142,7 @@ export class WorkflowBuilderFiles {
 
   async read(path: string): Promise<string> {
     return this.operation(async () => {
-      if (process.platform === 'darwin') return this.darwinReference(path, false);
+      if (process.platform === 'darwin') return this.darwinReference(path, 'read');
       const file = await this.target(path, false);
       try {
         const bytes = Buffer.alloc(MAX_READ + 1);
@@ -157,7 +160,7 @@ export class WorkflowBuilderFiles {
 
   async list(path: string): Promise<string> {
     return this.operation(async () => {
-      if (process.platform === 'darwin') return this.darwinReference(path, true);
+      if (process.platform === 'darwin') return this.darwinReference(path, 'list');
       const file = await this.target(path, true);
       try {
         const entries: string[] = [];
@@ -173,13 +176,15 @@ export class WorkflowBuilderFiles {
     });
   }
 
-  private async darwinReference(path: string, listing: boolean): Promise<string> {
+  private darwinReference(path: string, operation: 'check'): Promise<void>;
+  private darwinReference(path: string, operation: 'read' | 'list'): Promise<string>;
+  private async darwinReference(path: string, operation: 'read' | 'list' | 'check'): Promise<string | void> {
     if (this.closed || typeof path !== 'string' || path.length > 4096 || path.includes('\0')) throw new Error();
     const absolute = resolve(this.scope, path);
     if (!within(this.scope, absolute) || !this.allowed(absolute)) throw new Error();
     const normalized = relative(this.scope, absolute) || '.';
     if (normalized.split(sep).length > 64) throw new Error();
-    // All per-reference filesystem work, including rechecking the Scope path,
+    // All per-request filesystem work, including rechecking the Scope path,
     // belongs to the disposable helper so slow metadata I/O is killable too.
     const source = import.meta.url.endsWith('.ts');
     const entry = fileURLToPath(new URL(source ? './workflow-builder-reader.ts' : './workflow-builder-reader.js', import.meta.url));
@@ -204,11 +209,15 @@ export class WorkflowBuilderFiles {
           if (!response || response.ok !== true) reject(new Error());
           else resolve(response.result);
         });
-        helper.child.send({ scope: this.scope, operation: listing ? 'list' : 'read', path: normalized }, error => { if (error) reject(error); });
+        helper.child.send({ scope: this.scope, operation, path: normalized }, error => { if (error) reject(error); });
       });
       await helper.stop(async () => {});
       if (this.closed || !this.allowed(absolute)) throw new Error();
-      if (!listing) {
+      if (operation === 'check') {
+        if ((result as { checked?: unknown } | null)?.checked !== true) throw new Error();
+        return;
+      }
+      if (operation === 'read') {
         const content = (result as { content?: unknown } | null)?.content;
         if (typeof content !== 'string' || content.length > MAX_READ) throw new Error();
         return content;

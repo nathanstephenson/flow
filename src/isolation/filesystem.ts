@@ -12,6 +12,7 @@ export type FilesystemIsolationOptions = {
   scope: string;
   /** Canonical binding recorded when Scope was selected; refuse later symlink redirection. */
   expectedScope?: string;
+  expectedScopeIdentity?: string;
   /** A dedicated directory named `backend`, not the Session Host state root. Kept for Revive. */
   stateDir?: string;
   /** The owning Session Host root, including a non-default FLOW_STATE_DIR. */
@@ -204,11 +205,14 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
   };
   // Pin validated mount sources in the host only, not inherited application descriptors. A
   // concurrently writable ancestor must not swap Scope for a symlink between validation and bind.
-  const pinned = (path: string) => {
-    const before = statSync(path);
+  const pinned = (path: string, expectedIdentity?: string) => {
+    const before = statSync(path, { bigint: true });
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | (before.isDirectory() ? constants.O_DIRECTORY : 0));
     sources.push(fd);
-    const after = fstatSync(fd);
+    const after = fstatSync(fd, { bigint: true });
+    if (expectedIdentity !== undefined && `${after.dev}:${after.ino}` !== expectedIdentity) {
+      throw new Error("Scope changed since selection; refusing replaced directory");
+    }
     if (before.dev !== after.dev || before.ino !== after.ino || realpathSync(`/proc/self/fd/${fd}`) !== path) {
       throw new Error(`Execution mount source changed during preparation: ${path}`);
     }
@@ -316,7 +320,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     const privateHome = join(scratch, "home");
     mkdirSync(join(privateHome, ".pi/agent"), { recursive: true, mode: 0o700 });
     mkdirSync(join(privateHome, ".claude"), { mode: 0o700 });
-    args.push("--bind-fd", pinned(scope), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
+    args.push("--bind-fd", pinned(scope, options.expectedScopeIdentity), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
       "--dir", `${virtualRoot}/run`, "--bind-fd", pinned(backend), virtualState);
     for (const path of directoryMasks) args.push("--remount-ro", path);
 

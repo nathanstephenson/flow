@@ -22,7 +22,7 @@ export async function workflowMcpAuthoringRoutes(request: IncomingMessage, respo
     if (projectId !== undefined && (!projectId.length || projectId.length > 4_096 || projectId.includes('\0'))) throw new Error();
   } catch { send(response, 400, { error: 'Invalid workflow MCP request' }); return true; }
   try {
-    send(response, 200, connectionId === undefined ? service.connections(projectId) : await service.discover(projectId, connectionId, refresh));
+    send(response, 200, connectionId === undefined ? await service.connections(projectId) : await service.discover(projectId, connectionId, refresh));
   } catch {
     send(response, 400, { error: 'Workflow MCP connection or Scope unavailable. Check MCP Settings and the selected Project.' });
   }

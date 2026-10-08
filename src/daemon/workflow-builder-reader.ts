@@ -15,7 +15,7 @@ const MAX_ENTRIES = 200;
 const directoryFlags = constants.O_RDONLY | constants.O_DIRECTORY | O_NOFOLLOW_ANY;
 const same = (a: { dev: bigint; ino: bigint }, b: { dev: bigint; ino: bigint }) => a.dev === b.dev && a.ino === b.ino;
 
-type Request = { scope: string; operation: 'read' | 'list'; path: string };
+type Request = { scope: string; operation: 'read' | 'list' | 'check'; path: string };
 
 async function checkScope(scope: string, root: { dev: bigint; ino: bigint }): Promise<void> {
   // Opening the canonical absolute Scope with ANY also refuses a new ancestor or
@@ -27,10 +27,11 @@ async function checkScope(scope: string, root: { dev: bigint; ino: bigint }): Pr
 
 async function reference(request: Request): Promise<unknown> {
   // Only normalized relative paths, never a descriptor path or an absolute path.
-  if (!request || !['read', 'list'].includes(request.operation) || typeof request.path !== 'string' ||
+  if (!request || !['read', 'list', 'check'].includes(request.operation) || typeof request.path !== 'string' ||
     request.path.length > 4096 || request.path.includes('\0') || isAbsolute(request.path) ||
     normalize(request.path) !== request.path || request.path.split('/').some(part => part === '..') ||
-    request.path.split('/').length > 64 || typeof request.scope !== 'string' || request.scope.length > 4096 ||
+    request.path.split('/').length > 64 || (request.operation === 'check' && request.path !== '.') ||
+    typeof request.scope !== 'string' || request.scope.length > 4096 ||
     request.scope.includes('\0') || !isAbsolute(request.scope) || resolve(request.scope) !== request.scope) throw new Error();
   const root = fstatSync(4, { bigint: true });
   if (!root.isDirectory()) throw new Error();
@@ -38,6 +39,7 @@ async function reference(request: Request): Promise<unknown> {
   const cwd = await open('.', directoryFlags);
   try { if (!same(await cwd.stat({ bigint: true }), root)) throw new Error(); }
   finally { await cwd.close(); }
+  if (request.operation === 'check') return { checked: true };
 
   let target: FileHandle | undefined;
   try {

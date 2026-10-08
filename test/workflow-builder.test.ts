@@ -189,7 +189,7 @@ it('returns an immediate running turn, snapshots assistant messages/Spend, rejec
 it('provides real MCP schemas through a read-only virtual file and rejects fabricated or altered tool snapshots', async () => {
   const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } };
   let calls = 0;
-  const f = fixture({ mcpCatalogue: async scope => { calls++; return { scope, connections: [{ id: 'configured', name: 'Configured service', transport: 'http', enabledByDefault: true }], tools: [tool], errors: [] }; } });
+  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => { calls++; return { scope, scopeIdentity, connections: [{ id: 'configured', name: 'Configured service', transport: 'http', enabledByDefault: true }], tools: [tool], errors: [] }; } });
   try {
     const view = await f.service.create({ definition: draft() });
     f.service.message(view.id, 'Use the configured lookup tool');
@@ -222,10 +222,10 @@ it('rejects late catalogue delivery and wrong authoring Scope without admitting 
     const read = f.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json');
     const rejected = assert.rejects(read);
     await f.service.abort(view.id);
-    resolve({ scope: f.machine, connections: [], tools: [], errors: [] });
+    resolve({ scope: f.machine, scopeIdentity: '', connections: [], tools: [], errors: [] });
     await rejected;
   } finally { await f.cleanup(); }
-  const wrong = fixture({ mcpCatalogue: async () => ({ scope: '/wrong-scope', connections: [], tools: [], errors: [] }) });
+  const wrong = fixture({ mcpCatalogue: async () => ({ scope: '/wrong-scope', scopeIdentity: '', connections: [], tools: [], errors: [] }) });
   try {
     const view = await wrong.service.create({ definition: draft() }); wrong.service.message(view.id, 'Discover');
     await assert.rejects(wrong.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json'), /Scope changed/);
@@ -237,7 +237,7 @@ it('rejects MCP catalogue access before discovery and after delivery if the pinn
     let calls = 0;
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const f = fixture({ mcpCatalogue: async scope => { calls++; await gate; return { scope, connections: [], tools: [], errors: [] }; } });
+    const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => { calls++; await gate; return { scope, scopeIdentity, connections: [], tools: [], errors: [] }; } });
     try {
       const view = await f.service.create({ definition: draft() });
       f.service.message(view.id, 'Discover');
@@ -250,6 +250,22 @@ it('rejects MCP catalogue access before discovery and after delivery if the pinn
       assert.equal(calls, stage === 'before' ? 0 : 1);
     } finally { release(); await f.cleanup(); }
   }
+});
+
+it('rejects a catalogue from a temporary replacement directory even after the original Scope is restored', async () => {
+  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => {
+    renameSync(scope, scope + '-original'); mkdirSync(scope);
+    const stat = statSync(scope, { bigint: true });
+    const replacementIdentity = `${stat.dev}:${stat.ino}`;
+    assert.notEqual(replacementIdentity, scopeIdentity);
+    renameSync(scope, scope + '-replacement'); renameSync(scope + '-original', scope);
+    return { scope, scopeIdentity: replacementIdentity, connections: [], tools: [], errors: [] };
+  } });
+  try {
+    const view = await f.service.create({ definition: draft() });
+    f.service.message(view.id, 'Discover');
+    await assert.rejects(f.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json'), /Scope changed/);
+  } finally { await f.cleanup(); }
 });
 
 it('bounds message storage, turn failures, startup timeout, total builders and late startup disposal', async () => {
@@ -463,7 +479,7 @@ it('mounts authoring discovery behind authentication and Origin checks without a
   const authoring: import('../src/protocol/workflow-mcp-authoring.ts').WorkflowMcpAuthoring = {
     connections: () => { calls++; return { scope: '/authoring', connections: [] }; },
     discover: async () => { calls++; return { tools: [], errors: [] }; },
-    catalogue: async () => ({ scope: '/authoring', connections: [], tools: [], errors: [] }),
+    catalogue: async () => ({ scope: '/authoring', scopeIdentity: '', connections: [], tools: [], errors: [] }),
     hasActiveWork: () => false, shutdown: async () => {},
   };
   const running = await serve({ host: new SessionHost(), token: 'test', assets: {}, workflowMcpAuthoring: authoring });

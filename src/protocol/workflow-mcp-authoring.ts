@@ -7,14 +7,16 @@ export type WorkflowMcpConnections = {
 
 /** Metadata only. No credentials, transport configuration, or callable handles. */
 export type WorkflowMcpCatalogue = WorkflowMcpConnections & {
+  /** Exact directory identity captured before discovery, never derived from a later path lookup. */
+  scopeIdentity: string;
   tools: McpToolSnapshot[];
   errors: Array<{ connectionId: string; connectionName: string; toolName?: string; message: string }>;
 };
 
 export interface WorkflowMcpAuthoring {
-  connections(projectId?: string): WorkflowMcpConnections;
+  connections(projectId?: string): WorkflowMcpConnections | Promise<WorkflowMcpConnections>;
   discover(projectId: string | undefined, connectionId: string, refresh?: boolean): Promise<McpToolDiscovery>;
-  catalogue(projectId?: string): Promise<WorkflowMcpCatalogue>;
+  catalogue(projectId?: string, expectedScope?: Pick<WorkflowMcpCatalogue, 'scope' | 'scopeIdentity'>): Promise<WorkflowMcpCatalogue>;
   hasActiveWork(): boolean;
   shutdown(): Promise<void>;
 }
