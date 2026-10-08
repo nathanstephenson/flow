@@ -386,6 +386,28 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     } catch { send(response, 400, { error: "MCP operation failed. Retry requires an Idle Agent Session without background work." }); }
     return;
   }
+  if (url.pathname === "/api/mcp/auth") {
+    response.setHeader("cache-control", "no-store");
+    if (request.method === "GET") {
+      send(response, 200, { signedIn: options.mcpAuth?.signedIn(options.config?.mcpConnections() ?? []) ?? [] });
+    } else send(response, 405, { error: "Method not allowed" });
+    return;
+  }
+  const mcpLogout = /^\/api\/mcp\/([^/]+)\/logout$/.exec(url.pathname);
+  if (mcpLogout) {
+    response.setHeader("cache-control", "no-store");
+    if (request.method !== "POST") {
+      send(response, 405, { error: "Method not allowed" });
+      return;
+    }
+    try {
+      const connection = options.config?.mcpConnections().find((entry) => entry.id === mcpLogout[1]);
+      if (!connection || !options.mcpAuth) throw new Error("Unknown connection");
+      options.mcpAuth.logout(connection);
+      send(response, 200, {});
+    } catch { send(response, 400, { error: "MCP sign-out failed" }); }
+    return;
+  }
   const mcpLogin = /^\/api\/mcp\/([^/]+)\/login$/.exec(url.pathname);
   if (request.method === "POST" && mcpLogin) {
     const connection = options.config?.mcpConnections().find((entry) => entry.id === mcpLogin[1]);

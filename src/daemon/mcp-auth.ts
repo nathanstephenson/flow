@@ -19,6 +19,7 @@ type Credentials = {
 export class McpAuth {
   private readonly path: string;
   private values: Record<string, Credentials>;
+  private readonly revisions = new Map<string, number>();
   private readonly pending = new Map<string, {
     connectionId: string;
     consumed: boolean;
@@ -50,6 +51,29 @@ export class McpAuth {
       )
       .digest("hex");
   }
+  private persist(): void {
+    const scratch = `${this.path}.tmp`;
+    writeFileSync(scratch, JSON.stringify(this.values), { mode: 0o600 });
+    renameSync(scratch, this.path);
+  }
+  signedIn(connections: McpConnection[]): string[] {
+    return connections
+      .filter((connection) => connection.transport === "http" && connection.oauth && this.values[this.key(connection)]?.tokens?.access_token)
+      .map((connection) => connection.id);
+  }
+  logout(connection: McpConnection): void {
+    if (connection.transport !== "http" || !connection.oauth)
+      throw new Error("OAuth is not enabled");
+    for (const [state, entry] of this.pending) {
+      if (entry.connectionId !== connection.id) continue;
+      clearTimeout(entry.timer);
+      this.pending.delete(state);
+    }
+    const key = this.key(connection);
+    this.revisions.set(key, (this.revisions.get(key) ?? 0) + 1);
+    delete this.values[key];
+    this.persist();
+  }
   credentialValues(): string[] {
     const values: string[] = [];
     const visit = (value: unknown): void => {
@@ -70,12 +94,13 @@ export class McpAuth {
     state?: string,
   ): OAuthClientProvider {
     const key = this.key(connection);
+    const revision = this.revisions.get(key) ?? 0;
     let verifier = "";
     const save = (patch: Credentials) => {
+      if ((this.revisions.get(key) ?? 0) !== revision || (state && !this.pending.has(state)))
+        throw new Error("Sign-in cancelled or expired");
       this.values[key] = { ...this.values[key], ...patch };
-      const scratch = `${this.path}.tmp`;
-      writeFileSync(scratch, JSON.stringify(this.values), { mode: 0o600 });
-      renameSync(scratch, this.path);
+      this.persist();
     };
     return {
       redirectUrl,
@@ -149,6 +174,7 @@ export class McpAuth {
         timer,
       });
       await auth(provider, { serverUrl: connection.url, fetchFn: timedFetch });
+      if (!this.pending.has(state)) throw new Error("Sign-in cancelled or expired");
       if (!authorizationUrl) throw new Error("No authorization URL");
       return authorizationUrl;
     } catch (error) {
@@ -173,7 +199,7 @@ export class McpAuth {
           authorizationCode: code,
           fetchFn: timedFetch,
         });
-        if (status === "AUTHORIZED") result = "signed-in";
+        if (status === "AUTHORIZED" && this.pending.get(state) === entry) result = "signed-in";
       } catch {}
     }
     this.pending.delete(state);

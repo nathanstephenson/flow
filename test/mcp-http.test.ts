@@ -219,6 +219,13 @@ test(
       failedCallback.searchParams.set("code", "bad-code");
       assert.equal(await auth.callback(failedCallback), "https://flow.example/?mcpAuth=failed#/settings/mcp");
       assert.equal((await auth.provider(connection).tokens())?.access_token, accessToken);
+      const logout = await fetch(`${flow.url}/api/mcp/remote/logout`, {
+        method: "POST", headers: { authorization: "Bearer test-token" },
+      });
+      assert.equal(logout.status, 200);
+      assert.equal(await auth.provider(connection).tokens(), undefined);
+      assert.equal(runtime.status()[0]?.state, "connected");
+      assert.equal(runtime.tools().length, 1);
       const abandoned = new URL(await auth.login(connection, "https://flow.example/"));
       auth.dispose();
       await assert.rejects(auth.callback(abandoned), /Invalid or expired/);

@@ -176,6 +176,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
               ...current.config,
               fonts: body.fonts,
               retention: body.retention,
+              mcp: body.mcp,
               // Both are authoritative, including omission after resetting to automatic. Do not
               // infer capability from the saved preference or retain a previous effective mode.
               filesystemIsolation: body.filesystemIsolation,
