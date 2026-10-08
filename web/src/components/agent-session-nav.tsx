@@ -310,10 +310,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           "h-auto rounded-none py-1.5 pr-8",
           "border-l-2 border-l-transparent",
           selected && "border-l-primary",
-          // The keyboard cursor is a ring rather than a fill, so it can sit on a row that is also
-          // open in a pane without the two signals cancelling each other out — and it stays visible
-          // when focus has left the rail entirely.
-          cursored && "outline -outline-offset-1 outline-sidebar-ring",
+          // SidebarMenuButton supplies the keyboard-only focus ring. The retained cursor controls
+          // tab order, not decoration: it must not leave an outline behind in the composer.
         )}
       >
         {/* Spread, so a third kind of background work never has to edit this line. `status` comes

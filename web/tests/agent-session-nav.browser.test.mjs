@@ -81,6 +81,20 @@ describe("Agent Session rail DOM focus", () => {
   });
   afterEach(async () => { await page?.close(); });
 
+  it("retains a tab stop without a persistent cursor outline", async () => {
+    const composer = page.getByRole('textbox', { name: 'Composer' });
+    await composer.focus();
+    for (const cursorId of ['a', 'b']) {
+      await page.evaluate(cursorId => window.renderRail({ cursorId }), cursorId);
+      await focusedIs(composer);
+      assert.equal(await cursor().getAttribute('tabindex'), '0');
+      const classes = await cursor().evaluate(element => [...element.classList]);
+      assert.equal(classes.includes('outline'), false);
+      assert.equal(classes.includes('outline-sidebar-ring'), false);
+      assert.equal(classes.includes('focus-visible:ring-3'), true);
+    }
+  });
+
   it("moves DOM focus with repeated arrow cursor changes", async () => {
     await cursor().focus();
     for (const key of ['ArrowDown', 'ArrowUp', 'ArrowDown']) {
