@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { SessionStatus } from "../../../src/protocol/commands.ts";
 import { cn } from "@/lib/utils.ts";
 
@@ -51,24 +52,22 @@ export function StatusDot({
   );
 }
 
-/**
- * The pane's working hairline.
- *
- * "Is it working?" is the question this UI exists to answer, and a still dot answers it poorly. A
- * 2px hairline under the pane header answers it from across the room, and index.css already collapses
- * every animation to nothing under `prefers-reduced-motion` — at which point the dot's hue and shape
- * are still carrying the state.
- *
- * The segment travels the header, compresses into each wall and turns round, rather than sliding off
- * and reappearing at the left: the old slide spent part of every cycle with the segment part-way
- * across and then gone, which read as a stall each time it restarted.
- */
-export function RunningHairline({ running }: { running: boolean }) {
+export function ComposerActivity({ status }: { status: SessionStatus }) {
+  const maskId = useId();
+  if (status !== "running" && status !== "awaiting") return null;
+
   return (
-    <div className="h-[2px] w-full overflow-hidden" aria-hidden>
-      {running ? (
-        <div className="animate-hairline-bounce h-full w-2/5 bg-primary" />
-      ) : null}
-    </div>
+    <svg className="composer-activity" data-status={status} aria-hidden>
+      <defs>
+        <mask id={maskId} maskUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%">
+          <rect x="-50%" y="-50%" width="200%" height="200%" fill="white" />
+          <rect className="composer-activity-cutout" width="100%" height="100%" fill="black" />
+        </mask>
+      </defs>
+      <g mask={`url(#${maskId})`}>
+        <rect className="composer-activity-shape composer-activity-glow" x="1" y="1" pathLength="100" />
+      </g>
+      <rect className="composer-activity-shape composer-activity-outline" x="1" y="1" pathLength="100" />
+    </svg>
   );
 }
