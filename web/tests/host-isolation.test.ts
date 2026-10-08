@@ -107,6 +107,24 @@ test("a refused PUT keeps the previous mode and status", async () => {
   assert.deepEqual(render().config.filesystemIsolationStatus, unrestricted);
 });
 
+test("PUT updates MCP connections and clears deleted definitions without refresh", async () => {
+  const connection = { id: "local", name: "Local", transport: "stdio" as const, command: "example-mcp", args: [], enabledByDefault: true };
+  fixture.gate = { state: "ready", config: { scope: "/scope", backends: ["pi"], mcp: [] } };
+  fixture.ok = true;
+  fixture.response = { mcp: [connection] };
+  await render().saveSettings({ mcp: [connection] });
+  assert.deepEqual(render().config.mcp, [connection]);
+  assert.equal(render().config.scope, "/scope");
+
+  fixture.response = { mcp: [] };
+  await render().saveSettings({ mcp: [] });
+  assert.deepEqual(render().config.mcp, []);
+
+  fixture.response = {};
+  await render().saveSettings({ mcp: [] });
+  assert.equal(render().config.mcp, undefined);
+});
+
 test("GET refresh replaces runtime status and clears a stale manual override", async () => {
   fixture.ok = true;
   fixture.status = 200;
