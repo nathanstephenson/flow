@@ -14,6 +14,7 @@ import { validateDefinition } from "../../../src/workflows/graph.ts";
 import { toTypeScript } from "../../../src/workflows/schema.ts";
 import { useModelCatalogue } from "../models.ts";
 import { WorkflowGraph } from "./workflow-graph.tsx";
+import { WorkflowBuilder } from "./workflow-builder.tsx";
 import { SchemaEditor } from "./workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { ConditionEditor } from "./workflow-condition.tsx";
@@ -47,6 +48,7 @@ export default function WorkflowsSettings() {
   const { config } = useHost();
   const mutation = useRef(false);
   const [busy, setBusy] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
   const [definition, setDefinition] = useState<WorkflowDefinition>();
   const [selected, select] = useState("");
   const [workspaceView, setWorkspaceView] = useState<"graph" | "inspector">("graph");
@@ -157,6 +159,7 @@ export default function WorkflowsSettings() {
           <Select
             value={definition?.id ?? ""}
             onValueChange={(value) => {
+              setBuilderOpen(false);
               setDefinition(normalizeNoControlEffort(list.data?.workflows.find((d) => d.id === value), catalogue));
               select("");
               setWorkspaceView("graph");
@@ -181,6 +184,7 @@ export default function WorkflowsSettings() {
             size="sm"
             variant="outline"
             onClick={() => {
+              setBuilderOpen(false);
               setDefinition({
                 version: 1,
                 id: crypto.randomUUID(),
@@ -328,6 +332,9 @@ export default function WorkflowsSettings() {
               />
             </details>
             <div className="workflow-toolbar">
+              <Button size="sm" variant="outline" disabled={busy || !definition.backend} onClick={() => setBuilderOpen(value => !value)}>
+                {builderOpen ? "Hide builder agent" : "Build with agent"}
+              </Button>
               {(
                 ["agent", "mcp", "shell", "typescript", "branch", "join"] as const
               ).map((kind) => (
@@ -379,6 +386,17 @@ export default function WorkflowsSettings() {
                 {invalid}
               </p>
             )}
+            {builderOpen && <WorkflowBuilder
+              key={`${definition.id}/${definition.backend}/${definition.projectId ?? ""}`}
+              definition={definition}
+              onApply={next => {
+                setDefinition(normalizeNoControlEffort(next, catalogue));
+                select("");
+                setWorkspaceView("graph");
+                setMessage("Builder draft applied. Save workflow to keep it.");
+              }}
+              onClose={() => setBuilderOpen(false)}
+            />}
             <div className="workflow-workspace" data-mobile-view={mobile ? workspaceView : "desktop"}>
               <WorkflowGraph
                 definition={definition}

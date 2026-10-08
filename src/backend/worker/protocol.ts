@@ -3,7 +3,9 @@ import type { McpTool } from "../mcp.ts";
 import type { Capabilities } from "../../protocol/events.ts";
 
 export type McpToolMetadata = Omit<McpTool, "call">;
-export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "onFailure"> & {
+export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "onFailure" | "signal"> & {
+  /** Only instructions cross IPC; the three callbacks remain in the host. */
+  workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];
   workflowEnabled: boolean;
   /** Trusted launcher configuration, never accepted from model RPC. */

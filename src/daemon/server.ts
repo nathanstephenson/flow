@@ -7,6 +7,7 @@ import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { workflowBuilderRoutes } from './workflow-builder-routes.ts';
 import { hostControlRoute, type HostControl } from './host-control-routes.ts';
 import { readBody, send } from './http.ts';
 import { workflowExecutionRoutes } from './workflow-execution-routes.ts';
@@ -62,6 +63,7 @@ export type ServeOptions = {
   control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
+  workflowBuilders?: import('./workflow-builder.ts').WorkflowBuilderService;
   secrets?: SecretStore;
   token: string;
   port?: number;
@@ -372,6 +374,7 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  if (await workflowBuilderRoutes(request, response, url.pathname, options.workflowBuilders)) return;
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
   if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets, options.workflowExecutions)) return;
 

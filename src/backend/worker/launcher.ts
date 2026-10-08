@@ -9,6 +9,8 @@ export type WorkerLaunchOptions = {
   entry?: string;
   execArgv?: string[];
   env?: NodeJS.ProcessEnv;
+  /** Trusted host-selected working directory; never a worker/model supplied value. */
+  cwd?: string;
   /** Host-owned mount descriptors consumed by the isolation launcher before worker exec. */
   stdioFds?: number[];
   shutdownTimeoutMs?: number;
@@ -28,6 +30,7 @@ export function launchWorker(options: WorkerLaunchOptions = {}) {
   const { command, args } = workerCommand(options);
   const child = spawn(command, args, {
     env: { ...process.env, ...options.env, FLOW_BACKEND_WORKER: "1" },
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     detached: process.platform !== "win32",
     stdio: ["ignore", "ignore", "pipe", "ipc", ...(options.stdioFds ?? [])],
     serialization: "advanced",

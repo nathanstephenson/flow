@@ -31,6 +31,7 @@ export class WorkerBackend implements AgentBackend {
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
   async create(options: BackendCreateOptions): Promise<BackendSession> {
+    options.signal?.throwIfAborted();
     const isolationEnabled = this.options.isolationEnabled?.() ?? true;
     if (!isolationEnabled) {
       const scope = realpathSync(options.scope);
@@ -42,7 +43,7 @@ export class WorkerBackend implements AgentBackend {
       try {
         proxy = new WorkerSession({ ...options, scope },
           claude ? { ...this.options, env: claude.env } : this.options, claude?.cleanup ?? (() => {}));
-        await proxy.open(); return proxy;
+        await proxy.open(options.signal); return proxy;
       } catch (error) {
         if (proxy) await proxy.dispose(); else claude?.cleanup();
         throw error;
@@ -66,11 +67,12 @@ export class WorkerBackend implements AgentBackend {
       env: this.options.env ?? {}, credentials: this.name, ipc: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
+      options.signal?.throwIfAborted();
       if (this.name === "claude") migrateLegacyClaudeState(options.stateDir,
         { ...process.env, ...this.options.env }, isolation.scope, options.resume);
       proxy = new WorkerSession({ ...options, scope: isolation.scope, stateDir: isolation.stateDir },
         { ...this.options, command: isolation.command, args: isolation.args, env: isolation.env, stdioFds: isolation.stdioFds }, isolation.cleanup);
-      await proxy.open();
+      await proxy.open(options.signal);
       return proxy;
     } catch (error) {
       if (proxy) await proxy.dispose(); else isolation.cleanup();
@@ -114,8 +116,15 @@ class WorkerSession implements BackendSession {
       child.send(message, (error) => { if (error) this.fail(error); });
     }, async (method, args, signal) => {
       if (this.disposing || this.failed) throw new Error("Backend Session stopped");
+      // Builders never inherit other host capabilities, even if the worker asks directly.
+      if (this.options.workflowBuilder && !["workflowBuilder.read", "workflowBuilder.list", "workflowBuilder.write"].includes(method)) {
+        throw new Error("Host capability is not enabled for workflow builder");
+      }
       // Never look up host functions by a worker-supplied property name.
       switch (method) {
+        case "workflowBuilder.read": return this.requireWorkflowBuilder(args[0]).read(args[0] as string);
+        case "workflowBuilder.list": return this.requireWorkflowBuilder(args[0]).list(args[0] as string);
+        case "workflowBuilder.write": return this.requireWorkflowBuilder(args[0]).write(args[0] as string);
         case "mcp.call": {
           const tool = this.options.mcp?.tools().find((tool) => tool.name === args[0]);
           if (!tool) throw new Error("Unknown MCP tool");
@@ -138,31 +147,41 @@ class WorkerSession implements BackendSession {
     child.once("exit", (code, signal) => this.fail(new Error(`Backend worker exited (${signal ?? code ?? "unknown"})${this.worker.diagnostics() ? `: ${this.worker.diagnostics()}` : ""}`)));
   }
 
+  private requireWorkflowBuilder(input: unknown) {
+    if (!this.options.workflowBuilder) throw new Error("Workflow builder tools are not enabled");
+    if (typeof input !== "string") throw new Error("Invalid workflow builder input: expected a string");
+    return this.options.workflowBuilder;
+  }
+
   private requireWorkflow() {
     if (!this.options.workflow) throw new Error("Workflow tools are not enabled");
     return this.options.workflow;
   }
 
-  async open(): Promise<void> {
-    const { emit: _emit, onFailure: _onFailure, mcp, workflow, ...options } = this.options;
+  async open(signal?: AbortSignal): Promise<void> {
+    const { emit: _emit, onFailure: _onFailure, signal: _signal, mcp, workflow, workflowBuilder, ...options } = this.options;
     const controller = new AbortController();
+    const cancel = () => controller.abort(signal?.reason);
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener('abort', cancel, { once: true });
     const timer = setTimeout(() => controller.abort(), this.launchOptions.startupTimeoutMs ?? 60_000);
     try {
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
-        workflowEnabled: !!workflow,
-        ...(mcp ? { mcpTools: mcpMetadata(mcp) } : {}),
+        workflowEnabled: !workflowBuilder && !!workflow,
+        ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }
+          : mcp ? { mcpTools: mcpMetadata(mcp) } : {}),
         ...(this.launchOptions.backendModule ? { backendModule: this.launchOptions.backendModule } : {}),
       }], controller.signal);
       this.updateSnapshot(state);
       const methods = new Set(state.methods);
-      if (methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
+      if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
       if (methods.has("setPermissionMode")) this.setPermissionMode = (mode) => this.rpc.call("setPermissionMode", [mode]);
-      if (methods.has("startWorkflowSubagent")) this.startWorkflowSubagent = (options) => this.startWorkflow(options);
-    } finally { clearTimeout(timer); }
+      if (!workflowBuilder && methods.has("startWorkflowSubagent")) this.startWorkflowSubagent = (options) => this.startWorkflow(options);
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
 
   private updateSnapshot(state: SessionSnapshot) {
