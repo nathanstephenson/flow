@@ -449,15 +449,15 @@ function MobileViewSelector({
   onClose: (side: DockSide, tabId: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-1 border-b bg-card px-1.5 py-1" aria-label="Agent Session views">
-      <div role="tablist" aria-label="Agent Session content" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+    <div className="flex min-w-0 items-stretch border-b bg-card" aria-label="Agent Session views">
+      <div role="tablist" aria-label="Agent Session content" className="flex min-w-0 flex-1 items-stretch overflow-x-auto">
         <button
           type="button"
           role="tab"
           aria-selected={selected.kind === "transcript"}
           onClick={onTranscript}
           className={cn(
-            "flex min-h-10 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "cursor-gloss flex min-h-10 min-w-20 flex-1 items-center justify-center gap-1.5 px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             selected.kind === "transcript" ? "bg-muted text-foreground" : "text-muted-foreground",
           )}
         >
@@ -472,7 +472,7 @@ function MobileViewSelector({
               <div
                 key={`${side}:${tab.id}`}
                 className={cn(
-                  "flex min-h-10 shrink-0 items-center rounded-xl pr-0.5 pl-3 text-xs",
+                  "cursor-gloss flex min-h-10 min-w-20 flex-1 items-stretch gap-0.5 px-2.5 text-xs",
                   active ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}
               >
@@ -480,7 +480,7 @@ function MobileViewSelector({
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  className="max-w-36 truncate py-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="min-w-0 flex-1 truncate py-2 text-left font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   onClick={() => onSelect(side, tab.id)}
                   title={`${label} · ${side} Dock`}
                 >
@@ -489,7 +489,7 @@ function MobileViewSelector({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="rounded-xl"
+                  className="self-center rounded-none"
                   onClick={() => onClose(side, tab.id)}
                   title={tab.content?.kind === "shell" ? "Close this tab — ends its Shell" : "Close this tab"}
                   aria-label={`Close ${label}${tab.content?.kind === "shell" ? " — ends its Shell" : ""}`}
@@ -504,7 +504,7 @@ function MobileViewSelector({
       <Button
         variant="ghost"
         size="icon-lg"
-        className="shrink-0 rounded-xl"
+        className="h-auto min-h-10 shrink-0 rounded-none"
         onClick={onNew}
         aria-label="New tab in the right Dock"
         title={shells ? "New tab" : "New Git, Workflows, or Agents tab"}

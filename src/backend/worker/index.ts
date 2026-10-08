@@ -12,7 +12,7 @@ import { seaSdkExecutionAssets } from './assets.ts';
 import { WorkerRpc } from "./rpc.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
-import { prepareClaudeState } from "./claude-state.ts";
+import { migrateLegacyClaudeState, prepareClaudeState } from "./claude-state.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
   backend?: "pi" | "claude";
@@ -37,7 +37,7 @@ export class WorkerBackend implements AgentBackend {
       if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
       // Pi retains its ordinary full environment. Claude needs an owned projects tree in both
       // modes; prepare its private config view on the host so Workflow children inherit it too.
-      const claude = this.name === "claude" ? prepareClaudeState(options.stateDir, { ...process.env, ...this.options.env }, scope) : undefined;
+      const claude = this.name === "claude" ? prepareClaudeState(options.stateDir, { ...process.env, ...this.options.env }, scope, options.resume) : undefined;
       let proxy: WorkerSession | undefined;
       try {
         proxy = new WorkerSession({ ...options, scope },
@@ -66,6 +66,8 @@ export class WorkerBackend implements AgentBackend {
       env: this.options.env ?? {}, credentials: this.name, ipc: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
+      if (this.name === "claude") migrateLegacyClaudeState(options.stateDir,
+        { ...process.env, ...this.options.env }, isolation.scope, options.resume);
       proxy = new WorkerSession({ ...options, scope: isolation.scope, stateDir: isolation.stateDir },
         { ...this.options, command: isolation.command, args: isolation.args, env: isolation.env, stdioFds: isolation.stdioFds }, isolation.cleanup);
       await proxy.open();

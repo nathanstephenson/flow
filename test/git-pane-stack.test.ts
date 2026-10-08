@@ -45,6 +45,16 @@ function find(element: any, type: string, matches: (element: Element) => boolean
   throw new Error(`Missing ${type}`);
 }
 
+// Match the visible label, including layout spans inside a native Button.
+function textContent(value: any): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(textContent).join("");
+  return value && typeof value === "object" ? textContent(value.props?.children) : "";
+}
+function findButton(element: Element, label: string): Element {
+  return find(element, "Button", node => textContent(node.props.children) === label);
+}
+
 it("uses shared mounted Git tabs, defaults to PR, preserves explicit choices and falls back", async () => {
   const pane = component("git-pane", async () => ({ repository: true, files: [] }));
   const props = { sessionId: "session" };
@@ -84,7 +94,7 @@ it("locks shared Git tabs and keeps Publish visible when PR discovery finishes",
   render();
   pane.effects[0]!();
   await Promise.resolve();
-  find(render(), "Button", node => node.props.children === "Publish").props.onClick();
+  findButton(render(), "Publish").props.onClick();
   find(render(), "PullRequestPane").props.onAvailable(true);
   assert.equal(find(render(), "Tabs").props.value, "Diff");
   assert.equal(find(render(), "TabsTrigger", node => node.props.value === "PR").props.disabled, true);
@@ -194,7 +204,7 @@ it("Stack changes immediately replace the PR pane and clear Publish results", as
   pane.render("GitPane", { sessionId: "session" });
   pane.effects[0]!();
   await Promise.resolve();
-  find(pane.render("GitPane", { sessionId: "session" }), "Button", node => node.props.children === "Publish").props.onClick();
+  findButton(pane.render("GitPane", { sessionId: "session" }), "Publish").props.onClick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
   find(pane.render("GitPane", { sessionId: "session" }), "form").props.onSubmit({ preventDefault() {} });
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -218,7 +228,7 @@ for (const branch of ["main", "flow/generated-123"]) it(`reviews and edits a sug
   pane.render("GitPane", props);
   pane.effects[0]!();
   await Promise.resolve();
-  find(pane.render("GitPane", props), "Button", node => node.props.children === "Publish").props.onClick();
+  findButton(pane.render("GitPane", props), "Publish").props.onClick();
   for (let i = 0; i < 5; i++) await Promise.resolve();
   const tree = pane.render("GitPane", props);
   const label = find(tree, "label", node => node.props.children[0] === "Feature branch name");
@@ -241,7 +251,7 @@ it("does not offer branch renaming without a Publish suggestion", async () => {
   pane.render("GitPane", props);
   pane.effects[0]!();
   await Promise.resolve();
-  find(pane.render("GitPane", props), "Button", node => node.props.children === "Publish").props.onClick();
+  findButton(pane.render("GitPane", props), "Publish").props.onClick();
   for (let i = 0; i < 5; i++) await Promise.resolve();
   const tree = pane.render("GitPane", props);
   assert.throws(() => find(tree, "label", node => node.props.children[0] === "Feature branch name"));

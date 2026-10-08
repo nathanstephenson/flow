@@ -112,15 +112,15 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       onValueChange={(value) => {
         if (!busy && review === undefined && (value === "Diff" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
       }}
-      className="min-h-0 min-w-0 space-y-4 overflow-auto p-4 text-sm"
+      className="min-h-0 min-w-0 space-y-4 overflow-auto px-4 pb-4 text-sm"
     >
-      <div className="border-b pb-4">
-        <TabsList aria-label="Git views" className="mx-auto flex w-fit min-w-0 max-w-full">
+      <div className="-mx-4 border-b">
+        <TabsList aria-label="Git views" className="flex w-full min-w-0 gap-0 rounded-none p-0">
           {tabs.map(value => (
             <TabsTrigger
               key={value}
               value={value}
-              className="w-24 min-w-0 shrink px-2"
+              className="h-9 min-w-0 flex-1 shrink rounded-none px-2"
               disabled={busy || review !== undefined}
             >
               {value}
@@ -130,11 +130,11 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       </div>
       {error ? <p role="alert">{error}</p> : null}
       <TabsContent value="Diff" keepMounted className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <strong>{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
-        <Button size="sm" variant="outline" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
-        <Button size="sm" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}>{busy ? "Please wait…" : "Publish"}</Button>
-        <Button size="sm" variant="outline" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>
+      <div className="grid grid-cols-3 gap-0">
+        <strong className="col-span-3 min-w-0 truncate pb-2.5">{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
+        <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
+        <Button size="sm" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}><span className="truncate">{busy ? "Please wait…" : "Publish"}</span></Button>
+        <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>
       </div>
       <p className="text-xs text-muted-foreground">Pull fast-forwards from the upstream branch. Local changes are never stashed.</p>
       <h2 className="font-medium">Changed files</h2>

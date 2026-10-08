@@ -1,5 +1,5 @@
 import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Plus, Settings } from "lucide-react";
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
 import type { LinkState } from "@client/connection.ts";
@@ -10,7 +10,7 @@ import { projectName } from "@client/project-name.ts";
 import { canSettle, railGroup, railGroupLabel, RAIL_GROUPS, working } from "@client/status.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
-import { StatusDot } from "@/components/status-indicator.tsx";
+import { statusIndicatorColor } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
   SidebarContent,
@@ -29,11 +29,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 import { useNow } from "@/lib/use-now.ts";
+import "./agent-session-nav.css";
 
 /**
  * The Agent Session rail, and the app's status board. Exactly one Agent Session is on screen at a
- * time, so the rail carries the state of the rest: a dot, a running state, a queue depth and a
- * relative time per row is enough to *monitor* any number of them without *reading* them.
+ * time, so the rail carries the state of the rest: a status edge, attention and a relative time per
+ * row are enough to *monitor* any number of them without *reading* them.
  *
  * The contents of the rail, not the rail itself: the `SidebarProvider` and `Sidebar` frame live in
  * the app shell, which swaps this out for the Settings nav. So this component supplies a header, a
@@ -100,6 +101,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
   const groups = RAIL_GROUPS.map((group) => ({ group, sessions: grouped.get(group)! }))
     .filter(({ sessions }) => sessions.length > 0);
   const filedAway = groups.find(({ group }) => group === "filed-away");
+  const filedAwayHasEnded = filedAway?.sessions.some(summary => summary.status === "ended") ?? false;
   const cursorGroup = props.sessions.find((session) => session.id === props.cursorId);
   const cursorGroupId = cursorGroup ? railGroup(cursorGroup) : undefined;
   const cursorInFiledAway = cursorGroupId === "filed-away";
@@ -148,7 +150,10 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         }}
       >
         {groups.filter(({ group }) => group !== "filed-away").map(({ group, sessions }) => (
-          <SidebarGroup key={group} className="p-0">
+          <SidebarGroup
+            key={group}
+            className={cn("p-0", group !== "needs-input" && group !== "unread" && "agent-session-band")}
+          >
             <SidebarGroupLabel className="select-none text-muted-foreground">
               {railGroupLabel(group)} · {sessions.length}
             </SidebarGroupLabel>
@@ -168,12 +173,18 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
             <SidebarSeparator className="mx-0" />
             <FiledAwayGroup
               count={filedAway.sessions.length}
+              hasEnded={filedAwayHasEnded}
               // The group cannot be collapsed while the keyboard cursor is inside it: collapsing
               // would strand focus on a row the browser will not focus.
               open={filedAwayOpen || cursorInFiledAway}
               onOpenChange={setFiledAwayOpen}
             >
-              <AgentSessionMenu {...navigationProps} label="Filed away Agent Sessions" sessions={filedAway.sessions} now={now} />
+              <AgentSessionMenu
+                {...navigationProps}
+                label={filedAwayHasEnded ? "Settled and Ended Agent Sessions" : "Settled Agent Sessions"}
+                sessions={filedAway.sessions}
+                now={now}
+              />
             </FiledAwayGroup>
           </>
         ) : null}
@@ -217,7 +228,7 @@ function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
 
 function RailHeader({ onNew }: { onNew: () => void }) {
   return (
-    <SidebarHeader className="border-b border-sidebar-border">
+    <SidebarHeader className="agent-session-rail-header h-10.5 gap-0 border-b border-sidebar-border p-0">
       {/*
        * One full-width labelled button, which is what removing the Project Root path made possible.
        *
@@ -231,9 +242,9 @@ function RailHeader({ onNew }: { onNew: () => void }) {
        * No tooltip either: the button says what it does.
        */}
       <Button
-        variant="outline"
+        variant="ghost"
         size="sm"
-        className="w-full justify-start gap-2"
+        className="h-10.5 min-h-10.5 w-full justify-start gap-2 rounded-none px-3"
         onClick={onNew}
       >
         <Plus aria-hidden className="size-4 shrink-0" />
@@ -284,6 +295,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
    * the Presentation Transcript.
    */
   const tabIndex = cursored ? 0 : -1;
+  const isWorking = working({ ...summary, status });
+  const statusAccent = status === "running" || status === "awaiting" || (status === "idle" && isWorking);
 
   return (
     /* Upstream's own shape, kept: a `relative` item with the action positioned over the row rather
@@ -296,6 +309,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
         // A list with one current row, not a tablist — see this file's header.
         aria-current={selected ? "true" : undefined}
         data-cursor={cursored ? "true" : undefined}
+        data-status-accent={statusAccent ? "true" : undefined}
+        style={{ "--agent-session-status": statusIndicatorColor(status, isWorking) } as CSSProperties}
         tabIndex={tabIndex}
         onClick={() => onFocus(summary.id)}
         className={cn(
@@ -307,16 +322,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           // third; `h-auto` hands the height back to the content, so a row is as tall as it has
           // something to say and a Scope that is not a repository stays two lines. p-2 would clip
           // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
-          "h-auto rounded-none py-1.5 pr-8",
-          "border-l-2 border-l-transparent",
-          selected && "border-l-primary",
-          // SidebarMenuButton supplies the keyboard-only focus ring. The retained cursor controls
-          // tab order, not decoration: it must not leave an outline behind in the composer.
+          // The keyboard-only focus outline lives inside the face, clear of the status edge.
+          // The retained cursor controls tab order, not decoration outside the rail.
+          "agent-session-row cursor-gloss h-auto rounded-none py-1.5 pr-8",
         )}
       >
-        {/* Spread, so a third kind of background work never has to edit this line. `status` comes
-            last deliberately: the live one beats the polled one the summary carries. */}
-        <StatusDot status={status} working={working({ ...summary, status })} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className={cn("min-w-0 flex-1 truncate text-sm", summary.attention && "font-semibold")}>
@@ -337,9 +347,8 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
             </span>
           ) : null}
           {/*
-           * Backend at one end, age at the other, and no status word between them: the dot's hue and
-           * shape say the state now, and a row that spelled it out as well was spending a third of
-           * its second line agreeing with the dot.
+           * Backend at one end, age at the other, and no status word between them: the edge hue
+           * carries visual activity while the accessible status below retains its full meaning.
            *
            * The Backend is a mark rather than its name, and the width that buys goes to the Project
            * — which is the thing a reader scanning a rail of Agent Sessions across several
@@ -347,12 +356,11 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
            * With the branch on the line above, the two together are the whole of where an Agent
            * Session is working.
            *
-           * The dot and the Backend glyph are both `aria-hidden`, so the words they replaced —
-           * including that Subagents are working — survive here for anyone not looking at colour
-           * or shape.
+           * The edge is decorative and the Backend glyph is `aria-hidden`, so their words —
+           * including that Subagents are working — survive here for anyone not looking at colour.
            */}
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="sr-only">{activityStatusText({ ...summary, status })}</span>
+            <span className="sr-only agent-session-status-text">{activityStatusText({ ...summary, status })}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
             <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
@@ -384,6 +392,7 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           <TooltipTrigger
             render={
               <SidebarMenuAction
+                className="agent-session-settle cursor-gloss-transparent"
                 showOnHover
                 // No `top-*` here: upstream ships `peer-data-[size=lg]/menu-button:top-2.5` for
                 // exactly this row height, and a plain utility loses to it on specificity anyway.
@@ -437,8 +446,8 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
 }
 
 /**
- * Settled Agent Sessions are de-emphasised, not hidden (ADR 0006): they are still readable, still
- * Revivable, and still on disk until their retention window closes.
+ * Filed-away Agent Sessions remain readable (ADR 0006). Settled ones are Revivable;
+ * Ended ones are not, so name both Lifecycles when this disclosure contains Ended rows.
  *
  * Still a native `<details>` — keyboard-accessible for free and expanded by the browser for
  * find-in-page — now wearing `SidebarGroupLabel` on its `<summary>`, which is upstream shadcn's own
@@ -448,11 +457,13 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
  */
 function FiledAwayGroup({
   count,
+  hasEnded,
   open,
   onOpenChange,
   children,
 }: {
   count: number;
+  hasEnded: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
@@ -464,10 +475,9 @@ function FiledAwayGroup({
           render={<summary className="cursor-default gap-1 text-muted-foreground select-none" />}
         >
           <ChevronDown aria-hidden className={cn("transition-transform", !open && "-rotate-90")} />
-          Filed away · {count}
+          {hasEnded ? "Settled / Ended" : "Settled"} · {count}
         </SidebarGroupLabel>
-        {/* Reduced contrast here; full contrast once one of them is focused in a pane. */}
-        <SidebarGroupContent className="opacity-60">{children}</SidebarGroupContent>
+        <SidebarGroupContent>{children}</SidebarGroupContent>
       </details>
     </SidebarGroup>
   );
