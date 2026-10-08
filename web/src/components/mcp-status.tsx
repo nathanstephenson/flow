@@ -3,64 +3,72 @@ import type { McpStatus } from "../../../src/protocol/mcp.ts";
 import { useHost } from "@/host.tsx";
 import { workflowApi, useWorkflowResource } from "./workflow-api.ts";
 import { signInMcp } from "./mcp-actions.ts";
-import { Button } from "./ui/button.tsx";
+import {
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "./ui/dropdown-menu.tsx";
 import { toast } from "./ui/toaster.tsx";
 
-export function McpConnectionStatus({ sessionId }: { sessionId: string }) {
-  const { config } = useHost();
+export function useMcpConnectionStatus(sessionId: string) {
   const { data } = useWorkflowResource<McpStatus[]>(
     `/api/sessions/${sessionId}/mcp`,
   );
   const [busy, setBusy] = useState(false);
+  const retry = (id: string) => {
+    setBusy(true);
+    void workflowApi(`/api/sessions/${sessionId}/mcp/${id}/retry`, "POST")
+      .catch((error) => toast.error(String(error)))
+      .finally(() => setBusy(false));
+  };
+  return { data, busy, retry };
+}
+
+export function McpConnectionMenu({ data, busy, retry }: ReturnType<typeof useMcpConnectionStatus>) {
+  const { config } = useHost();
   if (!data?.length) return null;
   return (
-    <details className="border-b px-4 py-2 text-xs text-muted-foreground">
-      <summary>
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
         MCP · {data.filter((entry) => entry.state === "connected").length}/
         {data.length} connected
-      </summary>
-      {data.map((entry) => {
-        const connection = config.mcp?.find(
-          (connection) => connection.id === entry.id,
-        );
-        return (
-          <div key={entry.id} className="flex items-center gap-2 py-1">
-            <span className="flex-1">
-              {connection?.name ?? entry.id}: {entry.state}
-              {entry.state === "connected" ? ` (${entry.tools} tools)` : ""}
-            </span>
-            {entry.state === "failed" && (
-              <>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        {data.map((entry) => {
+          const connection = config.mcp?.find(
+            (connection) => connection.id === entry.id,
+          );
+          const label = `${connection?.name ?? entry.id}: ${entry.state}${
+            entry.state === "connected" ? ` (${entry.tools} tools)` : ""
+          }`;
+          if (entry.state !== "failed") {
+            return (
+              <DropdownMenuItem key={entry.id} disabled>
+                {label}
+              </DropdownMenuItem>
+            );
+          }
+          return (
+            <DropdownMenuSub key={entry.id}>
+              <DropdownMenuSubTrigger>{label}</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
                 {connection?.transport === "http" && connection.oauth && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void signInMcp(entry.id)}
-                  >
+                  <DropdownMenuItem onClick={() => void signInMcp(entry.id)}>
                     Sign in
-                  </Button>
+                  </DropdownMenuItem>
                 )}
-                <Button
-                  size="sm"
-                  variant="outline"
+                <DropdownMenuItem
                   disabled={busy}
-                  onClick={() => {
-                    setBusy(true);
-                    void workflowApi(
-                      `/api/sessions/${sessionId}/mcp/${entry.id}/retry`,
-                      "POST",
-                    )
-                      .catch((error) => toast.error(String(error)))
-                      .finally(() => setBusy(false));
-                  }}
+                  onClick={() => retry(entry.id)}
                 >
                   Retry
-                </Button>
-              </>
-            )}
-          </div>
-        );
-      })}
-    </details>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

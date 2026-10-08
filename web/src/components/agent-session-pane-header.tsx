@@ -1,7 +1,6 @@
 import { MoreHorizontal, PanelBottom, PanelRight } from "lucide-react";
 import { useState } from "react";
 
-import { projectName } from "@client/project-name.ts";
 import { canRevive, occupied } from "@client/status.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
@@ -18,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
+import { McpConnectionMenu, useMcpConnectionStatus } from "@/components/mcp-status.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
   DropdownMenu,
@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils.ts";
  *
  * The line it draws with the Composer: anything describing the *next turn* belongs down there, which
  * is why the model, the Effort level, the Conversation Context meter and abort all left. What stays
- * is identity and lifecycle — one line of `<Project> | <title>`, the Docks and the overflow.
+ * is identity and lifecycle — the title, the Docks and the overflow.
  *
  * The backend is not among them: the tab already names it, and a second copy costs a row of the
  * transcript's height to repeat something already on screen. Naming it was what forced this header
@@ -43,17 +43,14 @@ import { cn } from "@/lib/utils.ts";
  *
  * The branch is deliberately *not* among them, though it was here first. It reads like identity, but
  * what the control is for is the edits the next message will cause — so it belongs with the rest of
- * "what this turn will do", and it lives on the composer's Scope Strip. What stayed behind is the
- * Project name, which for a Worktree Scope has to be read one path segment further up; see
- * `projectName`.
+ * "what this turn will do", and it lives on the composer's Scope Strip.
  *
  * Status is not among them: the rail already draws it for every Agent Session, including this one,
  * and a second copy over the transcript says nothing the reader cannot already see. The Agent Session
  * id is not either — it identifies nothing to a human, and the overflow menu copies it on request.
  *
  * Stock shadcn sans throughout and smaller than the transcript, so it stays legible without
- * competing with the document beside it. Mono survives only where character alignment is functional:
- * the Project name, which is a filesystem name.
+ * competing with the document beside it.
  *
  * Affordances are hidden rather than disabled when they cannot apply. A permanently greyed control
  * teaches nothing.
@@ -70,8 +67,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
   return (
     <div className="bg-card text-card-foreground">
       <div className="flex min-h-9 items-center gap-2 border-b px-3 py-2 max-lg:min-h-12 max-lg:pl-12">
-        <span className="shrink-0 font-mono text-xs">{projectName(chrome.scope ?? "", chrome.worktree)}</span>
-        <span className="-my-2 w-px shrink-0 self-stretch bg-border" aria-hidden />
         <span className="truncate text-sm font-medium">{title}</span>
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -139,6 +134,7 @@ function DockToggle({ side, docks }: { side: DockSide; docks: Docks }) {
  */
 function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Chrome }) {
   const run = useCommand();
+  const mcp = useMcpConnectionStatus(sessionId);
   const providers = useHost().config.providers;
   const summaryModel = chrome.backend === undefined ? undefined
     : providers?.summaries?.[chrome.backend] ?? (providers?.summary?.backend === chrome.backend ? providers.summary : undefined);
@@ -204,6 +200,7 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
               Name this Agent Session again
             </DropdownMenuItem>
           ) : null}
+          <McpConnectionMenu {...mcp} />
           <DropdownMenuItem onClick={() => void navigator.clipboard?.writeText(sessionId)}>
             Copy Agent Session id
           </DropdownMenuItem>
