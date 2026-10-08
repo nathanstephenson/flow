@@ -79,24 +79,12 @@ export function StatusDot({
   );
 }
 
-/**
- * The only animation in the app.
- *
- * "Is it working?" is the question this UI exists to answer, and a still dot answers it poorly. A
- * 2px hairline under the pane header answers it from across the room, and index.css already collapses
- * every animation to nothing under `prefers-reduced-motion` — at which point the dot's hue and shape
- * are still carrying the state.
- *
- * The segment travels the header, compresses into each wall and turns round, rather than sliding off
- * and reappearing at the left: the old slide spent part of every cycle with the segment part-way
- * across and then gone, which read as a stall each time it restarted.
- */
-export function RunningHairline({ running }: { running: boolean }) {
+export function ComposerActivity({ status }: { status: SessionStatus }) {
+  if (status !== "running" && status !== "awaiting") return null;
+
   return (
-    <div className="h-[2px] w-full overflow-hidden" aria-hidden>
-      {running ? (
-        <div className="animate-hairline-bounce h-full w-2/5 bg-primary" />
-      ) : null}
-    </div>
+    <svg className="composer-activity" data-status={status} aria-hidden>
+      <rect x="1" y="1" pathLength="100" />
+    </svg>
   );
 }

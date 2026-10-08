@@ -31,6 +31,7 @@ import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/pre
 import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
 import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
+import { ComposerActivity } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -690,10 +691,11 @@ export function Composer({
       <div
         ref={panel}
         className={cn(
-          "pane-measure rounded-xl border shadow-lg",
+          "relative pane-measure rounded-xl border shadow-lg",
           floating ? "pointer-events-auto bg-card/85 backdrop-blur-sm" : "bg-card",
         )}
       >
+        <ComposerActivity status={chrome.status} />
         {/*
           * The input and its one action, side by side.
           *

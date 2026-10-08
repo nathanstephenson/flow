@@ -8,7 +8,6 @@ import type { Docks } from "@/docks.ts";
 import { useHost } from "@/host.tsx";
 import type { DockSide } from "@/presentation/docks.ts";
 import type { Chrome } from "@/store/contract.ts";
-import { RunningHairline } from "@/components/status-indicator.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -86,9 +85,6 @@ export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: Agen
           <PaneOverflowMenu sessionId={sessionId} chrome={chrome} />
         </div>
       </div>
-
-      {/* Directly under the header, spanning it: the one animation in the app. */}
-      <RunningHairline running={chrome.status === "running"} />
     </div>
   );
 }
