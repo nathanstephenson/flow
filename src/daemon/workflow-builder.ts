@@ -201,6 +201,7 @@ export class WorkflowBuilderService {
     this.check(entry, true);
     const generation = ++entry.generation;
     entry.meterGeneration = generation;
+    delete entry.view.contextUsage;
     const instructions = await workflowBuilderInstructions(entry.view.definition, entry.models);
     this.check(entry, true);
     const live = () => { this.check(entry); if (entry.generation !== generation || entry.view.status !== 'running') throw new Error('Workflow builder turn is not active'); };
@@ -265,8 +266,9 @@ export class WorkflowBuilderService {
         },
       },
       emit: event => {
-        if (event.type === 'context_usage' && event.spend && entry.meterGeneration === generation) {
-          entry.view.spend = structuredClone(event.spend);
+        if (event.type === 'context_usage') {
+          if (event.spend && entry.meterGeneration === generation) entry.view.spend = structuredClone(event.spend);
+          if (!entry.closed && entry.generation === generation) this.event(entry, event);
         } else if (!entry.closed && entry.generation === generation) this.event(entry, event);
       },
       onFailure: () => { if (!entry.closed && entry.generation === generation) this.fail(entry); },
@@ -330,8 +332,8 @@ export class WorkflowBuilderService {
   private event(entry: Entry, event: BackendEvent): void {
     // Claude may publish the cumulative meter just after turn_ended. It still belongs to this
     // Backend Session; generation fencing in emit rejects events from a disposed predecessor.
-    if (event.type === 'context_usage' && event.spend) {
-      entry.view.spend = structuredClone(event.spend);
+    if (event.type === 'context_usage') {
+      entry.view.contextUsage = { used: event.used, window: event.window };
       return;
     }
     if (entry.view.status !== 'running') return;
@@ -340,6 +342,7 @@ export class WorkflowBuilderService {
       let message = entry.view.messages.find(message => message.id === id && message.role === 'assistant');
       if (!message) { message = { id, role: 'assistant', text: '' }; entry.view.messages.push(message); }
       message.text = event.text.slice(0, MAX_TEXT);
+      message.final = event.final;
       this.trim(entry);
     } else if (event.type === 'turn_ended') {
       if (event.reason === 'error') this.fail(entry);

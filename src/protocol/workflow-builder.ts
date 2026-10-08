@@ -13,8 +13,9 @@ export interface WorkflowBuilderView {
   status: 'idle' | 'running' | 'error';
   /** Capability revocation is immediate, but the retiring Backend Session is still being disposed. */
   stopping?: boolean;
-  messages: Array<{ id: string; role: 'user' | 'assistant'; text: string }>;
+  messages: Array<{ id: string; role: 'user' | 'assistant'; text: string; final?: boolean }>;
   error?: string;
   spend?: Spend;
+  contextUsage?: { used: number; window: number };
 }
 export interface WorkflowBuilderMessage { text: string }

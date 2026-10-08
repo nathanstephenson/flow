@@ -1,6 +1,39 @@
 .workflow-editor {
   display: grid;
+  min-width: 0;
   gap: 12px;
+}
+.workflow-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  height: clamp(600px, calc(100dvh - 220px), 1000px);
+  min-width: 0;
+  min-height: 0;
+}
+.workflow-layout[data-builder-open="true"] {
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 34%, 480px);
+}
+.workflow-editor-pane {
+  container: workflow-editor / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.workflow-editor-pane > * {
+  flex-shrink: 0;
+}
+.workflow-builder-sidebar {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.workflow-layout > [hidden] {
+  display: none;
 }
 .workflow-header,
 .workflow-toolbar {
@@ -16,6 +49,7 @@
 }
 .workflow-workspace {
   display: grid;
+  min-width: 0;
   grid-template-columns: minmax(0, 1fr) minmax(440px, 540px);
   gap: 12px;
   height: clamp(440px, calc(100dvh - 300px), 820px);
@@ -153,7 +187,27 @@
 .workflow-step[data-status="cancelled"] {
   opacity: 0.65;
 }
+@container workflow-editor (max-width: 900px) {
+  .workflow-metadata {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workflow-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(240px, 1fr) minmax(280px, 1fr);
+    height: 650px;
+  }
+}
+@container workflow-editor (max-width: 440px) {
+  .workflow-metadata {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 @media (max-width: 1023px) {
+  .workflow-layout,
+  .workflow-layout[data-builder-open="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    height: max(480px, calc(100dvh - 240px));
+  }
   .workflow-metadata {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

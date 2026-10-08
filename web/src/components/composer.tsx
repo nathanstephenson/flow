@@ -30,7 +30,7 @@ import {
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
 import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
 import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
-import { TurnStrip } from "@/components/turn-strip.tsx";
+import { TurnStrip, type TurnStripControls } from "@/components/turn-strip.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -72,6 +72,12 @@ export function Composer({
   drafts,
   authorisingSummary,
   onShowSubagents,
+  controls,
+  inputLabel,
+  attachmentsEnabled = true,
+  skillsEnabled = true,
+  abortDisabled = false,
+  abortLabel,
 }: {
   /**
    * What this composer's Draft is filed under, and what its listbox ids are built from — an Agent
@@ -130,6 +136,15 @@ export function Composer({
   /** Open the Subagents, from the strip. A callback rather than the Docks handle, so the Composer
    * stays ignorant that Docks exist — it knows there is somewhere to go, not where. */
   onShowSubagents: () => void;
+  /** Hide readings which do not describe this conversation; defaults preserve Agent Session chrome. */
+  controls?: TurnStripControls;
+  inputLabel?: string;
+  /** Restricted authoring conversations support text only, without Skills or Commands. */
+  attachmentsEnabled?: boolean;
+  skillsEnabled?: boolean;
+  /** Cleanup may continue after capabilities were revoked. Keep Abort visible but inert then. */
+  abortDisabled?: boolean;
+  abortLabel?: string;
 }) {
   /*
    * Seeded from the stash and written back on unmount, which is what makes a Draft survive a glance
@@ -216,7 +231,7 @@ export function Composer({
    * The window is the moment between opening a session and its first `model_changed`, and a replayed
    * transcript closes it before anyone can paste into it.
    */
-  const acceptsImages = chrome.model?.acceptsImages === true;
+  const acceptsImages = attachmentsEnabled && chrome.model?.acceptsImages === true;
 
   /*
    * The panel floats over the transcript, so the transcript has to know how tall it is or the last
@@ -290,6 +305,10 @@ export function Composer({
       // A relayed Enquiry owns only temporary answer text. It must never acquire files that would
       // either be silently discarded or race into the ordinary Draft when the relay closes.
       if (relayedFor.current !== undefined) return true;
+      if (!attachmentsEnabled) {
+        toast.info("Attachments unavailable", "This conversation accepts text only");
+        return true;
+      }
       if (!acceptsImages) {
         toast.info("This model cannot be shown an image", chrome.model?.label ?? chrome.model?.id);
         return true;
@@ -304,12 +323,12 @@ export function Composer({
       });
       return true;
     },
-    [acceptsImages, attachments.length, chrome.model, forget],
+    [acceptsImages, attachments.length, attachmentsEnabled, chrome.model, forget],
   );
 
   const catalogue = useMemo(
-    () => triggerables(chrome.capabilities?.compaction, skills ?? []),
-    [chrome.capabilities?.compaction, skills],
+    () => skillsEnabled ? triggerables(chrome.capabilities?.compaction, skills ?? []) : [],
+    [chrome.capabilities?.compaction, skills, skillsEnabled],
   );
   const items = useMemo(
     () => (query === undefined ? [] : matching(catalogue, query)),
@@ -322,7 +341,7 @@ export function Composer({
    * did nothing *ever* if it came back empty. A menu that is invisible when it cannot answer is
    * indistinguishable from one that was never built, which is precisely the report this fixed.
    */
-  const menuOpen = query !== undefined;
+  const menuOpen = skillsEnabled && query !== undefined;
 
   /*
    * Fetched when the menu first opens, not on mount and not on every keystroke.
@@ -333,7 +352,7 @@ export function Composer({
    * whole point of asking the backend rather than caching is that someone may have just written one.
    */
   useEffect(() => {
-    if (query === undefined) return;
+    if (query === undefined || !skillsEnabled) return;
     let live = true;
     void actions.listSkills().then((found) => {
       // An empty answer is still an answer: a host that cannot answer at all says so with an empty
@@ -345,7 +364,7 @@ export function Composer({
       live = false;
     };
     // Deliberately not `query`: this fires when the menu opens, not as it filters.
-  }, [query === undefined, actions]);
+  }, [query === undefined, actions, skillsEnabled]);
 
   /*
    * Start again whenever the Enquiry changes identity, including when it goes away. Done in render
@@ -536,7 +555,7 @@ export function Composer({
      * Permission Prompt is holding the turn, and a Command occupies the Agent Session: running one
      * against a backend that is already blocked is asking the host to hold two things at once.
      */
-    if (blocked) return;
+    if (blocked || locked) return;
 
     const message = (override ?? text).trim();
     // An image with no words is a message — "look at this" is what the paste already said.
@@ -576,7 +595,7 @@ export function Composer({
     } else {
       forget(sent);
     }
-  }, [actions, attachments, blocked, catalogue, ended, forget, sending, text]);
+  }, [actions, attachments, blocked, catalogue, ended, locked, forget, sending, text]);
 
   /**
    * Put the highlighted name in the box.
@@ -616,7 +635,7 @@ export function Composer({
        * `list_skills` effect — and a composer locked out of sending a Skill has no business listing
        * a Skill directory over HTTP to offer one.
        */
-      setQuery(blocked ? undefined : menuQuery(next, caret));
+      setQuery(blocked || !skillsEnabled ? undefined : menuQuery(next, caret));
       setHighlighted(0);
       // The cursor follows the typing onto the Other row, so an answer someone typed is not thrown
       // away by an Enter aimed at it. See `cursorAfterTyping` for the trap this closes.
@@ -629,7 +648,7 @@ export function Composer({
         );
       }
     },
-    [blocked, question, text],
+    [blocked, question, skillsEnabled, text],
   );
 
   /*
@@ -658,6 +677,7 @@ export function Composer({
   }, [choose, highlighted, items, menuOpen]);
 
   const abort = useCallback((): void => {
+    if (abortDisabled) return;
     const dropped = chrome.queueDepth;
     void actions.abort?.().then(() => {
       // Aborting means stop, not stop-then-continue, so the queue goes with it. Saying exactly what
@@ -665,8 +685,8 @@ export function Composer({
       toast.info(
         dropped > 0 ? `aborted · ${dropped} queued message${dropped === 1 ? "" : "s"} discarded` : "aborted",
       );
-    });
-  }, [actions, chrome.queueDepth]);
+    }, () => toast.info("Could not abort the current turn"));
+  }, [abortDisabled, actions, chrome.queueDepth]);
 
   return (
     /*
@@ -846,6 +866,7 @@ export function Composer({
             */}
           <ComposerInput
             value={text}
+            ariaLabel={inputLabel}
             placeholder={
               unavailable ??
               placeholder ??
@@ -873,19 +894,19 @@ export function Composer({
 
           <div className="flex shrink-0 items-center pr-2">
             {ended ? null : running ? (
-              <AbortButton onAbort={abort} />
+              <AbortButton onAbort={abort} disabled={abortDisabled} label={abortLabel} />
             ) : (
               <SendButton
                 chrome={chrome}
                 sending={sending}
-                disabled={blocked || (text.trim() === "" && attachments.length === 0)}
+                disabled={locked || blocked || (text.trim() === "" && attachments.length === 0)}
                 onSend={send}
               />
             )}
           </div>
         </div>
 
-        <TurnStrip chrome={chrome} actions={actions} />
+        <TurnStrip chrome={chrome} actions={actions} {...controls} />
       </div>
     </div>
   );
@@ -941,7 +962,7 @@ function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void 
  * long as the turn lasts. `--destructive` is one of the three things this palette spends colour on,
  * and discarding a queue someone typed is worth it.
  */
-function AbortButton({ onAbort }: { onAbort: () => void }) {
+function AbortButton({ onAbort, disabled = false, label }: { onAbort: () => void; disabled?: boolean; label?: string | undefined }) {
   return (
     <Tooltip>
       <TooltipTrigger
@@ -949,7 +970,8 @@ function AbortButton({ onAbort }: { onAbort: () => void }) {
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Abort the current turn"
+            aria-label={label ?? "Abort the current turn"}
+            disabled={disabled}
             className="text-destructive hover:text-destructive"
             onClick={onAbort}
           />
@@ -957,7 +979,7 @@ function AbortButton({ onAbort }: { onAbort: () => void }) {
       >
         <Square aria-hidden />
       </TooltipTrigger>
-      <TooltipContent>Abort the current turn — this also discards the Steering Queue</TooltipContent>
+      <TooltipContent>{label ?? "Abort the current turn — this also discards the Steering Queue"}</TooltipContent>
     </Tooltip>
   );
 }

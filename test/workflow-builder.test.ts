@@ -154,12 +154,15 @@ it('returns an immediate running turn, snapshots assistant messages/Spend, rejec
     assert.equal(f.service.message(view.id, 'Hello').status, 'running');
     assert.ok(f.service.hasActiveWork());
     first.options.emit({ type: 'message', id: 'answer', text: 'partial', final: false });
+    assert.equal(f.service.view(view.id).messages[1]!.final, false);
     first.options.emit({ type: 'message', id: 'answer', text: 'complete', final: true });
     first.options.emit({ type: 'context_usage', used: 1, window: 100, spend: { tokens: 3, cached: 0, costUSD: 0.01, models: [] } });
     first.options.emit({ type: 'turn_ended', turnId: 't', reason: 'complete' });
-    first.options.emit({ type: 'context_usage', used: 1, window: 100, spend: { tokens: 5, cached: 0, costUSD: 0.02, models: [] } });
+    first.options.emit({ type: 'context_usage', used: 2, window: 100, spend: { tokens: 5, cached: 0, costUSD: 0.02, models: [] } });
     assert.equal(f.service.view(view.id).messages.length, 2);
     assert.equal(f.service.view(view.id).messages[1]!.text, 'complete');
+    assert.equal(f.service.view(view.id).messages[1]!.final, true);
+    assert.deepEqual(f.service.view(view.id).contextUsage, { used: 2, window: 100 });
     assert.equal(f.service.view(view.id).spend!.tokens, 5);
     assert.ok(!f.service.hasActiveWork());
     f.service.message(view.id, 'Again');
@@ -308,12 +311,13 @@ it('records retiring final Spend while rejecting cancelled tools/messages and la
     f.service.message(view.id, 'Build');
     first.options.emit({ type: 'context_usage', used: 1, window: 100, spend: { tokens: 10, cached: 0, costUSD: 0.1, models: [] } });
     first.session.abort = async () => {
-      first.options.emit({ type: 'context_usage', used: 1, window: 100, spend: { tokens: 20, cached: 0, costUSD: 0.2, models: [] } });
+      first.options.emit({ type: 'context_usage', used: 50, window: 200, spend: { tokens: 20, cached: 0, costUSD: 0.2, models: [] } });
       first.options.emit({ type: 'message', id: 'cancelled', text: 'Do not render', final: true });
       await assert.rejects(first.options.workflowBuilder!.read('workflow.json'));
     };
     await f.service.abort(view.id);
     assert.equal(f.service.view(view.id).spend!.costUSD, 0.2);
+    assert.deepEqual(f.service.view(view.id).contextUsage, { used: 1, window: 100 });
     assert.ok(!f.service.view(view.id).messages.some(message => message.id === 'cancelled'));
     first.options.emit({ type: 'context_usage', used: 1, window: 100, spend: { tokens: 99, cached: 0, costUSD: 0.99, models: [] } });
     assert.equal(f.service.view(view.id).spend!.costUSD, 0.2);

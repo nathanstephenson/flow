@@ -39,6 +39,11 @@ agent write still requires a complete valid graph. Built-in filesystem tools, sh
 Subagents, external MCP tools, resource extensions, and hooks are not available. Both Claude and Pi
 use this restricted tool set; the worker bridge independently denies unrelated host capabilities.
 Questions are ordinary assistant text, not Enquiries requiring a second composer implementation.
+The sidebar reuses the existing transcript view and Composer through a bounded, ephemeral snapshot
+adapter, not an Agent Session registry entry or durable Presentation Transcript. It shows Model,
+Effort and available Context usage, but no Branch or Permissions indicators, Attachments, Skills,
+or Commands. Model and Effort are selected before starting, then remain fixed. Narrow editors
+stack graph and inspector; mobile Editor/Builder switching keeps the conversation and Draft mounted.
 
 Linux reference reads walk descriptor-relative `/proc/self/fd` paths. macOS 11+ uses a feature-probed
 `O_NOFOLLOW_ANY` guard and a disposable, builtin-only reader process: its cwd is checked against the
