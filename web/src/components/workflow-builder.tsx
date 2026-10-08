@@ -155,10 +155,10 @@ export function WorkflowBuilder({ definition, onApply, onClose }: {
         <h3 className="text-sm font-semibold">Builder agent</h3>
         <Button size="sm" variant="ghost" onClick={onClose}>Close builder</Button>
       </div>
-      <p className="text-xs text-muted-foreground">Edits only its private workflow.json. Apply here, then Save workflow in the editor.</p>
+      <p className="text-xs text-muted-foreground">Edits only its private workflow.json, with real MCP tool schemas available. Apply here, then Save workflow in the editor.</p>
       <details className="text-xs text-muted-foreground">
         <summary className="cursor-pointer">Read Scope and safety</summary>
-        <p className="mt-1 break-all">{view?.scope ?? definition.projectId ?? "The Project Root (or Flow’s starting directory)"}. No shell, external MCP tools, Subagents, Skills, or Attachments. Closing discards this conversation. Model and Effort are fixed after starting.</p>
+        <p className="mt-1 break-all">{view?.scope ?? definition.projectId ?? "The Project Root (or Flow’s starting directory)"}. No shell, external MCP calls, Subagents, Skills, or Attachments. MCP discovery is host-owned; configured stdio servers may start in the authoring Scope under the current isolation policy. Closing discards this conversation. Model and Effort are fixed after starting.</p>
       </details>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" disabled={!hasDraft || running || busy || changed} onClick={() => {

@@ -3,9 +3,9 @@
 ## Decision
 
 A Workflow Step may name a configured MCP connection and the server's **original** tool name.
-Agent-facing generated aliases are not durable tool identities. Discovery is scoped to an explicitly
-selected Agent Session; execution and recovery use only connections enabled for their owning Agent
-Session. Selection stores hashes of transport configuration and initialized server identity, plus
+Agent-facing generated aliases are not durable tool identities. Authoring discovery uses the source
+Project or machine-wide authoring Scope without an Agent Session (ADR 0031); execution and recovery
+use only connections enabled for their owning Agent Session. Selection stores hashes of transport configuration and initialized server identity, plus
 unaltered discovered input/output JSON Schemas. The Workflow Definition copy pins these values for
 an execution. Authoring discovery validates tools independently: compatible tools remain selectable,
 while incompatible tools carry their name, input/output schema context and the underlying validator

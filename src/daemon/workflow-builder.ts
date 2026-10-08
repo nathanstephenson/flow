@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { BackendSession, BackendCreateOptions } from '../backend/types.ts';
 import type { BackendEvent, EffortLevel, ModelInfo } from '../protocol/events.ts';
-import type { WorkflowDefinition } from '../protocol/workflows.ts';
+import { isDeepStrictEqual } from 'node:util';
+import type { WorkflowDefinition, McpToolSnapshot } from '../protocol/workflows.ts';
+import type { WorkflowMcpCatalogue } from '../protocol/workflow-mcp-authoring.ts';
 import type { CreateWorkflowBuilder, WorkflowBuilderView } from '../protocol/workflow-builder.ts';
 import { validateDefinition, workflowDefinitionValidator } from '../workflows/graph.ts';
 import type { ConfigStore } from './config-store.ts';
 import type { SessionHost } from './host.ts';
-import { includedProjects } from './projects.ts';
+import { workflowAuthoringScope } from './workflow-authoring-scope.ts';
 import { WorkflowBuilderFiles } from './workflow-builder-files.ts';
 import { workflowBuilderInstructions } from './workflow-builder-guidance.ts';
 
@@ -30,6 +32,8 @@ export interface WorkflowBuilderServiceOptions {
   stateRoot: string;
   /** Additional credential/snapshot validation, e.g. executions.validateDefinitionCredentials. */
   validateDefinition?: (definition: WorkflowDefinition) => void;
+  /** Host-owned metadata only; never callable MCP tools or transport credentials. */
+  mcpCatalogue?: (scope: string, projectId?: string) => Promise<WorkflowMcpCatalogue>;
   /** Internal lifecycle tuning, primarily for tests. Not an HTTP option. */
   limits?: Partial<Limits>;
 }
@@ -53,6 +57,8 @@ type Entry = {
   modelId?: string;
   effort?: EffortLevel;
   models: ModelInfo[];
+  originalMcpTools: McpToolSnapshot[];
+  catalogueMcpTools: McpToolSnapshot[];
 };
 
 export class WorkflowBuilderRequestError extends Error {
@@ -130,7 +136,7 @@ export class WorkflowBuilderService {
       this.options.validateDefinition?.(draft);
     } catch { throw invalid(); }
     const now = Date.now();
-    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [] };
+    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [], originalMcpTools: draft.steps.flatMap(step => step.kind === 'mcp' && step.tool.connectionId !== 'unselected' ? [structuredClone(step.tool)] : []), catalogueMcpTools: [] };
     this.entries.set(entry.view.id, entry);
     try {
       await within(this.trackStartup(entry, () => this.start(entry, input)), this.limits.startupMs);
@@ -163,12 +169,9 @@ export class WorkflowBuilderService {
 
   private async start(entry: Entry, input: CreateWorkflowBuilder): Promise<void> {
     const { config, scope, stateRoot, host } = this.options;
-    let root = config.projectRoot() ?? scope;
-    if (entry.view.definition.projectId !== undefined) {
-      const project = includedProjects(config.projectRoot(), config.projectInclude()).find(project => project.path === entry.view.definition.projectId);
-      if (!project || project.missing) throw new WorkflowBuilderRequestError(400, 'Workflow Project is not opted in');
-      root = project.path;
-    }
+    let root: string;
+    try { root = workflowAuthoringScope(config, scope, entry.view.definition.projectId); }
+    catch { throw new WorkflowBuilderRequestError(400, 'Workflow Project is not opted in or its Scope is unavailable'); }
     const files = await WorkflowBuilderFiles.create(root, stateRoot);
     if (entry.closed) { await files.close(); this.check(entry); }
     entry.files = files; entry.view.scope = files.scope;
@@ -212,7 +215,23 @@ export class WorkflowBuilderService {
       ...(entry.view.spend ? { priorSpend: structuredClone(entry.view.spend) } : {}),
       workflowBuilder: {
         instructions,
-        read: async path => { live(); return path === 'workflow.json' ? JSON.stringify(entry.view.definition) : entry.files!.read(path); },
+        read: async path => {
+          live();
+          if (path === 'workflow.json') return JSON.stringify(entry.view.definition);
+          if (path === 'mcp-tools.json') {
+            const catalogue = await this.options.mcpCatalogue?.(entry.view.scope, entry.view.definition.projectId)
+              ?? { scope: entry.view.scope, connections: [], tools: [], errors: [] };
+            live();
+            if (catalogue.scope !== entry.view.scope) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
+            const content = JSON.stringify(catalogue);
+            if (Buffer.byteLength(content) > 192_000) throw new Error('MCP tool catalogue is too large');
+            entry.catalogueMcpTools = structuredClone(catalogue.tools);
+            return content;
+          }
+          const content = await entry.files!.read(path);
+          live();
+          return content;
+        },
         list: async path => { live(); return entry.files!.list(path); },
         write: async content => {
           live();
@@ -240,6 +259,10 @@ export class WorkflowBuilderService {
               if (step.kind !== 'agent') continue;
               const model = entry.models.find(model => model.id === step.model);
               if (!model || (model.effortLevels?.length ? !model.effortLevels.includes(step.effort) : step.effort !== 'off')) throw new Error();
+            }
+            diagnostic = 'MCP steps must use unchanged existing snapshots or exact tools from mcp-tools.json';
+            for (const step of draft.steps) {
+              if (step.kind === 'mcp' && ![...entry.originalMcpTools, ...entry.catalogueMcpTools].some(tool => isDeepStrictEqual(tool, step.tool))) throw new Error();
             }
             diagnostic = 'Workflow credential or MCP snapshot validation failed';
             this.options.validateDefinition?.(draft);

@@ -186,6 +186,52 @@ it('returns an immediate running turn, snapshots assistant messages/Spend, rejec
   } finally { await f.cleanup(); }
 });
 
+it('provides real MCP schemas through a read-only virtual file and rejects fabricated or altered tool snapshots', async () => {
+  const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } };
+  let calls = 0;
+  const f = fixture({ mcpCatalogue: async scope => { calls++; return { scope, connections: [{ id: 'configured', name: 'Configured service', transport: 'http', enabledByDefault: true }], tools: [tool], errors: [] }; } });
+  try {
+    const view = await f.service.create({ definition: draft() });
+    f.service.message(view.id, 'Use the configured lookup tool');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    assert.ok(f.sessions[0]!.options.workflowBuilder!.instructions.includes('mcp-tools.json'));
+    const mcp: WorkflowDefinition = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { q: { kind: 'literal', value: 'hello' } } } } }] };
+    await assert.rejects(capabilities.write(JSON.stringify(mcp)), /exact tools/);
+    const catalogue = JSON.parse(await capabilities.read('mcp-tools.json'));
+    assert.deepEqual(catalogue.tools, [tool]); assert.equal(calls, 1);
+    assert.ok(!JSON.stringify(catalogue).includes('callTool'));
+    await capabilities.write(JSON.stringify(mcp));
+    assert.equal(f.service.view(view.id).definition.steps[0]!.kind, 'mcp');
+    const tampered = structuredClone(mcp);
+    (tampered.steps[0] as Extract<WorkflowDefinition['steps'][number], {kind:'mcp'}>).tool.serverIdentity = 'c'.repeat(64);
+    await assert.rejects(capabilities.write(JSON.stringify(tampered)), /exact tools/);
+    assert.deepEqual(f.service.view(view.id).definition, mcp);
+    await f.service.abort(view.id);
+    await assert.rejects(capabilities.read('mcp-tools.json'));
+    assert.equal(calls, 1);
+  } finally { await f.cleanup(); }
+});
+
+it('rejects late catalogue delivery and wrong authoring Scope without admitting MCP snapshots', async () => {
+  let resolve!: (value: import('../src/protocol/workflow-mcp-authoring.ts').WorkflowMcpCatalogue) => void;
+  const pending = new Promise<import('../src/protocol/workflow-mcp-authoring.ts').WorkflowMcpCatalogue>(done => { resolve = done; });
+  const f = fixture({ mcpCatalogue: async () => pending });
+  try {
+    const view = await f.service.create({ definition: draft() });
+    f.service.message(view.id, 'Discover tools');
+    const read = f.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json');
+    const rejected = assert.rejects(read);
+    await f.service.abort(view.id);
+    resolve({ scope: f.machine, connections: [], tools: [], errors: [] });
+    await rejected;
+  } finally { await f.cleanup(); }
+  const wrong = fixture({ mcpCatalogue: async () => ({ scope: '/wrong-scope', connections: [], tools: [], errors: [] }) });
+  try {
+    const view = await wrong.service.create({ definition: draft() }); wrong.service.message(view.id, 'Discover');
+    await assert.rejects(wrong.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json'), /Scope changed/);
+  } finally { await wrong.cleanup(); }
+});
+
 it('bounds message storage, turn failures, startup timeout, total builders and late startup disposal', async () => {
   const f = fixture({ limits: { maxBuilders: 1, startupMs: 60, turnMs: 25, disposeMs: 20 } });
   try {
@@ -390,6 +436,26 @@ it('bounds the abort response without abandoning slow disposal, private state or
     assert.ok(!existsSync(second.options.scope));
     assert.ok(!f.service.hasActiveWork());
   } finally { release(); releaseClose(); await f.cleanup(); }
+});
+
+it('mounts authoring discovery behind authentication and Origin checks without an Agent Session', async () => {
+  let calls = 0;
+  const authoring: import('../src/protocol/workflow-mcp-authoring.ts').WorkflowMcpAuthoring = {
+    connections: () => { calls++; return { scope: '/authoring', connections: [] }; },
+    discover: async () => { calls++; return { tools: [], errors: [] }; },
+    catalogue: async () => ({ scope: '/authoring', connections: [], tools: [], errors: [] }),
+    hasActiveWork: () => false, shutdown: async () => {},
+  };
+  const running = await serve({ host: new SessionHost(), token: 'test', assets: {}, workflowMcpAuthoring: authoring });
+  try {
+    const url = running.url + '/api/workflow-mcp';
+    assert.equal((await fetch(url)).status, 401);
+    assert.equal((await fetch(url, { headers: { authorization: 'Bearer test', origin: 'http://evil.test' } })).status, 403);
+    assert.equal(calls, 0);
+    assert.equal((await fetch(url, { headers: { authorization: 'Bearer test' } })).status, 200);
+    assert.equal((await fetch(url + '/configured?refresh=1', { headers: { authorization: 'Bearer test' } })).status, 200);
+    assert.equal(calls, 2);
+  } finally { await running.close(); }
 });
 
 it('routes use bounded bodies, safe errors and method checks behind an authentication gate', async () => {

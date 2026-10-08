@@ -562,7 +562,7 @@ export default function WorkflowsSettings() {
                       />
                     </>
                   )}
-                  {step.kind === "mcp" && <McpStepEditor definition={definition} step={step} onChange={update} />}
+                  {step.kind === "mcp" && <McpStepEditor key={step.id} definition={definition} step={step} onChange={update} />}
                   {step.kind === "shell" && (
                     <>
                       <label className="flex flex-col gap-1">
