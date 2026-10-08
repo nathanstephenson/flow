@@ -64,7 +64,7 @@ export function TranscriptSearchField({
         type="button"
         onClick={onClose}
         aria-label="Close search"
-        className="shrink-0 text-muted-foreground hover:text-foreground"
+        className="cursor-gloss shrink-0 text-muted-foreground hover:text-foreground"
       >
         <X className="size-4" aria-hidden />
       </button>

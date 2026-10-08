@@ -1,0 +1,41 @@
+/* Shared hover sheen. Native fills, ink, focus rings and popup geometry still own
+ * the control; the pointer changes only this local, decorative CSS layer.
+ */
+@layer components {
+  .cursor-gloss {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .cursor-gloss::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(ellipse 100% 100% at var(--gloss-x, 50%) var(--gloss-y, 50%), rgb(0 0 0 / 0.055), transparent 55%);
+  }
+
+  .dark .cursor-gloss::after {
+    background: radial-gradient(ellipse 100% 100% at var(--gloss-x, 50%) var(--gloss-y, 50%), rgb(255 255 255 / 0.09), transparent 55%);
+  }
+
+  .cursor-gloss[data-gloss-active]:not(:disabled, [aria-disabled="true"], [data-disabled])::after {
+    opacity: 1;
+  }
+
+  /* Moving off a parent onto its nested action must not light both controls. */
+  .cursor-gloss:has(.cursor-gloss[data-gloss-active])::after {
+    opacity: 0;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor-gloss::after { --gloss-x: 50%; --gloss-y: 50%; }
+  }
+
+  @media (forced-colors: active) {
+    .cursor-gloss::after { display: none; }
+  }
+}

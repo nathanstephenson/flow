@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -10,7 +10,7 @@ import { isolationIntegration } from "../isolation-fixture.ts";
 import { until } from "./pi-fixture.ts";
 
 function fixture(t: TestContext) {
-  const root = mkdtempSync(join(tmpdir(), "flow-claude-revive-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "flow-claude-revive-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const scope = join(root, "scope"), stateDir = join(root, "backend"), home = join(root, "home"), auth = join(home, ".claude");
   for (const dir of [scope, stateDir, auth]) mkdirSync(dir, { recursive: true });
@@ -119,6 +119,32 @@ for (const modes of [[false, true, false], [true, false, true]]) {
     assert.deepEqual(readdirSync(f.stateDir), ["claude-projects"], "durable state must not carry global credentials");
     assert.deepEqual(readdirSync(join(f.auth, "projects")), ["unrelated.jsonl"]);
     assert.equal(readFileSync(join(f.auth, ".credentials.json"), "utf8"), '{"fixture":"credential"}');
+  });
+}
+
+for (const enabled of [false, true]) {
+  test(`Claude worker migrates only a legacy conversation before ${enabled ? "restricted" : "unrestricted"} launch`, {
+    ...(enabled ? isolationIntegration : {}), timeout: 20_000,
+  }, async t => {
+    const f = fixture(t), events: BackendEvent[] = [];
+    const resume = "ea9c2f11-9bc7-4d10-9ec8-57ad95de794d";
+    const key = f.scope.replace(/[^a-zA-Z0-9]/g, "-");
+    const legacy = join(f.auth, "projects", key);
+    mkdirSync(legacy);
+    writeFileSync(join(legacy, `${resume}.jsonl`), JSON.stringify("before-restart") + "\n");
+    writeFileSync(join(legacy, "another-conversation.jsonl"), "must not import");
+    const session = await new WorkerBackend({ backend: "claude", env: f.env,
+      readablePaths: [f.executable], isolationEnabled: () => enabled }).create({
+      scope: f.scope, stateDir: f.stateDir, resume, emit: event => events.push(event),
+    });
+    try {
+      const report = await turn(session, events, "after-restart");
+      assert.deepEqual(report.prior, ["before-restart", "after-restart"]);
+      assert.equal(session.resumeToken(), resume);
+      assert.equal(report.hostCredentialVisible, !enabled);
+      assert.deepEqual(readdirSync(join(f.stateDir, "claude-projects", key)), [`${resume}.jsonl`]);
+      assert.equal(readFileSync(join(legacy, `${resume}.jsonl`), "utf8"), JSON.stringify("before-restart") + "\n");
+    } finally { await session.dispose(); }
   });
 }
 

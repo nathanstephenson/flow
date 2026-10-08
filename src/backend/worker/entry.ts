@@ -1,6 +1,7 @@
 import type { AgentBackend, BackendSession, WorkflowSubagentHandle, PromptAttachment } from "../types.ts";
 import type { McpSession, McpTool } from "../mcp.ts";
 import type { WorkflowParent } from "../workflow-tools.ts";
+import type { WorkflowBuilder } from "../workflow-builder.ts";
 import type { EffortLevel, PermissionDecision } from "../../protocol/events.ts";
 import { WorkerRpc, errorText } from "./rpc.ts";
 import { snapshot, type CreateMetadata, type McpToolMetadata, type WorkflowMetadata, type SessionSnapshot } from "./protocol.ts";
@@ -36,7 +37,13 @@ export function runWorker(): void {
     if (method === "create") {
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, workflowEnabled, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
+        instructions: workflowBuilderInstructions,
+        read: (path) => rpc.call("workflowBuilder.read", [path]),
+        list: (path) => rpc.call("workflowBuilder.list", [path]),
+        write: (content) => rpc.call("workflowBuilder.write", [content]),
+      };
       updateTools(mcpTools ?? []);
       const workflow: WorkflowParent = {
         inspect: (input) => rpc.call("workflow.inspect", [input]),
@@ -57,8 +64,10 @@ export function runWorker(): void {
       }
       session = await backend.create({
         ...options,
-        ...(mcpTools ? { mcp: { tools: () => tools } as McpSession } : {}),
-        ...(workflowEnabled ? { workflow } : {}),
+        ...(workflowBuilder ? { workflowBuilder } : {
+          ...(mcpTools ? { mcp: { tools: () => tools } as McpSession } : {}),
+          ...(workflowEnabled ? { workflow } : {}),
+        }),
         emit: (event) => {
           // Models can be a large catalogue. Do not resend it for every text/tool delta, but do
           // mirror any changed state before the event that exposes it to the Session Host.

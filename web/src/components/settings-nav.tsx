@@ -65,7 +65,7 @@ export function SettingsNav({
   };
   return (
     <>
-      <SidebarHeader className="flex-row items-center gap-1 border-b border-sidebar-border">
+      <SidebarHeader className="h-10.5 shrink-0 flex-row items-center gap-0 border-b border-sidebar-border p-0 px-3">
         <span className="text-sm font-medium">Settings</span>
       </SidebarHeader>
 
@@ -107,10 +107,10 @@ export function SettingsNav({
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border py-1.5">
+      <SidebarFooter className="gap-0 border-t border-sidebar-border p-0">
         {config.authentication === "oidc" ? (
-          <form action="/oauth/logout" method="post">
-            <Button type="submit" variant="ghost" size="sm" className="w-full justify-start gap-2">
+          <form action="/oauth/logout" method="post" className="m-0 flex w-full">
+            <Button type="submit" variant="ghost" size="sm" className="h-10.5 min-h-10.5 w-full justify-start gap-2 rounded-none px-3">
               <LogOut aria-hidden />
               Sign out of Flow
             </Button>
@@ -121,7 +121,7 @@ export function SettingsNav({
          * entry to pop. This returns to the Agent Session that was on screen before the Settings
          * were opened — see `leaveSettings` in web/src/route.ts.
          */}
-        <Button variant="ghost" size="sm" className="justify-start gap-2" onClick={leave}>
+        <Button variant="ghost" size="sm" className="h-10.5 min-h-10.5 w-full justify-start gap-2 rounded-none px-3" onClick={leave}>
           <ArrowLeft aria-hidden />
           Back to Agent Sessions
         </Button>

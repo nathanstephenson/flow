@@ -146,7 +146,8 @@ describe("New Agent Session tabs integration", () => {
     const initial = render();
     const initialRoot = find(initial, "Tabs");
     assert.equal(initialRoot.props.value, "chat");
-    assert.equal(find(initial, "TabsTrigger", (tab) => tab.props.value === "chat").props.children, "chat");
+    assert.equal(find(initial, "TabsTrigger", (tab) => tab.props.value === "chat").props.children, "Chat");
+    assert.equal(find(initial, "TabsTrigger", (tab) => tab.props.value === "workflow").props.children, "Workflow");
     assert.ok(find(initial, "TabsContent", (panel) => panel.props.value === "chat"));
     assert.ok(find(initial, "TabsContent", (panel) => panel.props.value === "workflow"));
     assert.ok(find(initial, "Composer"));
@@ -154,6 +155,7 @@ describe("New Agent Session tabs integration", () => {
     initialRoot.props.onValueChange("workflow");
     const workflow = render();
     assert.equal(find(workflow, "Tabs").props.value, "workflow");
+    assert.equal(find(workflow, "TabsTrigger", (tab) => tab.props.value === "workflow").props.children, "Workflow");
     assert.equal(find(workflow, "TabsContent", (panel) => panel.props.value === "workflow").props.keepMounted, true);
     assert.ok(find(workflow, "h2", (heading) => heading.props.children === "Start with a workflow"));
 

@@ -5,6 +5,10 @@ import { it } from "node:test";
 import { SessionHost } from "../../src/daemon/host.ts";
 import { gate, piFixture, until, userText } from "./pi-fixture.ts";
 
+// Pollers must not read an empty PID file between redirection's open and printf's write.
+// Publish it atomically, retaining the strict post-disposal ESRCH assertions below.
+const runningCallCommand = "printf $$ > call.pid.tmp; mv call.pid.tmp call.pid; while :; do sleep 1; done";
+
 it("delivers a background completion after the current turn and queued human messages", { timeout: 15_000 }, async (t) => {
   const child = gate();
   const working = gate();
@@ -82,7 +86,7 @@ it("reads and stops a Background Call through tools without duplicating its term
   const fixture = await piFixture(t, (request) => {
     if (request.messages.at(-1)?.role === "user") {
       if (userText(request) === "Launch") return { tools: [{ id: "bash-1", name: "bash", arguments: {
-        command: "printf started; printf $$ > call.pid; while :; do sleep 1; done", run_in_background: true,
+        command: `printf started; ${runningCallCommand}`, run_in_background: true,
       } }] };
       if (userText(request) === "Read") return { tools: [{ id: "read-1", name: "bash_output", arguments: { call_id: "bash-1" } }] };
       if (userText(request) === "Stop") return { tools: [{ id: "stop-1", name: "kill_shell", arguments: { call_id: "bash-1" } }] };
@@ -93,6 +97,7 @@ it("reads and stops a Background Call through tools without duplicating its term
   await session.prompt("Launch");
   await until(() => existsSync(join(fixture.scope, "call.pid")));
   const pid = Number(readFileSync(join(fixture.scope, "call.pid"), "utf8"));
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, "Background Call published an invalid PID");
   await session.prompt("Read");
   const read = fixture.events.find((event) => event.type === "tool_ended" && event.callId === "read-1");
   assert.ok(read?.type === "tool_ended" && !read.isError);
@@ -118,7 +123,7 @@ it("disposes background Subagents and process trees without starting a completio
     if (userText(request) === "Child") { await child.promise; return { text: "Late child result" }; }
     if (userText(request) === "Launch" && request.messages.at(-1)?.role === "user") return { tools: [
       { id: "spawn-1", name: "subagent", arguments: { description: "Background work", prompt: "Child" } },
-      { id: "bash-1", name: "bash", arguments: { command: "printf $$ > call.pid; while :; do sleep 1; done", run_in_background: true } },
+      { id: "bash-1", name: "bash", arguments: { command: runningCallCommand, run_in_background: true } },
     ] };
     return { text: "Launched" };
   });
@@ -127,6 +132,7 @@ it("disposes background Subagents and process trees without starting a completio
   await session.prompt("Launch");
   await until(() => existsSync(join(fixture.scope, "call.pid")) && fixture.requests.some((request) => userText(request) === "Child"));
   const pid = Number(readFileSync(join(fixture.scope, "call.pid"), "utf8"));
+  assert.ok(Number.isSafeInteger(pid) && pid > 0, "Background Call published an invalid PID");
   await session.dispose();
   child.release();
   assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state), ["running", "aborted"]);

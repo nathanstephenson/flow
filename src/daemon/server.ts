@@ -7,6 +7,8 @@ import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { workflowBuilderRoutes } from './workflow-builder-routes.ts';
+import { workflowMcpAuthoringRoutes } from './workflow-mcp-authoring-routes.ts';
 import { hostControlRoute, type HostControl } from './host-control-routes.ts';
 import { readBody, send } from './http.ts';
 import { workflowExecutionRoutes } from './workflow-execution-routes.ts';
@@ -62,6 +64,8 @@ export type ServeOptions = {
   control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
+  workflowBuilders?: import('./workflow-builder.ts').WorkflowBuilderService;
+  workflowMcpAuthoring?: import('../protocol/workflow-mcp-authoring.ts').WorkflowMcpAuthoring;
   secrets?: SecretStore;
   token: string;
   port?: number;
@@ -372,6 +376,8 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  if (await workflowMcpAuthoringRoutes(request, response, url.pathname, options.workflowMcpAuthoring)) return;
+  if (await workflowBuilderRoutes(request, response, url.pathname, options.workflowBuilders)) return;
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
   if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets, options.workflowExecutions)) return;
 
@@ -384,6 +390,28 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
       } else if (request.method === "GET" && !mcpRoute[2]) send(response, 200, options.host.mcpStatus(mcpRoute[1]!));
       else send(response, 405, { error: "Method not allowed" });
     } catch { send(response, 400, { error: "MCP operation failed. Retry requires an Idle Agent Session without background work." }); }
+    return;
+  }
+  if (url.pathname === "/api/mcp/auth") {
+    response.setHeader("cache-control", "no-store");
+    if (request.method === "GET") {
+      send(response, 200, { signedIn: options.mcpAuth?.signedIn(options.config?.mcpConnections() ?? []) ?? [] });
+    } else send(response, 405, { error: "Method not allowed" });
+    return;
+  }
+  const mcpLogout = /^\/api\/mcp\/([^/]+)\/logout$/.exec(url.pathname);
+  if (mcpLogout) {
+    response.setHeader("cache-control", "no-store");
+    if (request.method !== "POST") {
+      send(response, 405, { error: "Method not allowed" });
+      return;
+    }
+    try {
+      const connection = options.config?.mcpConnections().find((entry) => entry.id === mcpLogout[1]);
+      if (!connection || !options.mcpAuth) throw new Error("Unknown connection");
+      options.mcpAuth.logout(connection);
+      send(response, 200, {});
+    } catch { send(response, 400, { error: "MCP sign-out failed" }); }
     return;
   }
   const mcpLogin = /^\/api\/mcp\/([^/]+)\/login$/.exec(url.pathname);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { McpConnection } from "../../../src/protocol/mcp.ts";
 import { useHost } from "@/host.tsx";
 import { SettingsGroup, useSaveSettings } from "./settings-parts.tsx";
@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "./ui/select.tsx";
 import { signInMcp } from "./mcp-actions.ts";
-import { useWorkflowResource } from "./workflow-api.ts";
+import { useWorkflowResource, workflowApi } from "./workflow-api.ts";
 import { toast } from "./ui/toaster.tsx";
 
 type HeaderRow = { name: string; kind: "value" | "secret"; value: string };
@@ -22,6 +22,43 @@ export default function McpSettings() {
   const { config } = useHost();
   const { save, saving } = useSaveSettings();
   const secrets = useWorkflowResource<{ names: string[] }>("/api/secrets");
+  const [signedIn, setSignedIn] = useState<string[]>();
+  const [authRevision, setAuthRevision] = useState(0);
+  const [authFailed, setAuthFailed] = useState(false);
+  const [signingOut, setSigningOut] = useState<string>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setSignedIn(undefined);
+    setAuthFailed(false);
+    void workflowApi<{ signedIn: string[] }>(
+      "/api/mcp/auth", "GET", undefined, controller.signal,
+    )
+      .then((status) => {
+        if (!controller.signal.aborted) setSignedIn(status.signedIn);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setAuthFailed(true);
+          toast.error(String(error));
+        }
+      });
+    return () => controller.abort();
+  }, [config.mcp, authRevision]);
+  const signOut = async (id: string) => {
+    setSigningOut(id);
+    try {
+      await workflowApi(`/api/mcp/${id}/logout`, "POST");
+      setSignedIn((current) => current?.filter((entry) => entry !== id));
+      setAuthRevision((current) => current + 1);
+      toast.info(
+        "MCP signed out. Existing Agent Sessions can reconnect with Retry.",
+      );
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setSigningOut(undefined);
+    }
+  };
   const [headers, setHeaders] = useState<HeaderRow[]>([]);
   const patchHeader = (index: number, patch: Partial<HeaderRow>) =>
     setHeaders((rows) =>
@@ -60,9 +97,24 @@ export default function McpSettings() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => void signInMcp(connection.id)}
+                disabled={
+                  (!authFailed && signedIn === undefined) || signingOut !== undefined
+                }
+                onClick={() => {
+                  if (authFailed) setAuthRevision((current) => current + 1);
+                  else
+                    void (signedIn?.includes(connection.id)
+                      ? signOut(connection.id)
+                      : signInMcp(connection.id));
+                }}
               >
-                Sign in
+                {authFailed
+                  ? "Retry sign-in status"
+                  : signingOut === connection.id
+                    ? "Signing out…"
+                    : signedIn === undefined
+                      ? "Checking sign-in…"
+                      : signedIn.includes(connection.id) ? "Sign out" : "Sign in"}
               </Button>
             )}
             <Button

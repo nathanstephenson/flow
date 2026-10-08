@@ -37,7 +37,9 @@ import { cn } from "@/lib/utils.ts";
  * The branch half is absent for a Scope that is not a repository; the rest of the row is not, which
  * is why this renders unconditionally. A Project need not be a repository at all (ADR 0011).
  */
-export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chrome; actions: ComposerActions; permissions?: boolean }) {
+export type TurnStripControls = { permissions?: boolean; branches?: boolean; disabled?: boolean };
+
+export function TurnStrip({ chrome, actions, permissions = true, branches = true, disabled = false }: { chrome: Chrome; actions: ComposerActions } & TurnStripControls) {
   const ended = chrome.status === "ended";
 
   return (
@@ -47,12 +49,12 @@ export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chr
      * divider is dimmed below the default border so it separates without drawing a line across the
      * composer.
      */
-    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-t border-border/40 px-2 py-1">
+    <div className={cn("grid items-center gap-2 border-t border-border/40 px-2 py-1", branches ? "grid-cols-[1fr_auto_1fr]" : "grid-cols-[minmax(0,1fr)_auto]")}>
       <div className="flex min-w-0 items-center gap-0.5">
         <ModelPicker
           models={chrome.capabilities?.models}
           model={chrome.model}
-          disabled={ended}
+          disabled={ended || disabled}
           // A reading in the strip, not a form field: see `ModelPickerProps.quiet`.
           quiet
           onSelect={actions.setModel}
@@ -61,11 +63,11 @@ export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chr
           capabilities={chrome.capabilities}
           model={chrome.model}
           effort={chrome.effort}
-          disabled={ended}
+          disabled={ended || disabled}
           onSelect={actions.setEffort}
         />
         {permissions && chrome.permissionMode && <PermissionModeSelect backend={chrome.backend} value={chrome.permissionMode}
-          disabled={ended || occupied(chrome.status) || !!chrome.authorising}
+          disabled={ended || disabled || occupied(chrome.status) || !!chrome.authorising}
           onChange={actions.setPermissionMode} />}
       </div>
 
@@ -76,9 +78,9 @@ export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chr
        * the first token count arrives, and an absent element is not an empty column — auto-placement
        * would put the branch in the middle track and leave it centred.
        */}
-      <div className="col-start-3 flex min-w-0 items-center justify-end">
-        <BranchPicker chrome={chrome} actions={actions} />
-      </div>
+      {branches && <div className="col-start-3 flex min-w-0 items-center justify-end">
+        <BranchPicker chrome={chrome} actions={actions} disabled={disabled} />
+      </div>}
     </div>
   );
 }
@@ -92,7 +94,7 @@ export function TurnStrip({ chrome, actions, permissions = true }: { chrome: Chr
  * moving it here is real and worth naming: **a Worktree is no longer distinguishable at a glance**,
  * only on hover and by its branch happening to be named `flow/…`.
  */
-function BranchPicker({ chrome, actions }: { chrome: Chrome; actions: ComposerActions }) {
+function BranchPicker({ chrome, actions, disabled }: { chrome: Chrome; actions: ComposerActions; disabled: boolean }) {
   const branches = useBranches(chrome.scope);
   const [failure, setFailure] = useState<string | undefined>(undefined);
 
@@ -120,7 +122,7 @@ function BranchPicker({ chrome, actions }: { chrome: Chrome; actions: ComposerAc
            * the *moment* is wrong, and a control that vanishes mid-turn reads as something breaking.
            * The host refuses this anyway with a 409; saying so first beats being told no.
            */
-          disabled={running || ended}
+          disabled={running || ended || disabled}
           onOpenChange={(open) => {
             if (open) branches.load();
           }}
