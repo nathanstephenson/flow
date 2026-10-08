@@ -219,8 +219,11 @@ export class WorkflowBuilderService {
           live();
           if (path === 'workflow.json') return JSON.stringify(entry.view.definition);
           if (path === 'mcp-tools.json') {
+            await entry.files!.checkScope();
+            live();
             const catalogue = await this.options.mcpCatalogue?.(entry.view.scope, entry.view.definition.projectId)
               ?? { scope: entry.view.scope, connections: [], tools: [], errors: [] };
+            await entry.files!.checkScope();
             live();
             if (catalogue.scope !== entry.view.scope) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
             const content = JSON.stringify(catalogue);

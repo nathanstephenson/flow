@@ -90,14 +90,17 @@ export function McpStepEditor({
     error?: string;
   }>();
   const [discoveryRefresh, setDiscoveryRefresh] = useState(0);
+  const consumedDiscoveryRefresh = useRef(0);
   const discoveryVersion = useRef(0);
   useEffect(() => {
     const controller = new AbortController();
     const version = ++discoveryVersion.current;
+    const refresh = discoveryRefresh !== consumedDiscoveryRefresh.current;
+    consumedDiscoveryRefresh.current = discoveryRefresh;
     setDiscovery(undefined);
     if (discoveryPath) {
       void workflowApi<McpToolDiscovery>(
-        discoveryRefresh ? `${discoveryPath}${query ? "&" : "?"}refresh=1` : discoveryPath,
+        refresh ? `${discoveryPath}${query ? "&" : "?"}refresh=1` : discoveryPath,
         "GET",
         undefined,
         controller.signal,

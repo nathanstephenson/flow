@@ -94,6 +94,17 @@ export class WorkflowBuilderFiles {
 
   protect(path: string): void { this.protectedPaths.push(resolve(path)); }
 
+  /** Virtual metadata must obey the same pinned-directory boundary as reference reads. */
+  async checkScope(): Promise<void> {
+    return this.operation(async () => {
+      const check = await directory(this.scope);
+      try {
+        const stat = await check.stat({ bigint: true });
+        if (stat.dev !== this.identity.dev || stat.ino !== this.identity.ino) throw new Error('Workflow builder Scope changed. Close and reopen the builder.');
+      } finally { await check.close(); }
+    });
+  }
+
   private allowed(path: string): boolean {
     return !path.split(sep).some(credentialPart) && !this.protectedPaths.some(root => within(root, path));
   }
@@ -219,7 +230,7 @@ export class WorkflowBuilderFiles {
     }
   }
 
-  private async operation(work: () => Promise<string>): Promise<string> {
+  private async operation<T>(work: () => Promise<T>): Promise<T> {
     if (this.closed || this.active >= 8) throw new Error('Workflow reference unavailable');
     this.active++;
     try { return await work(); } catch { throw new Error('Workflow reference unavailable'); } finally {

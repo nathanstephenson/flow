@@ -16,9 +16,13 @@ connections enabled, and still compare pinned transport/server/tool identities a
 A host-owned authoring service initializes MCP clients, lists tools and validates each schema,
 then disposes the clients. It never calls a tool. It uses current credential storage, existing
 noninteractive direct transport behavior, bounded startup, capacity, output and a short Scope/
-transport-identity/isolation-policy cache. Concurrent readers share discovery, not callable handles.
+directory-identity/transport-identity/isolation-policy cache. Directory identity is checked before
+startup and after discovery/cleanup; replacing the directory at the same path cannot reuse cached
+tools. Concurrent readers share discovery, not callable handles.
 Unavailable connections and incompatible tools carry safe diagnostics; one failure need not hide
-compatible tools. Host shutdown stops admission and retains ownership through cleanup.
+compatible tools. Authoring requests have a bounded response, but stdio capacity and cleanup remain
+owned until the supervisor reports actual leader exit and process-group cleanup, not merely bounded
+transport close. Host shutdown stops admission and retains ownership through that cleanup.
 
 The restricted builder reads a virtual `mcp-tools.json` through its existing host read capability.
 The catalogue discovers default-enabled connections and includes explicitly discovered cached
@@ -26,7 +30,7 @@ connections. It contains exact tool snapshots and diagnostics, not URLs, argumen
 MCP clients or invocation functions. Schemas and other service-provided metadata are untrusted data.
 Writes can introduce only snapshots supplied by the host, or preserve original snapshots unchanged;
 the model cannot fabricate or edit their identity/schema fields. The authoring Scope must still
-match the builder's pinned Scope. The builder receives no external MCP tools or additional native
+match the builder's pinned Scope, including directory identity checks before and after catalogue reads. The builder receives no external MCP tools or additional native
 capabilities and cannot invoke the discovered services.
 
 ## Consequences

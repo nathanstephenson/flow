@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { McpSession, McpTool } from '../src/backend/mcp.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
 import { WorkflowMcpAuthoringService, type WorkflowMcpAuthoringOptions } from '../src/daemon/workflow-mcp-authoring.ts';
 import { workflowMcpAuthoringRoutes } from '../src/daemon/workflow-mcp-authoring-routes.ts';
 import { connectionIdentity } from '../src/daemon/workflow-mcp.ts';
+import { workflowAuthoringScope } from '../src/daemon/workflow-authoring-scope.ts';
 
 const connection = (id = 'default', enabledByDefault = true): Extract<McpConnection, { transport: 'http' }> => ({ id, name: id, enabledByDefault, transport: 'http', url: `https://${id}.example.test/mcp`, oauth: false, headers: {} });
 const tool = (name = 'read', inputSchema: McpTool['definition']['inputSchema'] = { type: 'object', properties: { id: { type: 'string' } } }): McpTool => ({ name: `mcp__default__${name}`, connectionId: 'default', definition: { name, inputSchema }, serverIdentity: 'fixture-server', call: async () => { assert.fail('Discovery must never call a tool'); } });
@@ -16,7 +17,7 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 const pause = () => new Promise(resolve => setTimeout(resolve, 2));
 async function until(check: () => boolean) { for (let i = 0; i < 200 && !check(); i++) await pause(); assert.ok(check()); }
 
-type Fake = { scope: string; connection: McpConnection; isolation: boolean | undefined; opened: number; disposed: number; tools: McpTool[]; failed: boolean; openError?: Error; openWait?: Promise<void>; disposeWait?: Promise<void> };
+type Fake = { scope: string; connection: McpConnection; isolation: boolean | undefined; opened: number; disposed: number; tools: McpTool[]; failed: boolean; openError?: Error; openWait?: Promise<void>; disposeWait?: Promise<void>; exitWait?: Promise<void> };
 function fixture(initial: McpConnection[] = [connection(), connection('manual', false)]) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'flow-mcp-authoring-')));
   const machine = join(root, 'machine'), project = join(root, 'project'), fallback = join(root, 'fallback');
@@ -45,7 +46,7 @@ function fixture(initial: McpConnection[] = [connection(), connection('manual', 
         open: async () => { fake.opened++; if (fake.openWait) await fake.openWait; if (fake.openError) throw fake.openError; },
         status: () => [{ id, state: fake.failed ? 'failed' : 'connected', tools: fake.tools.length }],
         tools: () => fake.tools,
-        dispose: async () => { fake.disposed++; if (fake.disposeWait) await fake.disposeWait; },
+        dispose: async ({ waitForExit = false }: { waitForExit?: boolean } = {}) => { fake.disposed++; if (fake.disposeWait) await fake.disposeWait; if (waitForExit && fake.exitWait) await fake.exitWait; },
       };
       return session as unknown as McpSession;
     },
@@ -125,6 +126,44 @@ test('opted-in Projects use canonical Scope; no Agent Session is needed; invalid
     assert.equal(f.starts.at(-1)!.scope, f.fallback);
     await assert.rejects(f.service.discover(undefined, 'unknown'), /Unknown/);
   } finally { await f.cleanup(); }
+});
+
+test('authoring expands home-relative Project Roots and fallback Scopes', () => {
+  const config = { projectRoot: () => '~', projectInclude: () => [] };
+  assert.equal(workflowAuthoringScope(config, '/unused'), realpathSync(homedir()));
+  assert.equal(workflowAuthoringScope({ ...config, projectRoot: () => undefined }, '~'), realpathSync(homedir()));
+});
+
+test('directory replacement invalidates cached tools and explicitly discovered connections', async () => {
+  const f = fixture();
+  try {
+    await f.service.discover(undefined, 'manual');
+    await f.service.discover(undefined, 'default');
+    renameSync(f.machine, f.machine + '-old'); mkdirSync(f.machine);
+    const catalogue = await f.service.catalogue();
+    assert.deepEqual(catalogue.tools.map(tool => tool.connectionId), ['default']);
+    assert.equal(f.starts.length, 3);
+    await f.service.discover(undefined, 'manual');
+    assert.equal(f.starts.length, 4);
+  } finally { await f.cleanup(); }
+});
+
+test('directory replacement during startup or discovery rejects tools and retains disposal ownership', async () => {
+  for (const stage of ['startup', 'open', 'dispose'] as const) {
+    const f = fixture(); const gate = deferred();
+    try {
+      if (stage === 'startup') f.createWait(gate.promise);
+      else f.configure(fake => { if (stage === 'open') fake.openWait = gate.promise; else fake.disposeWait = gate.promise; });
+      const discovery = f.service.discover(undefined, 'default');
+      const rejected = assert.rejects(discovery, /Scope changed/);
+      await until(() => stage === 'startup' ? f.starts.length === 1 : stage === 'open' ? f.sessions[0]?.opened === 1 : f.sessions[0]?.disposed === 1);
+      renameSync(f.machine, f.machine + '-old'); mkdirSync(f.machine);
+      gate.resolve(); await rejected;
+      await until(() => !f.service.hasActiveWork());
+      assert.equal(f.sessions[0]!.disposed, 1);
+      if (stage === 'startup') assert.equal(f.sessions[0]!.opened, 0);
+    } finally { gate.resolve(); await f.cleanup(); }
+  }
 });
 
 test('singleflight joins explicit discovery and catalogue, and returns independent cached snapshots', async () => {
@@ -410,6 +449,29 @@ test('ten-second response bound also covers slow disposal; shutdown waits for th
     await closing;
     assert.equal(f.sessions[0]!.disposed, 1);
     assert.equal(f.service.hasActiveWork(), false);
+  } finally { gate.resolve(); await f.cleanup(); }
+});
+
+test('actual-exit waits retain all authoring capacity and shutdown ownership after bounded responses', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  const f = fixture([connection(), connection('second'), connection('third'), connection('fourth'), connection('queued')]);
+  const gate = deferred();
+  try {
+    f.configure(fake => { fake.exitWait = gate.promise; });
+    const pending = ['default', 'second', 'third', 'fourth'].map(id => f.service.discover(undefined, id));
+    const rejected = pending.map(promise => assert.rejects(promise, /timed out/));
+    for (let i = 0; i < 50 && f.sessions.filter(fake => fake.disposed).length < 4; i++) await Promise.resolve();
+    assert.equal(f.sessions.length, 4);
+    t.mock.timers.tick(10_000); await Promise.all(rejected);
+    assert.equal(f.service.hasActiveWork(), true);
+    const queued = assert.rejects(f.service.discover(undefined, 'queued'), /stopped/);
+    let stopped = false;
+    const closing = f.service.shutdown().then(() => { stopped = true; });
+    await queued; await Promise.resolve();
+    assert.equal(stopped, false); assert.equal(f.starts.length, 4);
+    gate.resolve(); await closing;
+    assert.equal(f.service.hasActiveWork(), false);
+    assert.ok(f.sessions.every(fake => fake.disposed === 1));
   } finally { gate.resolve(); await f.cleanup(); }
 });
 

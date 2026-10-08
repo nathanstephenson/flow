@@ -193,6 +193,54 @@ it('discovers and refreshes in the authoring Scope without a Project query', asy
   await p.settle();
 });
 
+for (const target of ['project-b', undefined]) {
+  it(`uses cached rediscovery after Refresh and Retry in ${target ? 'Project' : 'authoring'} Scope`, async () => {
+    const p = editor();
+    await p.ready();
+    assert.equal(p.latest().url.searchParams.get('refresh'), null);
+    const refresh = p.refresh();
+    assert.equal(refresh.url.searchParams.get('refresh'), '1');
+    refresh.resolve(compatible);
+    await p.settle();
+    const rediscover = async (id: string) => {
+      p.select('MCP server').props.onValueChange(id);
+      p.render();
+      const request = p.latest();
+      requestScope(request, `/api/workflow-mcp/${id}`, 'project-a');
+      assert.equal(request.url.searchParams.get('refresh'), null);
+      request.resolve(compatible);
+      await p.settle();
+    };
+    await rediscover('other');
+    await rediscover('server');
+    const failed = p.refresh();
+    assert.equal(failed.url.searchParams.get('refresh'), '1');
+    failed.reject(new Error('Discovery failed'));
+    await p.settle();
+    assert.equal(text(p.button()), 'Retry discovery');
+    const retry = p.refresh();
+    assert.equal(retry.url.searchParams.get('refresh'), '1');
+    retry.resolve(compatible);
+    await p.settle();
+    const count = p.requests.length;
+    p.render();
+    assert.equal(p.requests.length, count, 'Consuming refresh must not issue an extra request');
+    p.switchProject(target).resolve({ ...catalogue, scope: '/new-scope' });
+    await p.settle();
+    p.select('MCP server').props.onValueChange('server');
+    p.render();
+    requestScope(p.latest(), '/api/workflow-mcp/server', target);
+    assert.equal(p.latest().url.searchParams.get('refresh'), null);
+    p.latest().resolve(compatible);
+    await p.settle();
+    const nextRefresh = p.refresh();
+    assert.equal(nextRefresh.url.searchParams.get('refresh'), '1');
+    nextRefresh.resolve(compatible);
+    await p.settle();
+    assert.equal(p.changes.length, 0);
+  });
+}
+
 it('keeps compatible tools selectable and shows collapsible input/output incompatibility reasons', async () => {
   const p = editor();
   await p.ready({ tools: [tool], errors });
@@ -304,6 +352,7 @@ for (const target of ['project-b', undefined]) {
       p.select('MCP server').props.onValueChange('server');
       p.render();
       requestScope(p.latest(), '/api/workflow-mcp/server', 'project-c');
+      assert.equal(p.latest().url.searchParams.get('refresh'), null);
       assert.equal(p.button().props.disabled, true);
       p.latest().resolve(compatible);
       await p.settle();
@@ -322,6 +371,7 @@ for (const outcome of ['success', 'failure']) {
     p.render();
     const current = p.latest();
     requestScope(current, '/api/workflow-mcp/other', 'project-a');
+    assert.equal(current.url.searchParams.get('refresh'), null);
     assert.equal(oldRequest.signal.aborted, true);
     assert.doesNotMatch(text(p.render()), /incompatible|compatible tool available/);
     if (outcome === 'success') oldRequest.resolve({ tools: [tool], errors });

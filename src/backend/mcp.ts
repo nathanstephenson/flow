@@ -56,6 +56,7 @@ export class McpSession {
   private readonly states = new Map<string, McpStatus>();
   private readonly pending = new Map<string, Promise<void>>();
   private readonly activeCalls = new Map<string, number>();
+  private readonly exits = new Set<Promise<void>>();
   private disposed = false;
   private readonly direct: boolean;
   readonly connections: readonly McpConnection[];
@@ -217,6 +218,11 @@ export class McpSession {
           },
         });
       }
+      if (transport instanceof SupervisedStdioTransport) {
+        const exited = transport.exited;
+        this.exits.add(exited);
+        void exited.then(() => this.exits.delete(exited));
+      }
       if (this.disposed) { await stop(); return; }
       const signal = AbortSignal.timeout(10_000);
       await client.connect(
@@ -291,12 +297,14 @@ export class McpSession {
       this.states.set(id, { id, state: "failed", tools: 0 });
     }
   }
-  async dispose(): Promise<void> {
+  /** Ordinary callers retain bounded stdio close; authoring owns capacity until actual exit. */
+  async dispose({ waitForExit = false }: { waitForExit?: boolean } = {}): Promise<void> {
     this.disposed = true;
     this.entries.clear();
     await Promise.all([...this.stops.values()].map((stop) => stop()));
     await Promise.allSettled(this.pending.values());
     // A connect may have been waiting for the previous connection's teardown.
     await Promise.all([...this.stops.values()].map((stop) => stop()));
+    if (waitForExit) await Promise.all(this.exits);
   }
 }

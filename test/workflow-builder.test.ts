@@ -232,6 +232,26 @@ it('rejects late catalogue delivery and wrong authoring Scope without admitting 
   } finally { await wrong.cleanup(); }
 });
 
+it('rejects MCP catalogue access before discovery and after delivery if the pinned directory is replaced', async () => {
+  for (const stage of ['before', 'during'] as const) {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const f = fixture({ mcpCatalogue: async scope => { calls++; await gate; return { scope, connections: [], tools: [], errors: [] }; } });
+    try {
+      const view = await f.service.create({ definition: draft() });
+      f.service.message(view.id, 'Discover');
+      const replace = () => { renameSync(f.machine, f.machine + '-old'); mkdirSync(f.machine); };
+      if (stage === 'before') replace();
+      const read = f.sessions[0]!.options.workflowBuilder!.read('mcp-tools.json');
+      const rejected = assert.rejects(read);
+      if (stage === 'during') { await wait(() => calls === 1); replace(); }
+      release(); await rejected;
+      assert.equal(calls, stage === 'before' ? 0 : 1);
+    } finally { release(); await f.cleanup(); }
+  }
+});
+
 it('bounds message storage, turn failures, startup timeout, total builders and late startup disposal', async () => {
   const f = fixture({ limits: { maxBuilders: 1, startupMs: 60, turnMs: 25, disposeMs: 20 } });
   try {

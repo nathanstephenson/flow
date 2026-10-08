@@ -6,7 +6,7 @@ import type { McpToolDiscovery } from '../protocol/workflows.ts';
 import type { ConfigStore } from './config-store.ts';
 import type { SessionHost } from './host.ts';
 import { redactCredentials } from './credential-redaction.ts';
-import { workflowAuthoringScope } from './workflow-authoring-scope.ts';
+import { checkWorkflowAuthoringDirectory, workflowAuthoringDirectory, workflowAuthoringScope, type WorkflowAuthoringDirectory } from './workflow-authoring-scope.ts';
 import { connectionIdentity, snapshotTool } from './workflow-mcp.ts';
 
 export type WorkflowMcpAuthoringOptions = {
@@ -17,6 +17,7 @@ export type WorkflowMcpAuthoringOptions = {
 
 type Entry = {
   scope: string;
+  directory: WorkflowAuthoringDirectory;
   connection: McpConnection;
   isolation: boolean;
   generation: number;
@@ -59,25 +60,27 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
   }
 
   async discover(projectId: string | undefined, connectionId: string, refresh = false): Promise<McpToolDiscovery> {
-    const scope = this.scope(projectId);
+    const scope = workflowAuthoringDirectory(this.scope(projectId));
     const generation = this.generation;
     const connection = this.options.config.mcpConnections().find(connection => connection.id === connectionId);
     if (!connection) throw new Error('Unknown MCP connection');
     const result = await this.request(scope, connection, refresh);
+    checkWorkflowAuthoringDirectory(scope);
     this.refresh();
     if (generation !== this.generation) throw new Error('MCP configuration changed; discover again');
     return this.redact(structuredClone(result));
   }
 
   async catalogue(projectId?: string): Promise<WorkflowMcpCatalogue> {
-    const scope = this.scope(projectId);
-    const metadata = this.metadata(scope);
+    const scope = workflowAuthoringDirectory(this.scope(projectId));
+    const metadata = this.metadata(scope.path);
     const generation = this.generation;
     const selected = this.options.config.mcpConnections().filter(connection => connection.enabledByDefault || this.entries.has(this.key(scope, connection)));
     const results = await Promise.all(selected.map(async connection => {
       try { return { connection, discovery: await this.request(scope, connection) }; }
       catch (error) { return { connection, error: this.safeError(error).message }; }
     }));
+    checkWorkflowAuthoringDirectory(scope);
     this.refresh();
     if (generation !== this.generation) throw new Error('MCP configuration changed; read the catalogue again');
     const result: WorkflowMcpCatalogue = { ...metadata, tools: [], errors: [] };
@@ -132,9 +135,10 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     this.queue.length = 0;
   }
 
-  private key(scope: string, connection: McpConnection): string { return JSON.stringify([scope, connectionIdentity(connection)]); }
+  private key(scope: WorkflowAuthoringDirectory, connection: McpConnection): string { return JSON.stringify([scope.path, scope.identity, connectionIdentity(connection)]); }
 
-  private request(scope: string, connection: McpConnection, refresh = false): Promise<McpToolDiscovery> {
+  private request(scope: WorkflowAuthoringDirectory, connection: McpConnection, refresh = false): Promise<McpToolDiscovery> {
+    checkWorkflowAuthoringDirectory(scope);
     const key = this.key(scope, connection);
     const existing = this.entries.get(key);
     if (existing && (!existing.expires || (!refresh && existing.expires > Date.now()))) return existing.promise;
@@ -146,7 +150,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     }
     let resolve!: Entry['resolve'], reject!: Entry['reject'];
     const promise = new Promise<McpToolDiscovery>((yes, no) => { resolve = yes; reject = no; });
-    const entry: Entry = { scope, connection: structuredClone(connection), isolation: this.options.config.filesystemIsolationEnabled(), generation: this.generation, promise, resolve, reject, controller: new AbortController(), expires: 0 };
+    const entry: Entry = { scope: scope.path, directory: scope, connection: structuredClone(connection), isolation: this.options.config.filesystemIsolationEnabled(), generation: this.generation, promise, resolve, reject, controller: new AbortController(), expires: 0 };
     this.entries.set(key, entry);
     this.queue.push(entry);
     this.drain();
@@ -164,7 +168,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
 
   private async run(entry: Entry): Promise<void> {
     let session: McpSession | undefined, disposal: Promise<void> | undefined;
-    const dispose = () => session ? disposal ??= session.dispose() : Promise.resolve();
+    const dispose = () => session ? disposal ??= session.dispose({ waitForExit: true }) : Promise.resolve();
     const { signal } = entry.controller;
     const abort = () => { void dispose().catch(() => {}); };
     signal.addEventListener('abort', abort, { once: true });
@@ -175,13 +179,16 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
       signal.addEventListener('abort', cancel, { once: true });
     });
     const work = (async () => {
+      checkWorkflowAuthoringDirectory(entry.directory);
       session = await this.options.host.openWorkflowMcpAuthoring(entry.scope, entry.connection.id, entry.isolation);
       signal.throwIfAborted();
+      checkWorkflowAuthoringDirectory(entry.directory);
       this.refresh();
       if (entry.generation !== this.generation) throw new Error('MCP configuration changed; discover again');
       if (connectionIdentity(session.connections[0]!) !== connectionIdentity(entry.connection)) throw new Error('MCP configuration changed; discover again');
       await session.open();
       signal.throwIfAborted();
+      checkWorkflowAuthoringDirectory(entry.directory);
       if (session.status()[0]?.state !== 'connected') throw new Error('MCP connection unavailable. Sign in in MCP Settings or reconfigure the server, then retry manually.');
       return this.snapshot(entry.connection, session);
     })();
@@ -189,6 +196,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
       const completed = work.then(async result => { await dispose(); return result; });
       const result = await Promise.race([completed, cancelled]);
       signal.throwIfAborted();
+      checkWorkflowAuthoringDirectory(entry.directory);
       this.refresh();
       if (entry.generation !== this.generation) throw new Error('MCP configuration changed; discover again');
       entry.expires = Date.now() + TTL;

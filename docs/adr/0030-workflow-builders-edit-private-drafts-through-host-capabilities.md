@@ -68,6 +68,6 @@ contract and model catalogue, not executable Project instructions or a new graph
 - Closing the editor is intentionally not a durable Agent Session lifecycle operation.
 - No shell search, workflow execution, or external MCP invocation is offered inside the builder.
   Host-owned metadata discovery is available through `mcp-tools.json` (ADR 0031). Existing
-  MCP snapshots can be preserved, but selecting new MCP tools remains a visual-editor operation.
+  MCP snapshots can be preserved; new MCP steps must use exact snapshots from that catalogue.
 - Project files remain untrusted reference data. Read-only access is not a confidentiality guarantee
   for everything the owner permits inside that Scope; do not place protected-file aliases there.
