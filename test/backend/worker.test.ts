@@ -90,6 +90,38 @@ test("MCP stays host-owned and metadata refresh reaches the worker", isolationIn
   assert.ok(events.some((event) => event.type === "message" && event.text.includes("mcp__fixture__new")));
 });
 
+test("Claude MCP bridges retain selected connections across delayed discovery and refresh", { timeout: 20_000 }, async (t) => {
+  const scope = await mkdtemp(join(tmpdir(), "flow-worker-mcp-"));
+  const events: BackendEvent[] = [];
+  const tools: McpTool[] = [];
+  let calls = 0;
+  const mcp = { connections: [{ id: "fixture" }, { id: "offline" }], tools: () => tools } as unknown as McpSession;
+  const backend = new WorkerBackend({ backendModule, isolationEnabled: () => false });
+  const session = await backend.create({ scope, mcp, emit: (event) => events.push(event) });
+  t.after(async () => { await session.dispose(); await rm(scope, { recursive: true, force: true }); });
+  const listing = async () => {
+    await session.prompt("claude-mcp");
+    const event = events.findLast((event) => event.type === "message" && event.id === "claude-mcp");
+    assert.ok(event?.type === "message");
+    return JSON.parse(event.text);
+  };
+  assert.deepEqual(await listing(), { fixture: [], offline: [] });
+  tools.push({ name: "mcp__fixture__tool", connectionId: "fixture",
+    definition: { name: "tool", inputSchema: { type: "object" } }, serverIdentity: "identity",
+    call: async (input) => {
+      assert.deepEqual(input, { fixture: true });
+      calls++;
+      return { content: [{ type: "text", text: "host result" }] };
+    },
+  });
+  await session.refreshMcp!();
+  assert.deepEqual(await listing(), { fixture: ["tool"], offline: [] });
+  tools[0] = { ...tools[0]!, name: "mcp__fixture__new", definition: { ...tools[0]!.definition, name: "new" } };
+  await session.refreshMcp!();
+  assert.deepEqual(await listing(), { fixture: ["new"], offline: [] });
+  assert.equal(calls, 2);
+});
+
 test("WorkflowParent callbacks remain host-owned and reverse cancellation aborts their signal", isolationIntegration, async (t) => {
   let inspections = 0;
   let cancelled = false;

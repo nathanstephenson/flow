@@ -2,6 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { readlinkSync } from "node:fs";
 import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { claudeMcpServers } from "../../src/backend/claude/mcp.ts";
 import { AutoPermissionUnavailable } from "../../src/backend/permission-errors.ts";
 import type { AgentBackend, BackendSession, WorkflowSubagentHandle } from "../../src/backend/types.ts";
 import type { Capabilities } from "../../src/protocol/events.ts";
@@ -37,6 +40,25 @@ const backend: AgentBackend = {
         if (text === "descendant") {
           ownedProcess = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
           options.emit({ type: "message", id: "process", text: JSON.stringify({ pid: ownedProcess.pid, namespace: readlinkSync("/proc/self/ns/pid") }), final: true });
+        }
+        if (text === "claude-mcp") {
+          const servers = claudeMcpServers(options.mcp);
+          const listings: Record<string, unknown> = {};
+          for (const [id, server] of Object.entries(servers)) {
+            const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+            const client = new Client({ name: "fixture", version: "1" });
+            try {
+              await server.instance.connect(serverTransport);
+              await client.connect(clientTransport);
+              const { tools } = await client.listTools();
+              listings[id] = tools.map((tool) => tool.name);
+              if (tools.length) await client.callTool({ name: tools[0]!.name, arguments: { fixture: true } });
+            } finally {
+              await client.close();
+              await server.instance.close();
+            }
+          }
+          options.emit({ type: "message", id: "claude-mcp", text: JSON.stringify(listings), final: true });
         }
         if (text === "mcp-hold") await options.mcp!.tools()[0]!.call({ hold: true });
         if (text === "mcp") {

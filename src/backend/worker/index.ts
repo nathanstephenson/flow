@@ -169,7 +169,7 @@ class WorkerSession implements BackendSession {
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
         workflowEnabled: !workflowBuilder && !!workflow,
         ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }
-          : mcp ? { mcpTools: mcpMetadata(mcp) } : {}),
+          : mcp ? { mcpTools: mcpMetadata(mcp), mcpConnectionIds: (mcp.connections ?? []).map((connection) => connection.id) } : {}),
         ...(this.launchOptions.backendModule ? { backendModule: this.launchOptions.backendModule } : {}),
       }], controller.signal);
       this.updateSnapshot(state);
