@@ -37,7 +37,7 @@ export function runWorker(): void {
     if (method === "create") {
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, mcpConnectionIds, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
         instructions: workflowBuilderInstructions,
         read: (path) => rpc.call("workflowBuilder.read", [path]),
@@ -65,7 +65,7 @@ export function runWorker(): void {
       session = await backend.create({
         ...options,
         ...(workflowBuilder ? { workflowBuilder } : {
-          ...(mcpTools ? { mcp: { tools: () => tools } as McpSession } : {}),
+          ...(mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),
           ...(workflowEnabled ? { workflow } : {}),
         }),
         emit: (event) => {

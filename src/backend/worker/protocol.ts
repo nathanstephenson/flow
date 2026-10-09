@@ -7,6 +7,7 @@ export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workfl
   /** Only instructions cross IPC; the three callbacks remain in the host. */
   workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];
+  mcpConnectionIds?: string[];
   workflowEnabled: boolean;
   /** Trusted launcher configuration, never accepted from model RPC. */
   backendModule?: string;
