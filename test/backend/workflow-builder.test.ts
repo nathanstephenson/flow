@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -17,6 +18,11 @@ import { claudeWorkflowBuilderToolNames } from "../../src/backend/claude/workflo
 import type { BackendEvent } from "../../src/protocol/events.ts";
 import type { McpSession } from "../../src/backend/mcp.ts";
 import { piFixture, until } from "./pi-fixture.ts";
+import { SessionHost } from "../../src/daemon/host.ts";
+
+const bwrap = process.env.FLOW_BWRAP_PATH ?? "/usr/bin/bwrap";
+const probe = process.platform === "linux" ? spawnSync(bwrap, ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "/bin/true"], { encoding: "utf8", timeout: 10000 }) : undefined;
+const restricted = { timeout: 60000, skip: !probe || probe.error || probe.status !== 0 ? "Bubblewrap namespaces unavailable" : false };
 
 const names = workflowBuilderTools.map(tool => tool.name);
 const workflow = { inspect: async () => null, recover: async () => null, relayEnquiry: async () => null, relayPermission: async () => null };
@@ -96,6 +102,57 @@ it("Pi builder exposes only host tools and ignores ambient resources, grants, an
   await session.setModel("flow-test/child");
   await session.prompt("Still restricted");
   assert.deepEqual(f.requests.at(-1)?.tools?.map(tool => tool.function.name).sort(), [...names].sort());
+});
+
+it("restricted Pi builder starts, uses host tools, reopens, and discovers models with linked ambient resources", restricted, async t => {
+  const { builder, calls } = builderFixture();
+  let turn = 0;
+  const f = await piFixture(t, () => ++turn === 1 ? { tools: [
+    { id: "read", name: names[0]!, arguments: { path: "reference" } },
+    { id: "list", name: names[1]!, arguments: { path: "examples" } },
+    { id: "write", name: names[2]!, arguments: { content: "draft" } },
+  ] } : { text: "done" });
+  const root = await mkdtemp(join(tmpdir(), "flow-restricted-builder-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scope = join(root, "project"), stateDir = join(root, "backend"), ambient = join(root, "ambient");
+  for (const path of [scope, stateDir, ambient]) mkdirSync(path);
+  writeFileSync(join(ambient, "AGENTS.md"), "AMBIENT AUTHORITY");
+  symlinkSync(join(ambient, "AGENTS.md"), join(f.scope, "AGENTS.md"));
+  symlinkSync(ambient, join(f.scope, "skills"));
+  writeFileSync(join(f.scope, "auth.json"), '{"flow-test":{"type":"api_key","key":"test-only"}}');
+  const credentials = ["auth.json", "models.json", "settings.json"].map(name => [name, readFileSync(join(f.scope, name), "utf8")] as const);
+  const backend = new WorkerBackend({ backend: "pi", isolationEnabled: () => true,
+    env: { PI_CODING_AGENT_DIR: f.scope, PI_OFFLINE: "1", FLOW_BWRAP_PATH: bwrap } });
+  const host = new SessionHost();
+  host.registerBackend(backend);
+  t.after(() => host.shutdown());
+  const events: BackendEvent[] = [];
+  const options = { scope, stateDir, workflowBuilder: builder, modelId: "flow-test/parent", emit: (event: BackendEvent) => events.push(event) };
+  const session = await host.createWorkflowBuilderSession("pi", options);
+  t.after(() => session.dispose());
+  assert.deepEqual(await session.skills!(), []);
+  await session.prompt("Build draft");
+  await until(() => events.some(event => event.type === "turn_ended"), 15000);
+  assert.deepEqual(calls, [["read", "reference"], ["list", "examples"], ["write", "draft"]]);
+  const resume = session.resumeToken();
+  await session.dispose();
+  const reopened = await backend.create({ ...options, ...(resume ? { resume } : {}) });
+  t.after(() => reopened.dispose());
+  await reopened.prompt("Continue draft");
+  await until(() => events.filter(event => event.type === "turn_ended").length === 2, 15000);
+  await reopened.dispose();
+  const beforeProbe = f.requests.length;
+  const listing = await host.workflowBuilderModels("pi", scope);
+  assert.equal(listing.problem, undefined);
+  assert.ok(listing.models.some(model => model.id === "flow-test/parent"));
+  assert.equal(f.requests.length, beforeProbe);
+  for (const request of f.requests) {
+    assert.deepEqual(request.tools?.map(tool => tool.function.name).sort(), [...names].sort());
+    assert.ok(!JSON.stringify(request.messages).includes("AMBIENT AUTHORITY"));
+  }
+  for (const [name, content] of credentials) assert.equal(readFileSync(join(f.scope, name), "utf8"), content);
+  const ordinary = await host.models(scope);
+  assert.match(ordinary[0]!.problem ?? "", /Unsafe Pi resource/);
 });
 
 it("Claude builder excludes native and external tools and cannot relax its permission gate", async t => {
@@ -203,9 +260,16 @@ it("builder host rejects other reverse RPC capabilities even from a misbehaving 
   assert.deepEqual(calls, []);
 });
 
-it("installed Claude CLI declares only the three builder tools and executes them through the host", { timeout: 30000 }, async t => {
-  const scope = await mkdtemp(join(tmpdir(), "flow-claude-builder-"));
-  t.after(() => rm(scope, { recursive: true, force: true }));
+for (const isolated of [false, true]) it(`${isolated ? "restricted" : "direct"} installed Claude CLI declares only the three builder tools and executes them through the host`, isolated ? restricted : { timeout: 30000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), "flow-claude-builder-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const scope = join(root, "project"), config = join(root, "user-config"), home = join(root, "home"), stateDir = join(root, "backend");
+  for (const path of [scope, config, home, stateDir]) mkdirSync(path);
+  writeFileSync(join(root, "authority.md"), "AMBIENT AUTHORITY");
+  symlinkSync(join(root, "authority.md"), join(config, "CLAUDE.md"));
+  symlinkSync(scope, join(config, "skills"));
+  writeFileSync(join(config, ".credentials.json"), "{}");
+  writeFileSync(join(home, ".claude.json"), "{}");
   mkdirSync(join(scope, ".claude", "skills", "ambient"), { recursive: true });
   writeFileSync(join(scope, "CLAUDE.md"), "AMBIENT AUTHORITY");
   writeFileSync(join(scope, ".claude", "skills", "ambient", "SKILL.md"), "---\nname: ambient\ndescription: AMBIENT AUTHORITY\n---\nAMBIENT AUTHORITY");
@@ -240,20 +304,40 @@ it("installed Claude CLI declares only the three builder tools and executes them
   t.after(() => { server.closeAllConnections(); server.close(); });
   const address = server.address() as { port: number };
   const events: BackendEvent[] = [];
-  const backend = new ClaudeBackend({ query: args => query({ ...args, options: { ...args.options,
-    env: { ...args.options?.env, HOME: join(scope, "home"), CLAUDE_CONFIG_DIR: join(scope, "user-config"),
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_API_KEY: "dummy-local-key",
-      ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      CLAUDE_CODE_USE_BEDROCK: undefined, CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined },
-  } }) });
-  mkdirSync(join(scope, "sessions"));
-  const session = await backend.create({ scope, stateDir: join(scope, "sessions"), workflowBuilder: builder,
-    permissionMode: "always", emit: event => events.push(event) });
+  const env = { HOME: home, CLAUDE_CONFIG_DIR: config, CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined, FLOW_BWRAP_PATH: bwrap,
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_API_KEY: "dummy-local-key",
+    ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_CODE_USE_BEDROCK: undefined, CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined };
+  const backend = isolated ? new WorkerBackend({ backend: "claude", isolationEnabled: () => true, env })
+    : new ClaudeBackend({ query: args => query({ ...args, options: { ...args.options, env: { ...args.options?.env, ...env } } }) });
+  const options = { scope, stateDir, workflowBuilder: builder, permissionMode: "always" as const, emit: (event: BackendEvent) => events.push(event) };
+  const session = await backend.create(options);
   t.after(() => session.dispose());
   await session.prompt("Build draft");
   await until(() => events.some(event => event.type === "turn_ended"), 20000);
   assert.deepEqual(calls, [["read", "reference"], ["list", "examples"], ["write", "draft"]]);
   assert.equal(requests.length, 4);
+  if (isolated) {
+    const resume = session.resumeToken();
+    await session.dispose();
+    const reopened = await backend.create({ ...options, ...(resume ? { resume } : {}) });
+    t.after(() => reopened.dispose());
+    await reopened.prompt("Continue draft");
+    await until(() => events.filter(event => event.type === "turn_ended").length === 2, 20000);
+    await reopened.dispose();
+    const host = new SessionHost();
+    host.registerBackend(backend);
+    t.after(() => host.shutdown());
+    const beforeProbe = requests.length;
+    const listing = await host.workflowBuilderModels("claude", scope);
+    assert.equal(listing.problem, undefined);
+    assert.ok(listing.models.length);
+    assert.equal(requests.length, beforeProbe);
+    assert.equal(readFileSync(join(config, ".credentials.json"), "utf8"), "{}");
+    assert.equal(readFileSync(join(home, ".claude.json"), "utf8"), "{}");
+    const ordinary = await host.models(scope);
+    assert.match(ordinary[0]!.problem ?? "", /Unsafe Claude resource/);
+  }
   for (const request of requests) {
     assert.deepEqual((request.tools as { name: string }[]).map(tool => tool.name).sort(), [...claudeWorkflowBuilderToolNames].sort());
     assert.ok(!JSON.stringify(request).includes("AMBIENT AUTHORITY"));

@@ -26,6 +26,7 @@ export type FilesystemIsolationOptions = {
   /** Execution assets hidden by masks, mounted read-only at real paths; narrow lookup aliases are preserved. */
   readablePaths?: string[];
   credentials?: "pi" | "claude" | "none";
+  workflowBuilder?: boolean;
 };
 
 export type FilesystemIsolation = {
@@ -345,13 +346,13 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     };
     if (options.credentials === "pi") {
       for (const name of ["auth.json", "models.json", "settings.json"]) stage(join(piDir, name), join(env.PI_CODING_AGENT_DIR!, name));
-      resources("Pi", piDir, env.PI_CODING_AGENT_DIR!, ["AGENTS.md", "skills", "prompts", "themes", "extensions", "packages", "bin", "tools"]);
+      if (!options.workflowBuilder) resources("Pi", piDir, env.PI_CODING_AGENT_DIR!, ["AGENTS.md", "skills", "prompts", "themes", "extensions", "packages", "bin", "tools"]);
     } else if (options.credentials === "claude") {
       stage(join(claudeAuthDir, ".credentials.json"), join(env.CLAUDE_CONFIG_DIR!, ".credentials.json"));
       const config = existsSync(join(claudeDir, ".claude.json")) ? join(claudeDir, ".claude.json") : join(credentialHome, ".claude.json");
       stage(config, join(virtualHome, ".claude.json"));
       stage(config, join(env.CLAUDE_CONFIG_DIR!, ".claude.json"));
-      resources("Claude", claudeDir, env.CLAUDE_CONFIG_DIR!, ["CLAUDE.md", "commands", "skills", "agents", "rules", "plugins"]);
+      if (!options.workflowBuilder) resources("Claude", claudeDir, env.CLAUDE_CONFIG_DIR!, ["CLAUDE.md", "commands", "skills", "agents", "rules", "plugins"]);
       // The CLI owns its project transcripts. Persist only that subtree, not global credentials.
       const projects = join(backend, "claude-projects");
       if (!existsSync(projects)) mkdirSync(projects, { mode: 0o700 });

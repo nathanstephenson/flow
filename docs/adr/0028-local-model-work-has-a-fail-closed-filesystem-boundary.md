@@ -67,7 +67,9 @@ and secrets, is not writable or directly exposed to workers. Only the selected b
 is mounted at a worker-private path for Revive. Credential files needed by the selected SDK are
 staged narrowly into a private home, never by mounting the real home writable. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
-without admitting symlinks or parents that contain protected host state. Adapter-local credential
+without admitting symlinks or parents that contain protected host state. Restricted Workflow Builders
+and their model-discovery probes omit unused ambient resources while retaining credential staging
+(ADR 0030). Adapter-local credential
 refresh does not write back to the user's global credential files. A separately configured Claude
 auth root is masked too and only its credential file is staged. Nonempty `CLAUDE_CONFIG_DIR` and
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` must be absolute for restricted launches: relative roots use the

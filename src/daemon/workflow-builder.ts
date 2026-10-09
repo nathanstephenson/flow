@@ -23,7 +23,7 @@ const MAX_HISTORY = 256_000;
 // A cold catalogue probe and a worker startup each have their own bounded launch window.
 const defaults = { startupMs: 120_000, idleMs: 30 * 60_000, lifetimeMs: 2 * 60 * 60_000, turnMs: 10 * 60_000, disposeMs: 5_000, maxBuilders: 8 };
 type Limits = typeof defaults;
-type Host = Pick<SessionHost, 'models' | 'createWorkflowBuilderSession'>;
+type Host = Pick<SessionHost, 'workflowBuilderModels' | 'createWorkflowBuilderSession'>;
 type Config = Pick<ConfigStore, 'projectRoot' | 'projectInclude' | 'defaultModel' | 'defaultEffort'>;
 export interface WorkflowBuilderServiceOptions {
   host: Host;
@@ -81,6 +81,8 @@ function bounded(value: unknown): void {
   if (Buffer.byteLength(JSON.stringify(value) ?? '') > MAX_DEFINITION) throw invalid();
 }
 const stepValidators = workflowDefinitionValidator.shape.steps.element.options;
+const mcpReferenceValidator = stepValidators[5].shape.tool.omit({ connectionName: true, inputSchema: true, outputSchema: true });
+const mcpDiagnostic = (id: unknown) => `MCP step ${JSON.stringify(id)} must use unchanged existing snapshots or exact tools from mcp-tools.json`;
 const draftName = { name: stepValidators[0].shape.name.or(z.literal('')) };
 const draftStepValidator = z.discriminatedUnion('kind', [
   stepValidators[0].extend({ ...draftName, model: z.string() }),
@@ -96,6 +98,28 @@ function definition(value: unknown, draft = false): WorkflowDefinition {
   // broken connections/mappings for the agent to repair. Writes still require full validation.
   const parsed = draftValidator.parse(value) as WorkflowDefinition;
   return draft ? parsed : validateDefinition(parsed).definition;
+}
+function builderDefinition(value: unknown, entry: Entry): WorkflowDefinition {
+  bounded(value);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const draft = value as Record<string, unknown>;
+    if (draft.projectId === null && entry.view.definition.projectId === undefined) delete draft.projectId;
+    if (Array.isArray(draft.steps)) {
+      if (draft.steps.length > 200) throw invalid();
+      for (const step of draft.steps) {
+        if (!step || typeof step !== 'object' || step.kind !== 'mcp') continue;
+        const reference = mcpReferenceValidator.safeParse(step.tool);
+        if (!reference.success) continue;
+        const tool = [...entry.catalogueMcpTools, ...entry.originalMcpTools].find(tool =>
+          Object.entries(reference.data).every(([key, value]) => tool[key as keyof McpToolSnapshot] === value));
+        if (!tool) throw new Error(mcpDiagnostic(step.id));
+        step.tool = tool;
+        bounded(value);
+        step.tool = structuredClone(tool);
+      }
+    }
+  }
+  return definition(value);
 }
 function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -184,7 +208,7 @@ export class WorkflowBuilderService {
     await mkdir(join(directory, 'backend'), { mode: 0o700 });
     await mkdir(join(directory, 'scope'), { mode: 0o700 });
     this.check(entry);
-    const catalogue = (await host.models(join(directory, 'scope'))).find(catalogue => catalogue.backend === entry.view.definition.backend);
+    const catalogue = await host.workflowBuilderModels(entry.view.definition.backend, join(directory, 'scope'));
     this.check(entry, true);
     if (!catalogue?.models.length) throw new WorkflowBuilderRequestError(400, 'Workflow Backend models are unavailable');
     entry.models = catalogue.models.slice(0, 500);
@@ -247,7 +271,7 @@ export class WorkflowBuilderService {
           try {
             if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_DEFINITION) throw new Error();
             let draft: WorkflowDefinition;
-            try { draft = definition(JSON.parse(content)); }
+            try { draft = builderDefinition(JSON.parse(content), entry); }
             catch (error) {
               diagnostic = error instanceof z.ZodError
                 ? error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ').slice(0, 500)
@@ -263,9 +287,11 @@ export class WorkflowBuilderService {
               const model = entry.models.find(model => model.id === step.model);
               if (!model || (model.effortLevels?.length ? !model.effortLevels.includes(step.effort) : step.effort !== 'off')) throw new Error();
             }
-            diagnostic = 'MCP steps must use unchanged existing snapshots or exact tools from mcp-tools.json';
             for (const step of draft.steps) {
-              if (step.kind === 'mcp' && ![...entry.originalMcpTools, ...entry.catalogueMcpTools].some(tool => isDeepStrictEqual(tool, step.tool))) throw new Error();
+              if (step.kind === 'mcp' && ![...entry.originalMcpTools, ...entry.catalogueMcpTools].some(tool => isDeepStrictEqual(tool, step.tool))) {
+                diagnostic = mcpDiagnostic(step.id);
+                throw new Error();
+              }
             }
             diagnostic = 'Workflow credential or MCP snapshot validation failed';
             this.options.validateDefinition?.(draft);

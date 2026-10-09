@@ -2817,6 +2817,10 @@ export class SessionHost {
     });
   }
 
+  workflowBuilderModels(backend: string, scope: string): Promise<BackendModels> {
+    return probeModels(this.backendFor(backend), scope, true);
+  }
+
   /** Independent, host-mediated authoring; never inherits Agent Session tools or MCP. */
   createWorkflowBuilderSession(backend: string, options: Pick<import('../backend/types.ts').BackendCreateOptions, 'scope' | 'stateDir' | 'modelId' | 'effort' | 'priorSpend' | 'workflowBuilder' | 'emit' | 'onFailure' | 'signal'>): Promise<BackendSession> {
     if (!options.workflowBuilder) throw new Error('Workflow builder capabilities are required');

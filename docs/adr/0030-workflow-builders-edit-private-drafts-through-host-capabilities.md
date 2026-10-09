@@ -33,11 +33,17 @@ The model gets only three host-mediated capabilities: read a reference file, lis
 directory, and replace its own workflow draft. Reference paths are bounded to the pinned read Scope,
 reject symlink traversal and special files, and exclude protected host state and credential stores.
 Writes validate the workflow graph and its fixed identity before replacing the previous draft.
-Invalid writes leave the last accepted draft unchanged. Initial authoring input may be incomplete,
+Invalid writes leave the last accepted draft unchanged. Machine-wide definitions omit `projectId`;
+a builder write of `projectId: null` is treated as omission only when the original definition has
+no Project binding. A Project-specific builder cannot remove or change its binding.
+Initial authoring input may be incomplete,
 including blank names/model selections and broken edges or mappings; it is never executable. Every
 agent write still requires a complete valid graph. Built-in filesystem tools, shell tools,
 Subagents, external MCP tools, resource extensions, and hooks are not available. Both Claude and Pi
 use this restricted tool set; the worker bridge independently denies unrelated host capabilities.
+Builder workers and their model-discovery probes stage the selected SDK's credentials, but do not
+validate or mount unused ambient resource folders. Linked ambient instructions or Skills cannot
+block builder startup or reopening. Ordinary Backend Sessions retain their resource checks.
 Questions are ordinary assistant text, not Enquiries requiring a second composer implementation.
 The sidebar reuses the existing transcript view and Composer through a bounded, ephemeral snapshot
 adapter, not an Agent Session registry entry or durable Presentation Transcript. It shows Model,
@@ -69,5 +75,12 @@ contract and model catalogue, not executable Project instructions or a new graph
 - No shell search, workflow execution, or external MCP invocation is offered inside the builder.
   Host-owned metadata discovery is available through `mcp-tools.json` (ADR 0031). Existing
   MCP snapshots can be preserved; new MCP steps must use exact snapshots from that catalogue.
+  Builder writes may select a tool with a compact `{connectionId, identity, serverIdentity, toolName}`
+  reference. The host resolves it only against unchanged original snapshots or the catalogue read
+  by that builder, preferring the current catalogue when the same reference identifies an original
+  snapshot with an older schema. It checks step, byte, node and depth limits before cloning, then
+  inserts the complete snapshot before graph and credential validation.
+  Saved definitions still contain complete snapshots. Supplied full snapshots must remain exact;
+  rejected snapshot diagnostics name the Workflow Step.
 - Project files remain untrusted reference data. Read-only access is not a confidentiality guarantee
   for everything the owner permits inside that Scope; do not place protected-file aliases there.
