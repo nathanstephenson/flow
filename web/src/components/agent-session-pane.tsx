@@ -125,22 +125,6 @@ function AttachedPane({
   const rememberedDetails = useRef<Record<string, MobileDetail | undefined>>({});
   const handledReveal = useRef(0);
 
-  useEffect(() => {
-    if (!mobile || window.visualViewport === null) return;
-    const viewport = window.visualViewport;
-    const update = (): void => {
-      document.documentElement.style.setProperty("--mobile-viewport-height", `${viewport.height}px`);
-    };
-    update();
-    viewport.addEventListener("resize", update);
-    viewport.addEventListener("scroll", update);
-    return () => {
-      viewport.removeEventListener("resize", update);
-      viewport.removeEventListener("scroll", update);
-      document.documentElement.style.removeProperty("--mobile-viewport-height");
-    };
-  }, [mobile]);
-
   const writeMobileView = useCallback((next: MobileView, replace = false) => {
     if (sameMobileView(mobileViewRef.current, next) && !replace) return;
     mobileViewRef.current = next;
@@ -349,7 +333,7 @@ function AttachedPane({
   const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
   return (
-    <div className={cn("grid min-h-0 min-w-0", mobile ? "mobile-view-height grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
+    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
       <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
 
       {mobile ? (

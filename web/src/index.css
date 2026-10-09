@@ -217,6 +217,7 @@
   body {
     /* All app scrollers are local; the document itself must never drift sideways on a phone. */
     overflow: hidden;
+    touch-action: manipulation;
     font-variant-numeric: tabular-nums;
   }
 
@@ -362,18 +363,19 @@
 
 /* The mobile frame opts into viewport-fit=cover, so its chrome owns the device cutouts. */
 @media (max-width: 1023px) {
+  #root {
+    position: fixed;
+    top: var(--mobile-viewport-top, 0px);
+    left: 0;
+    width: 100%;
+    height: var(--mobile-viewport-height, 100dvh);
+  }
+
   .mobile-safe-frame {
     padding-top: env(safe-area-inset-top);
     padding-right: env(safe-area-inset-right);
     padding-bottom: env(safe-area-inset-bottom);
     padding-left: env(safe-area-inset-left);
-  }
-
-  /* iOS Safari does not implement interactive-widget=resizes-content. The pane tracks its visual
-   * viewport so every selected surface—not only the Composer—stays above the keyboard. */
-  .mobile-view-height {
-    height: var(--mobile-viewport-height, 100dvh);
-    max-height: 100%;
   }
 
   .mobile-rail-trigger {

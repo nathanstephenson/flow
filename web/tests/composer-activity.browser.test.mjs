@@ -120,6 +120,18 @@ describe("Composer activity border", () => {
     assert.deepEqual(errors, []);
   });
 
+  it("keeps mobile input text large enough to avoid focus zoom", async () => {
+    for (const width of [390, 820, 1023, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
+        const input = pane().locator('.cm-content');
+        await input.click();
+        assert.equal(await style(input, 'fontSize'), width < 1024 ? '16px' : '14px');
+      }
+    }
+  });
+
   it("uses the active and awaiting tokens in both themes", async () => {
     const colors = {};
     for (const theme of ['light', 'dark']) {
