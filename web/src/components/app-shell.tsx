@@ -7,6 +7,7 @@ import { useDocks } from "@/docks.ts";
 import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
+import { useMobileViewport } from "@/lib/use-mobile-viewport.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
 import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
@@ -48,6 +49,7 @@ import { toast } from "@/components/ui/toaster.tsx";
  * below.
  */
 export function AppShell() {
+  useMobileViewport();
   const { config } = useHost();
   const { sessions, loaded } = useAgentSessions();
   const {

@@ -571,6 +571,9 @@ const THEME = EditorView.theme({
     color: "var(--foreground)",
     backgroundColor: "transparent",
   },
+  "@media (max-width: 1023px)": {
+    ".cm-scroller": { fontSize: "1rem" },
+  },
   "&.cm-focused": { outline: "none" },
   ".cm-content": {
     fontFamily: "inherit",
