@@ -898,7 +898,6 @@ export function Composer({
           />
 
           <div className="flex shrink-0 items-center pr-2">
-            {mobile && <TurnOptionsButton chrome={chrome} actions={actions} controls={controls} onReturnFocus={() => input.current?.focus()} />}
             {ended ? null : running ? (
               <AbortButton onAbort={abort} disabled={abortDisabled} label={abortLabel} />
             ) : (
@@ -912,7 +911,11 @@ export function Composer({
           </div>
         </div>
 
-        {mobile ? <TurnSummary chrome={chrome} /> : <TurnStrip chrome={chrome} actions={actions} {...controls} />}
+        {mobile ? (
+          <TurnSummary chrome={chrome}>
+            <TurnOptionsButton chrome={chrome} actions={actions} controls={controls} onReturnFocus={() => input.current?.focus()} />
+          </TurnSummary>
+        ) : <TurnStrip chrome={chrome} actions={actions} {...controls} />}
       </div>
     </div>
   );

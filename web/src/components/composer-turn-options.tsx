@@ -1,5 +1,5 @@
 import { SlidersHorizontal } from "lucide-react";
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 
 import type { ComposerActions } from "@/composer-actions.ts";
 import type { Chrome } from "@/store/contract.ts";
@@ -36,12 +36,13 @@ export function TurnOptionsButton({ chrome, actions, controls, onReturnFocus }: 
   );
 }
 
-export function TurnSummary({ chrome }: { chrome: Chrome }) {
+export function TurnSummary({ chrome, children }: { chrome: Chrome; children: ReactNode }) {
   const model = chrome.model?.label ?? chrome.model?.id ?? "model";
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 border-t border-border/40 px-3 py-2 text-xs text-muted-foreground">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-t border-border/40 px-3 py-1 text-xs text-muted-foreground">
       <span className="min-w-0 truncate" title={model}>{model}</span>
-      <div className="shrink-0">
+      {children}
+      <div className="w-full min-w-0 max-w-32 justify-self-end">
         <ContextUsageMeter usage={chrome.contextUsage} compacting={chrome.compacting} />
       </div>
     </div>

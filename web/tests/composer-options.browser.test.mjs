@@ -218,10 +218,21 @@ describe("Composer turn options", () => {
         const send = pane().getByRole("button", { name: "Send this message", exact: true });
         await separate(trigger(), send);
         await separate(editor(), trigger());
+        await separate(summary, trigger());
+        await separate(trigger(), meter(pane()));
         const optionsBox = await trigger().boundingBox();
+        const panelBox = await panel().boundingBox();
+        const summaryBox = await summary.boundingBox();
+        const meterBox = await meter(pane()).boundingBox();
         const sendBox = await send.boundingBox();
-        assert.ok(Math.abs(optionsBox.y + optionsBox.height / 2 - sendBox.y - sendBox.height / 2) < 2,
-          "Turn options must sit beside Send");
+        assert.ok(Math.abs(optionsBox.x + optionsBox.width / 2 - panelBox.x - panelBox.width / 2) < 1,
+          "Turn options must be centred in the bottom row");
+        assert.ok(summaryBox.x + summaryBox.width <= optionsBox.x && optionsBox.x + optionsBox.width <= meterBox.x,
+          "Turn options must sit between the model summary and context meter");
+        assert.ok(Math.abs(summaryBox.y + summaryBox.height / 2 - optionsBox.y - optionsBox.height / 2) < 1 &&
+          Math.abs(meterBox.y + meterBox.height / 2 - optionsBox.y - optionsBox.height / 2) < 1,
+          "Summary, Turn options and context meter must share the bottom row");
+        assert.ok(optionsBox.y >= sendBox.y + sendBox.height, "Turn options must be below Send");
         await editor().click();
         await page.keyboard.type("Keep this unsent Draft");
         await open();
