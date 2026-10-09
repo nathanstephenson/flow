@@ -12,7 +12,7 @@ import {
   templateValue,
 } from "../presentation/workflow-json-schema.ts";
 import type { WorkflowMcpConnections } from "../../../src/protocol/workflow-mcp-authoring.ts";
-import { workflowApi } from "./workflow-api.ts";
+import { workflowMcpApi } from "./workflow-api.ts";
 import { JsonSchemaEditor } from "./workflow-json-schema.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -59,10 +59,8 @@ export function McpStepEditor({
         ? current
         : { path: connectionsPath, id: "" },
     );
-    void workflowApi<WorkflowMcpConnections>(
+    void workflowMcpApi<WorkflowMcpConnections>(
       connectionsPath,
-      "GET",
-      undefined,
       controller.signal,
     )
       .then((data) => {
@@ -99,10 +97,8 @@ export function McpStepEditor({
     consumedDiscoveryRefresh.current = discoveryRefresh;
     setDiscovery(undefined);
     if (discoveryPath) {
-      void workflowApi<McpToolDiscovery>(
+      void workflowMcpApi<McpToolDiscovery>(
         refresh ? `${discoveryPath}${query ? "&" : "?"}refresh=1` : discoveryPath,
-        "GET",
-        undefined,
         controller.signal,
       )
         .then((data) => {

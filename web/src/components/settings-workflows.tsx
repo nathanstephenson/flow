@@ -414,7 +414,7 @@ export default function WorkflowsSettings() {
                   }
                 }}
                 onSelect={selectStep}
-                selectedStepId={mobile ? selected : undefined}
+                selectedStepId={selected}
               />
               {step && (
                 <aside className="workflow-inspector grid gap-3 rounded-lg border p-4">
@@ -639,7 +639,7 @@ export default function WorkflowsSettings() {
                     />
                   )}
                   <StepTest
-                    key={step.id}
+                    key={`test/${step.id}`}
                     definition={definition}
                     stepId={step.id}
                   />

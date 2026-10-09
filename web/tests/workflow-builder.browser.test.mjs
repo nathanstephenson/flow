@@ -21,12 +21,15 @@ const bundle = await build({
     </TooltipProvider></HostProvider>);`, loader: 'tsx', resolveDir: root },
   tsconfig: `${root}/web/tsconfig.json`, bundle: true, write: false, format: 'iife', platform: 'browser',
   loader: { '.css': 'empty' }, define: { 'process.env.NODE_ENV': '"development"' },
+  plugins: [{ name: 'empty-agent-sessions', setup(build) {
+    build.onLoad({ filter: /\/agent-sessions\.tsx$/ }, () => ({ contents: 'export function useAgentSessions() { return { sessions: [] }; }', loader: 'tsx' }));
+  } }],
 });
 const original = { version: 1, id: 'example', name: 'Original workflow', backend: 'pi', permission: 'auto-accept', inputSchema: { type: 'object', fields: {} }, steps: [], edges: [] };
 const other = { ...original, id: 'other', name: 'Other workflow' };
 
 describe('workflow builder editor', () => {
-  let browser, page, view, calls, saved, slowStop, rejectSend, rejectAbort, pageErrors;
+  let browser, page, view, calls, saved, slowStop, rejectSend, rejectAbort, pageErrors, keyWarnings, mcpListGate;
   const input = () => page.getByRole('textbox', { name: 'Builder message', exact: true });
   const draftText = () => input().evaluate(element => [...element.querySelectorAll('.cm-line')].map(line => {
     const copy = line.cloneNode(true);
@@ -51,10 +54,11 @@ describe('workflow builder editor', () => {
   before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) }); });
   after(async () => { await browser?.close(); });
   beforeEach(async () => {
-    calls = []; saved = undefined; view = undefined; slowStop = false; rejectSend = false; rejectAbort = false; pageErrors = [];
+    calls = []; saved = undefined; view = undefined; slowStop = false; rejectSend = false; rejectAbort = false; pageErrors = []; keyWarnings = []; mcpListGate = undefined;
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.setDefaultTimeout(10000);
     page.on('pageerror', error => pageErrors.push(error.message));
+    page.on('console', message => { if (message.text().includes('same key')) keyWarnings.push(message.text()); });
     const mockAPI = async route => {
       const request = route.request(); const path = new URL(request.url()).pathname;
       const method = request.method();
@@ -66,6 +70,8 @@ describe('workflow builder editor', () => {
       else if (path === '/api/models') body = [{ backend: 'pi', models: [{ id: 'reasoner', label: 'Reasoner', effortLevels: ['off', 'high'], acceptsImages: true }] }];
       else if (path === '/api/workflows') body = { workflows: [saved ?? original, other] };
       else if (path === '/api/secrets') body = { names: [] };
+      else if (path === '/api/workflow-mcp') body = { scope: '/tmp/root', connections: [{ id: 'local', name: 'Local tools', transport: 'stdio', enabledByDefault: true }] };
+      else if (path === '/api/workflow-mcp/local') body = { tools: [{ connectionId: 'local', connectionName: 'Local tools', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }], errors: [] };
       else if (path === '/api/workflows/example' && method === 'PUT') { saved = request.postDataJSON(); body = { workflow: saved }; }
       else if (path === '/api/workflow-builders' && method === 'POST') {
         view = { id: 'builder', scope: '/tmp/root', status: 'idle', definition: request.postDataJSON().definition, messages: [] }; body = view;
@@ -82,6 +88,7 @@ describe('workflow builder editor', () => {
       else if (path === '/api/workflow-builders/builder' && method === 'DELETE') body = { closed: true };
       else if (path === '/api/workflow-builders/builder') body = view;
       else return route.fulfill({ contentType: 'application/json', body: '{}' });
+      if (path === '/api/workflow-mcp' && mcpListGate) await mcpListGate;
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
     };
     await page.route('https://flow.test/**', mockAPI);
@@ -97,6 +104,7 @@ describe('workflow builder editor', () => {
   afterEach(async () => {
     try {
       assert.deepEqual(pageErrors, []);
+      assert.deepEqual(keyWarnings, []);
       assert.equal(calls.some(call => /^\/api\/sessions(?:\/|$)/.test(call.path)), false, 'The builder must not issue Agent Session requests');
       assert.equal(calls.some(call => /\/(?:skills|attachments|branches)(?:\/|$)/.test(call.path)), false, 'The builder must not list Skills, Attachments, or branches');
     } finally { await page?.close(); }
@@ -107,6 +115,51 @@ describe('workflow builder editor', () => {
     await conversation().getByText('Updated the workflow draft.', { exact: true }).waitFor();
     await waitEditable();
   };
+  for (const [theme, width] of [['light', 1440], ['dark', 1100], ['dark', 390]])
+  it(`adds an MCP step and keeps one stable inspector in ${theme} mode at ${width}px`, async () => {
+    await page.getByRole('button', { name: 'Hide builder agent', exact: true }).click();
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), theme === 'dark');
+    let releaseMcp;
+    mcpListGate = new Promise(resolve => { releaseMcp = resolve; });
+    await page.getByRole('button', { name: 'Add MCP', exact: true }).click();
+    const inspector = page.locator('.workflow-inspector');
+    await inspector.getByRole('button', { name: 'Loading servers…', exact: true }).waitFor();
+    await inspector.getByRole('textbox', { name: 'Name', exact: true }).fill('Lookup');
+    assert.equal(await inspector.getByRole('combobox', { name: 'MCP server', exact: true }).count(), 1);
+    releaseMcp();
+    await inspector.getByText('Scope: /tmp/root', { exact: true }).waitFor();
+    await inspector.getByRole('combobox', { name: 'MCP server', exact: true }).click();
+    await page.getByRole('option', { name: 'Local tools · stdio', exact: true }).click();
+    await inspector.getByRole('status').filter({ hasText: '1 compatible tool available.' }).waitFor();
+    await inspector.getByRole('combobox', { name: 'MCP tool', exact: true }).click();
+    await page.getByRole('option', { name: 'lookup', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[aria-label="MCP tool"]')?.getAttribute('aria-expanded') === 'false');
+    await inspector.locator('[aria-label="Include Arguments.query"]').click();
+    await inspector.getByRole('textbox', { name: 'Arguments.query', exact: true }).fill('Saved query');
+    const height = await inspector.evaluate(element => element.scrollHeight);
+    await page.waitForTimeout(6500);
+    assert.equal(await inspector.count(), 1);
+    assert.equal(await inspector.getByRole('combobox', { name: 'MCP server', exact: true }).count(), 1);
+    assert.equal(await inspector.getByRole('textbox', { name: 'Arguments.query', exact: true }).inputValue(), 'Saved query');
+    assert.equal(await inspector.evaluate(element => element.scrollHeight), height);
+    assert.equal(calls.filter(call => call.path === '/api/workflow-mcp').length, 1);
+    await assertNoOverflow();
+    if (width >= 1024) {
+      await page.locator('.workflow-canvas .react-flow__pane').click({ position: { x: 20, y: 20 } });
+      await inspector.getByText('Select a step to edit its settings.', { exact: true }).waitFor();
+      assert.equal(await page.locator('.react-flow__node.selected').count(), 0);
+    } else {
+      await inspector.getByRole('button', { name: 'Back to workflow graph', exact: true }).click();
+    }
+    await page.locator('.workflow-step').filter({ hasText: 'Lookup' }).click();
+    await inspector.getByRole('textbox', { name: 'Arguments.query', exact: true }).waitFor();
+    assert.equal(await inspector.getByRole('textbox', { name: 'Arguments.query', exact: true }).inputValue(), 'Saved query');
+    await page.getByRole('button', { name: 'Save workflow', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: 'Saved' }).waitFor();
+    assert.equal(saved.steps[0].tool.toolName, 'lookup');
+    assert.equal(saved.steps[0].mapping.template.fields.query.value, 'Saved query');
+  });
   it('uses selected model/Effort, applies explicitly, and saves through the normal editor', async () => {
     await ask();
     const creation = calls.find(call => call.path === '/api/workflow-builders');

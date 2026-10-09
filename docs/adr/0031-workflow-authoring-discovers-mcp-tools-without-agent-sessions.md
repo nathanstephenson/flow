@@ -25,10 +25,11 @@ not callable handles.
 Unavailable connections and incompatible tools carry safe diagnostics; one failure need not hide
 compatible tools. The ten-second authoring deadline starts at request admission and includes Scope
 checks, queue wait, initialization and disposal response waits. Expired queued work is removed and
-cannot start later when cleanup capacity becomes free. Darwin canonicalization and directory
-identity checks run in a guarded, bounded metadata helper, not the Session Host; identical pending
-checks share a helper without caching completed identities. Authoring requests have a bounded
-response, but stdio capacity and cleanup remain
+cannot start later when cleanup capacity becomes free. Scope canonicalization and directory
+identity checks run on all platforms in a guarded, bounded metadata helper, not the Session Host;
+identical pending checks share a helper without caching completed identities. The editor applies a
+fifteen-second deadline to metadata requests, including response body reads, and offers manual Retry
+on failure. Authoring requests have a bounded response, but stdio capacity and cleanup remain
 owned until the supervisor reports actual leader exit and process-group cleanup, not merely bounded
 transport close. Host shutdown stops admission and retains ownership through that cleanup.
 

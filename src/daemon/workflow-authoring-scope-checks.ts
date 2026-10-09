@@ -1,12 +1,11 @@
-import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { isSea } from 'node:sea';
 import { fileURLToPath } from 'node:url';
 import { launchWorker } from '../backend/worker/launcher.ts';
-import { checkWorkflowAuthoringDirectory, workflowAuthoringDirectory, type WorkflowAuthoringDirectory } from './workflow-authoring-scope.ts';
+import type { WorkflowAuthoringDirectory } from './workflow-authoring-scope.ts';
 
 type Reader = { cancel: () => void; cleanup: Promise<void> };
-type Options = { linuxSync?: boolean; launch?: typeof launchWorker };
+type Options = { launch?: typeof launchWorker };
 const unavailable = () => new Error('Workflow authoring Scope unavailable');
 const changed = () => new Error('Workflow authoring Scope changed; discover again');
 const validPath = (path: unknown): path is string => typeof path === 'string' && path.length > 0 && path.length <= 4096 && !path.includes('\0');
@@ -27,18 +26,12 @@ export class WorkflowAuthoringScopeChecks {
 
   async read(path: string): Promise<WorkflowAuthoringDirectory> {
     if (this.closed || !validPath(path)) throw unavailable();
-    if (process.platform === 'linux' && this.options.linuxSync !== false) {
-      try { return workflowAuthoringDirectory(realpathSync(path)); } catch { throw unavailable(); }
-    }
     return this.inspect({ operation: 'read', path: resolve(path) });
   }
 
   async check(directory: WorkflowAuthoringDirectory): Promise<void> {
     if (this.closed || !validDirectory(directory)) throw changed();
     const pinned = { path: directory.path, identity: directory.identity };
-    if (process.platform === 'linux' && this.options.linuxSync !== false) {
-      try { return checkWorkflowAuthoringDirectory(pinned); } catch { throw changed(); }
-    }
     const actual = await this.inspect({ operation: 'check', ...pinned });
     if (actual.path !== pinned.path || actual.identity !== pinned.identity) throw changed();
   }

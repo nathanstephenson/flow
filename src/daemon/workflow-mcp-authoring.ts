@@ -287,10 +287,13 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
   private async bounded<T>(work: (deadline: number) => Promise<T>): Promise<T> {
     const deadline = Date.now() + 10_000;
     let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('MCP discovery timed out')), Math.max(0, deadline - Date.now()));
+    });
     try {
-      return await Promise.race([work(deadline), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('MCP discovery timed out')), Math.max(0, deadline - Date.now()));
-      })]);
+      const result = await Promise.race([timeout, work(deadline)]);
+      this.checkDeadline(deadline);
+      return result;
     } finally { clearTimeout(timer); }
   }
 

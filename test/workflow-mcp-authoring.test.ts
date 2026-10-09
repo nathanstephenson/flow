@@ -15,8 +15,9 @@ import { WorkflowAuthoringScopeChecks } from '../src/daemon/workflow-authoring-s
 const connection = (id = 'default', enabledByDefault = true): Extract<McpConnection, { transport: 'http' }> => ({ id, name: id, enabledByDefault, transport: 'http', url: `https://${id}.example.test/mcp`, oauth: false, headers: {} });
 const tool = (name = 'read', inputSchema: McpTool['definition']['inputSchema'] = { type: 'object', properties: { id: { type: 'string' } } }): McpTool => ({ name: `mcp__default__${name}`, connectionId: 'default', definition: { name, inputSchema }, serverIdentity: 'fixture-server', call: async () => { assert.fail('Discovery must never call a tool'); } });
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(yes => { resolve = yes; }); return { promise, resolve }; }
-const pause = () => new Promise(resolve => setTimeout(resolve, 2));
-async function until(check: () => boolean) { for (let i = 0; i < 200 && !check(); i++) await pause(); assert.ok(check()); }
+const realSetTimeout = setTimeout;
+const pause = () => new Promise(resolve => realSetTimeout(resolve, 2));
+async function until(check: () => boolean) { for (let i = 0; i < 2000 && !check(); i++) await pause(); assert.ok(check()); }
 
 type Fake = { scope: string; scopeIdentity: string | undefined; connection: McpConnection; isolation: boolean | undefined; opened: number; disposed: number; tools: McpTool[]; failed: boolean; openError?: Error; openWait?: Promise<void>; disposeWait?: Promise<void>; exitWait?: Promise<void> };
 function fixture(initial: McpConnection[] = [connection(), connection('manual', false)]) {
@@ -104,7 +105,7 @@ test('metadata exposes all connections; discovery selects only one; catalogue se
     assert.equal(f.starts.length, 2);
     assert.ok(f.sessions.every(session => session.opened === 1 && session.disposed === 1));
     assert.ok(!JSON.stringify(next).includes('example.test'));
-    assert.equal(f.service.hasActiveWork(), false);
+    await until(() => !f.service.hasActiveWork());
   } finally { await f.cleanup(); }
 });
 
@@ -420,16 +421,14 @@ test('discovery timeout is ten seconds; cleanup stays owned after the response',
     f.configure(fake => { fake.openWait = gate.promise; });
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const discovery = f.service.discover(undefined, 'default');
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    assert.equal(f.sessions[0]!.opened, 1);
+    await until(() => f.sessions[0]?.opened === 1);
     const rejected = assert.rejects(discovery, /timed out/);
     t.mock.timers.tick(10_000);
     await rejected;
     assert.equal(f.sessions[0]!.disposed, 1);
     assert.equal(f.service.hasActiveWork(), true);
     gate.resolve();
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    assert.equal(f.service.hasActiveWork(), false);
+    await until(() => !f.service.hasActiveWork());
     await assert.rejects(f.service.discover(undefined, 'default'), /timed out/);
     assert.equal(f.starts.length, 1);
   } finally { gate.resolve(); await f.cleanup(); }
@@ -455,8 +454,7 @@ test('ten-second response bound also covers slow disposal; shutdown waits for th
     f.configure(fake => { fake.disposeWait = gate.promise; });
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const discovery = f.service.discover(undefined, 'default');
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    assert.equal(f.sessions[0]!.disposed, 1);
+    await until(() => f.sessions[0]?.disposed === 1);
     const rejected = assert.rejects(discovery, /timed out/);
     t.mock.timers.tick(10_000);
     await rejected;
@@ -477,11 +475,11 @@ test('actual-exit waits retain all authoring capacity and shutdown ownership aft
     f.configure(fake => { fake.exitWait = gate.promise; });
     const pending = ['default', 'second', 'third', 'fourth'].map(id => f.service.discover(undefined, id));
     const rejected = pending.map(promise => assert.rejects(promise, /timed out/));
-    for (let i = 0; i < 50 && f.sessions.filter(fake => fake.disposed).length < 4; i++) await Promise.resolve();
+    await until(() => f.sessions.filter(fake => fake.disposed).length === 4);
     assert.equal(f.sessions.length, 4);
     t.mock.timers.tick(10_000); await Promise.all(rejected);
     assert.equal(f.service.hasActiveWork(), true);
-    const queued = assert.rejects(f.service.discover(undefined, 'queued'), /stopped/);
+    const queued = assert.rejects(f.service.discover(undefined, 'queued'), /stopped|Scope unavailable/);
     let stopped = false;
     const closing = f.service.shutdown().then(() => { stopped = true; });
     await queued; await Promise.resolve();
@@ -490,6 +488,19 @@ test('actual-exit waits retain all authoring capacity and shutdown ownership aft
     assert.equal(f.service.hasActiveWork(), false);
     assert.ok(f.sessions.every(fake => fake.disposed === 1));
   } finally { gate.resolve(); await f.cleanup(); }
+});
+
+test('caller deadline is armed before Scope lookup begins', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  const f = fixture();
+  t.mock.method(WorkflowAuthoringScopeChecks.prototype, 'read', async () => {
+    t.mock.timers.tick(10_001);
+    return workflowAuthoringDirectory(f.machine);
+  });
+  try {
+    await assert.rejects(f.service.connections(), /timed out/);
+    assert.equal(f.starts.length, 0);
+  } finally { await f.cleanup(); }
 });
 
 test('caller deadline includes Scope lookup and prevents late lookup from starting a client', async t => {
@@ -512,23 +523,24 @@ test('caller deadline includes Scope lookup and prevents late lookup from starti
 
 test('queued explicit discovery and catalogue time out at admission without releasing live cleanup or spawning later', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
-  const f = fixture(['default', 'second', 'third', 'fourth', 'queued'].map(id => connection(id)));
+  const f = fixture(['default', 'second', 'third', 'fourth', 'queued', 'catalogued'].map(id => connection(id)));
+  const queue = (f.service as unknown as { queue: unknown[] }).queue;
   const gate = deferred();
   try {
     f.configure(fake => { fake.exitWait = gate.promise; });
     const held = ['default', 'second', 'third', 'fourth'].map(id => assert.rejects(f.service.discover(undefined, id), /timed out/));
-    for (let i = 0; i < 100 && f.sessions.filter(fake => fake.disposed).length < 4; i++) await Promise.resolve();
-    assert.equal(f.sessions.filter(fake => fake.disposed).length, 4);
+    await until(() => f.sessions.filter(fake => fake.disposed).length === 4);
     t.mock.timers.tick(10_000); await Promise.all(held);
     const queued = assert.rejects(f.service.discover(undefined, 'queued'), /timed out/);
     const catalogue = assert.rejects(f.service.catalogue(), /timed out/);
-    for (let i = 0; i < 100; i++) await Promise.resolve();
+    await until(() => queue.length === 2);
     assert.equal(f.starts.length, 4);
     t.mock.timers.tick(10_000); await Promise.all([queued, catalogue]);
+    assert.equal(queue.length, 0);
     assert.equal(f.service.hasActiveWork(), true);
-    gate.resolve(); await f.service.shutdown();
+    gate.resolve();
+    await until(() => !f.service.hasActiveWork());
     assert.equal(f.starts.length, 4, 'expired queued work must never launch after capacity is released');
-    assert.equal(f.service.hasActiveWork(), false);
   } finally { gate.resolve(); await f.cleanup(); }
 });
 

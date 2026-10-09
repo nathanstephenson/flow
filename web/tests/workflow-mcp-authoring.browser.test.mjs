@@ -205,6 +205,42 @@ describe('MCP workflow authoring without an Agent Session', () => {
     assert.equal(await page.getByRole('region', { name: 'Incompatible MCP tools' }).count(), 0);
   });
 
+  for (const phase of ['servers', 'discovery']) {
+    it(`ends pending ${phase} loading at the client deadline and permits Retry despite an ignored AbortSignal`, async () => {
+      const time = new Date('2026-01-01T00:00:00Z');
+      await page.clock.install({ time });
+      const key = phase === 'servers' ? '/api/workflow-mcp?projectId=alpha' : '/api/workflow-mcp/local?projectId=alpha';
+      const release = hold(key);
+      const pendingRequest = page.waitForRequest(request => request.url() === `https://flow.test${key}`);
+      await mount(initialDefinition, true);
+      if (phase === 'discovery') await selectServer('Local tools · stdio');
+      await page.getByRole('button', { name: phase === 'servers' ? 'Loading servers…' : 'Discovering…', exact: true }).waitFor();
+      await pendingRequest;
+      assert.equal(await page.getByRole('alert').count(), 0);
+      await page.clock.fastForward(15_000);
+      await page.getByRole('alert').filter({ hasText: 'MCP metadata request timed out after 15 seconds' }).waitFor();
+      const retry = page.getByRole('button', { name: phase === 'servers' ? 'Retry servers' : 'Retry discovery', exact: true });
+      assert.equal(await retry.isEnabled(), true);
+      assert.equal(calls.filter(call => call.key === key).length, 1);
+      const lateResponse = page.waitForResponse(response => response.url() === `https://flow.test${key}`);
+      release();
+      await lateResponse;
+      await page.clock.runFor(50);
+      assert.equal(await page.getByRole('alert').count(), 1);
+      assert.equal(await retry.isEnabled(), true);
+      assert.deepEqual(await currentStep(), initialDefinition.steps[0]);
+      held.delete(key);
+      await retry.click();
+      if (phase === 'servers') {
+        await page.getByText('Scope: /tmp/alpha', { exact: true }).waitFor();
+        await selectServer('Local tools · stdio');
+      }
+      await page.getByRole('status').filter({ hasText: '1 compatible tool available.' }).waitFor();
+      assert.equal(await page.getByRole('alert').count(), 0);
+      assert.deepEqual(await currentStep(), initialDefinition.steps[0]);
+    });
+  }
+
   it('rejects late discovery after a server change even when the transport ignores AbortSignal', async () => {
     responses.set('/api/workflow-mcp/local?projectId=alpha', { tools: [tool], errors: [diagnostic] });
     const release = hold('/api/workflow-mcp/local?projectId=alpha');
