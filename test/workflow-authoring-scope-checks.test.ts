@@ -31,7 +31,7 @@ function fakeReaders() {
       stop: async () => { reader.stops++; await stopped.promise; await exited.promise; },
     };
   };
-  return { readers, checks: new WorkflowAuthoringScopeChecks({ linuxSync: false, launch }) };
+  return { readers, checks: new WorkflowAuthoringScopeChecks({ launch }) };
 }
 
 function fixture() {
@@ -57,41 +57,40 @@ test('path selection preserves Project membership and normalization without chec
   assert.throws(() => workflowAuthoringScopePath(noRoot, '/fallback', `${root}/api`), /not opted in/);
 });
 
-for (const linuxSync of [true, false]) {
-  test(`canonical aliases and replaced roots are checked (${linuxSync ? 'Linux fast path' : 'reader'})`, async () => {
-    const f = fixture();
-    const checks = new WorkflowAuthoringScopeChecks({ linuxSync });
-    try {
-      const alias = join(f.root, 'alias');
-      symlinkSync(f.scope, alias);
-      const directory = await checks.read(alias);
-      assert.deepEqual(directory, workflowAuthoringDirectory(f.scope));
-      await checks.check(directory);
-      await assert.rejects(checks.check({ ...directory, path: alias }), /Scope changed/);
-      renameSync(f.scope, join(f.root, 'original'));
-      mkdirSync(f.scope);
-      await assert.rejects(checks.check(directory), /Scope changed/);
-      rmSync(f.scope, { recursive: true });
-      symlinkSync(join(f.root, 'original'), f.scope);
-      await assert.rejects(checks.check(directory), /Scope changed/);
-      rmSync(f.scope);
-      renameSync(join(f.root, 'original'), f.scope);
-      await checks.check(directory);
-      writeFileSync(join(f.root, 'file'), 'not a directory');
-      await assert.rejects(checks.read(join(f.root, 'file')));
-      await assert.rejects(checks.read(join(f.root, 'missing')), /Scope unavailable/);
-      renameSync(f.scope, join(f.root, 'gone'));
-      await assert.rejects(checks.check(directory), /Scope changed/);
-    } finally { await checks.shutdown(); f.cleanup(); }
-    assert.equal(checks.hasActiveWork(), false);
-    await assert.rejects(checks.read(f.scope), /unavailable/);
-  });
-}
+test('canonical aliases and replaced roots are checked by the reader', async () => {
+  const f = fixture();
+  const checks = new WorkflowAuthoringScopeChecks();
+  try {
+    const alias = join(f.root, 'alias');
+    symlinkSync(f.scope, alias);
+    const directory = await checks.read(alias);
+    assert.deepEqual(directory, workflowAuthoringDirectory(f.scope));
+    await checks.check(directory);
+    await assert.rejects(checks.check({ ...directory, path: alias }), /Scope changed/);
+    renameSync(f.scope, join(f.root, 'original'));
+    mkdirSync(f.scope);
+    await assert.rejects(checks.check(directory), /Scope changed/);
+    rmSync(f.scope, { recursive: true });
+    symlinkSync(join(f.root, 'original'), f.scope);
+    await assert.rejects(checks.check(directory), /Scope changed/);
+    rmSync(f.scope);
+    renameSync(join(f.root, 'original'), f.scope);
+    await checks.check(directory);
+    writeFileSync(join(f.root, 'file'), 'not a directory');
+    await assert.rejects(checks.read(join(f.root, 'file')));
+    await assert.rejects(checks.read(join(f.root, 'missing')), /Scope unavailable/);
+    renameSync(f.scope, join(f.root, 'gone'));
+    await assert.rejects(checks.check(directory), /Scope changed/);
+  } finally { await checks.shutdown(); f.cleanup(); }
+  assert.equal(checks.hasActiveWork(), false);
+  await assert.rejects(checks.read(f.scope), /unavailable/);
+});
 
-test('stalled reader response is bounded but its actual stop remains owned', async t => {
+for (const operation of ['read', 'check'] as const)
+test(`stalled reader ${operation} response is bounded but its actual stop remains owned`, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fakeReaders();
-  const pending = f.checks.read('/stalled');
+  const pending = operation === 'read' ? f.checks.read('/stalled') : f.checks.check({ path: '/stalled', identity: '1:2' });
   const rejected = assert.rejects(pending, /unavailable/);
   assert.equal(f.checks.hasActiveWork(), true);
   t.mock.timers.tick(4999);
@@ -199,6 +198,35 @@ test('helper startup failure does not drop cleanup ownership', async () => {
   assert.equal(reader.stops, 1);
   reader.release();
   await f.checks.shutdown();
+});
+
+test('blocked filesystem work in the reader leaves host timers and shutdown available', { timeout: 10_000 }, async () => {
+  const f = fixture();
+  const entry = join(f.root, 'stalled-reader.mjs');
+  writeFileSync(entry, `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    fs.realpath = () => {
+      process.stderr.write('Scope read stalled');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+      return Promise.reject(new Error());
+    };
+    syncBuiltinESMExports();
+    const { runWorkflowAuthoringScopeReader } = await import(${JSON.stringify(new URL('../src/daemon/workflow-authoring-scope-reader.ts', import.meta.url).href)});
+    runWorkflowAuthoringScopeReader();
+  `);
+  let helper: ReturnType<typeof launchWorker> | undefined;
+  const checks = new WorkflowAuthoringScopeChecks({ launch: options => helper = launchWorker({ ...options, entry }) });
+  let responsive = false;
+  const timer = setTimeout(() => { responsive = true; }, 50);
+  try {
+    await assert.rejects(checks.read(f.scope), /unavailable/);
+    assert.equal(responsive, true);
+    assert.match(helper!.diagnostics(), /Scope read stalled/);
+    await checks.shutdown();
+    assert.equal(checks.hasActiveWork(), false);
+    assert.ok(helper!.child.exitCode !== null || helper!.child.signalCode !== null);
+  } finally { clearTimeout(timer); await checks.shutdown(); f.cleanup(); }
 });
 
 test('reader entry refuses IPC without its guarded environment', { timeout: 5000 }, async () => {

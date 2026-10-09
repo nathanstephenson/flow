@@ -52,7 +52,11 @@ const code = transformSync(readFileSync(new URL('../web/src/components/workflow-
   loader: 'tsx', format: 'cjs', jsx: 'automatic',
 }).code;
 
-function editor(projectId: string | undefined = 'project-a') {
+const apiCode = transformSync(readFileSync(new URL('../web/src/components/workflow-api.ts', import.meta.url), 'utf8'), {
+  loader: 'ts', format: 'cjs',
+}).code;
+
+function editor(projectId: string | undefined = 'project-a', pendingBody = false) {
   const hooks: any[] = [];
   const effects: Array<{ dependencies: unknown[] | undefined; cleanup: (() => void) | undefined }> = [];
   const requests: Array<ReturnType<typeof deferred<any>> & { url: URL; method: string; signal: AbortSignal }> = [];
@@ -73,6 +77,23 @@ function editor(projectId: string | undefined = 'project-a') {
   let view!: Element;
   let pendingEffects: Array<() => void> = [];
   const module = { exports: {} as { McpStepEditor: (props: unknown) => Element } };
+  const api = { exports: {} as { workflowMcpApi: unknown } };
+  runInNewContext(apiCode, { module: api, exports: api.exports, AbortController, setTimeout, clearTimeout, require: (name: string) => {
+    if (name === 'react') return {};
+    if (name === '@/authentication.ts') return {
+      authenticatedFetch: (path: string, options: { method: string; body?: unknown; signal: AbortSignal }) => {
+        assert.equal(options.method, 'GET');
+        assert.equal(options.body, undefined);
+        assert.ok(options.signal instanceof AbortSignal);
+        const request = { ...deferred<any>(), url: new URL(path, 'http://flow.test'), method: options.method, signal: options.signal };
+        requests.push(request);
+        return pendingBody
+          ? Promise.resolve({ ok: true, json: () => request.promise })
+          : request.promise.then(data => ({ ok: true, json: async () => data }));
+      },
+    };
+    throw new Error(`Unexpected API import: ${name}`);
+  } });
   runInNewContext(code, { module, exports: module.exports, AbortController, require: (name: string) => {
     if (name === 'react') return {
       useState: (initial: any) => {
@@ -97,16 +118,7 @@ function editor(projectId: string | undefined = 'project-a') {
       },
     };
     if (name === 'react/jsx-runtime') return require(name);
-    if (name === './workflow-api.ts') return {
-      workflowApi: (path: string, method: string, body: unknown, signal: AbortSignal) => {
-        assert.equal(method, 'GET');
-        assert.equal(body, undefined);
-        assert.ok(signal instanceof AbortSignal);
-        const request = { ...deferred<any>(), url: new URL(path, 'http://flow.test'), method, signal };
-        requests.push(request);
-        return request.promise;
-      },
-    };
+    if (name === './workflow-api.ts') return api.exports;
     if (name === '../../../src/workflows/loops.ts') return { analyzeLoops: () => ({ loops: [] }) };
     if (name === '../../../src/workflows/json-schema.ts') return { validateJsonSchema: () => {} };
     if (name === '../presentation/workflows.ts') return { mappingChoices: () => [] };
@@ -403,6 +415,69 @@ for (const phase of ['connections', 'discovery']) {
       await p.settle();
       assert.equal(p.lateUpdates(), 0);
       assert.equal(p.changes.length, 0);
+    });
+  }
+}
+
+for (const pendingBody of [false, true]) {
+  for (const phase of ['connections', 'discovery']) {
+    it(`times out pending ${phase} ${pendingBody ? 'response bodies' : 'fetches'} and permits Retry without accepting late results`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const p = editor('project-a', pendingBody);
+      t.after(() => p.unmount());
+      if (phase === 'discovery') {
+        p.latest().resolve(catalogue);
+        await p.settle();
+      }
+      const pending = p.latest();
+      await p.settle();
+      t.mock.timers.tick(14_999);
+      await p.settle();
+      assert.equal(elements(p.render()).filter(node => node.props.role === 'alert').length, 0);
+      assert.equal(p.button(phase === 'connections' ? /Loading servers/ : /Discovering/).props.disabled, true);
+      t.mock.timers.tick(1);
+      await p.settle();
+      assert.equal(pending.signal.aborted, true);
+      assert.match(text(find(p.render(), 'p', node => node.props.role === 'alert')), /MCP metadata request timed out after 15 seconds/);
+      assert.equal(p.requests.length, phase === 'connections' ? 1 : 2, 'Timeout must not retry automatically');
+      const retry = p.button(phase === 'connections' ? /Retry servers/ : /Retry discovery/);
+      assert.equal(retry.props.disabled, false);
+      retry.props.onClick();
+      p.render();
+      const current = p.latest();
+      pending.resolve(phase === 'connections' ? { ...catalogue, scope: '/late-scope' } : { tools: [tool], errors });
+      await p.settle();
+      assert.doesNotMatch(text(p.render()), /late-scope|compatible tool available|incompatible/);
+      assert.equal(p.button(phase === 'connections' ? /Loading servers/ : /Discovering/).props.disabled, true);
+      current.resolve(phase === 'connections' ? catalogue : compatible);
+      await p.settle();
+      if (phase === 'connections') {
+        p.latest().resolve(compatible);
+        await p.settle();
+      }
+      assert.match(text(p.render()), /1 compatible tool available/);
+      assert.equal(p.changes.length, 0);
+      t.mock.timers.tick(15_000);
+      await p.settle();
+      assert.equal(elements(p.render()).filter(node => node.props.role === 'alert').length, 0);
+      assert.equal(current.signal.aborted, false, 'Successful requests must clear their deadline');
+    });
+
+    it(`cleans up a pending ${phase} ${pendingBody ? 'response body' : 'fetch'} deadline on unmount`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const p = editor('project-a', pendingBody);
+      if (phase === 'discovery') {
+        p.latest().resolve(catalogue);
+        await p.settle();
+      }
+      await p.settle();
+      const pending = p.latest();
+      p.unmount();
+      assert.equal(pending.signal.aborted, true);
+      t.mock.timers.tick(15_000);
+      pending.resolve(phase === 'connections' ? catalogue : compatible);
+      await p.settle();
+      assert.equal(p.lateUpdates(), 0);
     });
   }
 }

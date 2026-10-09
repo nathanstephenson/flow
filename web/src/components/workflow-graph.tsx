@@ -282,6 +282,7 @@ export function WorkflowGraph({
         }
         onConnect={connect}
         onNodeClick={(_, node) => node.type === "workflow" && onSelect(node.id)}
+        onPaneClick={onChange && controlledSelection ? () => onSelect("") : undefined}
         // A controlled selection is presentation state supplied by its parent. Reporting it back on
         // every graph repaint would immediately reopen a mobile inspector its Back button hid.
         onSelectionChange={execution || controlledSelection ? undefined : selectionChanged}
