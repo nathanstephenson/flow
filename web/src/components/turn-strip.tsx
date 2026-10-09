@@ -1,8 +1,10 @@
 import { GitBranch } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { scopeKindHint, scopeKindLabel } from "@client/scope-kind.ts";
 import { occupied } from "@client/status.ts";
+import { effortCapability } from "@client/model-choices.ts";
+import { contextUsageDetail } from "@client/context-usage.ts";
 import { useBranches } from "@/branches.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
 import type { Chrome } from "@/store/contract.ts";
@@ -39,48 +41,59 @@ import { cn } from "@/lib/utils.ts";
  */
 export type TurnStripControls = { permissions?: boolean; branches?: boolean; disabled?: boolean };
 
-export function TurnStrip({ chrome, actions, permissions = true, branches = true, disabled = false }: { chrome: Chrome; actions: ComposerActions } & TurnStripControls) {
+export function TurnStrip({ chrome, actions, permissions = true, branches = true, disabled = false, layout = "strip" }: { chrome: Chrome; actions: ComposerActions; layout?: "strip" | "drawer" } & TurnStripControls) {
   const ended = chrome.status === "ended";
+  const model = chrome.capabilities?.models.length ? (
+    <ModelPicker models={chrome.capabilities.models} model={chrome.model}
+      disabled={ended || disabled} quiet onSelect={actions.setModel} />
+  ) : null;
+  const effort = effortCapability(chrome.capabilities, chrome.model).status !== "none" ? (
+    <EffortPicker capabilities={chrome.capabilities} model={chrome.model} effort={chrome.effort}
+      disabled={ended || disabled} onSelect={actions.setEffort} />
+  ) : null;
+  const permission = permissions && chrome.permissionMode && (chrome.backend === "pi" || chrome.backend === "claude") ? (
+    <PermissionModeSelect backend={chrome.backend} value={chrome.permissionMode}
+      disabled={ended || disabled || occupied(chrome.status) || !!chrome.authorising}
+      onChange={actions.setPermissionMode} />
+  ) : null;
+  const branch = branches && chrome.branch ? <BranchPicker chrome={chrome} actions={actions} disabled={disabled} hint={layout === "strip"} /> : null;
+  const meter = <ContextUsageMeter usage={chrome.contextUsage} compacting={chrome.compacting} />;
+
+  if (layout === "drawer") {
+    return (
+      <div className="grid min-w-0 gap-4 px-6 pb-6">
+        <TurnOption label="Model">{model}</TurnOption>
+        <TurnOption label="Effort">{effort}</TurnOption>
+        <TurnOption label="Permissions">{permission}</TurnOption>
+        <TurnOption label="Branch">{branch}</TurnOption>
+        <div className="grid gap-2">
+          {meter}
+          {contextUsageDetail(chrome.contextUsage)?.map((row) => (
+            <div key={row.label} className="flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs">
+              <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">{row.label}</span>
+              <span className="tabular-nums">{row.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    /*
-     * Tight on purpose: this is the panel's second band, so every pixel is one the reader pays on
-     * every pane. `py-1` against `text-xs` leaves the row the height of its own text, and the
-     * divider is dimmed below the default border so it separates without drawing a line across the
-     * composer.
-     */
     <div className={cn("grid items-center gap-2 border-t border-border/40 px-2 py-1", branches ? "grid-cols-[1fr_auto_1fr]" : "grid-cols-[minmax(0,1fr)_auto]")}>
-      <div className="flex min-w-0 items-center gap-0.5">
-        <ModelPicker
-          models={chrome.capabilities?.models}
-          model={chrome.model}
-          disabled={ended || disabled}
-          // A reading in the strip, not a form field: see `ModelPickerProps.quiet`.
-          quiet
-          onSelect={actions.setModel}
-        />
-        <EffortPicker
-          capabilities={chrome.capabilities}
-          model={chrome.model}
-          effort={chrome.effort}
-          disabled={ended || disabled}
-          onSelect={actions.setEffort}
-        />
-        {permissions && chrome.permissionMode && <PermissionModeSelect backend={chrome.backend} value={chrome.permissionMode}
-          disabled={ended || disabled || occupied(chrome.status) || !!chrome.authorising}
-          onChange={actions.setPermissionMode} />}
-      </div>
+      <div className="flex min-w-0 items-center gap-0.5">{model}{effort}{permission}</div>
+      {meter}
+      {branches && <div className="col-start-3 flex min-w-0 items-center justify-end">{branch}</div>}
+    </div>
+  );
+}
 
-      <ContextUsageMeter usage={chrome.contextUsage} compacting={chrome.compacting} />
-
-      {/*
-       * Pinned to the third track rather than auto-placed: the meter renders nothing at all until
-       * the first token count arrives, and an absent element is not an empty column — auto-placement
-       * would put the branch in the middle track and leave it centred.
-       */}
-      {branches && <div className="col-start-3 flex min-w-0 items-center justify-end">
-        <BranchPicker chrome={chrome} actions={actions} disabled={disabled} />
-      </div>}
+function TurnOption({ label, children }: { label: string; children: ReactNode }) {
+  if (!children) return null;
+  return (
+    <div className="grid min-w-0 gap-1 [&_[data-slot=select-trigger]]:min-h-10 [&_[data-slot=combobox-trigger]]:min-h-10">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      {children}
     </div>
   );
 }
@@ -94,7 +107,7 @@ export function TurnStrip({ chrome, actions, permissions = true, branches = true
  * moving it here is real and worth naming: **a Worktree is no longer distinguishable at a glance**,
  * only on hover and by its branch happening to be named `flow/…`.
  */
-function BranchPicker({ chrome, actions, disabled }: { chrome: Chrome; actions: ComposerActions; disabled: boolean }) {
+function BranchPicker({ chrome, actions, disabled, hint = true }: { chrome: Chrome; actions: ComposerActions; disabled: boolean; hint?: boolean }) {
   const branches = useBranches(chrome.scope);
   const [failure, setFailure] = useState<string | undefined>(undefined);
 
@@ -104,9 +117,14 @@ function BranchPicker({ chrome, actions, disabled }: { chrome: Chrome; actions: 
   // Matches the Session Host, which refuses a branch switch on `turnInFlight` — true while Awaiting.
   const running = occupied(chrome.status);
   const ended = chrome.status === "ended";
+  const detail = failure ?? (branch.detached
+    ? `Detached at ${branch.name}`
+    : running
+      ? "Finish or abort the turn to switch branch"
+      : `${scopeKindLabel(chrome)} · ${branch.name}`);
 
-  return (
-    <Tooltip>
+  const picker = (
+    <Tooltip disabled={!hint}>
       {/*
        * The tooltip wraps the Select rather than being its trigger, for two reasons: upstream's
        * Trigger hands its own props to whatever it renders, so the target has to be a real element
@@ -164,18 +182,18 @@ function BranchPicker({ chrome, actions, disabled }: { chrome: Chrome; actions: 
       </TooltipTrigger>
       <TooltipContent>
         <span className="flex flex-col gap-0.5">
-          <span>
-            {failure ??
-              (branch.detached
-                ? `Detached at ${branch.name}`
-                : running
-                  ? "Finish or abort the turn to switch branch"
-                  : `${scopeKindLabel(chrome)} · ${branch.name}`)}
-          </span>
-          {/* The only place the checkout is explained, now that it has no label of its own. */}
+          <span>{detail}</span>
           <span className="text-muted-foreground">{scopeKindHint(chrome)}</span>
         </span>
       </TooltipContent>
     </Tooltip>
+  );
+
+  return hint ? picker : (
+    <div className="grid min-w-0 gap-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+      {picker}
+      <p role={failure ? "alert" : undefined}>{detail}</p>
+      <p>{scopeKindHint(chrome)}</p>
+    </div>
   );
 }
