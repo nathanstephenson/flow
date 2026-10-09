@@ -2,6 +2,7 @@ import type { Capabilities, EffortLevel, ModelInfo } from "../../../src/protocol
 import { effortCapability, modelChoicesOf, type ModelChoice } from "@client/model-choices.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
+import { cn } from "@/lib/utils.ts";
 import {
   Combobox,
   ComboboxCollection,
@@ -85,8 +86,8 @@ function ModelSelect({ choices, model, disabled, quiet, onSelect }: WithChoices)
         if (typeof value === "string") onSelect(value);
       }}
     >
-      <SelectTrigger aria-label="Model" size="sm" className={quiet ? QUIET_TRIGGER : undefined}>
-        <SelectValue placeholder="model">{() => modelLabel(model)}</SelectValue>
+      <SelectTrigger aria-label="Model" size="sm" className={cn("min-w-0 max-w-full", quiet && QUIET_TRIGGER)}>
+        <SelectValue placeholder="model" className="min-w-0">{() => <span className="truncate">{modelLabel(model)}</span>}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         {groupByProvider(choices).map((group) => (
@@ -142,13 +143,15 @@ function ModelCombobox({ choices, model, disabled, quiet, onSelect }: WithChoice
         aria-label="Model"
         render={
           quiet ? (
-            <Button variant="ghost" size="sm" className={QUIET_TRIGGER} />
+            <Button variant="ghost" size="sm" className={cn(QUIET_TRIGGER, "min-w-0 max-w-full")} />
           ) : (
             <Button variant="outline" className="w-full justify-between font-normal" />
           )
         }
       >
-        <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
+        <span className="min-w-0 truncate">
+          <ComboboxValue>{(choice: ModelChoice | null) => modelLabel(choice?.model ?? model)}</ComboboxValue>
+        </span>
       </ComboboxTrigger>
       <ComboboxContent>
         {/*

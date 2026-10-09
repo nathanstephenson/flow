@@ -31,6 +31,8 @@ import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/pre
 import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
 import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip, type TurnStripControls } from "@/components/turn-strip.tsx";
+import { TurnOptionsButton, TurnSummary } from "@/components/composer-turn-options.tsx";
+import { useIsMobile } from "@/lib/use-mobile.ts";
 import { ComposerActivity } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
@@ -161,6 +163,7 @@ export function Composer({
   // Invalidates asynchronous attachment work whenever the relay borrows or releases the composer.
   const attachmentEpoch = useRef(0);
   const [sending, setSending] = useState(false);
+  const mobile = useIsMobile();
   const input = useRef<ComposerInputHandle | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
   // `undefined` until the first fetch answers, which is not the same as "none": one is a menu still
@@ -895,6 +898,7 @@ export function Composer({
           />
 
           <div className="flex shrink-0 items-center pr-2">
+            {mobile && <TurnOptionsButton chrome={chrome} actions={actions} controls={controls} onReturnFocus={() => input.current?.focus()} />}
             {ended ? null : running ? (
               <AbortButton onAbort={abort} disabled={abortDisabled} label={abortLabel} />
             ) : (
@@ -908,7 +912,7 @@ export function Composer({
           </div>
         </div>
 
-        <TurnStrip chrome={chrome} actions={actions} {...controls} />
+        {mobile ? <TurnSummary chrome={chrome} /> : <TurnStrip chrome={chrome} actions={actions} {...controls} />}
       </div>
     </div>
   );
