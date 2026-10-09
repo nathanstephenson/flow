@@ -25,7 +25,11 @@ function fixture(overrides: Partial<WorkflowBuilderServiceOptions> = {}) {
   let createWait: Promise<void> | undefined;
   let disposeWait: Promise<void> | undefined;
   const host = {
-    models: async () => [{ backend: 'fake', models: [{ id: 'model', effortLevels: ['low', 'high'] as Array<'low' | 'high'> }, { id: 'plain' }] }],
+    workflowBuilderModels: async (backend: string, scope: string) => {
+      assert.equal(backend, 'fake');
+      assert.equal(statSync(scope).isDirectory(), true);
+      return { backend: 'fake', models: [{ id: 'model', effortLevels: ['low', 'high'] as Array<'low' | 'high'> }, { id: 'plain' }] };
+    },
     createWorkflowBuilderSession: async (_backend: string, options: BackendCreateOptions) => {
       starts.push(options);
       if (createWait) await createWait;
@@ -68,6 +72,22 @@ it('pins opted-in Project, machine root and fallback Scope; rejects unlisted Pro
     assert.ok(options.workflowBuilder!.instructions.includes('maxTries'));
     await f.service.close(machine.id);
     assert.ok(!existsSync(options.scope));
+  } finally { await f.cleanup(); }
+});
+
+it('accepts null only for an unbound authoring draft and stores no Project binding', async () => {
+  const f = fixture();
+  try {
+    const machine = await f.service.create({ definition: draft() });
+    f.service.message(machine.id, 'Build a machine-wide workflow');
+    assert.ok(f.sessions[0]!.options.workflowBuilder!.instructions.includes('omit projectId'));
+    await f.sessions[0]!.options.workflowBuilder!.write(JSON.stringify({ ...valid(), projectId: null }));
+    assert.deepEqual(f.service.view(machine.id).definition, valid());
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(dirname(f.sessions[0]!.options.scope), 'workflow.json'), 'utf8')), 'projectId'), false);
+    const project = await f.service.create({ definition: { ...draft(), projectId: f.project } });
+    f.service.message(project.id, 'Keep this Project');
+    await assert.rejects(f.sessions[1]!.options.workflowBuilder!.write(JSON.stringify({ ...valid(), projectId: null })), /previous draft preserved/);
+    assert.equal(f.service.view(project.id).definition.projectId, f.project);
   } finally { await f.cleanup(); }
 });
 
@@ -209,6 +229,59 @@ it('provides real MCP schemas through a read-only virtual file and rejects fabri
     await f.service.abort(view.id);
     await assert.rejects(capabilities.read('mcp-tools.json'));
     assert.equal(calls, 1);
+  } finally { await f.cleanup(); }
+});
+
+it('resolves compact MCP references to exact host snapshots without accepting altered schemas or identities', async () => {
+  const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string', description: 'Exact description' } }, required: ['q'] }, outputSchema: { type: 'object', properties: { answer: { type: 'string' } } } };
+  const { connectionId, identity, serverIdentity, toolName } = tool;
+  const reference = { connectionId, identity, serverIdentity, toolName };
+  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+  try {
+    const view = await f.service.create({ definition: draft() });
+    f.service.message(view.id, 'Use lookup');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    const compact = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool: reference }] };
+    await assert.rejects(capabilities.write(JSON.stringify(compact)), /MCP step "lookup"/);
+    await capabilities.read('mcp-tools.json');
+    await capabilities.write(JSON.stringify(compact));
+    const accepted = { ...compact, steps: [{ ...compact.steps[0]!, tool }] };
+    assert.deepEqual(f.service.view(view.id).definition, accepted);
+    assert.deepEqual(JSON.parse(await capabilities.read('workflow.json')), accepted);
+    assert.deepEqual(JSON.parse(readFileSync(join(dirname(f.sessions[0]!.options.scope), 'workflow.json'), 'utf8')), accepted);
+    for (const changed of [
+      { ...reference, connectionId: 'unknown' }, { ...reference, identity: 'c'.repeat(64) },
+      { ...reference, serverIdentity: 'c'.repeat(64) }, { ...reference, toolName: 'other' },
+      { ...reference, extra: true }, { ...reference, inputSchema: false },
+      { ...tool, inputSchema: { ...tool.inputSchema, properties: { q: { type: 'string', description: 'Changed description' } } } },
+    ]) {
+      await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [{ ...compact.steps[0]!, tool: changed }] })), /previous draft preserved/);
+      assert.deepEqual(f.service.view(view.id).definition, accepted);
+    }
+    await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [{ ...compact.steps[0]!, tool: { ...tool, inputSchema: false } }] })), /MCP step "lookup".*exact tools/);
+  } finally { await f.cleanup(); }
+  const existing = fixture();
+  try {
+    const view = await existing.service.create({ definition: { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool }] } });
+    existing.service.message(view.id, 'Preserve lookup');
+    await existing.sessions[0]!.options.workflowBuilder!.write(JSON.stringify({ ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool: reference }] }));
+    assert.deepEqual((existing.service.view(view.id).definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'mcp' }>).tool, tool);
+  } finally { await existing.cleanup(); }
+});
+
+it('bounds expanded MCP snapshots as well as compact authoring input', async () => {
+  const tool = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', description: 'x'.repeat(2000) } };
+  const { connectionId, identity, serverIdentity, toolName } = tool;
+  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+  try {
+    const view = await f.service.create({ definition: valid() });
+    f.service.message(view.id, 'Build');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    await capabilities.read('mcp-tools.json');
+    const compact = { ...valid(), steps: Array.from({ length: 150 }, (_, index) => ({ id: `lookup-${index}`, name: `Lookup ${index}`, kind: 'mcp', tool: { connectionId, identity, serverIdentity, toolName } })) };
+    assert.ok(Buffer.byteLength(JSON.stringify(compact)) < 256_000);
+    await assert.rejects(capabilities.write(JSON.stringify(compact)), /previous draft preserved/);
+    assert.deepEqual(f.service.view(view.id).definition, valid());
   } finally { await f.cleanup(); }
 });
 

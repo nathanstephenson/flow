@@ -415,6 +415,41 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     assert.equal(readFileSync(join(customPi, "settings.json"), "utf8"), "custom-settings");
   });
 
+  for (const backend of ["pi", "claude"] as const) it(`builder stages ${backend} credentials without linked ambient resources`, async t => {
+    const f = fixture(); t.after(f.cleanup);
+    const directory = backend === "pi" ? f.pi : f.claude;
+    const instruction = backend === "pi" ? "AGENTS.md" : "CLAUDE.md";
+    symlinkSync(join(f.flow, "token"), join(directory, instruction));
+    symlinkSync(f.flow, join(directory, "skills"));
+    const options = f.options({ credentials: backend, stateDir: f.backend, workflowBuilder: true,
+      env: { ...f.env, PI_CODING_AGENT_DIR: f.pi, CLAUDE_CONFIG_DIR: f.claude } });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await node(options, String.raw`
+        const f=require('fs'),a=require('assert/strict'),p=JSON.parse(process.argv[1]);
+        const d=p.backend==='pi'?process.env.PI_CODING_AGENT_DIR:process.env.CLAUDE_CONFIG_DIR;
+        a.equal(f.existsSync(d+'/'+p.instruction),false);
+        a.equal(f.existsSync(d+'/skills'),false);
+        const auth=p.backend==='pi'?'auth.json':'.credentials.json';
+        a.equal(f.readFileSync(d+'/'+auth,'utf8'),p.auth);
+        if(p.backend==='pi') {
+          a.equal(f.readFileSync(d+'/models.json','utf8'),'{'+'"models":[]}');
+          a.equal(f.readFileSync(d+'/settings.json','utf8'),'{'+'"theme":"dark"}');
+        } else {
+          a.equal(f.readFileSync(d+'/.claude.json','utf8'),'{'+'"auth":"config"}');
+        }
+        f.writeFileSync(d+'/'+auth,'private refresh');
+        const state=p.backend==='pi'?process.env.PI_CODING_AGENT_SESSION_DIR:d+'/projects';
+        f.mkdirSync(state,{recursive:true});
+        if(p.attempt) a.equal(f.readFileSync(state+'/marker','utf8'),'saved');
+        else f.writeFileSync(state+'/marker','saved');
+      `, { backend, instruction, attempt, auth: readFileSync(join(directory, backend === "pi" ? "auth.json" : ".credentials.json"), "utf8") });
+    }
+    assert.equal(readFileSync(join(f.pi, "auth.json"), "utf8"), '{"provider":"credential"}');
+    assert.equal(readFileSync(join(f.claude, ".credentials.json"), "utf8"), '{"oauth":"credential"}');
+    assert.equal(readFileSync(join(f.home, ".claude.json"), "utf8"), '{"auth":"config"}');
+    await assert.rejects(prepareFilesystemIsolation({ ...options, workflowBuilder: false }), /Unsafe .* resource/);
+  });
+
   it("never stages credentials beneath an operator TMPDIR inside writable Scope", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const saved = process.env.TMPDIR;
@@ -441,7 +476,9 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     const f = fixture(); t.after(f.cleanup);
     rmSync(join(f.pi, "auth.json"));
     symlinkSync(join(f.flow, "token"), join(f.pi, "auth.json"));
-    await assert.rejects(prepareFilesystemIsolation(f.options({ credentials: "pi" })), /non-symlink file/);
+    for (const workflowBuilder of [false, true]) {
+      await assert.rejects(prepareFilesystemIsolation(f.options({ credentials: "pi", workflowBuilder })), /non-symlink file/);
+    }
     rmSync(join(f.pi, "auth.json")); writeFileSync(join(f.pi, "auth.json"), "auth");
     mkdirSync(join(f.pi, "sessions"));
     symlinkSync(join(f.pi, "sessions"), join(f.pi, "skills"));

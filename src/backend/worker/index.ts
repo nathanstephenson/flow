@@ -64,7 +64,7 @@ export class WorkerBackend implements AgentBackend {
     const isolation = await prepareFilesystemIsolation({ ...plan, scope: options.scope, expectedScope: resolve(options.scope),
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
-      env: this.options.env ?? {}, credentials: this.name, ipc: true, readablePaths: assets });
+      env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, ipc: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
       options.signal?.throwIfAborted();
