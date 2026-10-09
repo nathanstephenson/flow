@@ -269,20 +269,49 @@ it('resolves compact MCP references to exact host snapshots without accepting al
   } finally { await existing.cleanup(); }
 });
 
-it('bounds expanded MCP snapshots as well as compact authoring input', async () => {
-  const tool = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', description: 'x'.repeat(2000) } };
-  const { connectionId, identity, serverIdentity, toolName } = tool;
-  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+it('compact MCP references prefer the current catalogue while full original snapshots can be preserved', async () => {
+  const original = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', description: 'Old schema' } };
+  const current = { ...original, inputSchema: { type: 'object', description: 'Current schema' } };
+  const { connectionId, identity, serverIdentity, toolName } = original;
+  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [current], errors: [] }) });
   try {
-    const view = await f.service.create({ definition: valid() });
-    f.service.message(view.id, 'Build');
+    const initial = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp' as const, tool: original }] };
+    const view = await f.service.create({ definition: initial });
+    f.service.message(view.id, 'Update lookup');
     const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    const compact = { ...initial, steps: [{ ...initial.steps[0]!, tool: { connectionId, identity, serverIdentity, toolName } }] };
+    await capabilities.write(JSON.stringify(compact));
+    assert.deepEqual(f.service.view(view.id).definition, initial);
     await capabilities.read('mcp-tools.json');
-    const compact = { ...valid(), steps: Array.from({ length: 150 }, (_, index) => ({ id: `lookup-${index}`, name: `Lookup ${index}`, kind: 'mcp', tool: { connectionId, identity, serverIdentity, toolName } })) };
-    assert.ok(Buffer.byteLength(JSON.stringify(compact)) < 256_000);
-    await assert.rejects(capabilities.write(JSON.stringify(compact)), /previous draft preserved/);
-    assert.deepEqual(f.service.view(view.id).definition, valid());
+    await capabilities.write(JSON.stringify(compact));
+    assert.deepEqual(f.service.view(view.id).definition, { ...initial, steps: [{ ...initial.steps[0]!, tool: current }] });
+    await capabilities.write(JSON.stringify(initial));
+    assert.deepEqual(f.service.view(view.id).definition, initial);
   } finally { await f.cleanup(); }
+});
+
+it('bounds expanded MCP bytes, nodes and step count as well as compact authoring input', async () => {
+  for (const { inputSchema, count } of [
+    { inputSchema: { type: 'object', description: 'x'.repeat(2000) }, count: 150 },
+    { inputSchema: { type: 'object', properties: { key: { type: 'string', enum: Array.from({ length: 150 }, (_, index) => String(index)) } } }, count: 150 },
+    { inputSchema: { type: 'object' }, count: 201 },
+  ]) {
+    const tool = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema };
+    const { connectionId, identity, serverIdentity, toolName } = tool;
+    const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+    try {
+      const view = await f.service.create({ definition: valid() });
+      f.service.message(view.id, 'Build');
+      const capabilities = f.sessions[0]!.options.workflowBuilder!;
+      await capabilities.read('mcp-tools.json');
+      const compact = { ...valid(), steps: Array.from({ length: count }, (_, index) => ({ id: `lookup-${index}`, name: `Lookup ${index}`, kind: 'mcp', tool: { connectionId, identity, serverIdentity, toolName } })) };
+      assert.ok(Buffer.byteLength(JSON.stringify(compact)) < 256_000);
+      const expanded = { ...compact, steps: compact.steps.map(step => ({ ...step, tool })) };
+      assert.equal(Buffer.byteLength(JSON.stringify(expanded)) > 256_000, inputSchema.description !== undefined);
+      await assert.rejects(capabilities.write(JSON.stringify(compact)), /previous draft preserved/);
+      assert.deepEqual(f.service.view(view.id).definition, valid());
+    } finally { await f.cleanup(); }
+  }
 });
 
 it('rejects late catalogue delivery and wrong authoring Scope without admitting MCP snapshots', async () => {

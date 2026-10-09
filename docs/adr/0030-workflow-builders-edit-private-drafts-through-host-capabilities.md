@@ -77,7 +77,9 @@ contract and model catalogue, not executable Project instructions or a new graph
   MCP snapshots can be preserved; new MCP steps must use exact snapshots from that catalogue.
   Builder writes may select a tool with a compact `{connectionId, identity, serverIdentity, toolName}`
   reference. The host resolves it only against unchanged original snapshots or the catalogue read
-  by that builder, then inserts the complete snapshot before graph and credential validation.
+  by that builder, preferring the current catalogue when the same reference identifies an original
+  snapshot with an older schema. It checks step, byte, node and depth limits before cloning, then
+  inserts the complete snapshot before graph and credential validation.
   Saved definitions still contain complete snapshots. Supplied full snapshots must remain exact;
   rejected snapshot diagnostics name the Workflow Step.
 - Project files remain untrusted reference data. Read-only access is not a confidentiality guarantee

@@ -104,17 +104,17 @@ function builderDefinition(value: unknown, entry: Entry): WorkflowDefinition {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const draft = value as Record<string, unknown>;
     if (draft.projectId === null && entry.view.definition.projectId === undefined) delete draft.projectId;
-    let bytes = Buffer.byteLength(JSON.stringify(draft));
     if (Array.isArray(draft.steps)) {
+      if (draft.steps.length > 200) throw invalid();
       for (const step of draft.steps) {
         if (!step || typeof step !== 'object' || step.kind !== 'mcp') continue;
         const reference = mcpReferenceValidator.safeParse(step.tool);
         if (!reference.success) continue;
-        const tool = [...entry.originalMcpTools, ...entry.catalogueMcpTools].find(tool =>
+        const tool = [...entry.catalogueMcpTools, ...entry.originalMcpTools].find(tool =>
           Object.entries(reference.data).every(([key, value]) => tool[key as keyof McpToolSnapshot] === value));
         if (!tool) throw new Error(mcpDiagnostic(step.id));
-        bytes += Buffer.byteLength(JSON.stringify(tool)) - Buffer.byteLength(JSON.stringify(step.tool));
-        if (bytes > MAX_DEFINITION) throw invalid();
+        step.tool = tool;
+        bounded(value);
         step.tool = structuredClone(tool);
       }
     }
