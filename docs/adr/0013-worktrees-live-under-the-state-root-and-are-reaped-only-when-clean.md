@@ -41,15 +41,37 @@ truth about where an Agent Session lives, able to disagree with the first.
 **Removed only when clean, which is a narrower rule than it first appears.** ADR 0006 is careful that
 reaping is "the only operation in Flow that destroys a Presentation Transcript" and that a
 Settle stays reversible, "a Settle you regret in the morning is recoverable". Deleting a Worktree
-would be a second destructive act on that same one-day timer, from a sweep nobody is watching. What
-made a rule easy to write is that `git worktree remove` does not delete the branch ref or its
-commits: committed work survives a reap and stays reachable by name, so the only thing ever at risk is
-what was never committed — one `status --porcelain`. Always removing was rejected as data loss on a
-timer; never removing was rejected because the state root would then accumulate a working tree per
-Agent Session forever, which is most of the reason for putting them there. A dirty Worktree therefore
-outlives its Agent Session and is announced through an observer, which means the state root can hold
-directories no live session points at. Those are derivable — read `worktrees/`, ask git — so no
-bookkeeping is added for them here.
+would be a second destructive act on that same one-day timer, from a sweep nobody is watching.
+A dirty Worktree stays on disk to protect uncommitted work. Always removing was rejected as data
+loss on a timer; never removing was rejected because the state root would accumulate a working tree
+per Agent Session. A dirty Worktree outlives its Agent Session and is announced through an observer.
+The state root can therefore hold directories no live Agent Session points at. Those can be found by
+reading `worktrees/` and asking Git, so no separate ownership record is added here.
+
+**Merged local branches are removed after successful Worktree removal.** Keeping every branch made
+the local branch list grow even when Worktrees were removed. Reaping now attempts to remove both the
+recorded creation branch and the branch checked out when removal starts. Reading the current branch
+also handles renames and a new feature branch created inside the Worktree. Detached HEAD adds no
+branch to remove.
+
+Each candidate must be an ancestor of the source repository's current local branch. If that checkout
+has a detached HEAD, branches are retained. Branches checked out in another Worktree are also retained.
+
+Deletion uses `git branch -d`, never `-D`, so Git checks both current commits and checked-out branches
+at deletion. An ancestry check followed by ordinary `branch -d` is not sufficient: the branch and its
+upstream can gain unmerged commits between those commands. Direct `update-ref` deletion avoids that
+commit race but bypasses Git's checked-out-branch protection.
+
+For the deletion command only, the candidate's upstream is mapped to the source branch through a
+unique temporary remote configuration. Git therefore checks the source branch, not the candidate's
+normal upstream. The mapping uses the first configured merge reference because that setting can
+have multiple values. No configuration file is changed, no network command runs, and no remote
+branch is deleted. A missing branch or a refused deletion does not prevent Reaping.
+This uses Git's standard deletion checks, not a separate cross-process locking scheme.
+
+This is a conservative local check: it does not fetch, query pull requests, or recognise squash merges.
+Unmerged branches remain after their Agent Sessions are Reaped; there is no later branch sweep.
+Branches from Agent Sessions already Reaped are not removed retroactively.
 
 **The flag is recorded, not derived from the path.** "Does this Scope sit beneath `<stateRoot>/worktrees`"
 would have been shorter, and is how `Project.group` is worked out. The two are not alike: a wrong group

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import {
   isRepository,
   localBranches,
   planWorktree,
+  removeMergedBranch,
   removeWorktree,
   switchBranch,
 } from "../src/daemon/git.ts";
@@ -285,6 +287,93 @@ describe("createWorktree", () => {
     assert.equal(created.ok, false);
     assert.equal(existsSync(join(under, "absent-base")), false);
   });
+});
+
+describe("removeMergedBranch", { concurrency: false }, () => {
+  it("does not delete the branch behind a symbolic reference", async () => {
+    const repo = newRepo("symbolic-cleanup");
+    const commit = git(repo, "rev-parse", "main").trim();
+    git(repo, "symbolic-ref", "refs/heads/alias", "refs/heads/main");
+
+    await removeMergedBranch(repo, "alias");
+
+    assert.equal(git(repo, "rev-parse", "refs/heads/main").trim(), commit);
+  });
+
+  it("handles multiple merge references without saving temporary remote configuration", async () => {
+    const repo = newRepo("multiple-merge-refs", ["candidate"]);
+    git(repo, "remote", "add", "origin", repo);
+    git(repo, "config", "branch.candidate.remote", "origin");
+    git(repo, "config", "--add", "branch.candidate.merge", "refs/heads/candidate");
+    git(repo, "config", "--add", "branch.candidate.merge", "refs/heads/another");
+    const remote = git(repo, "config", "--get-regexp", "^remote\\.origin\\.");
+
+    assert.equal((await removeMergedBranch(repo, "candidate")).ok, true);
+
+    const branches = await localBranches(repo);
+    assert.deepEqual(branches, { ok: true, value: ["main"] });
+    assert.equal(git(repo, "config", "--get-regexp", "^remote\\.origin\\."), remote);
+    assert.equal(git(repo, "config", "--list").includes("flow-cleanup-"), false);
+  });
+
+  for (const changed of ["candidate", "source", "checkout"] as const) {
+    it(`preserves the candidate when the ${changed} ref changes after the merge check`, async () => {
+      const repo = newRepo(`merged-${changed}-race`, ["candidate"]);
+      const original = git(repo, "rev-parse", "candidate").trim();
+      git(repo, "commit", "--quiet", "--allow-empty", "-m", "new commit");
+      const newer = git(repo, "rev-parse", "main").trim();
+      const refs = changed === "candidate"
+        ? ["refs/heads/candidate", "refs/remotes/origin/candidate"]
+        : ["refs/heads/main"];
+      const replacement = changed === "candidate" ? newer : original;
+      if (changed === "source") git(repo, "update-ref", "refs/heads/candidate", newer);
+      if (changed === "candidate") {
+        git(repo, "update-ref", "refs/heads/main", original);
+        git(repo, "remote", "add", "origin", repo);
+        git(repo, "update-ref", "refs/remotes/origin/candidate", original);
+        git(repo, "branch", "--set-upstream-to=origin/candidate", "candidate");
+      }
+      git(repo, "merge-base", "--is-ancestor", "candidate", "main");
+
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      const bin = mkdtempSync(join(root, "git-wrapper-"));
+      const marker = join(bin, "changed");
+      writeFileSync(join(bin, "git"), `#!${process.execPath}
+const { spawnSync, execFileSync } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: "inherit" });
+if (result.status === 0 && args[1] === ${JSON.stringify(repo)} &&
+    args[2] === "merge-base" && args[3] === "--is-ancestor") {
+  if (${JSON.stringify(changed)} === "checkout") {
+    execFileSync(${JSON.stringify(realGit)}, ["-C", ${JSON.stringify(repo)}, "switch", "candidate"]);
+  } else {
+    for (const ref of ${JSON.stringify(refs)}) {
+      execFileSync(${JSON.stringify(realGit)}, ["-C", ${JSON.stringify(repo)}, "update-ref", ref, ${JSON.stringify(replacement)}]);
+    }
+  }
+  writeFileSync(${JSON.stringify(marker)}, "changed");
+}
+process.exit(result.status ?? 1);
+`, { mode: 0o755 });
+
+      const previousPath = process.env.PATH;
+      let result: Awaited<ReturnType<typeof removeMergedBranch>>;
+      try {
+        process.env.PATH = `${bin}:${previousPath ?? ""}`;
+        result = await removeMergedBranch(repo, "candidate");
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+      }
+
+      assert.equal(existsSync(marker), true, "the successful merge check must trigger the ref change");
+      if (changed === "checkout") assert.equal(git(repo, "symbolic-ref", "--short", "HEAD").trim(), "candidate");
+      else assert.equal(git(repo, "rev-parse", changed === "candidate" ? refs[1]! : refs[0]!).trim(), replacement);
+      assert.equal(result.ok, false, "deletion must reject unmerged or checked-out branches");
+      assert.equal(git(repo, "rev-parse", "refs/heads/candidate").trim(), changed === "checkout" ? original : newer);
+    });
+  }
 });
 
 describe("removeWorktree", () => {
