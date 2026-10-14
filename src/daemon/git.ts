@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -356,6 +357,35 @@ export async function createWorktree(options: {
   );
   if (!added.ok) return added;
   return { ok: true, value: planned.value };
+}
+
+export async function removeMergedBranch(repo: string, branch: string): Promise<GitResult<void>> {
+  const target = await head(repo);
+  if (!target.ok) return target;
+  if (target.value.detached) return refuse(`delete refs/heads/${branch}`, "The source repository has a detached HEAD");
+
+  const branchRef = `refs/heads/${branch}`;
+  const targetRef = `refs/heads/${target.value.name}`;
+  const merged = await run(repo, ["merge-base", "--is-ancestor", branchRef, targetRef], GIT_READ_TIMEOUT_MS);
+  if (!merged.ok) return merged;
+
+  const configured = await run(repo, ["config", "--get-all", `branch.${branch}.merge`], GIT_READ_TIMEOUT_MS);
+  if (!configured.ok && configured.failure.code !== 1) return configured;
+  const mergeRef = configured.ok ? configured.value.trim().split("\n")[0]! : branchRef;
+  const cleanupRemote = `flow-cleanup-${randomUUID()}`;
+  const removed = await run(
+    repo,
+    [
+      "-c", `branch.${branch}.remote=${cleanupRemote}`,
+      "-c", `branch.${branch}.merge=${mergeRef}`,
+      "-c", `remote.${cleanupRemote}.url=.`,
+      "-c", `remote.${cleanupRemote}.fetch=${mergeRef}:${targetRef}`,
+      "branch", "-d", "--", branch,
+    ],
+    GIT_WRITE_TIMEOUT_MS,
+  );
+  if (!removed.ok) return removed;
+  return { ok: true, value: undefined };
 }
 
 /**

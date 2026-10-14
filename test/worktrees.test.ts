@@ -139,7 +139,7 @@ describe("worktrees", () => {
   });
 
   describe("reaping", () => {
-    it("removes a clean worktree, and leaves its branch reachable", async () => {
+    it("removes a clean worktree and its merged local branch", async () => {
       const host = await hostWith();
       const repo = repository(work, "api");
       const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
@@ -151,7 +151,161 @@ describe("worktrees", () => {
 
       assert.equal(existsSync(scope), false, "the worktree is gone");
       assert.equal(existsSync(store.sessionDir(id)), false, "and so is the transcript");
-      // The whole reason a reap can be safe: committed work is still there under its own name.
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(branch), false);
+    });
+
+    it("preserves a branch with unmerged commits while removing its worktree", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "commit", "--allow-empty", "-m", "unmerged");
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      assert.equal(existsSync(scope), false);
+      assert.equal(git(repo, "log", "-1", "--format=%s", branch).trim(), "unmerged");
+    });
+
+    it("preserves unmerged commits when the source repository has a detached HEAD", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "commit", "--allow-empty", "-m", "unmerged");
+      git(repo, "checkout", "--detach", branch);
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      assert.equal(existsSync(scope), false);
+      assert.equal(git(repo, "log", "-1", "--format=%s", branch).trim(), "unmerged");
+    });
+
+    it("removes a branch after its commits are merged", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "commit", "--allow-empty", "-m", "finished");
+      git(repo, "merge", "--ff-only", branch);
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(branch), false);
+      assert.equal(git(repo, "log", "-1", "--format=%s").trim(), "finished");
+    });
+
+    it("removes the merged branch currently checked out and the original branch", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const original = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "switch", "-c", "fix/finished");
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(original), false);
+      assert.equal(branches.ok && branches.value.includes("fix/finished"), false);
+    });
+
+    it("removes a renamed merged branch after a host restart", async () => {
+      const first = await hostWith();
+      const repo = repository(work, "api");
+      const id = await first.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = first.list().find((entry) => entry.id === id)?.scope ?? "";
+      git(scope, "branch", "-m", "fix/renamed");
+      await first.settle(id);
+      const second = await hostWith();
+
+      assert.deepEqual(await second.reap(Date.now() + DAY + 1000), [id]);
+
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes("fix/renamed"), false);
+    });
+
+    it("preserves a pushed branch whose commits are not merged locally", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "commit", "--allow-empty", "-m", "pushed but unmerged");
+      const remote = join(work, "remote.git");
+      git(repo, "init", "--bare", "--initial-branch=main", remote);
+      git(repo, "remote", "add", "origin", remote);
+      git(scope, "push", "--set-upstream", "origin", branch);
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      assert.equal(git(repo, "log", "-1", "--format=%s", branch).trim(), "pushed but unmerged");
+      assert.equal(git(remote, "log", "-1", "--format=%s", branch).trim(), "pushed but unmerged");
+    });
+
+    it("removes a merged local branch without removing its remote branch", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "commit", "--allow-empty", "-m", "finished");
+      const remote = join(work, "remote.git");
+      git(repo, "init", "--bare", "--initial-branch=main", remote);
+      git(repo, "remote", "add", "origin", remote);
+      git(scope, "push", "--set-upstream", "origin", branch);
+      git(repo, "merge", "--ff-only", branch);
+      const remoteCommit = git(remote, "rev-parse", `refs/heads/${branch}`).trim();
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(branch), false);
+      assert.equal(git(remote, "rev-parse", `refs/heads/${branch}`).trim(), remoteCommit);
+    });
+
+    it("preserves branches checked out in another worktree", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(scope, "switch", "main", "--ignore-other-worktrees");
+      const other = join(work, "other");
+      git(repo, "worktree", "add", other, branch);
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(branch), true);
+      assert.equal(branches.ok && branches.value.includes("main"), true);
+      assert.equal(existsSync(other), true);
+    });
+
+    it("does not remove branches when worktree removal fails", async () => {
+      const host = await hostWith();
+      const repo = repository(work, "api");
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+      const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
+      git(repo, "worktree", "lock", scope);
+      await host.settle(id);
+
+      assert.deepEqual(await host.reap(Date.now() + DAY + 1000), [id]);
+
+      assert.equal(existsSync(scope), true);
       const branches = await localBranches(repo);
       assert.equal(branches.ok && branches.value.includes(branch), true);
     });
@@ -161,6 +315,7 @@ describe("worktrees", () => {
       const repo = repository(work, "api");
       const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
       const scope = host.list().find((entry) => entry.id === id)?.scope ?? "";
+      const branch = host.list().find((entry) => entry.id === id)?.branch?.name ?? "";
       writeFileSync(join(scope, "unfinished.txt"), "work in progress\n");
       await host.settle(id);
 
@@ -173,6 +328,8 @@ describe("worktrees", () => {
       // work stays, because deleting it on a timer is the one thing ADR 0006 does not license.
       assert.equal(existsSync(store.sessionDir(id)), false);
       assert.equal(existsSync(join(scope, "unfinished.txt")), true);
+      const branches = await localBranches(repo);
+      assert.equal(branches.ok && branches.value.includes(branch), true);
       assert.equal(kept.length, 1);
       assert.equal(kept[0]?.path, scope);
       assert.match(kept[0]?.reason ?? "", /uncommitted/);

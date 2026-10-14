@@ -49,6 +49,7 @@ import {
   head,
   isClean,
   isRepository,
+  removeMergedBranch,
   removeWorktree,
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
@@ -511,7 +512,7 @@ export class SessionHost {
   /**
    * Notified when a reap left a worktree on disk rather than removing it.
    *
-   * Only a clean worktree is removed: a branch ref always survives a reap, so no commit is ever
+   * Only a clean worktree is removed: unmerged branch refs survive a reap, so no commit is ever
    * lost, but uncommitted and untracked work would be — and deleting that on a retention timer,
    * from a sweep nobody is watching, is a second destructive act ADR 0006 does not license.
    *
@@ -1965,10 +1966,8 @@ export class SessionHost {
   /**
    * Remove a reaped session's worktree, but only while it is clean.
    *
-   * `git worktree remove` never deletes the branch ref or the commits on it, so committed work
-   * survives a reap and is reachable by name afterwards. The only thing at risk is what was never
-   * committed, which is why one `status --porcelain` is the whole safety rule — and why a dirty
-   * worktree is left where it is and announced instead.
+   * Unmerged branch refs survive a reap. Local branches merged into the source repository's branch
+   * are removed after the worktree, unless Git refuses. Uncommitted work stays in a dirty worktree.
    */
   private async releaseWorktree(record: SessionRecord): Promise<void> {
     const worktree = record.worktree;
@@ -1990,8 +1989,16 @@ export class SessionHost {
       return;
     }
 
+    const current = await head(worktree.path);
     const removed = await removeWorktree({ repo: worktree.repo, path: worktree.path });
-    if (!removed.ok) kept(removed.failure.message);
+    if (!removed.ok) {
+      kept(removed.failure.message);
+      return;
+    }
+
+    const branches = new Set([worktree.branch]);
+    if (current.ok && !current.value.detached) branches.add(current.value.name);
+    for (const branch of branches) await removeMergedBranch(worktree.repo, branch);
   }
 
   /**

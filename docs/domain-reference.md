@@ -314,8 +314,8 @@ _Avoid_: project, suggestion, available project
 **Worktree**:
 A Scope the Session Host made, by cutting a branch from a Project. Owned by the host rather than by
 whoever asked for it: it is chosen when an Agent Session is created, never entered later, and it is
-removed when that Agent Session is Reaped — but only while it is clean, because a branch outlives a
-reap and uncommitted work does not.
+removed when that Agent Session is Reaped — but only while it is clean, so uncommitted work survives.
+Unmerged branches survive Reaping; merged local branches may be removed with the Worktree.
 _Avoid_: checkout, copy, clone, workspace — and note it is a *kind of* Scope, not an alternative to
 one, so an Agent Session bound to a Worktree is bound for its whole life like any other.
 
