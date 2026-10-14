@@ -25,12 +25,24 @@ describe("text diffs", () => {
     assert.deepEqual(textDiff("", "diff"), []);
   });
 
-  it("does not colour ordinary code, prose or tool output", () => {
+  it("colours change markers in blocks with any language label", () => {
+    const text = "const value = 1;\n-old\n+new\n-\n+\n-negative\n+positive\n -indented\n +indented\n";
+    for (const lang of ["ts", "javascript", "python", "text", "unknown", "TS filename.ts"]) {
+      const lines = textDiff(text, lang)!;
+      assert.deepEqual(lines.map((line) => line.kind), [
+        "context", "removed", "added", "removed", "added", "removed", "added", "context", "context",
+      ]);
+      assert.equal(lines.map((line) => line.text).join(""), text);
+      assert.deepEqual(textDiff("+unfinished", lang), [{ text: "+unfinished", kind: "added" }]);
+    }
+  });
+
+  it("does not colour unlabelled fragments, prose or tool output", () => {
     for (const text of ["+positive\n-negative", "--- a\n+++ b", "@@ -1 +1 @@\n-old\n+new", "", "git status"]) {
       assert.equal(textDiff(text), undefined);
     }
-    assert.equal(textDiff(unified, "text"), undefined);
-    assert.equal(textDiff("+counter;\n-value;", "javascript"), undefined);
+    assert.equal(textDiff("+positive\n-negative", "   "), undefined);
+    assert.equal(textDiff("const value = 1;\n -indented\n +indented", "ts")!.every((line) => line.kind === "context"), true);
   });
 
   it("distinguishes file headers from similarly prefixed content inside hunks", () => {
@@ -42,10 +54,12 @@ describe("text diffs", () => {
 
   it("preserves CRLF, empty lines, tabs, HTML and the final newline exactly", () => {
     const text = "--- a\r\n+++ b\r\n@@ -1 +1 @@\r\n-\t<script>\r\n+\tnew\r\n\r\n";
-    const lines = textDiff(text)!;
-    assert.equal(lines.map((line) => line.text).join(""), text);
-    assert.equal(lines[3]!.kind, "removed");
-    assert.equal(lines[4]!.kind, "added");
+    for (const lang of [undefined, "ts"]) {
+      const lines = textDiff(text, lang)!;
+      assert.equal(lines.map((line) => line.text).join(""), text);
+      assert.equal(lines[3]!.kind, "removed");
+      assert.equal(lines[4]!.kind, "added");
+    }
   });
 });
 

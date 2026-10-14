@@ -19,7 +19,9 @@ const bundle = await build({
       import { EditDiffView, ToolPayloadView } from '@/components/edit-diff-view.tsx';
       const text = ${JSON.stringify(text)};
       createRoot(document.getElementById('root')).render(<main className="bg-background text-foreground p-6 space-y-6">
-        <section id="diff"><Markdown blocks={parseMarkdown('~~~diff\\n' + text + '~~~')} query="old" /></section>
+        <section id="diff"><Markdown blocks={parseMarkdown('~~~ts\\n' + text + '~~~')} query="old" /></section>
+        <section id="labelled"><Markdown blocks={parseMarkdown('~~~python\\n-old\\n+new\\n~~~')} query="old" /></section>
+        <pre id="labelled-plain">{'-old\\n+new'}</pre>
         <section id="edit"><EditDiffView input={{old_string: 'old', new_string: 'new'}} query="old" /></section>
         <section id="tool"><ToolPayloadView entry={{kind: 'tool', result: text}} query="" /></section>
         <section id="structured"><ToolPayloadView entry={{kind: 'tool', result: {
@@ -27,7 +29,7 @@ const bundle = await build({
         }}} query="old" /></section>
         <pre id="plain">{text}</pre>
         <section id="crlf"><ToolPayloadView entry={{kind: 'tool', result: text.replaceAll('\\n', '\\r\\n')}} query="" /></section>
-        <section id="stream"><Markdown blocks={parseMarkdown('~~~patch\\n-old\\n+streaming')} query=""
+        <section id="stream"><Markdown blocks={parseMarkdown('~~~ts\\n-old\\n+streaming')} query=""
           trailing={<span data-caret="true">▍</span>} /></section>
         <section id="long"><Markdown blocks={parseMarkdown('~~~diff\\n-' + 'long'.repeat(200) + '\\n+short\\n~~~')} query="" /></section>
       </main>);
@@ -81,6 +83,9 @@ for (const theme of ["light", "dark"]) {
         return {
           added: colour("#diff .text-diff-added"), removed: colour("#diff .text-destructive"),
           editAdded: colour("#edit .text-diff-added"), editRemoved: colour("#edit .text-destructive"),
+          labelledAdded: colour("#labelled .text-diff-added"), labelledRemoved: colour("#labelled .text-destructive"),
+          labelledCopied: selectedText("#labelled pre"), labelledPlainCopied: selectedText("#labelled-plain"),
+          labelledSearch: document.querySelector("#labelled .text-destructive mark")?.textContent,
           structuredAdded: colour("#structured .text-diff-added"), structuredRemoved: colour("#structured .text-destructive"),
           structuredCopied: selectedText("#structured pre"),
           structuredMetadata: document.querySelector("#structured").textContent,
@@ -98,6 +103,10 @@ for (const theme of ["light", "dark"]) {
       });
       assert.deepEqual(metrics.added, metrics.editAdded);
       assert.deepEqual(metrics.removed, metrics.editRemoved);
+      assert.deepEqual(metrics.labelledAdded, metrics.editAdded);
+      assert.deepEqual(metrics.labelledRemoved, metrics.editRemoved);
+      assert.equal(metrics.labelledCopied, metrics.labelledPlainCopied);
+      assert.equal(metrics.labelledSearch, "old");
       assert.deepEqual(metrics.structuredAdded, metrics.editAdded);
       assert.deepEqual(metrics.structuredRemoved, metrics.editRemoved);
       assert.notDeepEqual(metrics.added, metrics.removed);
