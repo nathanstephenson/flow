@@ -40,15 +40,13 @@ export type DiffLineKind = "added" | "removed" | "context";
 export type TextDiffLine = { text: string; kind: DiffLineKind };
 
 /**
- * Explicit diff/patch fences may contain just +/- fragments. Without that hint, require a unified
- * file header and hunk, so ordinary code and tool output are not mistaken for changes. Keep every
- * byte, including newlines, for copying and search highlighting.
+ * Labelled fences may contain just +/- fragments. Without a label, require a unified file header
+ * and hunk, so ordinary tool output is not mistaken for changes. Keep every byte, including
+ * newlines, for copying and search highlighting.
  */
 export function textDiff(text: string, lang?: string): TextDiffLine[] | undefined {
-  const language = lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-  const explicit = language === "diff" || language === "patch";
-  if (language && !explicit) return undefined;
-  if (!explicit) {
+  const labelled = Boolean(lang?.trim());
+  if (!labelled) {
     const fileHeader = /^--- [^\n]*\n\+\+\+ [^\n]*\n/m.test(text);
     const hunkHeader = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text);
     if (!fileHeader || !hunkHeader) return undefined;
@@ -65,7 +63,7 @@ export function textDiff(text: string, lang?: string): TextDiffLine[] | undefine
     }
     const inHunk = remainingOld > 0 || remainingNew > 0;
     let kind: DiffLineKind = "context";
-    if (inHunk || explicit) {
+    if (inHunk || labelled) {
       // ---/+++ are file headers outside a hunk, but valid removed/added content inside one.
       if (line.startsWith("-") && (inHunk || !line.startsWith("--- "))) kind = "removed";
       if (line.startsWith("+") && (inHunk || !line.startsWith("+++ "))) kind = "added";

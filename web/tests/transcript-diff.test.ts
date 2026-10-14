@@ -52,9 +52,9 @@ function assertColours(html: string) {
   assert.ok(html.includes(added));
 }
 
-test("fenced diff/patch blocks use the same colour classes as edit tools", () => {
+test("labelled code blocks use the same colour classes as edit tools", () => {
   assertColours(edit());
-  for (const lang of ["diff", "patch"]) {
+  for (const lang of ["diff", "patch", "ts", "python", "text", "unknown"]) {
     const html = markdown(`\`\`\`${lang}\n${unified}\`\`\``);
     assertColours(html);
     assert.match(html, /--- a\/file<\/span>\n/);
@@ -65,8 +65,8 @@ test("fenced diff/patch blocks use the same colour classes as edit tools", () =>
   }
 });
 
-test("diff blocks keep search marks, literal HTML and the streaming caret", () => {
-  const html = markdown("```diff\n-old <script>\n+new <script>", "script", true);
+test("language-labelled fragments keep search marks, literal HTML and the streaming caret", () => {
+  const html = markdown("```ts\n-old <script>\n+new <script>", "script", true);
   assertColours(html);
   assert.match(html, /&lt;<\/span><mark[^>]*>script<\/mark><span>&gt;/);
   assert.ok(!html.includes("<script>"));
@@ -76,9 +76,9 @@ test("diff blocks keep search marks, literal HTML and the streaming caret", () =
 });
 
 test("nested and unlabelled unified diff blocks are coloured, ordinary code is not", () => {
-  assertColours(markdown(`> \`\`\`diff\n> -old\n> +new\n> \`\`\``));
+  assertColours(markdown(`> \`\`\`ts\n> -old\n> +new\n> \`\`\``));
   assertColours(markdown(`\`\`\`\n${unified}\`\`\``));
-  for (const text of ["```js\n-old;\n+new;\n```", "```\n-old\n+new\n```", "`+new` and ordinary prose"]) {
+  for (const text of ["```js\nconst value = 1;\n -old;\n +new;\n```", "```\n-old\n+new\n```", "`+new` and ordinary prose"]) {
     assert.ok(!markdown(text).includes(added));
     assert.ok(!markdown(text).includes(removed));
   }
