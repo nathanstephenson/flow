@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import { promisify } from "node:util";
 import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIsolationOptions } from "../src/isolation/filesystem.ts";
 import { filesystemStdioLaunch } from "../src/isolation/launcher.ts";
+import { encodeFrame, frameDecoder } from "../src/backend/worker/frames.ts";
 
 const execute = promisify(execFile);
 const bwrap = process.env.FLOW_BWRAP_PATH ?? "/usr/bin/bwrap";
@@ -552,29 +553,31 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     await assert.rejects(prepareFilesystemIsolation(f.options({ scope: auth, env })), /protected host state/);
   });
 
-  it("preserves Node IPC fd3 and read-only runtime assets under masked /tmp", async (t) => {
+  it("carries framed worker messages on stdio with read-only runtime assets under masked /tmp", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const asset = join(f.root, "entry.cjs");
-    writeFileSync(asset, "process.send({ready:true});process.on('message',m=>{process.send({echo:m});process.disconnect()});");
-    const prepared = await prepareFilesystemIsolation(f.options({ ipc: true, args: [asset], readablePaths: [asset] }));
+    writeFileSync(asset, `const v8=require('v8');let b=Buffer.alloc(0);process.stdin.on('data',c=>{b=Buffer.concat([b,c]);
+      if(b.length<4||b.length<4+b.readUInt32BE(0))return;const m=v8.deserialize(b.subarray(4,4+b.readUInt32BE(0)));
+      const body=v8.serialize({echo:m,worker:process.env.FLOW_BACKEND_WORKER});const h=Buffer.alloc(4);h.writeUInt32BE(body.length);
+      process.stdout.write(Buffer.concat([h,body]),()=>process.exit(0));});`);
+    const prepared = await prepareFilesystemIsolation(f.options({ worker: true, args: [asset], readablePaths: [asset] }));
     try {
-      assert.ok(prepared.args.includes("NODE_CHANNEL_FD"));
       await new Promise<void>((resolve, reject) => {
         const child = spawn(prepared.command, prepared.args, { env: prepared.env, detached: true,
-          stdio: ["ignore", "ignore", "pipe", "ipc", ...prepared.stdioFds], serialization: "advanced" });
-        const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("IPC timeout")); }, 10_000);
+          stdio: ["pipe", "pipe", "pipe", ...prepared.stdioFds] });
+        const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("worker channel timeout")); }, 10_000);
         let echoed = false;
         let diagnostics = "";
         child.stderr!.on("data", (chunk) => { diagnostics += chunk; });
         child.on("error", reject);
-        child.on("message", (message) => {
-          const m = message as { ready?: boolean; echo?: string };
-          if (m.ready) child.send("hello");
-          if (m.echo === "hello") echoed = true;
-        });
+        child.stdout!.on("data", frameDecoder((message) => {
+          const m = message as { echo?: string; worker?: string };
+          echoed = m.echo === "hello" && m.worker === "1";
+        }));
+        child.stdin!.write(encodeFrame("hello"));
         child.on("close", (code) => {
           clearTimeout(timer);
-          if (code === 0 && echoed) resolve(); else reject(new Error(`IPC failed (${code}): ${diagnostics}`));
+          if (code === 0 && echoed) resolve(); else reject(new Error(`worker channel failed (${code}): ${diagnostics}`));
         });
       });
     } finally { prepared.cleanup(); }

@@ -5,6 +5,7 @@ import { lstat, open, opendir, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, normalize, resolve } from 'node:path';
 import { isSea } from 'node:sea';
 import { fileURLToPath } from 'node:url';
+import { deserialize, serialize } from 'node:v8';
 
 // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
 // Darwin (macOS 11+). This is NOT O_NOFOLLOW and the two
@@ -33,7 +34,7 @@ async function reference(request: Request): Promise<unknown> {
     request.path.split('/').length > 64 || (request.operation === 'check' && request.path !== '.') ||
     typeof request.scope !== 'string' || request.scope.length > 4096 ||
     request.scope.includes('\0') || !isAbsolute(request.scope) || resolve(request.scope) !== request.scope) throw new Error();
-  const root = fstatSync(4, { bigint: true });
+  const root = fstatSync(3, { bigint: true });
   if (!root.isDirectory()) throw new Error();
   await checkScope(request.scope, root);
   const cwd = await open('.', directoryFlags);
@@ -86,21 +87,32 @@ async function reference(request: Request): Promise<unknown> {
   }
 }
 
+function serveOneFrame(handle: (request: unknown) => Promise<unknown>): void {
+  let buffer = Buffer.alloc(0);
+  process.stdin.on('data', (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    if (buffer.length < 4 || buffer.length < 4 + buffer.readUInt32BE(0)) return;
+    process.stdin.pause();
+    void handle(deserialize(buffer.subarray(4, 4 + buffer.readUInt32BE(0)))).then(response => {
+      const body = serialize(response);
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.length);
+      process.stdout.write(Buffer.concat([header, body]), () => process.exit(0));
+    });
+  });
+  process.stdin.once('end', () => process.exit(1));
+}
+
 export function runWorkflowBuilderReader(): void {
-  if (process.platform !== 'darwin' || !process.send || process.env.FLOW_WORKFLOW_BUILDER_READER !== '1') {
+  if (process.platform !== 'darwin' || process.env.FLOW_WORKFLOW_BUILDER_READER !== '1') {
     throw new Error('Workflow reference unavailable');
   }
   // Also bound orphaned helpers. The parent independently kills and reaps at 5s.
-  const timer = setTimeout(() => process.exit(1), 4500);
-  process.once('disconnect', () => process.exit(1));
-  process.once('message', (request: Request) => {
-    void reference(request).then(result => ({ ok: true, result }), () => ({ ok: false })).then(response => {
-      process.send!(response, () => { clearTimeout(timer); process.exit(0); });
-    });
-  });
+  setTimeout(() => process.exit(1), 4500);
+  serveOneFrame(request => reference(request as Request).then(result => ({ ok: true, result }), () => ({ ok: false })));
 }
 
 // Direct Node source/compiled entry. SEA dispatch happens in cli/main.ts instead.
 if (!isSea() && process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  try { runWorkflowBuilderReader(); } catch { process.exitCode = 1; process.disconnect?.(); }
+  try { runWorkflowBuilderReader(); } catch { process.exitCode = 1; }
 }

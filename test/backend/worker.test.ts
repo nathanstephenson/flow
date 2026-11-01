@@ -258,14 +258,22 @@ test("host rejects arbitrary reverse method names rather than invoking prototype
   const scope = await mkdtemp(join(tmpdir(), "flow-worker-hostile-"));
   t.after(() => rm(scope, { recursive: true, force: true }));
   const entry = join(scope, "hostile.mjs");
-  await writeFile(entry, `process.on('message', m => {
-    if (m.kind === 'call' && m.method === 'create') {
-      process.send({kind:'call',id:99,method:'constructor',args:[]});
-      process.send({kind:'reply',id:m.id,value:{capabilities:{providers:[],models:[],compaction:false,fork:false,subagents:false,enquiries:false,permissions:false},methods:[]}});
-    } else if(m.kind === 'reply' && m.id === 99) {
-      process.send({kind:'notification',name:'event',value:{event:{type:'notice',level:'info',text:m.error}}});
-    } else if(m.kind === 'call' && m.method === 'dispose') {
-      process.send({kind:'reply',id:m.id}); process.disconnect();
+  await writeFile(entry, `import v8 from 'node:v8';
+  const send = m => { const body = v8.serialize(m); const h = Buffer.alloc(4); h.writeUInt32BE(body.length); process.stdout.write(Buffer.concat([h, body])); };
+  let buffer = Buffer.alloc(0);
+  process.stdin.on('data', chunk => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (buffer.length >= 4 && buffer.length >= 4 + buffer.readUInt32BE(0)) {
+      const m = v8.deserialize(buffer.subarray(4, 4 + buffer.readUInt32BE(0)));
+      buffer = buffer.subarray(4 + buffer.readUInt32BE(0));
+      if (m.kind === 'call' && m.method === 'create') {
+        send({kind:'call',id:99,method:'constructor',args:[]});
+        send({kind:'reply',id:m.id,value:{capabilities:{providers:[],models:[],compaction:false,fork:false,subagents:false,enquiries:false,permissions:false},methods:[]}});
+      } else if(m.kind === 'reply' && m.id === 99) {
+        send({kind:'notification',name:'event',value:{event:{type:'notice',level:'info',text:m.error}}});
+      } else if(m.kind === 'call' && m.method === 'dispose') {
+        send({kind:'reply',id:m.id}); process.stdout.end(() => process.exit(0));
+      }
     }
   });`);
   const events: BackendEvent[] = [];

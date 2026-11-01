@@ -1,8 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { encodeFrame, frameDecoder } from "./frames.ts";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 
-/** A wrapper can replace command/args to enter a sandbox without changing the IPC contract. */
+/** A wrapper can replace command/args to enter a sandbox without changing the framed stdio contract. */
 export type WorkerLaunchOptions = {
   command?: string;
   args?: string[];
@@ -32,9 +33,9 @@ export function launchWorker(options: WorkerLaunchOptions = {}) {
     env: { ...process.env, ...options.env, FLOW_BACKEND_WORKER: "1" },
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     detached: process.platform !== "win32",
-    stdio: ["ignore", "ignore", "pipe", "ipc", ...(options.stdioFds ?? [])],
-    serialization: "advanced",
+    stdio: ["pipe", "pipe", "pipe", ...(options.stdioFds ?? [])],
   });
+  child.stdin?.on("error", () => {});
   // Drain diagnostics so a chatty SDK cannot block on stderr. Keep only a bounded failure tail.
   let diagnostics = "";
   child.stderr?.on("data", (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString()).slice(-8192); });
@@ -45,6 +46,16 @@ export function launchWorker(options: WorkerLaunchOptions = {}) {
   return {
     child,
     exited,
+    send: (message: unknown, callback: (error?: Error | null) => void) => {
+      if (!child.stdin?.writable) throw new Error("Backend worker disconnected");
+      child.stdin.write(encodeFrame(message), callback);
+    },
+    onMessage: (listener: (message: unknown) => void, onError: (error: Error) => void) => {
+      const decode = frameDecoder(listener);
+      child.stdout?.on("data", (chunk: Buffer) => {
+        try { decode(chunk); } catch (error) { onError(error as Error); }
+      });
+    },
     diagnostics: () => diagnostics.trim(),
     /** Await the process, then kill its entire process group if cooperative disposal stalled. */
     stop: (graceful: () => Promise<unknown>) => stopping ??= (async () => {

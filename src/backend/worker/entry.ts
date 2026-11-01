@@ -6,6 +6,7 @@ import type { EffortLevel, PermissionDecision } from "../../protocol/events.ts";
 import { WorkerRpc, errorText } from "./rpc.ts";
 import { snapshot, type CreateMetadata, type McpToolMetadata, type WorkflowMetadata, type SessionSnapshot } from "./protocol.ts";
 import { killWorkerTree } from "./launcher.ts";
+import { encodeFrame, frameDecoder } from "./frames.ts";
 import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { isSea } from "node:sea";
@@ -20,7 +21,8 @@ export function runWorker(): void {
     });
     return;
   }
-  if (!process.send) throw new Error("Backend worker requires an IPC channel");
+  const writeFrame = process.stdout.write.bind(process.stdout);
+  process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write;
   let session: BackendSession | undefined;
   let published: SessionSnapshot | undefined;
   const publishSnapshot = () => (published = snapshot(session!));
@@ -29,9 +31,9 @@ export function runWorker(): void {
   let shutdown: Promise<void> | undefined;
   let tools: McpTool[] = [];
   const workflows = new Map<string, WorkflowSubagentHandle>();
-  const send = (message: Parameters<NonNullable<typeof process.send>>[0]) => {
-    if (!process.connected) throw new Error("Backend worker disconnected");
-    process.send!(message, (error) => { if (error) void stop(); });
+  const send = (message: unknown) => {
+    if (!process.stdout.writable) throw new Error("Backend worker disconnected");
+    writeFrame(encodeFrame(message), (error) => { if (error) void stop(); });
   };
   const rpc = new WorkerRpc(send, async (method, args) => {
     if (method === "create") {
@@ -81,7 +83,7 @@ export function runWorker(): void {
     if (method === "dispose") {
       await disposeSession();
       // The RPC reply must be queued before disconnecting and exiting.
-      setImmediate(() => { if (process.connected) process.disconnect(); process.exit(0); });
+      setImmediate(() => process.stdout.end(() => process.exit(0)));
       return;
     }
     if (!session || closing) throw new Error("Backend worker is not running");
@@ -142,8 +144,12 @@ export function runWorker(): void {
       try { await disposeSession(); } finally { clearTimeout(timer); process.exit(0); }
     })();
   }
-  process.on("message", (message) => rpc.receive(message));
-  process.once("disconnect", () => { void stop(); });
+  const decode = frameDecoder((message) => rpc.receive(message));
+  process.stdin.on("data", (chunk: Buffer) => {
+    try { decode(chunk); } catch { void stop(); }
+  });
+  process.stdin.once("end", () => { void stop(); });
+  process.stdout.on("error", () => { void stop(); });
   process.once("SIGTERM", () => { void stop(); });
   process.once("SIGINT", () => { void stop(); });
 }
