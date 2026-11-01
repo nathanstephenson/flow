@@ -21,7 +21,7 @@ test("installed Claude: two unrestricted SDK workers and normal CLI share atomic
   // Starting both workers before either refresh finishes exercises stale-token re-read under
   // the actual CLI's cross-process lock. They must not refresh the same rotating token twice.
   const starting = Promise.all(states.map((stateDir, i) => new WorkerBackend({ backend: "claude",
-    env: { ...f.env, FLOW_CLAUDE_PATH: cli }, isolationEnabled: () => false })
+    env: { ...f.env, FLOW_CLAUDE_PATH: cli }, isolationMode: () => "none" as const })
     .create({ scope: f.scope, stateDir, emit: event => events[i]!.push(event) }).then(session => {
       t.after(() => session.dispose());
       return session;
@@ -47,7 +47,7 @@ test("installed Claude: two unrestricted SDK workers and normal CLI share atomic
   // A fresh Backend Session after disposal must read the rotated token from the ordinary store.
   const rebuiltEvents: BackendEvent[] = [];
   const rebuilt = await new WorkerBackend({ backend: "claude", env: { ...f.env, FLOW_CLAUDE_PATH: cli },
-    isolationEnabled: () => false }).create({ scope: f.scope, stateDir: states[0]!, emit: event => rebuiltEvents.push(event) });
+    isolationMode: () => "none" as const }).create({ scope: f.scope, stateDir: states[0]!, emit: event => rebuiltEvents.push(event) });
   try {
     await rebuilt.prompt("rebuilt");
     await until(() => rebuiltEvents.some(event => event.type === "turn_ended"), 20_000);
@@ -60,7 +60,7 @@ test("installed Claude: restricted OAuth rotation never updates the global store
 }, async t => {
   const f = await claudeAuthFixture(t), before = f.credentials(), beforeFiles = readdirSync(f.auth), events: BackendEvent[] = [];
   const session = await new WorkerBackend({ backend: "claude", env: { ...f.env,
-    CLAUDE_SECURESTORAGE_CONFIG_DIR: f.auth }, readablePaths: [f.cert], isolationEnabled: () => true })
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: f.auth }, readablePaths: [f.cert], isolationMode: () => "bubblewrap" as const })
     .create({ scope: f.scope, stateDir: f.state("restricted"), emit: event => events.push(event) });
   try {
     await session.prompt("fixture");

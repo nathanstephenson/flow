@@ -62,7 +62,7 @@ it("MCP session recreation preserves Ask interception, remembered grants, and li
     transport: "stdio", command: process.execPath, args: ["--experimental-strip-types", resolve("test/fixtures/mcp-server.ts")] }],
     // This permission fixture deliberately keeps SDK auth/settings inside Scope. It
     // tests interception, not a boundary (which correctly refuses that overlap).
-    fixture.scope, undefined, false, undefined, undefined, undefined, false);
+    fixture.scope, undefined, false, undefined, undefined, undefined, "none");
   t.after(() => mcp.dispose());
   const session = await fixture.create({ permissionMode: "ask", mcp });
   const first = session.prompt("write-before-refresh");

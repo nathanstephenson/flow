@@ -30,7 +30,7 @@ for (const projectSpecific of [false, true]) it(`isolated ${projectSpecific ? 'P
   symlinkSync(scope, join(f.scope, 'skills'));
   const credentials = readFileSync(join(f.scope, 'models.json'), 'utf8');
   const host = new SessionHost();
-  host.registerBackend(new WorkerBackend({ backend: 'pi', isolationEnabled: () => true, stateRoot,
+  host.registerBackend(new WorkerBackend({ backend: 'pi', isolationMode: () => "bubblewrap" as const, stateRoot,
     env: { PI_CODING_AGENT_DIR: f.scope, PI_OFFLINE: '1' } }));
   t.after(() => host.shutdown());
   const service = new WorkflowBuilderService({ host, stateRoot, scope,

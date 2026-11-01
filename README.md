@@ -507,7 +507,7 @@ Settings are machine-wide: they govern every Agent Session on the machine, not o
 
 | Setting | Meaning | Default |
 | --- | --- | --- |
-| `filesystemIsolation` | Machine-wide filesystem enforcement: `true` requires isolation; `false` selects unrestricted execution. | automatic: ON when actual Linux Bubblewrap enforcement is available, otherwise UNRESTRICTED |
+| `filesystemIsolation` | Machine-wide filesystem enforcement: `"bubblewrap"` or `"sandbox"` requires that isolation; `"none"` selects unrestricted execution. Stored `true`/`false` load as `"bubblewrap"`/`"none"`. | automatic: Bubblewrap when actual Linux Bubblewrap enforcement is available, otherwise UNRESTRICTED. Never sandbox. |
 | `retention.settled` | How long a Settled Agent Session survives before it is reaped. A duration — `90m`, `36h`, `1d` — or `never`. | `1d` |
 | `fonts.chrome` | The interface typeface: labels, transcript prose, buttons. | `'Inter Variable', sans-serif` |
 | `fonts.monospace` | The Shell's terminal, and the chrome that aligns character by character. | a Nerd Font stack (below) |
@@ -523,10 +523,10 @@ copying values at startup, so an edit applies to the running daemon: retention t
 next hourly sweep, and a typeface immediately.
 
 The **General → Filesystem isolation** group shows support status/reason and warns clearly when
-execution is unrestricted. The optional stored key is `filesystemIsolation?: boolean`; leaving it
+execution is unrestricted. The optional stored key is `filesystemIsolation?: "none" | "bubblewrap" | "sandbox"`; leaving it
 out selects automatic mode, and PUT `/api/config` with `filesystemIsolation: null` resets to that
 mode. Omitting the key in a PUT leaves the current override unchanged. The config view reports
-isolation status with `supported`, `enabled`, `automatic`, `checking` and `reason`. The initial
+isolation status with the resolved `mode`, `automatic`, `checking`, Bubblewrap `supported` and `reason`, and `sandbox` support. The initial
 capability-dependent automatic choice remains fixed until the Session Host restarts; a failed
 enabled launch never changes it to unrestricted. Checking must finish before automatic work launches.
 Settings changes apply to new Backend Sessions (including Revive), new Workflow Executions and new

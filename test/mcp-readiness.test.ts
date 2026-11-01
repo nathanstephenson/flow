@@ -120,7 +120,7 @@ test("Workflow Steps wait for registration and block Retry until stopped", { tim
 test("failed bounded discovery does not prevent the first prompt", { timeout: 15_000 }, async () => {
   // Exercise discovery even without Bubblewrap: this inert fixture runs no tools, and an
   // immediate isolation failure would hide regressions in waiting for the discovery deadline.
-  const host = new SessionHost({ filesystemIsolationEnabled: () => false,
+  const host = new SessionHost({ filesystemIsolationMode: () => "none" as const,
     mcpConnections: () => [{ ...connection, args: ["-e", "setInterval(() => {}, 1000)"] }] });
   const fake = new FakeBackend();
   const prompted = deferred<string | undefined>();

@@ -42,10 +42,10 @@ export async function startRuntime(options: {
     if (config.warning) console.error(`  WARNING: ${config.warning}`);
     await config.initializeFilesystemIsolation();
     const isolation = config.filesystemIsolationStatus();
-    if (!isolation.enabled) {
+    if (isolation.mode === "none") {
       console.error(`  WARNING: Filesystem isolation is OFF. Agent tools, local Workflow code and stdio MCP can access or delete files outside Scope, including host credentials.${isolation.reason ? ` ${isolation.reason}` : ''}`);
-    } else if (!isolation.supported) {
-      console.error(`  WARNING: Filesystem isolation is enabled but unavailable; restricted execution will be refused. ${isolation.reason ?? ''}`);
+    } else if (isolation.mode === "bubblewrap" ? !isolation.supported : !isolation.sandbox.supported) {
+      console.error(`  WARNING: Filesystem isolation (${isolation.mode}) is selected but unavailable; restricted execution will be refused. ${(isolation.mode === "bubblewrap" ? isolation.reason : isolation.sandbox.reason) ?? ''}`);
     }
     const mcpAuth = new McpAuth(root);
     const store = new TranscriptStore(root);
@@ -53,7 +53,7 @@ export async function startRuntime(options: {
     const host = new SessionHost({
       store, resolveSecret: name => secrets.resolve(name), retention: config.retention,
       mcpConnections: config.mcpConnections, mcpAuth,
-      filesystemIsolationEnabled: config.filesystemIsolationEnabled,
+      filesystemIsolationMode: config.filesystemIsolationMode,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,

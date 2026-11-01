@@ -29,7 +29,7 @@ async function fixture() {
   await config.initializeFilesystemIsolation();
   config.update({ workflowRuntime: { nodePath: process.execPath } });
   const store = new TranscriptStore(stateRoot), workflows = new WorkflowStore(stateRoot), secrets = new SecretStore(stateRoot);
-  const host = new SessionHost({ store, filesystemIsolationEnabled: config.filesystemIsolationEnabled });
+  const host = new SessionHost({ store, filesystemIsolationMode: config.filesystemIsolationMode });
   host.registerBackend(new FakeBackend());
   const service = new WorkflowExecutionService(host, workflows, secrets, config, runtimePath);
   const id = await host.create({ backend: 'fake', scope });
@@ -58,21 +58,21 @@ it('reports automatic unsupported mode and explicit fail-closed choice through a
     method, headers: { authorization: 'Bearer test' }, ...(patch ? { body: JSON.stringify(patch) } : {}),
   });
   try {
-    assert.equal((await fetch(server.url + '/api/config', { method: 'PUT', body: JSON.stringify({ filesystemIsolation: false }) })).status, 401);
+    assert.equal((await fetch(server.url + '/api/config', { method: 'PUT', body: JSON.stringify({ filesystemIsolation: "none" }) })).status, 401);
     assert.deepEqual((await (await request('GET')).json() as SettingsResponse).filesystemIsolationStatus,
-      { supported: false, enabled: false, automatic: true, checking: false, reason: 'Test namespaces unavailable' });
-    assert.equal(f.host.filesystemIsolationEnabled(), false);
-    const manual = await (await request('PUT', { filesystemIsolation: true })).json() as SettingsResponse;
-    assert.equal(manual.filesystemIsolation, true);
-    assert.equal(manual.filesystemIsolationStatus.enabled, true);
+      { mode: 'none', automatic: true, checking: false, supported: false, reason: 'Test namespaces unavailable', sandbox: { supported: false, reason: "No sandbox provider is configured." } });
+    assert.equal(f.host.filesystemIsolationMode(), "none");
+    const manual = await (await request('PUT', { filesystemIsolation: "bubblewrap" })).json() as SettingsResponse;
+    assert.equal(manual.filesystemIsolation, "bubblewrap");
+    assert.equal(manual.filesystemIsolationStatus.mode, "bubblewrap");
     assert.equal(manual.filesystemIsolationStatus.automatic, false);
-    assert.equal(f.host.filesystemIsolationEnabled(), true);
+    assert.equal(f.host.filesystemIsolationMode(), "bubblewrap");
     await request('PUT', { retention: { settled: '2d' } });
-    assert.equal(f.host.filesystemIsolationEnabled(), true);
+    assert.equal(f.host.filesystemIsolationMode(), "bubblewrap");
     const reset = await (await request('PUT', { filesystemIsolation: null })).json() as SettingsResponse;
     assert.equal(Object.hasOwn(reset, 'filesystemIsolation'), false);
     assert.equal(reset.filesystemIsolationStatus.automatic, true);
-    assert.equal(reset.filesystemIsolationStatus.enabled, false);
+    assert.equal(reset.filesystemIsolationStatus.mode, "none");
     assert.equal(new ConfigStore(f.stateRoot).view().filesystemIsolation, undefined);
     for (const value of ['false', 1, {}]) assert.equal((await request('PUT', { filesystemIsolation: value })).status, 400);
   } finally { await server.close(); await f.close(); }
@@ -84,7 +84,7 @@ it('snapshots active Workflow launch policy while enabling isolation refuses new
     const outside = join(f.directory, 'outside-scope');
     try {
       const started = await f.service.start({ sessionId: f.id, definition: graph(`sleep 0.1; printf old-mode > ${quote(outside)}`), input: {} });
-      f.config.update({ filesystemIsolation: true });
+      f.config.update({ filesystemIsolation: "bubblewrap" });
       f.service.refresh();
       const completed = await f.service.scheduler.wait(f.id, started.execution.id);
       assert.equal(completed.status, 'completed');
@@ -107,9 +107,9 @@ for (const legacy of [false, true]) {
         assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'recovery-required');
         const privatePath = join(f.stateRoot, 'sessions', f.id, 'workflow-activity', started.execution.id + '.json');
         const saved = JSON.parse(readFileSync(privatePath, 'utf8'));
-        assert.equal(saved.runtime.isolationEnabled, false);
-        if (legacy) { delete saved.runtime.isolationEnabled; writeFileSync(privatePath, JSON.stringify(saved)); }
-        else f.config.update({ filesystemIsolation: true });
+        assert.equal(saved.runtime.isolationMode, 'none');
+        if (legacy) { delete saved.runtime.isolationMode; writeFileSync(privatePath, JSON.stringify(saved)); }
+        else f.config.update({ filesystemIsolation: "bubblewrap" });
         const restored = f.restartService();
         restored.reconcile();
         if (legacy) {

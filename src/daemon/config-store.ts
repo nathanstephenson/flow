@@ -10,7 +10,7 @@ import {
   type SettingsPatch,
   type SummaryModel,
 } from "./config.ts";
-import { DEFAULT_WORKFLOW_RUNTIME, type FilesystemIsolationStatus } from '../protocol/settings.ts';
+import { DEFAULT_WORKFLOW_RUNTIME, type FilesystemIsolationMode, type FilesystemIsolationStatus } from '../protocol/settings.ts';
 import {
   detectFilesystemIsolationSupport,
   type FilesystemIsolationSupport,
@@ -65,16 +65,17 @@ export class ConfigStore {
     await this.isolationInitialization;
   }
 
-  /** Pending automatic selection is fail-closed; explicit true stays enabled even if unsupported. */
-  readonly filesystemIsolationEnabled = (): boolean =>
-    this.config.filesystemIsolation ?? this.isolationSupport?.supported ?? true;
+  /** Pending automatic selection is fail-closed; an explicit restricted mode stays selected even if unsupported. */
+  readonly filesystemIsolationMode = (): FilesystemIsolationMode =>
+    this.config.filesystemIsolation ?? (this.isolationSupport?.supported ?? true ? "bubblewrap" : "none");
 
   readonly filesystemIsolationStatus = (): FilesystemIsolationStatus => ({
-    supported: this.isolationSupport?.supported ?? false,
-    enabled: this.filesystemIsolationEnabled(),
+    mode: this.filesystemIsolationMode(),
     automatic: this.config.filesystemIsolation === undefined,
     checking: this.isolationSupport === undefined,
+    supported: this.isolationSupport?.supported ?? false,
     ...(this.isolationSupport?.reason === undefined ? {} : { reason: this.isolationSupport.reason }),
+    sandbox: { supported: false, reason: "No sandbox provider is configured." },
   });
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */

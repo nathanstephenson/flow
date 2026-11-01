@@ -5,12 +5,14 @@ import type { Json, VisualSchema, WorkflowStep } from '../protocol/workflows.ts'
 import type { ExecutorContext, WorkflowExecutor, WorkflowExecutors } from './scheduler.ts';
 import { parseValue, toTypeScript } from './schema.ts';
 import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIsolation } from '../isolation/filesystem.ts';
+import { sandboxUnavailable } from '../isolation/sandbox.ts';
+import type { FilesystemIsolationMode } from '../protocol/settings.ts';
 
 export interface CodeExecutorOptions {
   runtimePath: string;
   nodePath: string;
-  /** Host-resolved launch policy. Defaults to restricted; no fallback on preparation failure. */
-  isolationEnabled?: boolean;
+  /** Host-resolved launch policy. Defaults to Bubblewrap; no fallback on preparation failure. */
+  isolationMode?: FilesystemIsolationMode;
   /** The owning Session Host state root, including programmatically configured roots. */
   stateRoot?: string;
   /** Known before availability probes in production Workflow Executions. */
@@ -32,7 +34,8 @@ function probe(command: string, args: string[], stdioFds: number[] = [], env: No
 }
 
 export async function createCodeExecutors(options: CodeExecutorOptions): Promise<Executors> {
-  const isolationEnabled = options.isolationEnabled ?? true;
+  const isolationMode = options.isolationMode ?? 'bubblewrap';
+  const isolationEnabled = isolationMode !== 'none';
   function canonicalScope(scope: string): string {
     if (isolationEnabled) return validateFilesystemScope({ scope, expectedScope: resolve(scope),
       ...(options.stateRoot ? { stateRoot: options.stateRoot } : {}) });
@@ -45,6 +48,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
   async function probeNode(): Promise<boolean> {
     const args = ['-e', 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'];
     if (!isolationEnabled) return probe(options.nodePath, args);
+    if (isolationMode === 'sandbox') { boundaryError = sandboxUnavailable().message; return false; }
     const scope = mkdtempSync(join(realpathSync('/tmp'), 'flow-runtime-probe-'));
     let isolation: FilesystemIsolation | undefined;
     try {

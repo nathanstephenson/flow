@@ -77,7 +77,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     transport: 'stdio' as const, command: process.execPath, args: [script] };
   const session = (isolated = false) => {
     hostPids = !isolated;
-    const mcp = new McpSession([connection], scope, undefined, false, undefined, undefined, undefined, isolated);
+    const mcp = new McpSession([connection], scope, undefined, false, undefined, undefined, undefined, isolated ? "bubblewrap" as const : "none" as const);
     t.after(() => within(mcp.dispose()));
     return mcp;
   };
@@ -178,7 +178,7 @@ test('missing stdio executable resolves actual-exit supervision and supports bou
   await within(transport.close());
   await within(transport.exited);
   const mcp = new McpSession([{ ...f.connection, command: join(f.root, 'missing') }], f.scope,
-    undefined, false, undefined, undefined, undefined, false);
+    undefined, false, undefined, undefined, undefined, "none");
   t.after(() => within(mcp.dispose()));
   await within(mcp.open());
   assert.equal(mcp.status()[0]?.state, 'failed');

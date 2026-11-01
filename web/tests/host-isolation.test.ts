@@ -75,19 +75,22 @@ const { fixture, render } = compiled.exports as {
   render: () => HostValue;
 };
 
-const isolated = { supported: true, enabled: true, automatic: true, checking: false };
-const unrestricted = { ...isolated, enabled: false, automatic: false };
+const isolated = {
+  mode: "bubblewrap" as const, automatic: true, checking: false, supported: true,
+  sandbox: { supported: false, reason: "No sandbox provider is configured." },
+};
+const unrestricted = { ...isolated, mode: "none" as const, automatic: false };
 
 test("PUT replaces mode and runtime status, then omission clears a manual override on reset", async () => {
   fixture.gate = { state: "ready", config: { scope: "/scope", backends: ["pi"], filesystemIsolationStatus: isolated } };
   fixture.ok = true;
-  fixture.response = { filesystemIsolation: false, filesystemIsolationStatus: unrestricted };
-  await render().saveSettings({ filesystemIsolation: false });
+  fixture.response = { filesystemIsolation: "none", filesystemIsolationStatus: unrestricted };
+  await render().saveSettings({ filesystemIsolation: "none" });
   let value = render();
-  assert.equal(value.config.filesystemIsolation, false);
+  assert.equal(value.config.filesystemIsolation, "none");
   assert.deepEqual(value.config.filesystemIsolationStatus, unrestricted);
   assert.equal(value.config.scope, "/scope");
-  assert.deepEqual(JSON.parse(fixture.requests.at(-1)!.body!), { filesystemIsolation: false });
+  assert.deepEqual(JSON.parse(fixture.requests.at(-1)!.body!), { filesystemIsolation: "none" });
 
   fixture.response = { filesystemIsolationStatus: isolated };
   await value.saveSettings({ filesystemIsolation: null });
@@ -98,12 +101,12 @@ test("PUT replaces mode and runtime status, then omission clears a manual overri
 });
 
 test("a refused PUT keeps the previous mode and status", async () => {
-  fixture.gate = { state: "ready", config: { scope: "/scope", backends: ["pi"], filesystemIsolation: false, filesystemIsolationStatus: unrestricted } };
+  fixture.gate = { state: "ready", config: { scope: "/scope", backends: ["pi"], filesystemIsolation: "none", filesystemIsolationStatus: unrestricted } };
   fixture.ok = false;
   fixture.status = 400;
   fixture.response = { error: "Linux namespaces are unavailable" };
-  await assert.rejects(render().saveSettings({ filesystemIsolation: true }), /Linux namespaces are unavailable/);
-  assert.equal(render().config.filesystemIsolation, false);
+  await assert.rejects(render().saveSettings({ filesystemIsolation: "bubblewrap" }), /Linux namespaces are unavailable/);
+  assert.equal(render().config.filesystemIsolation, "none");
   assert.deepEqual(render().config.filesystemIsolationStatus, unrestricted);
 });
 

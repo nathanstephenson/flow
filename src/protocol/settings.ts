@@ -22,18 +22,22 @@ export type WorkflowRuntimeSettings = {
 
 export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {};
 
+export type FilesystemIsolationMode = "none" | "bubblewrap" | "sandbox";
+
 /** Runtime capability and resolved machine-wide policy; never persisted as a default. */
 export interface FilesystemIsolationStatus {
-  supported: boolean;
-  enabled: boolean;
+  mode: FilesystemIsolationMode;
   automatic: boolean;
   checking: boolean;
+  /** Bubblewrap support. */
+  supported: boolean;
   reason?: string;
+  sandbox: { supported: boolean; reason?: string };
 }
 
 export type Settings = {
-  /** Omitted chooses isolation only when the machine's real launch probe succeeds. */
-  filesystemIsolation?: boolean;
+  /** Omitted chooses Bubblewrap only when the machine's real launch probe succeeds. Never sandbox. */
+  filesystemIsolation?: FilesystemIsolationMode;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
@@ -136,8 +140,8 @@ export type AutoCompaction = { mode: "disabled" } | { mode: "enabled"; targetPer
  * would erase it.
  */
 export type SettingsPatch = {
-  /** null restores automatic selection; true never permits an unrestricted launch fallback. */
-  filesystemIsolation?: boolean | null;
+  /** null restores automatic selection; a restricted mode never permits an unrestricted launch fallback. */
+  filesystemIsolation?: FilesystemIsolationMode | null;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };

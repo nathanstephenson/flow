@@ -1,8 +1,21 @@
 import { useEffect } from "react";
+import type { FilesystemIsolationMode } from "../../../src/protocol/settings.ts";
 import { useHost } from "@/host.tsx";
 import { SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
-import { Button } from "@/components/ui/button.tsx";
-import { Switch } from "@/components/ui/switch.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.tsx";
+
+const AUTOMATIC = "automatic";
+const LABELS: Record<FilesystemIsolationMode, string> = {
+  none: "Unrestricted",
+  bubblewrap: "Bubblewrap",
+  sandbox: "Sandbox",
+};
 
 /** The host resolves automatic mode; rendering this control never persists a fallback. */
 export function IsolationSettings() {
@@ -10,10 +23,13 @@ export function IsolationSettings() {
   const { save, saving } = useSaveSettings();
   const status = config.filesystemIsolationStatus;
   const checking = !status || status.checking;
-  const enabled = status?.enabled ?? false;
+  const choice = config.filesystemIsolation;
+  const automatic = status?.automatic ?? choice === undefined;
+  const mode = status?.mode ?? choice ?? "none";
   const supported = status?.supported ?? false;
-  const automatic = status?.automatic ?? config.filesystemIsolation === undefined;
-  const canEnable = !checking && supported;
+  const sandboxSupported = status?.sandbox.supported ?? false;
+  const enforceable = mode === "bubblewrap" ? supported : mode === "sandbox" ? sandboxSupported : true;
+  const automaticLabel = `Automatic — ${checking ? "checking…" : LABELS[mode]}`;
 
   // The launch probe can finish after the first config response. Refresh its answer, without
   // writing a preference or inferring a fallback in the browser.
@@ -26,49 +42,70 @@ export function IsolationSettings() {
   return (
     <SettingsGroup
       title="Filesystem isolation"
-      description="Machine-wide. Automatic mode enables isolation by default when supported; otherwise new work is unrestricted. When isolated, only the Scope and private execution state are writable."
+      description="Machine-wide. Unrestricted gives no isolation. Bubblewrap and Sandbox let only the Scope and private execution state be written. Automatic uses Bubblewrap when supported; otherwise new work is unrestricted."
     >
-      <label className="flex items-center justify-between gap-4">
-        <span className="text-sm font-medium">Enable filesystem isolation</span>
-        <Switch
-          aria-label="Enable filesystem isolation"
+      <Select
+        value={automatic ? AUTOMATIC : mode}
+        disabled={saving}
+        onValueChange={(next) => {
+          if (next === AUTOMATIC) {
+            void save({ filesystemIsolation: null }, "Automatic filesystem isolation restored — applies to new work.");
+          } else if (next === "none" || next === "bubblewrap" || next === "sandbox") {
+            void save({ filesystemIsolation: next }, "Filesystem isolation setting saved — applies to new work.");
+          }
+        }}
+      >
+        <SelectTrigger
+          className="w-full sm:max-w-sm"
+          aria-label="Filesystem isolation mode"
           aria-describedby="filesystem-isolation-support"
-          checked={enabled}
-          disabled={saving || (!enabled && !canEnable)}
-          onCheckedChange={(next) => {
-            if (next && !canEnable) return;
-            void save(
-              { filesystemIsolation: next },
-              "Filesystem isolation setting saved — applies to new work.",
-            );
-          }}
-        />
-      </label>
-      <p id="filesystem-isolation-support" className="text-xs text-muted-foreground" role="status">
-        {checking
-          ? "Checking filesystem isolation support…"
-          : supported
-            ? "Supported — Linux, bubblewrap (bwrap), and namespaces passed the startup check."
-            : "Unsupported — filesystem isolation requires Linux, bubblewrap (bwrap), and usable namespaces."}
-        {status?.reason ? ` ${status.reason}` : ""}
-      </p>
+        >
+          <SelectValue>{automatic ? automaticLabel : LABELS[mode]}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={AUTOMATIC}>{automaticLabel}</SelectItem>
+          <SelectItem value="none">{LABELS.none}</SelectItem>
+          <SelectItem value="bubblewrap" disabled={(checking || !supported) && choice !== "bubblewrap"}>
+            {LABELS.bubblewrap}
+          </SelectItem>
+          <SelectItem value="sandbox" disabled={!sandboxSupported && choice !== "sandbox"}>
+            {LABELS.sandbox}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <div id="filesystem-isolation-support" className="flex flex-col gap-1 text-xs text-muted-foreground" role="status">
+        <p>
+          {checking
+            ? "Checking filesystem isolation support…"
+            : supported
+              ? "Bubblewrap supported — Linux, bubblewrap (bwrap), and namespaces passed the startup check."
+              : "Bubblewrap unsupported — it requires Linux, bubblewrap (bwrap), and usable namespaces."}
+          {status?.reason ? ` ${status.reason}` : ""}
+        </p>
+        <p>
+          {sandboxSupported ? "Sandbox supported." : "Sandbox unsupported."}
+          {!sandboxSupported && status?.sandbox.reason ? ` ${status.sandbox.reason}` : ""}
+        </p>
+      </div>
       <p className="text-xs text-muted-foreground">
         Support is checked at Session Host startup. Restart the host after changing Bubblewrap or namespace settings.
       </p>
       <p className="text-xs text-muted-foreground">
         {automatic ? "Automatic" : "Manual"} choice · {checking
           ? "effective mode not yet confirmed"
-          : enabled
-            ? supported ? "isolation enabled for new work" : "isolation requested, but cannot run on this machine"
-            : "unrestricted for new work"}.
+          : mode === "none"
+            ? "unrestricted for new work"
+            : enforceable
+              ? `${LABELS[mode]} isolation for new work`
+              : `${LABELS[mode]} isolation requested, but cannot run on this machine`}.
       </p>
-      {!checking && enabled && !supported ? (
+      {!checking && !enforceable ? (
         <p className="text-sm text-destructive" role="alert">
           Isolation cannot be enforced on this machine. New work requiring it cannot run.
-          Turn it off or reset to automatic to allow unrestricted work.
+          Choose another mode or Automatic to allow unrestricted work.
         </p>
       ) : null}
-      {!enabled ? (
+      {mode === "none" ? (
         <div className="flex flex-col gap-1 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
           <p className="font-semibold">Unrestricted filesystem access{checking ? " may be in effect" : " for new work"}</p>
           <p>
@@ -79,25 +116,6 @@ export function IsolationSettings() {
           </p>
         </div>
       ) : null}
-      {!checking && !supported ? (
-        <p className="text-xs text-muted-foreground">
-          Enabling isolation is unavailable until this machine supports it. Automatic mode uses
-          unrestricted access here; it does not silently save a manual override.
-        </p>
-      ) : null}
-      <div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={automatic || saving}
-          onClick={() => void save(
-            { filesystemIsolation: null },
-            "Automatic filesystem isolation restored — applies to new work.",
-          )}
-        >
-          Reset to automatic
-        </Button>
-      </div>
       <p className="text-xs text-muted-foreground">
         Applies to new Backend Sessions (including Revive), new Workflow Executions, and new local
         MCP clients. Existing work keeps the mode it started with, including Workflow recovery.

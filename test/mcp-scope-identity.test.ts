@@ -44,7 +44,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     command: process.execPath, args: [script], enabledByDefault: true };
   const session = (isolated = false, command = connection.command) => {
     const mcp = new McpSession([{ ...connection, command }], scope, undefined, true,
-      undefined, undefined, undefined, isolated, expected);
+      undefined, undefined, undefined, isolated ? "bubblewrap" as const : "none" as const, expected);
     t.after(() => mcp.dispose({ waitForExit: true }));
     return mcp;
   };
@@ -132,7 +132,7 @@ test('non-Linux authoring fails closed but ordinary unrestricted MCP keeps worki
     assert.equal(existsSync(join(f.scope, 'launched')), false);
     const ordinary = new McpSession([{ id: 'ordinary', name: 'Ordinary', enabledByDefault: true,
       transport: 'stdio', command: process.execPath, args: [join(f.root, 'server.cjs')] }], f.scope,
-      undefined, false, undefined, undefined, undefined, false);
+      undefined, false, undefined, undefined, undefined, "none");
     try {
       await ordinary.open();
       assert.equal(ordinary.status()[0]?.state, 'connected');
