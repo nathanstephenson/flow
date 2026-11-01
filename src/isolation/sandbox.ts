@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, sep } from "node:path";
+import { sandboxSupervisorSource } from "./sandbox-supervisor.ts";
 
 export type SandboxProvider = {
   version: 1; nodePath: string; claudePath: string; claudeAuthDir?: string;
@@ -69,3 +70,61 @@ export const detectSandboxSupport: SandboxSupportDetector = async ({ stateRoot, 
     });
   });
 };
+
+export type SandboxMount = { path: string; readOnly: boolean; dev: number; ino: number };
+export type SandboxSpec = { version: 1; name: string; mounts: SandboxMount[]; env: Record<string, string>; allowDomains: string[] };
+export type Sandbox = {
+  name: string;
+  command(cwd: string, argv: string[], env: Record<string, string>): { command: string; args: string[] };
+  remove(): Promise<void>;
+};
+
+export function sandboxMounts(writable: string[], readable: string[]): SandboxMount[] {
+  const mounts = new Map<string, boolean>();
+  for (const path of writable) mounts.set(realpathSync(path), false);
+  for (const path of readable) {
+    const real = realpathSync(path);
+    if (!mounts.has(real)) mounts.set(real, true);
+  }
+  const sorted = [...mounts].sort(([a], [b]) => a.length - b.length);
+  const kept: [string, boolean][] = [];
+  for (const [path, readOnly] of sorted) {
+    if (kept.some(([parent, parentReadOnly]) => parentReadOnly === readOnly && (path === parent || path.startsWith(parent + sep)))) continue;
+    kept.push([path, readOnly]);
+  }
+  return kept.map(([path, readOnly]) => {
+    const stat = statSync(path);
+    return { path, readOnly, dev: stat.dev, ino: stat.ino };
+  });
+}
+
+function runProvider(argv: string[], timeoutMs: number, signal?: AbortSignal): Promise<void> {
+  const [command, ...args] = argv;
+  return new Promise((resolve, reject) => {
+    execFile(command!, args, { timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 1024 * 1024, ...(signal ? { signal } : {}) }, (error, _stdout, stderr) => {
+      if (error) reject(new Error(`Sandbox provider ${argv.join(" ")} failed: ${stderr.trim().slice(-2048) || error.message}`));
+      else resolve();
+    });
+  });
+}
+
+export async function createSandbox(provider: SandboxProvider, nodePath: string, spec: SandboxSpec, specPath: string, signal?: AbortSignal): Promise<Sandbox> {
+  for (const mount of spec.mounts) {
+    const stat = statSync(mount.path);
+    if (realpathSync(mount.path) !== mount.path || stat.dev !== mount.dev || stat.ino !== mount.ino) throw new Error(`Sandbox mount changed since validation: ${mount.path}`);
+  }
+  writeFileSync(specPath, JSON.stringify(spec), { mode: 0o600 });
+  const remove = () => runProvider(fillTemplate(provider.remove, { name: spec.name }), 120_000);
+  await remove();
+  try { await runProvider(fillTemplate(provider.create, { spec: specPath }), 600_000, signal); }
+  catch (error) { await remove().catch(() => {}); throw error; }
+  return {
+    name: spec.name,
+    command: (cwd, argv, env) => {
+      const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
+      return { command: command!, args: [...args, nodePath, "-e", sandboxSupervisorSource, "--", "env",
+        ...Object.entries(env).map(([key, value]) => `${key}=${value}`), ...argv] };
+    },
+    remove,
+  };
+}

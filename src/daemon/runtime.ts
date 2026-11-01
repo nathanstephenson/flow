@@ -53,7 +53,7 @@ export async function startRuntime(options: {
     const host = new SessionHost({
       store, resolveSecret: name => secrets.resolve(name), retention: config.retention,
       mcpConnections: config.mcpConnections, mcpAuth,
-      filesystemIsolationMode: config.filesystemIsolationMode,
+      filesystemIsolationMode: config.filesystemIsolationMode, sandboxSupport: config.sandboxSupport,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
