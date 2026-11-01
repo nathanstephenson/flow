@@ -190,8 +190,8 @@ test("explicit Sandbox without a sandbox provider shows its reason and cannot ru
 });
 
 test("supported Sandbox is selectable and saved as sandbox", async () => {
-  const html = show({ sandbox: { supported: true } });
-  assert.match(html, /Sandbox supported./);
+  const html = show({ sandbox: { supported: true, path: "/etc/flow/sandbox-provider.json" } });
+  assert.match(html, /Sandbox supported — provider \/etc\/flow\/sandbox-provider.json\./);
   assert.equal(fixture.items.sandbox?.disabled, false);
   fixture.select.onValueChange("sandbox");
   await flushed();

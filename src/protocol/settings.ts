@@ -32,7 +32,7 @@ export interface FilesystemIsolationStatus {
   /** Bubblewrap support. */
   supported: boolean;
   reason?: string;
-  sandbox: { supported: boolean; reason?: string };
+  sandbox: { supported: boolean; reason?: string; path?: string };
 }
 
 export type Settings = {

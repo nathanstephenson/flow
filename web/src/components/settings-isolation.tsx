@@ -83,7 +83,7 @@ export function IsolationSettings() {
           {status?.reason ? ` ${status.reason}` : ""}
         </p>
         <p>
-          {sandboxSupported ? "Sandbox supported." : "Sandbox unsupported."}
+          {sandboxSupported ? `Sandbox supported — provider ${status?.sandbox.path ?? ""}.` : "Sandbox unsupported."}
           {!sandboxSupported && status?.sandbox.reason ? ` ${status.sandbox.reason}` : ""}
         </p>
       </div>

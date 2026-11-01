@@ -249,7 +249,7 @@ describe("machine-wide filesystem isolation", () => {
         return supported ? { supported } : { supported, reason: "namespaces unavailable" };
       });
       assert.deepEqual(store.filesystemIsolationStatus(), {
-        mode: "bubblewrap", automatic: true, checking: true, supported: false, sandbox: { supported: false, reason: "No sandbox provider is configured." },
+        mode: "bubblewrap", automatic: true, checking: true, supported: false, sandbox: { supported: false, reason: "Checking the sandbox provider." },
       });
       assert.equal("filesystemIsolation" in store.view(), false);
       await Promise.all([store.initializeFilesystemIsolation(), store.initializeFilesystemIsolation()]);
@@ -257,7 +257,7 @@ describe("machine-wide filesystem isolation", () => {
       assert.equal(calls, 1, "support is latched, never retried to downgrade later work");
       assert.deepEqual(store.filesystemIsolationStatus(), {
         mode: supported ? "bubblewrap" : "none", automatic: true, checking: false, supported,
-        ...(supported ? {} : { reason: "namespaces unavailable" }), sandbox: { supported: false, reason: "No sandbox provider is configured." },
+        ...(supported ? {} : { reason: "namespaces unavailable" }), sandbox: { supported: false, reason: `No sandbox provider file at ${join(root, "sandbox-provider.json")}.` },
       });
       store.update({ fonts: { chrome: "Berkeley Mono" } });
       assert.equal("filesystemIsolation" in file(), false, "unrelated saves cannot pin automatic defaults");
@@ -293,7 +293,7 @@ describe("machine-wide filesystem isolation", () => {
     await pending;
     // The launch consumer must choose restricted/refused work, never unrestricted work.
     assert.deepEqual(store.filesystemIsolationStatus(), {
-      mode: "bubblewrap", automatic: false, checking: false, supported: false, reason: "real mount launch refused", sandbox: { supported: false, reason: "No sandbox provider is configured." },
+      mode: "bubblewrap", automatic: false, checking: false, supported: false, reason: "real mount launch refused", sandbox: { supported: false, reason: `No sandbox provider file at ${join(root, "sandbox-provider.json")}.` },
     });
   });
 
