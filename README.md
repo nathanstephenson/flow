@@ -527,9 +527,23 @@ execution is unrestricted. The optional stored key is `filesystemIsolation?: "no
 out selects automatic mode, and PUT `/api/config` with `filesystemIsolation: null` resets to that
 mode. Omitting the key in a PUT leaves the current override unchanged. The config view reports
 isolation status with the resolved `mode`, `automatic`, `checking`, Bubblewrap `supported` and `reason`, and `sandbox` support. Sandbox mode needs a sandbox provider file, read once at Session Host startup from
-`FLOW_SANDBOX_PROVIDER`, or else `<state root>/sandbox-provider.json`. It holds `version: 1` and argv
-templates for `probe`, `create` (with `{spec}`), `exec` (with `{name}` and `{cwd}`) and `remove`
-(with `{name}`). Sandbox is available only when the provider's `probe` succeeds. The initial
+`FLOW_SANDBOX_PROVIDER`, or else `<state root>/sandbox-provider.json`. Sandboxes are Docker Sandboxes
+(`sbx`). The file holds `version: 1`, the guest's absolute `nodePath` and `claudePath`, an optional
+`claudeAuthDir`, and argv templates for `probe`, `create` (with `{spec}`, optionally `{name}`), `exec`
+(with `{name}` and `{cwd}`) and `remove` (with `{name}`). Sandbox is available only when `probe` exits 0.
+For example, with a base environment from `harness plan --out <dir>`:
+
+```json
+{
+  "version": 1,
+  "nodePath": "/usr/local/bin/node",
+  "claudePath": "/home/agent/.local/bin/claude",
+  "probe": ["sbx", "ls", "--json"],
+  "create": ["sbx", "env", "create", "<dir>", "{spec}", "--force"],
+  "exec": ["sbx", "exec", "-i", "-w", "{cwd}", "{name}"],
+  "remove": ["sbx", "rm", "--force", "{name}"]
+}
+``` The initial
 capability-dependent automatic choice remains fixed until the Session Host restarts; a failed
 enabled launch never changes it to unrestricted. Checking must finish before automatic work launches.
 Settings changes apply to new Backend Sessions (including Revive), new Workflow Executions and new

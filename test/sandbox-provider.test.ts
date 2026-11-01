@@ -8,6 +8,8 @@ import { detectSandboxSupport, fillTemplate, parseSandboxProvider, sandboxProvid
 
 const valid = {
   version: 1,
+  nodePath: "/usr/local/bin/node",
+  claudePath: "/home/agent/.local/bin/claude",
   probe: ["provider", "probe"],
   create: ["provider", "create", "--spec", "{spec}"],
   exec: ["provider", "exec", "{name}", "--cwd", "{cwd}", "--"],
@@ -15,12 +17,19 @@ const valid = {
 };
 
 describe("sandbox provider file", () => {
-  it("accepts a valid file", () => {
+  it("accepts a valid file, including the raw sbx commands", () => {
     assert.deepEqual(parseSandboxProvider(JSON.stringify(valid)), valid);
+    const sbx = { ...valid, claudeAuthDir: "/state/claude", probe: ["sbx", "ls", "--json"],
+      create: ["sbx", "env", "create", "/plan", "{spec}", "--name", "{name}", "--force"],
+      exec: ["sbx", "exec", "-i", "-w", "{cwd}", "{name}"], remove: ["sbx", "rm", "--force", "{name}"] };
+    assert.deepEqual(parseSandboxProvider(JSON.stringify(sbx)), sbx);
   });
 
   for (const [label, change, error] of [
     ["wrong version", { version: 2 }, /version must be 1/],
+    ["relative node path", { nodePath: "node" }, /nodePath must be an absolute path/],
+    ["missing claude path", { claudePath: undefined }, /claudePath must be an absolute path/],
+    ["relative auth dir", { claudeAuthDir: "claude" }, /claudeAuthDir must be an absolute path/],
     ["missing command", { remove: undefined }, /remove must be a non-empty array/],
     ["empty command", { probe: [] }, /probe must be a non-empty array/],
     ["non-string part", { probe: ["provider", 1] }, /probe must be a non-empty array/],
@@ -68,19 +77,17 @@ describe("sandbox provider probe", () => {
     assert.match(!support.supported ? support.reason : "", /Invalid sandbox provider file/);
   });
 
-  it("returns the provider and probe paths when the probe passes", async () => {
-    provider(`echo '{"ok":true,"nodePath":"/usr/local/bin/node","claudePath":"/home/agent/.local/bin/claude"}'`);
+  it("returns the provider when the probe exits 0", async () => {
+    provider("echo anything");
     const support = await detectSandboxSupport({ stateRoot: root, env: {} });
     assert.ok(support.supported);
-    assert.deepEqual(support.probe, { nodePath: "/usr/local/bin/node", claudePath: "/home/agent/.local/bin/claude" });
+    assert.equal(support.provider.nodePath, "/usr/local/bin/node");
     assert.equal(support.provider.remove[1], "rm");
   });
 
   for (const [label, script, reason] of [
-    ["the provider's reason", `echo '{"ok":false,"reason":"no KVM"}'; exit 1`, /no KVM/],
-    ["ok with a failing exit", `echo '{"ok":true,"nodePath":"/n","claudePath":"/c"}'; exit 3`, /exited with 3/],
-    ["relative paths", `echo '{"ok":true,"nodePath":"node","claudePath":"/c"}'`, /nodePath must be an absolute path/],
-    ["no output", `echo broken >&2; exit 2`, /broken/],
+    ["the probe's error output", `echo "not signed in" >&2; exit 1`, /not signed in/],
+    ["a failing exit and no output", `exit 3`, /Command failed/],
   ] as const) {
     it(`fails with ${label}`, async () => {
       provider(script);
@@ -97,7 +104,7 @@ describe("sandbox provider probe", () => {
   });
 
   it("shows provider support in the isolation status", async () => {
-    provider(`echo '{"ok":true,"nodePath":"/n","claudePath":"/c"}'`);
+    provider("true");
     const store = new ConfigStore(root, async () => ({ supported: false, reason: "no bwrap" }));
     await store.initializeFilesystemIsolation();
     assert.deepEqual(store.filesystemIsolationStatus().sandbox, { supported: true, path: join(root, "sandbox-provider.json") });
