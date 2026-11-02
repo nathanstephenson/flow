@@ -71,6 +71,10 @@ export class McpSession {
   private readonly stateRoot: string | undefined;
   private readonly isolationMode: FilesystemIsolationMode;
   private readonly expectedScopeIdentity: string | undefined;
+  /** Sandbox workers: the host owns OAuth, refreshes on request and returns only access tokens. */
+  private readonly hostToken: ((connectionId: string, refresh: boolean) => Promise<string>) | undefined;
+  /** Sandbox workers start local servers from host paths over the VM's shared file system. */
+  connectTimeoutMs = 10_000;
   constructor(
     connections: readonly McpConnection[],
     scope: string,
@@ -81,7 +85,9 @@ export class McpSession {
     stateRoot?: string,
     isolationMode: FilesystemIsolationMode = "bubblewrap",
     expectedScopeIdentity?: string,
+    hostToken?: (connectionId: string, refresh: boolean) => Promise<string>,
   ) {
+    this.hostToken = hostToken;
     this.connections = structuredClone(connections);
     this.scope = scope;
     this.auth = auth;
@@ -229,17 +235,25 @@ export class McpSession {
             : {}),
           // A Headers object rather than a spread, because header names are case-insensitive: a
           // configured `Authorization` must lose to the OAuth token, not travel beside it.
-          fetch: (input, init) => {
+          fetch: async (input, init) => {
             const headers = new Headers(configured);
             new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
             if (tokens) headers.set("Authorization", `Bearer ${tokens.access_token}`);
-            return fetch(input, {
-              ...init,
-              headers,
-              signal: this.direct ? init?.signal ?? null : init?.signal
-                ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)])
-                : AbortSignal.timeout(10_000),
-            });
+            const send = async (refresh?: boolean) => {
+              if (refresh !== undefined) headers.set("Authorization", `Bearer ${await this.hostToken!(id, refresh)}`);
+              return fetch(input, {
+                ...init,
+                headers,
+                signal: this.direct ? init?.signal ?? null : init?.signal
+                  ? AbortSignal.any([init.signal, AbortSignal.timeout(10_000)])
+                  : AbortSignal.timeout(10_000),
+              });
+            };
+            if (!connection.oauth || !this.hostToken) return send();
+            const response = await send(false);
+            if (response.status !== 401) return response;
+            await response.body?.cancel();
+            return send(true);
           },
         });
       }
@@ -250,10 +264,10 @@ export class McpSession {
         void exited.then(() => this.exits.delete(exited));
       }
       if (this.disposed) { await stop(); return; }
-      const signal = AbortSignal.timeout(10_000);
+      const signal = AbortSignal.timeout(this.connectTimeoutMs);
       await client.connect(
         transport as import("@modelcontextprotocol/sdk/shared/transport.js").Transport,
-        { timeout: 10_000, signal },
+        { timeout: this.connectTimeoutMs, signal },
       );
       const serverIdentity = createHash("sha256").update(JSON.stringify(client.getServerVersion() ?? null)).digest("hex");
       const tools: McpTool[] = [];
@@ -261,7 +275,7 @@ export class McpSession {
       const seen = new Set<string>();
       do {
         const result = await client.listTools(cursor ? { cursor } : {}, {
-          timeout: 10_000,
+          timeout: this.connectTimeoutMs,
           signal,
         });
         for (const definition of result.tools) {

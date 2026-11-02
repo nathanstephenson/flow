@@ -14,6 +14,7 @@ import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, Perm
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
 import { seaSdkExecutionAssets } from './assets.ts';
 import { WorkerRpc } from "./rpc.ts";
+import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { migrateLegacyClaudeState, prepareClaudeState } from "./claude-state.ts";
@@ -184,6 +185,10 @@ class WorkerSession implements BackendSession {
       }
       // Never look up host functions by a worker-supplied property name.
       switch (method) {
+        case "mcp.token": {
+          if (!(this.options.mcp instanceof SandboxMcpSession) || typeof args[0] !== "string") throw new Error("Host capability is not enabled");
+          return this.options.mcp.token(args[0], args[1] === true);
+        }
         case "workflowBuilder.read": return this.requireWorkflowBuilder(args[0]).read(args[0] as string);
         case "workflowBuilder.list": return this.requireWorkflowBuilder(args[0]).list(args[0] as string);
         case "workflowBuilder.write": return this.requireWorkflowBuilder(args[0]).write(args[0] as string);
@@ -231,10 +236,12 @@ class WorkerSession implements BackendSession {
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
         workflowEnabled: !workflowBuilder && !!workflow,
         ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }
+          : mcp instanceof SandboxMcpSession ? { mcpSandbox: mcp.definitions() }
           : mcp ? { mcpTools: mcpMetadata(mcp), mcpConnectionIds: (mcp.connections ?? []).map((connection) => connection.id) } : {}),
         ...(this.launchOptions.backendModule ? { backendModule: this.launchOptions.backendModule } : {}),
       }], controller.signal);
       this.updateSnapshot(state);
+      if (mcp instanceof SandboxMcpSession) mcp.attach((method, args) => this.rpc.call(method, args));
       const methods = new Set(state.methods);
       if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
