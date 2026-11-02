@@ -54,11 +54,11 @@ export class WorkerBackend implements AgentBackend {
     const cleanups: (() => void)[] = [];
     if (this.name === "claude") {
       const claude = prepareClaudeState(stateDir, { ...process.env, ...this.options.env }, scope, options.resume,
-        { viewRoot: stateDir, secureStorage: support.probe.claudeAuthDir ?? null });
+        { viewRoot: stateDir, secureStorage: support.provider.claudeAuthDir ?? null });
       cleanups.push(claude.cleanup);
       env.CLAUDE_CONFIG_DIR = claude.env.CLAUDE_CONFIG_DIR!;
       if (claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
-      env.FLOW_CLAUDE_PATH = support.probe.claudePath;
+      env.FLOW_CLAUDE_PATH = support.provider.claudePath;
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
         if (lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
@@ -78,12 +78,12 @@ export class WorkerBackend implements AgentBackend {
     const cleanup = () => { for (const step of cleanups.splice(0)) step(); };
     let proxy: WorkerSession | undefined;
     try {
-      const spec = { version: 1 as const, name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
-        mounts: sandboxMounts([scope, stateDir], assets), env: {}, allowDomains: [] };
-      const sandbox = await createSandbox(support.provider, support.probe.nodePath, spec, join(stateDir, "sandbox.json"), options.signal);
+      const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
+        workspace: scope, mounts: sandboxMounts([scope, stateDir], assets), env: {} };
+      const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
       cleanups.push(() => { void sandbox.remove().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
-      const launch = sandbox.command(scope, [support.probe.nodePath, ...plan.args], env);
-      proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, command: launch.command, args: launch.args, env: {} }, cleanup);
+      const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
+      proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       await proxy.open(options.signal);
       return proxy;
     } catch (error) {

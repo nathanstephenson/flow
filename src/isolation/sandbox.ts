@@ -72,7 +72,7 @@ export const detectSandboxSupport: SandboxSupportDetector = async ({ stateRoot, 
 };
 
 export type SandboxMount = { path: string; readOnly: boolean; dev: number; ino: number };
-export type SandboxSpec = { version: 1; name: string; mounts: SandboxMount[]; env: Record<string, string>; allowDomains: string[] };
+export type SandboxSpec = { name: string; workspace: string; mounts: SandboxMount[]; env: Record<string, string> };
 export type Sandbox = {
   name: string;
   command(cwd: string, argv: string[], env: Record<string, string>): { command: string; args: string[] };
@@ -108,21 +108,23 @@ function runProvider(argv: string[], timeoutMs: number, signal?: AbortSignal): P
   });
 }
 
-export async function createSandbox(provider: SandboxProvider, nodePath: string, spec: SandboxSpec, specPath: string, signal?: AbortSignal): Promise<Sandbox> {
+export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec, specPath: string, signal?: AbortSignal): Promise<Sandbox> {
   for (const mount of spec.mounts) {
     const stat = statSync(mount.path);
     if (realpathSync(mount.path) !== mount.path || stat.dev !== mount.dev || stat.ino !== mount.ino) throw new Error(`Sandbox mount changed since validation: ${mount.path}`);
   }
-  writeFileSync(specPath, JSON.stringify(spec), { mode: 0o600 });
+  writeFileSync(specPath, JSON.stringify({ schemaVersion: "1", name: spec.name, workspace: spec.workspace,
+    additionalWorkspaces: spec.mounts.filter((mount) => mount.path !== spec.workspace).map(({ path, readOnly }) => ({ path, readOnly })),
+    env: spec.env }), { mode: 0o600 });
   const remove = () => runProvider(fillTemplate(provider.remove, { name: spec.name }), 120_000);
-  await remove();
-  try { await runProvider(fillTemplate(provider.create, { spec: specPath }), 600_000, signal); }
+  await remove().catch(() => {});
+  try { await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
   catch (error) { await remove().catch(() => {}); throw error; }
   return {
     name: spec.name,
     command: (cwd, argv, env) => {
       const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
-      return { command: command!, args: [...args, nodePath, "-e", sandboxSupervisorSource, "--", "env",
+      return { command: command!, args: [...args, provider.nodePath, "-e", sandboxSupervisorSource, "--", "env",
         ...Object.entries(env).map(([key, value]) => `${key}=${value}`), ...argv] };
     },
     remove,
