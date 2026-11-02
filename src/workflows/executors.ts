@@ -5,7 +5,7 @@ import type { Json, VisualSchema, WorkflowStep } from '../protocol/workflows.ts'
 import type { ExecutorContext, WorkflowExecutor, WorkflowExecutors } from './scheduler.ts';
 import { parseValue, toTypeScript } from './schema.ts';
 import { prepareFilesystemIsolation, validateFilesystemScope, type FilesystemIsolation } from '../isolation/filesystem.ts';
-import { sandboxUnavailable } from '../isolation/sandbox.ts';
+import { sandboxUnavailable, type Sandbox } from '../isolation/sandbox.ts';
 import type { FilesystemIsolationMode } from '../protocol/settings.ts';
 
 export interface CodeExecutorOptions {
@@ -18,6 +18,8 @@ export interface CodeExecutorOptions {
   /** Known before availability probes in production Workflow Executions. */
   scope?: string;
   resolveSecret?: (reference: string, signal: AbortSignal) => Promise<string>;
+  /** Sandbox mode: the Agent Session's VM, which Workflow code shares (ADR 0032). */
+  sandbox?: (sessionId: string) => Promise<Sandbox>;
 }
 const environment = { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' };
 
@@ -48,7 +50,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
   async function probeNode(): Promise<boolean> {
     const args = ['-e', 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'];
     if (!isolationEnabled) return probe(options.nodePath, args);
-    if (isolationMode === 'sandbox') { boundaryError = sandboxUnavailable().message; return false; }
+    if (isolationMode === 'sandbox') { if (options.sandbox) return true; boundaryError = sandboxUnavailable().message; return false; }
     const scope = mkdtempSync(join(realpathSync('/tmp'), 'flow-runtime-probe-'));
     let isolation: FilesystemIsolation | undefined;
     try {
@@ -91,7 +93,8 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     const stateRoot = options.stateRoot ? { stateRoot: options.stateRoot } : {};
     const scope = canonicalScope(context.scope);
     const runtimePath = realpathSync(options.runtimePath);
-    const nodePath = realpathSync(options.nodePath);
+    const sandbox = isolationMode === 'sandbox' ? await options.sandbox!(context.sessionId) : undefined;
+    const nodePath = sandbox ? sandbox.nodePath : realpathSync(options.nodePath);
     const args = ['--noprofile', '--norc', '-c', 'ulimit -c 0; exec "$@"', 'flow-workflow', nodePath, '--max-old-space-size=128', runtimePath];
     const timeout = Math.min(context.step.timeoutMs ?? 60_000, 2_147_000_000);
     const request = JSON.stringify({ ...context.step, scope, input: context.input, inputType: inputSchema ? toTypeScript(inputSchema) : 'unknown', outputType: context.step.kind === 'typescript' ? toTypeScript(context.step.outputSchema) : 'unknown', secrets, timeout });
@@ -102,12 +105,14 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
       FLOW_BWRAP_PATH: process.env.FLOW_BWRAP_PATH, FLOW_STATE_DIR: process.env.FLOW_STATE_DIR,
       HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
-    const isolation = isolationEnabled ? await prepareFilesystemIsolation({ scope, expectedScope: resolve(context.scope),
+    const launch = sandbox?.command(scope, ['/bin/bash', ...args], environment);
+    const isolation = isolationEnabled && !sandbox ? await prepareFilesystemIsolation({ scope, expectedScope: resolve(context.scope),
       ...stateRoot, command: '/bin/bash', args, env, readablePaths: [nodePath, runtimePath], credentials: 'none' }) : undefined;
+    const release = sandbox?.hold();
     try {
       context.signal.throwIfAborted();
-      const child = spawn(isolation?.command ?? '/bin/bash', isolation?.args ?? args,
-        { env: isolation?.env ?? environment, ...(!isolation ? { cwd: scope } : {}), detached: true,
+      const child = spawn(launch?.command ?? isolation?.command ?? '/bin/bash', launch?.args ?? isolation?.args ?? args,
+        { env: launch ? process.env : isolation?.env ?? environment, ...(!isolation && !launch ? { cwd: scope } : {}), detached: true,
           stdio: ['pipe', 'pipe', 'pipe', ...(isolation?.stdioFds ?? [])] });
       let stdout = '', stderr = '', stopped = false;
       // Restricted launches also end the PID namespace. Unrestricted detached descendants
@@ -146,6 +151,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
       }
     } finally {
       isolation?.cleanup();
+      release?.();
     }
   }
   return { shell: executor, typescript: executor };

@@ -144,7 +144,7 @@ export class WorkflowExecutionService {
     this.code = {};
     this.ready = (async () => {
       try {
-        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), isolationMode: options.isolationMode, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
+        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: (sessionId) => this.host.workflowSandbox(sessionId), isolationMode: options.isolationMode, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
         if (key !== this.runtimeKey) return;
         this.code = executors;
         executors.shell.check({ id: 'probe', name: 'probe', kind: 'shell', command: 'true' }, { sessionId: 'probe', backend: 'probe', scope: '/' });
@@ -489,7 +489,7 @@ export class WorkflowExecutionService {
     // Pre-toggle records were always restricted. Missing historical policy must never downgrade them.
     const options = this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationMode: 'bubblewrap' as const };
     const needsCode = saved.definition.steps.some(step => ['shell', 'typescript'].includes(step.kind));
-    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), isolationMode: options.isolationMode, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
+    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: (sessionId) => this.host.workflowSandbox(sessionId), isolationMode: options.isolationMode, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
     if (saved.definition.projectId && !sameProject(saved.definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
     const values = this.referencedSecrets(saved.definition, saved.testStepId);
     assertNoSecrets({ ...saved, definition: publicDefinition(saved.definition), action }, values);

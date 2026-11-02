@@ -106,6 +106,8 @@ export interface WorkflowSubagentHandle {
 }
 
 export interface BackendSession {
+  /** Sandbox mode: the Agent Session's VM, shared with its Workflow code (ADR 0032). */
+  readonly sandbox?: import("../isolation/sandbox.ts").Sandbox | undefined;
   refreshMcp?(): Promise<void>;
   startWorkflowSubagent?(options: WorkflowSubagentOptions): WorkflowSubagentHandle;
   readonly capabilities: Capabilities;
