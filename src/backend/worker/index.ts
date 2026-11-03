@@ -86,7 +86,7 @@ export class WorkerBackend implements AgentBackend {
     let proxy: WorkerSession | undefined;
     try {
       const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
-        workspace: scope, mounts: sandboxMounts([scope, stateDir], assets), env: {} };
+        workspace: scope, mounts: sandboxMounts([scope, stateDir, ...(this.name === "claude" && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [])], assets), env: {} };
       const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
       cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);

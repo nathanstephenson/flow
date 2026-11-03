@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
@@ -59,4 +60,15 @@ test("a sandbox probe without a state directory runs in a disposable VM and remo
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(f.calls().at(-1), `remove ${f.spec().name}`);
   assert.equal(existsSync(temp), false);
+});
+
+test("a Claude sandbox session mounts the provider's Claude sign-in folder writable", async (t) => {
+  const f = fakeProvider(t);
+  const auth = join(f.stateRoot, "..", "claude-auth");
+  mkdirSync(auth);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => f.support.supported ? { ...f.support, provider: { ...f.support.provider, claudeAuthDir: auth } } : f.support });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
+  t.after(() => session.dispose());
+  assert.ok(f.spec().additionalWorkspaces.some((mount) => mount.path === realpathSync(auth) && !mount.readOnly));
 });
