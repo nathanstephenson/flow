@@ -81,12 +81,13 @@ test("sandbox mode without a working provider refuses to launch", async (t) => {
   }
 });
 
-test("a failed remove before create (no VM yet) does not block the session", async (t) => {
+test("a failed remove of a crashed VM before create does not block the session", async (t) => {
   const f = fakeProvider(t, undefined, 'echo "remove $1" >> "$LOG/calls"; echo "sandbox not found" >&2; exit 1');
+  writeFileSync(join(f.state, "sandbox.json"), "{}");
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
   await session.dispose();
-  assert.ok(f.calls().includes("create"));
+  assert.deepEqual(f.calls().slice(0, 2), [`remove ${f.spec().name}`, "create"]);
 });
 
 test("a sandbox probe without a state directory runs in a disposable VM and removes its temporary state", async (t) => {
