@@ -16,6 +16,7 @@ const backend: AgentBackend = {
     if (options.modelId === "create-error") throw new Error("fixture create failed");
     if (options.modelId === "auto-unavailable" && options.permissionMode === "auto") throw new AutoPermissionUnavailable("fixture Auto unsupported");
     if (options.modelId === "create-hang") await new Promise(() => {});
+    if (options.modelId === "create-slow") await new Promise((resolve) => setTimeout(resolve, 1000));
     let permissionMode = options.permissionMode ?? "always";
     let resume = "initial-token";
     let activeCapabilities = capabilities;
