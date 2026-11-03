@@ -29,6 +29,7 @@ const backend: AgentBackend = {
       async prompt(text) {
         options.emit({ type: "turn_started", turnId: "fixture-turn" });
         if (text === "crash") { process.exit(23); }
+        if (text === "entry") options.emit({ type: "message", id: "entry", text: process.argv[1]!, final: true });
         if (text === "permission-mode") options.emit({ type: "message", id: "permission-mode", text: permissionMode, final: true });
         if (text === "late-crash") {
           options.emit({ type: "subagent", subagentId: "child", name: "child", state: "running" });

@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import test from "node:test";
+import { join, resolve } from "node:path";
+import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
 
 const backendModule = new URL("./worker-fixture.ts", import.meta.url).href;
+
+before(() => { execFileSync(process.execPath, ["scripts/build-worker.mjs"]); });
 
 test("a sandbox-mode Backend Session runs its worker through the provider and removes the VM on dispose", async (t) => {
   const f = fakeProvider(t);
@@ -39,6 +42,23 @@ test("a Revive after a clean close skips the pre-create remove; a spec left by a
   await (await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} })).dispose();
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.deepEqual(f.calls().slice(6), [`remove ${name}`, ...run]);
+});
+
+test("a sandbox start runs the bundled worker", async (t) => {
+  const f = fakeProvider(t);
+  const events: BackendEvent[] = [];
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: (event) => events.push(event) });
+  t.after(() => session.dispose());
+  await session.prompt("entry");
+  const entry = events.find((event) => event.type === "message" && event.id === "entry");
+  assert.equal(entry?.type === "message" && entry.text, resolve("build/backend-worker.mjs"));
+});
+
+test("sandbox mode refuses to launch without the worker bundle", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backendModule, entry: "/missing/backend-worker.mjs", stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  await assert.rejects(backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} }), /npm run build:worker/);
 });
 
 test("a failed create removes partial state and never launches the worker", async (t) => {

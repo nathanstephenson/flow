@@ -43,14 +43,16 @@ export class WorkerBackend implements AgentBackend {
     const support = this.options.sandbox?.();
     if (!support?.supported) throw new Error(`${sandboxUnavailable().message}: ${support?.reason ?? "no sandbox provider"}`);
     if (isSea()) throw new Error(`${sandboxUnavailable().message}: single-executable builds cannot run in a sandbox`);
+    const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const bundle = this.options.entry ?? join(packageRoot, "build/backend-worker.mjs");
+    if (!existsSync(bundle)) throw new Error(`${sandboxUnavailable().message}: worker bundle ${bundle} is missing; run npm run build:worker`);
     const scope = options.workflowBuilder ? realpathSync(options.scope) : validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
     const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(tmpdir(), "flow-sandbox-")));
     const stateDir = options.stateDir ?? temp!;
-    const plan = workerCommand(this.options);
-    const assets = [fileURLToPath(new URL("../../..", import.meta.url)), ...(this.options.readablePaths ?? [])];
+    const plan = workerCommand({ ...this.options, entry: bundle });
+    const assets = [packageRoot, bundle, ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
-    if (this.options.entry) assets.push(this.options.entry);
     assets.push(...nodeExecutionAssets(assets));
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };

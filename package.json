@@ -15,19 +15,22 @@
   "files": [
     "dist/",
     "web/dist/",
-    "build/workflow-runtime.cjs"
+    "build/workflow-runtime.cjs",
+    "build/backend-worker.mjs",
+    "build/backend-worker-chunks/"
   ],
   "scripts": {
     "build": "node scripts/build-cli.mjs",
-    "prepack": "npm run build && npm run build:web && npm run build:workflow-runtime",
+    "prepack": "npm run build && npm run build:web && npm run build:workflow-runtime && npm run build:worker",
     "test:package": "node scripts/test-package.mjs",
     "build:workflow-runtime": "node scripts/build-workflow-runtime.mjs",
+    "build:worker": "node scripts/build-worker.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.presentation.json && tsc -p web/tsconfig.json --noEmit && tsc -p web/tsconfig.node.json --noEmit",
     "dev": "vite --config web/vite.config.ts",
     "test": "node --test --experimental-strip-types \"test/**/*.test.ts\" \"web/**/*.test.ts\"",
     "spike:auth": "node --experimental-strip-types spikes/subscription-auth.ts",
     "test:oidc-issuer": "node --experimental-strip-types scripts/test-oidc-issuer.ts",
-    "prestart": "npm run build:web && npm run build:workflow-runtime",
+    "prestart": "npm run build:web && npm run build:workflow-runtime && npm run build:worker",
     "start": "node --experimental-strip-types src/cli/main.ts",
     "spike:adapter": "node --experimental-strip-types spikes/adapter-smoke.ts",
     "build:web": "node scripts/build-web.mjs",
