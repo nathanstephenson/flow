@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
@@ -43,10 +43,10 @@ export class WorkerBackend implements AgentBackend {
     const support = this.options.sandbox?.();
     if (!support?.supported) throw new Error(`${sandboxUnavailable().message}: ${support?.reason ?? "no sandbox provider"}`);
     if (isSea()) throw new Error(`${sandboxUnavailable().message}: single-executable builds cannot run in a sandbox`);
-    const stateDir = options.stateDir;
-    if (!stateDir) throw new Error(`${sandboxUnavailable().message}: no backend state directory`);
     const scope = options.workflowBuilder ? realpathSync(options.scope) : validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
+    const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(tmpdir(), "flow-sandbox-")));
+    const stateDir = options.stateDir ?? temp!;
     const plan = workerCommand(this.options);
     const assets = [fileURLToPath(new URL("../../..", import.meta.url)), ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
@@ -55,6 +55,7 @@ export class WorkerBackend implements AgentBackend {
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
     const cleanups: (() => void)[] = [];
+    let removed: Promise<unknown> = Promise.resolve();
     if (this.name === "claude") {
       const claude = prepareClaudeState(stateDir, { ...process.env, ...this.options.env }, scope, options.resume,
         { viewRoot: stateDir, secureStorage: support.provider.claudeAuthDir ?? null });
@@ -78,13 +79,16 @@ export class WorkerBackend implements AgentBackend {
       env.PI_CODING_AGENT_DIR = agent;
       env.PI_CODING_AGENT_SESSION_DIR = join(stateDir, "sessions");
     }
-    const cleanup = () => { for (const step of cleanups.splice(0)) step(); };
+    const cleanup = () => {
+      for (const step of cleanups.splice(0)) step();
+      if (temp) void removed.then(() => rmSync(temp, { recursive: true, force: true }));
+    };
     let proxy: WorkerSession | undefined;
     try {
       const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
         workspace: scope, mounts: sandboxMounts([scope, stateDir], assets), env: {} };
       const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
-      cleanups.push(() => { void sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
+      cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       await proxy.open(options.signal);

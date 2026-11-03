@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import test from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
@@ -46,4 +47,16 @@ test("a failed remove before create (no VM yet) does not block the session", asy
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
   await session.dispose();
   assert.ok(f.calls().includes("create"));
+});
+
+test("a sandbox probe without a state directory runs in a disposable VM and removes its temporary state", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, tools: "none", emit: () => {} });
+  const temp = f.spec().additionalWorkspaces.find((mount) => !mount.readOnly)!.path;
+  assert.equal(existsSync(temp), true);
+  await session.dispose();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(f.calls().at(-1), `remove ${f.spec().name}`);
+  assert.equal(existsSync(temp), false);
 });
