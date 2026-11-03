@@ -44,12 +44,16 @@ test("a Revive after a clean close skips the pre-create remove; a spec left by a
   assert.deepEqual(f.calls().slice(6), [`remove ${name}`, ...run]);
 });
 
-test("a sandbox start runs the bundled worker", async (t) => {
+test("a sandbox start writes one timing line and runs the bundled worker", async (t) => {
   const f = fakeProvider(t);
+  const lines: string[] = [];
+  t.mock.method(console, "error", (line: string) => { lines.push(line); });
   const events: BackendEvent[] = [];
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: (event) => events.push(event) });
   t.after(() => session.dispose());
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /^Sandbox flow-[0-9a-f]{16} start: prepare \d+ms, remove \d+ms, create \d+ms, open \d+ms \(worker ready \d+ms, import \d+ms, backend \d+ms\)$/);
   await session.prompt("entry");
   const entry = events.find((event) => event.type === "message" && event.id === "entry");
   assert.equal(entry?.type === "message" && entry.text, resolve("build/backend-worker.mjs"));

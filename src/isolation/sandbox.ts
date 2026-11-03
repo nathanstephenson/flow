@@ -80,6 +80,8 @@ export type Sandbox = {
   /** Keeps the VM while other owned work runs; the VM is removed when the owner closes and no hold remains. */
   hold(): () => void;
   close(): Promise<void>;
+  /** Provider remove and create durations in ms for this start. */
+  startup: { remove: number; create: number };
 };
 
 export function sandboxMounts(writable: string[], readable: string[]): SandboxMount[] {
@@ -121,9 +123,13 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
     additionalWorkspaces: spec.mounts.filter((mount) => mount.path !== spec.workspace).map(({ path, readOnly }) => ({ path, readOnly })),
     env: spec.env }), { mode: 0o600 });
   const remove = () => runProvider(fillTemplate(provider.remove, { name: spec.name }), 120_000);
+  let start = performance.now();
   if (stale) await remove().catch(() => {});
+  const startup = { remove: performance.now() - start, create: 0 };
+  start = performance.now();
   try { await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
   catch (error) { await remove().catch(() => {}); throw error; }
+  startup.create = performance.now() - start;
   let holds = 0, closed = false, removing = false;
   let finish!: (outcome: Promise<void>) => void;
   const removed = new Promise<void>((resolve) => { finish = resolve as (outcome: Promise<void>) => void; });
@@ -134,6 +140,7 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
   return {
     name: spec.name,
     nodePath: provider.nodePath,
+    startup,
     hold: () => {
       if (closed) throw new Error(`Sandbox ${spec.name} is stopping`);
       holds++;

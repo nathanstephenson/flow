@@ -39,6 +39,7 @@ export function runWorker(): void {
   };
   const rpc = new WorkerRpc(send, async (method, args, signal) => {
     if (method === "create") {
+      const ready = performance.now();
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
       const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
@@ -63,6 +64,7 @@ export function runWorker(): void {
         relayPermission: (input, signal) => rpc.call("workflow.relayPermission", [input], signal),
       };
       let backend: AgentBackend;
+      const importing = performance.now();
       try {
         backend = backendModule
           ? (isSea()
@@ -73,6 +75,7 @@ export function runWorker(): void {
       } catch (error) {
         throw new Error(`Backend "${backendName}" is not available in this build: ${errorText(error)}`);
       }
+      const imported = performance.now();
       session = await backend.create({
         ...options,
         ...(workflowBuilder ? { workflowBuilder } : {
@@ -88,7 +91,7 @@ export function runWorker(): void {
         },
       });
       if (closing) { await session.dispose(); throw new Error("Backend worker stopped during initialization"); }
-      return publishSnapshot();
+      return { ...publishSnapshot(), startup: { ready, import: imported - importing, create: performance.now() - imported } };
     }
     if (method === "dispose") {
       await disposeSession();
