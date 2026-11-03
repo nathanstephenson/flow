@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
@@ -23,7 +23,22 @@ test("a sandbox-mode Backend Session runs its worker through the provider and re
   assert.ok(spec.additionalWorkspaces.some((mount) => mount.readOnly));
   await session.dispose();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.deepEqual(f.calls(), [`remove ${spec.name}`, "create", `exec ${spec.name} ${f.scope}`, `remove ${spec.name}`]);
+  assert.deepEqual(f.calls(), ["create", `exec ${spec.name} ${f.scope}`, `remove ${spec.name}`]);
+});
+
+test("a Revive after a clean close skips the pre-create remove; a spec left by a crash does not", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  await (await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} })).dispose();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await (await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} })).dispose();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const name = f.spec().name, run = ["create", `exec ${name} ${f.scope}`, `remove ${name}`];
+  assert.deepEqual(f.calls(), [...run, ...run]);
+  writeFileSync(join(f.state, "sandbox.json"), "{}");
+  await (await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} })).dispose();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(f.calls().slice(6), [`remove ${name}`, ...run]);
 });
 
 test("a failed create removes partial state and never launches the worker", async (t) => {
