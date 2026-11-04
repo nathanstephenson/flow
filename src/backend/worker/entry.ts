@@ -31,6 +31,7 @@ export function runWorker(): void {
   let shutdown: Promise<void> | undefined;
   let tools: McpTool[] = [];
   let localMcp: McpSession | undefined;
+  let localMcpOpening: Promise<void> | undefined;
   const workflows = new Map<string, WorkflowSubagentHandle>();
   const send = (message: unknown) => {
     if (!process.stdout.writable) throw new Error("Backend worker disconnected");
@@ -38,6 +39,7 @@ export function runWorker(): void {
   };
   const rpc = new WorkerRpc(send, async (method, args, signal) => {
     if (method === "create") {
+      const ready = performance.now();
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
       const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
@@ -50,7 +52,11 @@ export function runWorker(): void {
       updateTools(mcpTools ?? []);
       if (mcpSandbox) localMcp = new McpSession(mcpSandbox, options.scope, undefined, false, undefined, undefined, undefined, "none", undefined,
         (connectionId, refresh) => rpc.call("mcp.token", [connectionId, refresh]));
-      if (localMcp) localMcp.connectTimeoutMs = 120_000;
+      if (localMcp) {
+        localMcp.connectTimeoutMs = 120_000;
+        localMcpOpening = localMcp.open();
+        localMcpOpening.catch(() => {});
+      }
       const workflow: WorkflowParent = {
         inspect: (input) => rpc.call("workflow.inspect", [input]),
         recover: (input, signal) => rpc.call("workflow.recover", [input], signal),
@@ -58,6 +64,7 @@ export function runWorker(): void {
         relayPermission: (input, signal) => rpc.call("workflow.relayPermission", [input], signal),
       };
       let backend: AgentBackend;
+      const importing = performance.now();
       try {
         backend = backendModule
           ? (isSea()
@@ -68,6 +75,7 @@ export function runWorker(): void {
       } catch (error) {
         throw new Error(`Backend "${backendName}" is not available in this build: ${errorText(error)}`);
       }
+      const imported = performance.now();
       session = await backend.create({
         ...options,
         ...(workflowBuilder ? { workflowBuilder } : {
@@ -83,7 +91,7 @@ export function runWorker(): void {
         },
       });
       if (closing) { await session.dispose(); throw new Error("Backend worker stopped during initialization"); }
-      return publishSnapshot();
+      return { ...publishSnapshot(), startup: { ready, import: imported - importing, create: performance.now() - imported } };
     }
     if (method === "dispose") {
       await disposeSession();
@@ -110,7 +118,14 @@ export function runWorker(): void {
       case "answerEnquiry": result = await session.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
       case "answerPermission": result = await session.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
       case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session.refreshMcp?.(); break;
-      case "mcp.open": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.open(); result = localMcp.status(); break;
+      case "mcp.open": {
+        if (!localMcp) throw new Error("No sandbox MCP clients");
+        const opening = localMcpOpening ?? localMcp.open();
+        localMcpOpening = undefined;
+        await opening;
+        result = localMcp.status();
+        break;
+      }
       case "mcp.retry": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.retry(args[0] as string); result = localMcp.status(); break;
       case "mcp.direct": {
         if (!localMcp) throw new Error("No sandbox MCP clients");

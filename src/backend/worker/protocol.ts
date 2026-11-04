@@ -20,6 +20,8 @@ export type SessionSnapshot = {
   capabilities: Capabilities;
   resume: string | undefined;
   methods: string[];
+  /** Worker durations in ms, only in the create reply: process start to create, backend import, backend create. */
+  startup?: { ready: number; import: number; create: number };
 };
 export function snapshot(session: BackendSession): SessionSnapshot {
   return {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { before } from "node:test";
 import { WorkerBackend } from "../src/backend/worker/index.ts";
 import { SandboxMcpSession } from "../src/backend/worker/sandbox-mcp.ts";
 import { createSandbox, sandboxMounts } from "../src/isolation/sandbox.ts";
@@ -12,6 +12,8 @@ import type { ExecutorContext } from "../src/workflows/scheduler.ts";
 import { fakeProvider } from "./backend/sandbox-fixture.ts";
 
 const backendModule = new URL("./backend/worker-fixture.ts", import.meta.url).href;
+
+before(() => { execFileSync(process.execPath, ["scripts/build-worker.mjs"]); });
 
 test("sandbox Workflow code runs through the session VM, which stays until the step ends", async (t) => {
   const f = fakeProvider(t);

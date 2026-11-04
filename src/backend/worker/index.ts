@@ -40,17 +40,20 @@ export class WorkerBackend implements AgentBackend {
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
   private async createSandboxed(options: BackendCreateOptions): Promise<BackendSession> {
+    const begin = performance.now();
     const support = this.options.sandbox?.();
     if (!support?.supported) throw new Error(`${sandboxUnavailable().message}: ${support?.reason ?? "no sandbox provider"}`);
     if (isSea()) throw new Error(`${sandboxUnavailable().message}: single-executable builds cannot run in a sandbox`);
+    const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const bundle = this.options.entry ?? join(packageRoot, "build/backend-worker.mjs");
+    if (!existsSync(bundle)) throw new Error(`${sandboxUnavailable().message}: worker bundle ${bundle} is missing; run npm run build:worker`);
     const scope = options.workflowBuilder ? realpathSync(options.scope) : validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
     const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(tmpdir(), "flow-sandbox-")));
     const stateDir = options.stateDir ?? temp!;
-    const plan = workerCommand(this.options);
-    const assets = [fileURLToPath(new URL("../../..", import.meta.url)), ...(this.options.readablePaths ?? [])];
+    const plan = workerCommand({ ...this.options, entry: bundle });
+    const assets = [packageRoot, bundle, ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
-    if (this.options.entry) assets.push(this.options.entry);
     assets.push(...nodeExecutionAssets(assets));
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
@@ -87,11 +90,16 @@ export class WorkerBackend implements AgentBackend {
     try {
       const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
         workspace: scope, mounts: sandboxMounts([scope, stateDir, ...(this.name === "claude" && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [])], assets), env: {} };
+      const prepare = performance.now() - begin;
       const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
       cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
-      await proxy.open(options.signal);
+      const opening = performance.now();
+      const worker = await proxy.open(options.signal);
+      const ms = (value = 0) => `${Math.round(value)}ms`;
+      console.error(`Sandbox ${sandbox.name} start: prepare ${ms(prepare)}, remove ${ms(sandbox.startup.remove)}, create ${ms(sandbox.startup.create)}, `
+        + `open ${ms(performance.now() - opening)} (worker ready ${ms(worker?.ready)}, import ${ms(worker?.import)}, backend ${ms(worker?.create)})`);
       return proxy;
     } catch (error) {
       if (proxy) await proxy.dispose(); else cleanup();
@@ -232,7 +240,7 @@ class WorkerSession implements BackendSession {
     return this.options.workflow;
   }
 
-  async open(signal?: AbortSignal): Promise<void> {
+  async open(signal?: AbortSignal): Promise<SessionSnapshot["startup"]> {
     const { emit: _emit, onFailure: _onFailure, signal: _signal, mcp, workflow, workflowBuilder, ...options } = this.options;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
@@ -257,6 +265,7 @@ class WorkerSession implements BackendSession {
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
       if (methods.has("setPermissionMode")) this.setPermissionMode = (mode) => this.rpc.call("setPermissionMode", [mode]);
       if (!workflowBuilder && methods.has("startWorkflowSubagent")) this.startWorkflowSubagent = (options) => this.startWorkflow(options);
+      return state.startup;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', cancel); }
   }
 

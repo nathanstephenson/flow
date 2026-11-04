@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { resolve } from "node:path";
-import test from "node:test";
+import { join, resolve } from "node:path";
+import test, { before } from "node:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -13,6 +15,8 @@ import type { BackendEvent } from "../../src/protocol/events.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
 
 const backendModule = new URL("./worker-fixture.ts", import.meta.url).href;
+
+before(() => { execFileSync(process.execPath, ["scripts/build-worker.mjs"]); });
 
 test("an OAuth connection asks the host for a refreshed token after a 401 and retries once", async (t) => {
   const server = createServer((request, response) => {
@@ -70,4 +74,20 @@ test("a sandbox Backend Session runs its MCP clients and tool calls in the worke
   assert.match(event.text, /content/);
   await mcp.retry("fixture");
   assert.equal(mcp.status()[0]?.state, "connected");
+});
+
+test("sandbox MCP servers start while the backend is created and the first open does not reconnect them", async (t) => {
+  const f = fakeProvider(t);
+  const starts = join(f.scope, "starts");
+  const connection: McpConnection = { id: "fixture", name: "Fixture", transport: "stdio", enabledByDefault: true, command: process.execPath,
+    args: ["--experimental-strip-types", "--import", `data:text/javascript,import{appendFileSync}from"node:fs";appendFileSync(${JSON.stringify(starts)},"start\\n")`,
+      resolve("test/fixtures/mcp-server.ts")] };
+  const mcp = new SandboxMcpSession([connection], f.scope);
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, mcp, modelId: "create-slow", emit: () => {} });
+  t.after(() => session.dispose());
+  assert.equal(existsSync(starts), true);
+  await mcp.open();
+  assert.deepEqual(mcp.status(), [{ id: "fixture", state: "connected", tools: 2 }]);
+  assert.equal(readFileSync(starts, "utf8"), "start\n");
 });
