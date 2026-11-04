@@ -55,6 +55,57 @@ Scoped filesystem APIs reject escaping paths and symlink traversal in both modes
 
 Shell and TypeScript steps have default execution timeouts with per-step overrides. Stopping execution does not undo filesystem changes or network requests.
 
+### MCP
+
+A direct MCP step calls one MCP tool. It makes no model call, creates no Subagent and adds no model tokens. See [ADR 0025](adr/0025-direct-mcp-workflow-steps.md).
+
+**Create a step**
+
+1. In **Settings → Workflows**, choose **Add MCP**.
+2. Select an Agent Session and one of its enabled MCP servers.
+3. Choose **Discover tools**.
+4. Select the original tool name.
+5. Compose its arguments from literals and the available workflow-input and predecessor references.
+
+The editor provides JSON Schema fields, local references, alternatives, conditional and dependent fields, arrays and tuples, and additional properties. You can examine the original constraints.
+
+- Validation uses the original schema, not a reduced visual version.
+- Unknown dialects, formats or validation keywords fail explicitly. Flow never discards a constraint silently.
+- Supported dialects: draft-07, 2019-09 and 2020-12 (the MCP default).
+
+**Transports and credentials**
+
+- Direct steps support stdio and Streamable HTTP, including existing OAuth sign-in.
+- New local stdio clients capture the machine-wide filesystem isolation policy. When isolation is on, servers are restricted. When it is off, they have unrestricted host-user filesystem authority. Existing clients keep their policy.
+- HTTP calls use the configured remote service without change.
+- Keep credentials in MCP Settings, never in workflow arguments.
+- If authentication is expired or missing, sign in there and select Retry manually. An execution never starts a login flow, and never replays an HTTP tool request after a 401.
+
+**Result**
+
+The result is always `{ structuredContent: JSON | null, content: MCPContentBlock[] }`.
+
+- Absent structured content becomes `null`. Flow does not parse text as JSON and does not download links.
+- To give the data to an Agent step directly, map `structuredContent` (or its fields) into the Agent's input.
+- Empty or not-found data is a success, and can drive a Branch.
+- Tool errors keep bounded partial output, with credentials redacted.
+- Results larger than **100,000 UTF-8 bytes** fail. Flow does not truncate them.
+
+**Pinning**
+
+Each execution pins the connection configuration, the server identity and the original input and output schemas.
+
+- A changed definition or a reconfigured server never retargets an existing execution.
+- Discovery and each attempt validate these identities again.
+- A missing, disabled, changed or unauthenticated tool requires explicit reconfiguration. There is no fallback.
+
+**Permissions, timeout and cancellation**
+
+- Ask mode prompts privately before **every call**, including single-step tests. Auto-accept does not prompt.
+- The timeout is **60 seconds** by default. You can change it on the step.
+- Failure and timeout edges, loops, joins, Retry and Supply output work as for other steps.
+- **Cancellation is not rollback.** Interrupted or timed-out writes can already have happened. Examine the remote state before you retry.
+
 ## Graph and data
 
 - Support sequences, conditional branches, parallel paths, and explicit joins.

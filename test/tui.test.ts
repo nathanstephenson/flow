@@ -598,7 +598,7 @@ describe("TUI over the wire", () => {
      * Wait for the *picker* to know the levels, not for the backend to have them.
      *
      * Capabilities reach the TUI late and over SSE — `query()` emits nothing until the input stream
-     * yields, so an adapter announces them on the way up rather than at create (see the README).
+     * yields, so an adapter announces them on the way up rather than at create (see docs/milestones.md, M0).
      * Waiting on `backend.latest.capabilities` therefore proves nothing about this client: until the
      * `capabilities_changed` entry has been reduced, render.ts draws "no effort control", and the
      * two keystrokes below land on an empty list and are silently dropped. That is what made this
