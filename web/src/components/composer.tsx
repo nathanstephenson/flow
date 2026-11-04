@@ -867,7 +867,7 @@ export function Composer({
           {/*
             * Enter sends and Shift+Enter is a newline, which is the editor's business now rather
             * than this component's. While a turn runs Enter is the *only* way to reach the Steering
-            * Queue, because the button beside it is Abort — which is why the placeholder says so.
+            * Queue, because the button beside it is Abort.
             */}
           <ComposerInput
             value={text}
@@ -967,8 +967,7 @@ function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void 
  * Abort takes the send button's place while a turn runs rather than sitting beside it, so there is
  * one control in one position and no guessing which of two adjacent buttons is about to fire.
  *
- * Steering is not lost with it: `send` is still bound to Enter, and the placeholder says so for as
- * long as the turn lasts. `--destructive` is one of the three things this palette spends colour on,
+ * Steering is not lost with it: `send` is still bound to Enter. `--destructive` is one of the three things this palette spends colour on,
  * and discarding a queue someone typed is worth it.
  */
 function AbortButton({ onAbort, disabled = false, label }: { onAbort: () => void; disabled?: boolean; label?: string | undefined }) {

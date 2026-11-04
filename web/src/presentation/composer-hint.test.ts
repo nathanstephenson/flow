@@ -34,11 +34,9 @@ describe("what the composer promises about the next message", () => {
     assert.match(sendLabel(chrome({ status: "dormant" })), /^Revive this Agent Session and send$/);
   });
 
-  it("teaches the key that queues, because while running the button is Abort", () => {
-    // The whole reason this sentence exists: with no Send button on screen, Enter is the only way to
-    // reach the Steering Queue, and a capability reachable only by an unguessable key is not offered.
-    assert.match(composerPlaceholder(chrome({ status: "running" })), /Enter queues it/);
-    assert.match(composerPlaceholder(chrome({ status: "running", queueDepth: 2 })), /Enter queues it behind 2/);
+  it("says nothing about the Steering Queue while the agent works", () => {
+    assert.equal(composerPlaceholder(chrome({ status: "running" })), "Message…");
+    assert.equal(composerPlaceholder(chrome({ status: "running", queueDepth: 2 })), "Message…");
   });
 
   /*
@@ -51,7 +49,7 @@ describe("what the composer promises about the next message", () => {
     const compacting = chrome({ status: "running", compacting: true });
 
     assert.match(composerPlaceholder(compacting), /Compacting the Conversation Context/);
-    assert.match(composerPlaceholder({ ...compacting, queueDepth: 2 }), /queues it behind 2/);
+    assert.equal(composerPlaceholder({ ...compacting, queueDepth: 2 }), "Compacting the Conversation Context…");
   });
 
   // A compaction Revives first (ADR 0003), so this is the state a session is really in when someone
@@ -63,9 +61,9 @@ describe("what the composer promises about the next message", () => {
     );
   });
 
-  it("names the queue depth it will land behind", () => {
-    assert.match(composerPlaceholder(chrome({ queueDepth: 3 })), /behind 3/);
-    assert.match(sendLabel(chrome({ queueDepth: 3 })), /behind 3/);
+  it("says nothing about the queue depth", () => {
+    assert.equal(composerPlaceholder(chrome({ queueDepth: 3 })), "Message…");
+    assert.equal(sendLabel(chrome({ queueDepth: 3 })), "Send this message");
   });
 
   it("states an Ended Agent Session's reason, and that it refuses a Revive", () => {

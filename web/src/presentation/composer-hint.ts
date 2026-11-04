@@ -1,4 +1,4 @@
-import { canRevive, occupied } from "../../../src/client/status.ts";
+import { canRevive } from "../../../src/client/status.ts";
 import type { Chrome } from "../store/contract.ts";
 
 /**
@@ -11,15 +11,11 @@ import type { Chrome } from "../store/contract.ts";
  *
  * The hint used to be a permanent line beneath the composer. It is the placeholder now, which costs
  * no height in a floating panel but disappears the moment you type — so `sendAction` carries the same
- * consequence into the button's tooltip and accessible name, where it survives typing. Queue depth is
- * independently visible as the header's own badge.
+ * consequence into the button's tooltip and accessible name, where it survives typing. Neither says
+ * anything about the Steering Queue: the activity strip and the queued messages above the input
+ * already show that the agent is working.
  */
 
-/**
- * While a turn is running the button is Abort, so Enter is the only way to add to the Steering Queue.
- * That is a real capability (ADR 0002) reachable by a key nobody would guess at, which makes saying
- * so the placeholder's job rather than a nicety.
- */
 /**
  * Where the human is up to in an Enquiry, for the placeholder.
  *
@@ -32,9 +28,8 @@ export type Answering = { index: number; count: number; multiSelect: boolean };
 /**
  * What the composer says while an Enquiry has the turn.
  *
- * The keys are the whole of what this has to say. Everything the placeholder normally carries — that
- * Enter queues, that this Revives — is about a *message*, and while an Enquiry is open no message is
- * going anywhere.
+ * The keys are the whole of what this has to say. What the placeholder normally carries — that this
+ * Revives — is about a *message*, and while an Enquiry is open no message is going anywhere.
  */
 export function answeringPlaceholder({ index, count, multiSelect }: Answering): string {
   const where = count > 1 ? `Question ${index + 1} of ${count}` : "Answer above";
@@ -74,23 +69,13 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
   /*
    * Before the status cases, and named rather than left as a generic "running".
    *
-   * A compaction takes minutes and produces nothing to read while it works, so a composer that says
-   * only "Enter queues it after the current turn" leaves someone who just asked for one wondering
-   * which turn that is. This is the report that a compaction had no visible indicator: it had one,
-   * a pulsing bar, and a pulsing bar does not answer "did my keystroke do anything".
+   * A compaction takes minutes and produces nothing to read while it works. This is the report that
+   * a compaction had no visible indicator: it had one, a pulsing bar, and a pulsing bar does not say
+   * what is happening.
    */
-  if (chrome.compacting) {
-    return chrome.queueDepth > 0
-      ? `Compacting the Conversation Context… — Enter queues it behind ${chrome.queueDepth}`
-      : "Compacting the Conversation Context… — Enter queues your message until it is done";
-  }
+  if (chrome.compacting) return "Compacting the Conversation Context…";
   if (canRevive(chrome.status)) return "Message… — this Revives the Agent Session";
-  if (occupied(chrome.status)) {
-    return chrome.queueDepth > 0
-      ? `Message… — Enter queues it behind ${chrome.queueDepth}`
-      : "Message… — Enter queues it after the current turn";
-  }
-  return chrome.queueDepth > 0 ? `Message… — sent behind ${chrome.queueDepth}` : "Message…";
+  return "Message…";
 }
 
 /** The accessible name and tooltip for the send button, which is the one place the hint survives typing. */
@@ -103,7 +88,6 @@ export function sendLabel(chrome: Chrome): string {
   if (chrome.asking) return "Answer the question above first";
   if (chrome.authorising) return `Decide whether ${chrome.authorising.tool} may run first`;
   if (canRevive(chrome.status)) return "Revive this Agent Session and send";
-  if (chrome.queueDepth > 0) return `Queue this message behind ${chrome.queueDepth}`;
   return "Send this message";
 }
 
