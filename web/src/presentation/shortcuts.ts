@@ -122,6 +122,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
   },
   {
     title: "Everywhere",
+    description: "While the Settings are open, only n, ? and Escape work.",
     shortcuts: [
       {
         binding: "new-agent-session",
@@ -135,7 +136,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
         description: "Show or hide the rail. Drag its right edge to change its width",
       },
       { binding: "keyboard-settings", keys: ["?"], description: "Show this list" },
-      { binding: "leave-settings", keys: ["Escape"], description: "Leave the Settings" },
+      { keys: ["Escape"], description: "Close the Settings" },
     ],
   },
 ];

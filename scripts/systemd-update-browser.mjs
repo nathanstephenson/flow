@@ -99,7 +99,7 @@ export async function beginBrowserUpdate({ url, token, version, artifactDir }) {
     await page.goto(new URL("/", base).href, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("button", { name: /^General\b/ }).click();
-    await page.waitForURL("**/#/settings/general", { waitUntil: "domcontentloaded" });
+    await page.waitForURL((url) => url.hash.endsWith("?settings=general"), { waitUntil: "domcontentloaded" });
     const update = page.locator("section").filter({ has: page.getByRole("heading", { name: "Flow update", exact: true }) });
     await update.getByRole("button", { name: "Check for updates", exact: true }).click();
     // Exact accessible name ensures we never approve a different advertised release.

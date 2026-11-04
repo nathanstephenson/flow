@@ -15,8 +15,6 @@
  *   muscle memory rather than two.
  */
 
-import type { Route } from "./route.ts";
-
 export type Binding =
   /** Opens the dialog with the defaults prefilled — it does not create anything. */
   | "new-agent-session"
@@ -35,9 +33,7 @@ export type Binding =
   /** Show or hide the rail. Its width is remembered; whether it is open is not. */
   | "toggle-rail"
   /** Open the Settings at the section listing these bindings. */
-  | "keyboard-settings"
-  /** Leave the Settings for whatever was on screen before them. */
-  | "leave-settings";
+  | "keyboard-settings";
 
 /**
  * Every binding, at runtime.
@@ -59,7 +55,6 @@ const EVERY_BINDING = {
   "toggle-right-dock": true,
   "toggle-rail": true,
   "keyboard-settings": true,
-  "leave-settings": true,
 } satisfies Record<Binding, true>;
 
 export const ALL_BINDINGS = Object.keys(EVERY_BINDING) as Binding[];
@@ -80,33 +75,23 @@ export type BindingContext = {
   /** Focus is on a typing surface — see `isTypingTarget`. */
   typing: boolean;
   /**
-   * What is on screen. Most of this table addresses the Agent Session rail and the pane, neither of
-   * which exists in the Settings, so it is resolved here rather than by quietly omitting handlers in
-   * the app shell — a key that does nothing should be visible as nothing in the table that owns it.
+   * The Settings Dialog is open. It covers the rail and the pane, so this table resolves only the
+   * keys that still mean something, rather than the app shell quietly omitting handlers.
    */
-  view: Route["view"];
+  settingsOpen: boolean;
 };
 
 /**
- * The bindings that survive in the Settings.
+ * The bindings that survive while the Settings are open.
  *
- * Everything else addresses an Agent Session — a rail cursor, a pane, a Dock — and the
- * Settings have none of those. `n` stays because starting an Agent Session is reasonable from
- * anywhere, and `?` stays because it lands on a section of the Settings itself.
+ * `n` stays because starting an Agent Session is reasonable from anywhere, and `?` stays because it
+ * lands on a section of the Settings itself. Escape belongs to the Dialog.
  */
-const IN_SETTINGS = new Set<Binding>([
-  "new-agent-session",
-  "toggle-rail",
-  "keyboard-settings",
-]);
+const IN_SETTINGS = new Set<Binding>(["new-agent-session", "keyboard-settings"]);
 
 export function resolveBinding(event: BindingEvent, context: BindingContext): Binding | undefined {
   const binding = resolveKey(event, context);
-  if (binding === undefined || context.view !== "settings") return binding;
-
-  // Escape means "leave" here rather than "abort a turn": there is no turn on screen to abort, and
-  // leaving is what a reader presses it for in a page they navigated into.
-  if (binding === "blur-or-abort") return "leave-settings";
+  if (binding === undefined || !context.settingsOpen) return binding;
   return IN_SETTINGS.has(binding) ? binding : undefined;
 }
 

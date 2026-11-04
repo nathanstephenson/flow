@@ -16,19 +16,17 @@ import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
 import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-layer.tsx";
 import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
-import { SettingsNav } from "@/components/settings-nav.tsx";
-import { SettingsPage } from "@/components/settings-page.tsx";
+import { SettingsDialog } from "@/components/settings-dialog.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
 /**
  * The frame: one rail, and whatever is beside it.
  *
- * There are three things it can be showing — an Agent Session's pane, the New Agent Session view, or
- * the Settings — and the route decides which (web/src/route.ts). Only two of those are `Route`
- * members: the New Agent Session view is the Agent Session route naming none, which is the same
- * thing the empty state used to be. The rail is the same `Sidebar` throughout and swaps only its
- * contents, so the views cannot drift into looking like several designs.
+ * It shows an Agent Session's pane or the New Agent Session view, and the route decides which
+ * (web/src/route.ts). The New Agent Session view is the Agent Session route naming none, which is the
+ * same thing the empty state used to be. The Settings open as a Dialog over both, so the rail and the
+ * pane stay live behind them.
  *
  * `SidebarProvider` lives here rather than inside the rail, which is what makes that possible: the
  * width comes from `--sidebar-width` on the provider, so the rail can be dragged wider and hidden
@@ -123,8 +121,8 @@ export function AppShell() {
    * Idle one. Opening a Filed away Agent Session unasked would put a finished transcript in front
    * of someone who came to start work.
    *
-   * Gated on the route rather than on `location.hash` now that a hash can name the Settings: a cold
-   * load into `#/settings` must not be answered by silently navigating away from them.
+   * Not while the Settings are open: focusing an Agent Session would close them, so a cold load into
+   * the Settings must not be answered by silently closing them.
    *
    * **State rather than a ref, now that something renders differently while it is undecided.** The
    * empty state used to be a sentence and could be shown while this made up its mind; it is a form
@@ -134,7 +132,7 @@ export function AppShell() {
    */
   const [landed, setLanded] = useState(false);
   useEffect(() => {
-    if (landed || route.view !== "session") return;
+    if (landed || route.settings !== undefined) return;
     if (focusedId !== undefined) {
       setLanded(true);
       return;
@@ -151,7 +149,7 @@ export function AppShell() {
     // Nothing worth opening when there are none or every Agent Session is Filed away.
     if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
-  }, [landed, loaded, sessions, focusedId, focus, route.view]);
+  }, [landed, loaded, sessions, focusedId, focus, route.settings]);
 
   // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
   // that identity was Reaped, never merely because it moved to another group.
@@ -225,7 +223,6 @@ export function AppShell() {
       "toggle-rail": () => setRailOpen((open) => !open),
       // `?` now lands somewhere, which is what it was resolving to nothing for.
       "keyboard-settings": () => openSettings("keyboard"),
-      "leave-settings": leaveSettings,
       "blur-or-abort": () => {
         // Escape with nothing typing means abort — and aborting discards the Steering Queue, so it
         // says what it dropped rather than leaving the reader to notice.
@@ -247,7 +244,6 @@ export function AppShell() {
       focus,
       focusInPane,
       focusedId,
-      leaveSettings,
       openNewAgentSession,
       openSettings,
       moveCursor,
@@ -256,10 +252,8 @@ export function AppShell() {
     ],
   );
 
-  const settings = route.view === "settings";
-
   return (
-    <KeyboardLayer handlers={handlers} view={route.view}>
+    <KeyboardLayer handlers={handlers} settingsOpen={route.settings !== undefined}>
       {/* min-h-0 beats upstream's min-h-svh through twMerge: this app is exactly the viewport tall
           and its scrollers are internal, so a minimum height would push them off the bottom.
           `style` is spread after upstream's own custom properties, so this is the supported way to
@@ -273,7 +267,7 @@ export function AppShell() {
         <Sidebar
           collapsible="offcanvas"
           role="complementary"
-          aria-label={settings ? "Settings" : "Agent Sessions"}
+          aria-label="Agent Sessions"
           className="border-r border-sidebar-border"
         >
           {/* Offcanvas rather than icon: these rows are two lines tall and their Settle action hides
@@ -281,25 +275,17 @@ export function AppShell() {
               collapse to than the extra width the pane gains from hiding it outright. */}
           <RailResizeHandle width={rail.width} onResize={rail.set} onNudge={rail.nudge} />
 
-          {settings ? (
-            <SettingsNav
-              section={route.section}
-              onSelect={openSettings}
-              onLeave={leaveSettings}
-            />
-          ) : (
-            <AgentSessionNav
-              sessions={sessions}
-              focusedId={focusedId}
-              focusedStatus={chrome?.status}
-              cursorId={cursorId}
-              link={chrome?.link}
-              onFocus={focus}
-              onSettle={settle}
-              onNew={openNewAgentSession}
-              onOpenSettings={openSettings}
-            />
-          )}
+          <AgentSessionNav
+            sessions={sessions}
+            focusedId={focusedId}
+            focusedStatus={chrome?.status}
+            cursorId={cursorId}
+            link={chrome?.link}
+            onFocus={focus}
+            onSettle={settle}
+            onNew={openNewAgentSession}
+            onOpenSettings={openSettings}
+          />
         </Sidebar>
 
         {/* A single-row grid rather than upstream's flex column: the pane inside is itself a grid
@@ -313,16 +299,14 @@ export function AppShell() {
            * the handle itself is the affordance.
            */}
           <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
-          {settings ? (
-            <SettingsPage section={route.section} />
-          ) : focusedId === undefined ? (
+          {focusedId === undefined ? (
             /*
              * The New Agent Session view *is* the empty state — nothing focused and "you are
              * starting one" were always the same moment. Held back until the auto-open rule above has
              * had its say, so a reader with work waiting is not shown a form on the way to it.
              */
             landed ? (
-              <NewAgentSessionPage drafts={drafts} onCreated={onCreated} initialBackend={route.view === 'session' ? route.backend : undefined} />
+              <NewAgentSessionPage drafts={drafts} onCreated={onCreated} initialBackend={route.backend} />
             ) : (
               <div className="min-h-0" />
             )
@@ -338,6 +322,7 @@ export function AppShell() {
           )}
         </SidebarInset>
       </SidebarProvider>
+      <SettingsDialog section={route.settings} onSelect={openSettings} onClose={leaveSettings} />
     </KeyboardLayer>
   );
 }

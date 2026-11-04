@@ -14,8 +14,7 @@ import { displayKey, SHORTCUTS, type Shortcut } from "./shortcuts.ts";
  * documented.
  */
 
-const SESSION: BindingContext = { typing: false, view: "session" };
-const SETTINGS: BindingContext = { typing: false, view: "settings" };
+const SESSION: BindingContext = { typing: false, settingsOpen: false };
 
 const documented = SHORTCUTS.flatMap((group) => group.shortcuts);
 
@@ -56,13 +55,7 @@ describe("the documented shortcuts", () => {
           shiftKey: false,
           repeat: false,
         };
-        // In one view or the other: most bindings only mean something beside an Agent Session, and
-        // `leave-settings` only means something in the Settings.
-        const resolved = [SESSION, SETTINGS].map((context) => resolveBinding(event, context));
-        assert.ok(
-          resolved.includes(shortcut.binding),
-          `${key} resolved to ${JSON.stringify(resolved)}, not ${shortcut.binding}`,
-        );
+        assert.equal(resolveBinding(event, SESSION), shortcut.binding, key);
       }
     }
   });
