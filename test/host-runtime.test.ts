@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { FakeBackend } from '../src/backend/fake/index.ts';
 import { SessionHost } from '../src/daemon/host.ts';
 import { readHost } from '../src/daemon/ownership.ts';
 import { startRuntime } from '../src/daemon/runtime.ts';
@@ -50,3 +51,18 @@ for (const failure of ['rejection', 'timeout']) {
     }
   });
 }
+
+test('host start probes the models once, and /api/models joins that probe', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-runtime-models-'));
+  const register = SessionHost.prototype.registerBackend;
+  const backend = new FakeBackend();
+  const create = t.mock.method(backend, 'create');
+  t.mock.method(SessionHost.prototype, 'registerBackend', function (this: SessionHost, candidate: { name: string }) { if (candidate.name === 'fake') register.call(this, backend); });
+  const runtime = await startRuntime({ root, version: '1.0.0', mode: 'background', assets: () => ({}), workflowRuntime: () => '/unused' });
+  try {
+    assert.equal(create.mock.callCount(), 1);
+    const response = await fetch(`${runtime.daemon.url}/api/models`, { headers: { authorization: `Bearer ${runtime.daemon.token}` } });
+    assert.equal(response.status, 200);
+    assert.equal(create.mock.callCount(), 1);
+  } finally { await runtime.stop(); rmSync(root, { recursive: true, force: true }); }
+});
