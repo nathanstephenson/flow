@@ -29,6 +29,9 @@ the VM. It relays stdio through its own pipes, marks the command's environment, 
 closes or the command exits, it stops every process with that marker. This stops one command tree,
 including `setsid` and detached children, without affecting other commands in the VM.
 
+In sandbox mode a Shell runs in the session's VM through the optional `shell` argv template, without
+the supervisor. When the provider file has no `shell`, Flow refuses the Shell.
+
 The worker channel is length-prefixed `v8.serialize` frames on stdin and stdout in every mode,
 because `sbx exec` carries only stdio.
 

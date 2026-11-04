@@ -81,6 +81,7 @@ export async function startRuntime(options: {
     })();
     cleanup = stop;
     registerBackends(host);
+    void host.models(config.projectRoot() ?? process.cwd());
     const workflows = new WorkflowStore(root);
     const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());
     workflowMcpAuthoring = new WorkflowMcpAuthoringService({ host, config, scope: process.cwd() });

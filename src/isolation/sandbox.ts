@@ -5,7 +5,7 @@ import { sandboxSupervisorSource } from "./sandbox-supervisor.ts";
 
 export type SandboxProvider = {
   version: 1; nodePath: string; claudePath: string; claudeAuthDir?: string;
-  probe: string[]; create: string[]; exec: string[]; remove: string[];
+  probe: string[]; create: string[]; exec: string[]; remove: string[]; shell?: string[];
 };
 export type SandboxSupport =
   | { supported: true; path: string; provider: SandboxProvider }
@@ -17,6 +17,7 @@ const placeholders = {
   create: { allowed: ["{spec}", "{name}"], required: ["{spec}"] },
   exec: { allowed: ["{name}", "{cwd}"], required: ["{name}", "{cwd}"] },
   remove: { allowed: ["{name}"], required: ["{name}"] },
+  shell: { allowed: ["{name}", "{cwd}"], required: ["{name}", "{cwd}"] },
 } as const;
 
 export function sandboxUnavailable(): Error {
@@ -36,6 +37,7 @@ export function parseSandboxProvider(text: string): SandboxProvider {
   }
   for (const [command, { allowed, required }] of Object.entries(placeholders)) {
     const template = value[command];
+    if (command === "shell" && template === undefined) continue;
     if (!Array.isArray(template) || !template.length || !template.every((part) => typeof part === "string" && part.length)) {
       throw new Error(`${command} must be a non-empty array of strings`);
     }
@@ -77,6 +79,8 @@ export type Sandbox = {
   name: string;
   nodePath: string;
   command(cwd: string, argv: string[], env: Record<string, string>): { command: string; args: string[] };
+  /** A login shell in the VM for a pty, without the supervisor; undefined when the provider has no `shell`. */
+  shellCommand(cwd: string): { command: string; args: string[] } | undefined;
   /** Keeps the VM while other owned work runs; the VM is removed when the owner closes and no hold remains. */
   hold(): () => void;
   close(): Promise<void>;
@@ -152,6 +156,11 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
       const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
       return { command: command!, args: [...args, provider.nodePath, "-e", sandboxSupervisorSource, "--", "env",
         ...Object.entries(env).map(([key, value]) => `${key}=${value}`), ...argv] };
+    },
+    shellCommand: (cwd) => {
+      if (!provider.shell) return undefined;
+      const [command, ...args] = fillTemplate(provider.shell, { name: spec.name, cwd });
+      return { command: command!, args: [...args, "/bin/bash", "-l"] };
     },
   };
 }

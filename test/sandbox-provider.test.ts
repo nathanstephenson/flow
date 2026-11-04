@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { ConfigStore } from "../src/daemon/config-store.ts";
-import { detectSandboxSupport, fillTemplate, parseSandboxProvider, sandboxProviderPath } from "../src/isolation/sandbox.ts";
+import { createSandbox, detectSandboxSupport, fillTemplate, parseSandboxProvider, sandboxMounts, sandboxProviderPath } from "../src/isolation/sandbox.ts";
+import { fakeProvider } from "./backend/sandbox-fixture.ts";
 
 const valid = {
   version: 1,
@@ -23,6 +24,8 @@ describe("sandbox provider file", () => {
       create: ["sbx", "env", "create", "/plan", "{spec}", "--name", "{name}", "--force"],
       exec: ["sbx", "exec", "-i", "-w", "{cwd}", "{name}"], remove: ["sbx", "rm", "--force", "{name}"] };
     assert.deepEqual(parseSandboxProvider(JSON.stringify(sbx)), sbx);
+    const shell = { ...valid, shell: ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"] };
+    assert.deepEqual(parseSandboxProvider(JSON.stringify(shell)), shell);
   });
 
   for (const [label, change, error] of [
@@ -36,6 +39,9 @@ describe("sandbox provider file", () => {
     ["missing spec", { create: ["provider", "create"] }, /create must contain \{spec\}/],
     ["missing cwd", { exec: ["provider", "exec", "{name}", "--"] }, /exec must contain \{cwd\}/],
     ["unknown placeholder", { remove: ["provider", "rm", "{name}", "{spec}"] }, /remove has unknown placeholder \{spec\}/],
+    ["empty shell", { shell: [] }, /shell must be a non-empty array/],
+    ["shell without cwd", { shell: ["sbx", "exec", "-it", "{name}"] }, /shell must contain \{cwd\}/],
+    ["shell with unknown placeholder", { shell: ["sbx", "exec", "-it", "-w", "{cwd}", "{name}", "{spec}"] }, /shell has unknown placeholder \{spec\}/],
   ] as const) {
     it(`refuses ${label}`, () => {
       assert.throws(() => parseSandboxProvider(JSON.stringify({ ...valid, ...change })), error);
@@ -109,5 +115,18 @@ describe("sandbox provider probe", () => {
     await store.initializeFilesystemIsolation();
     assert.deepEqual(store.filesystemIsolationStatus().sandbox, { supported: true, path: join(root, "sandbox-provider.json") });
     assert.equal(store.sandboxSupport()?.supported, true);
+  });
+});
+
+describe("sandbox Shell command", () => {
+  it("fills the shell template and starts a login bash, or is undefined without one", async (t) => {
+    const f = fakeProvider(t);
+    const spec = { name: "flow-test", workspace: f.scope, mounts: sandboxMounts([f.scope, f.state], []), env: {} };
+    const plain = await createSandbox(f.support.provider, spec, join(f.state, "sandbox.json"));
+    assert.equal(plain.shellCommand(f.scope), undefined);
+    await plain.close();
+    const sandbox = await createSandbox({ ...f.support.provider, shell: ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"] }, spec, join(f.state, "sandbox.json"));
+    assert.deepEqual(sandbox.shellCommand(f.scope), { command: "sbx", args: ["exec", "-it", "-w", f.scope, "flow-test", "/bin/bash", "-l"] });
+    await sandbox.close();
   });
 });

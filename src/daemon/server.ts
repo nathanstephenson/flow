@@ -830,14 +830,25 @@ async function handleShellCollection(
     return;
   }
 
+  let release: (() => void) | undefined;
   try {
+    let command: { command: string; args: string[] } | undefined;
+    if (host.filesystemIsolationMode() === "sandbox") {
+      const sandbox = await host.workflowSandbox(summary.id);
+      command = sandbox.shellCommand(summary.scope);
+      if (!command) throw new Error("Add a `shell` template to the sandbox provider file to open a Shell in sandbox mode");
+      release = sandbox.hold();
+    }
     send(response, 200, await shells.create({
       sessionId: summary.id,
       cwd: summary.scope,
       ...(body.cols === undefined ? {} : { cols: body.cols }),
       ...(body.rows === undefined ? {} : { rows: body.rows }),
+      ...command,
+      ...(release ? { release } : {}),
     }));
   } catch (error) {
+    release?.();
     send(response, 503, { error: error instanceof Error ? error.message : String(error) });
   }
 }

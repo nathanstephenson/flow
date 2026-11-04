@@ -531,6 +531,8 @@ isolation status with the resolved `mode`, `automatic`, `checking`, Bubblewrap `
 (`sbx`). The file holds `version: 1`, the guest's absolute `nodePath` and `claudePath`, an optional
 `claudeAuthDir`, and argv templates for `probe`, `create` (with `{spec}`, optionally `{name}`), `exec`
 (with `{name}` and `{cwd}`) and `remove` (with `{name}`). Sandbox is available only when `probe` exits 0.
+An optional `shell` template (with `{name}` and `{cwd}`) opens a Shell in the session's VM. Flow adds
+`/bin/bash -l` to it. Without `shell`, Flow refuses to open a Shell in sandbox mode.
 `sandboxSharing` is `"session"` (default, one VM for each Agent Session) or `"shared"` (one VM for all sandbox
 sessions, kept while the Session Host runs; Scopes must be under the Project Root or a Worktree). See ADR 0034.
 `claudeAuthDir` is a host folder that holds Claude's `.credentials.json`. Flow mounts it writable in the
@@ -547,7 +549,8 @@ For example, with a base environment from `harness plan --out <dir>`:
   "probe": ["sbx", "ls", "--json"],
   "create": ["sbx", "env", "create", "<dir>", "{spec}", "--force"],
   "exec": ["sbx", "exec", "-i", "-w", "{cwd}", "{name}"],
-  "remove": ["sbx", "rm", "--force", "{name}"]
+  "remove": ["sbx", "rm", "--force", "{name}"],
+  "shell": ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"]
 }
 ``` The initial
 capability-dependent automatic choice remains fixed until the Session Host restarts; a failed

@@ -66,6 +66,10 @@ export type CreateShellOptions = {
   cwd: string;
   cols?: number;
   rows?: number;
+  /** Spawned instead of the reader's own shell, e.g. a login shell in the session's Sandbox. */
+  command?: string;
+  args?: string[];
+  release?: () => void;
 };
 
 export type ShellRegistryOptions = {
@@ -106,7 +110,7 @@ export class ShellRegistry {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
     const id = randomUUID();
-    const child = pty.spawn(shellCommand(), [], {
+    const child = pty.spawn(options.command ?? shellCommand(), options.args ?? [], {
       name: "xterm-256color",
       cols,
       rows,
@@ -144,6 +148,7 @@ export class ShellRegistry {
 
     child.onExit(({ exitCode, signal }) => {
       record.exited = true;
+      options.release?.();
       resolveExit();
       for (const sink of record.sinks) sink.exit(exitCode, signal);
       record.sinks.clear();

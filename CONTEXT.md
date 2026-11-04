@@ -135,7 +135,7 @@ _Avoid_: workspace root, home, cwd
 **Entry Document**: The HTML document served for the web client's root and deep links.
 _Avoid_: shell, app shell, index
 
-**Shell**: An ephemeral shell process serving an Agent Session in its Scope; never Revived.
+**Shell**: An ephemeral shell process serving an Agent Session in its Scope, inside the Sandbox in Sandbox mode; never Revived.
 _Avoid_: terminal, pty, console, session
 
 **Scrollback**: Bounded recent Shell output retained for reconnecting clients; lossy and never written to disk.
