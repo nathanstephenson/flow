@@ -64,7 +64,7 @@ export class WorkerBackend implements AgentBackend {
     const isolation = await prepareFilesystemIsolation({ ...plan, scope: options.scope, expectedScope: resolve(options.scope),
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
-      env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, ipc: true, readablePaths: assets });
+      env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
       options.signal?.throwIfAborted();
@@ -112,8 +112,7 @@ class WorkerSession implements BackendSession {
     this.worker = launchWorker(launchOptions);
     const child = this.worker.child;
     this.rpc = new WorkerRpc((message) => {
-      if (!child.connected) throw new Error("Backend worker disconnected");
-      child.send(message, (error) => { if (error) this.fail(error); });
+      this.worker.send(message, (error) => { if (error) this.fail(error); });
     }, async (method, args, signal) => {
       if (this.disposing || this.failed) throw new Error("Backend Session stopped");
       // Builders never inherit other host capabilities, even if the worker asks directly.
@@ -141,9 +140,9 @@ class WorkerSession implements BackendSession {
         default: throw new Error(`Unknown host method: ${method}`);
       }
     }, (name, value) => this.notify(name, value));
-    child.on("message", (message) => this.rpc.receive(message));
+    this.worker.onMessage((message) => this.rpc.receive(message), (error) => this.fail(error));
     child.once("error", (error) => this.fail(error));
-    child.once("disconnect", () => this.fail(new Error("Backend worker disconnected")));
+    child.stdout?.once("close", () => this.fail(new Error("Backend worker disconnected")));
     child.once("exit", (code, signal) => this.fail(new Error(`Backend worker exited (${signal ?? code ?? "unknown"})${this.worker.diagnostics() ? `: ${this.worker.diagnostics()}` : ""}`)));
   }
 

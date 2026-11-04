@@ -2,6 +2,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { isSea } from 'node:sea';
 import { fileURLToPath } from 'node:url';
+import { deserialize, serialize } from 'node:v8';
 
 async function inspect(request: unknown): Promise<{ path: string; identity: string }> {
   const value = request as { operation?: unknown; path?: unknown; identity?: unknown } | null;
@@ -18,17 +19,28 @@ async function inspect(request: unknown): Promise<{ path: string; identity: stri
   return { path, identity };
 }
 
-export function runWorkflowAuthoringScopeReader(): void {
-  if (!process.send || process.env.FLOW_WORKFLOW_AUTHORING_SCOPE_READER !== '1') throw new Error();
-  const timer = setTimeout(() => process.exit(1), 4500);
-  process.once('disconnect', () => process.exit(1));
-  process.once('message', (request: unknown) => {
-    void inspect(request).then(result => ({ ok: true, result }), () => ({ ok: false })).then(response => {
-      process.send!(response, () => { clearTimeout(timer); process.exit(0); });
+function serveOneFrame(handle: (request: unknown) => Promise<unknown>): void {
+  let buffer = Buffer.alloc(0);
+  process.stdin.on('data', (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    if (buffer.length < 4 || buffer.length < 4 + buffer.readUInt32BE(0)) return;
+    process.stdin.pause();
+    void handle(deserialize(buffer.subarray(4, 4 + buffer.readUInt32BE(0)))).then(response => {
+      const body = serialize(response);
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.length);
+      process.stdout.write(Buffer.concat([header, body]), () => process.exit(0));
     });
   });
+  process.stdin.once('end', () => process.exit(1));
+}
+
+export function runWorkflowAuthoringScopeReader(): void {
+  if (process.env.FLOW_WORKFLOW_AUTHORING_SCOPE_READER !== '1') throw new Error();
+  setTimeout(() => process.exit(1), 4500);
+  serveOneFrame(request => inspect(request).then(result => ({ ok: true, result }), () => ({ ok: false })));
 }
 
 if (!isSea() && process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  try { runWorkflowAuthoringScopeReader(); } catch { process.exitCode = 1; process.disconnect?.(); }
+  try { runWorkflowAuthoringScopeReader(); } catch { process.exitCode = 1; }
 }

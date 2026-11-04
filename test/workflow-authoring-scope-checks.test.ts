@@ -23,11 +23,12 @@ function fakeReaders() {
     const exited = deferred();
     const stopped = deferred();
     const child = new EventEmitter();
-    Object.assign(child, { send: (_request: unknown, callback: (error: Error | null) => void) => { callback(null); return true; } });
     const reader = { child, stops: 0, options: options!, release: () => { stopped.resolve(); exited.resolve(); } };
     readers.push(reader);
     return {
       child: child as ChildProcess, exited: exited.promise, diagnostics: () => '',
+      send: (_request: unknown, callback: (error?: Error | null) => void) => callback(null),
+      onMessage: (listener: (message: unknown) => void) => { child.on('message', listener); },
       stop: async () => { reader.stops++; await stopped.promise; await exited.promise; },
     };
   };

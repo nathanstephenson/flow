@@ -1,6 +1,7 @@
 import { WorkerRpc } from "../../src/backend/worker/rpc.ts";
+import { encodeFrame, frameDecoder } from "../../src/backend/worker/frames.ts";
 
-const rpc = new WorkerRpc(message => process.send!(message), async (method, args) => {
+const rpc = new WorkerRpc(message => { process.stdout.write(encodeFrame(message)); }, async (method, args) => {
   if (method === "create") {
     const errors: string[] = [];
     for (const name of ["mcp.call", "workflow.inspect", "workflow.recover", "workflow.relayEnquiry", "workflow.relayPermission", "constructor"]) {
@@ -15,6 +16,6 @@ const rpc = new WorkerRpc(message => process.send!(message), async (method, args
     return { capabilities: { providers: [], models: [], compaction: false, fork: false, subagents: false, enquiries: false, permissions: false },
       resume: undefined, methods: [] };
   }
-  if (method === "dispose") setImmediate(() => { process.disconnect(); process.exit(0); });
+  if (method === "dispose") setImmediate(() => process.stdout.end(() => process.exit(0)));
 }, () => {});
-process.on("message", message => rpc.receive(message));
+process.stdin.on("data", frameDecoder(message => rpc.receive(message)));

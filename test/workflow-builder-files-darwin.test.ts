@@ -4,6 +4,7 @@ import { execFileSync, type ChildProcess } from 'node:child_process';
 import { open, type FileHandle } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { launchWorker } from '../src/backend/worker/launcher.ts';
+import { encodeFrame } from '../src/backend/worker/frames.ts';
 import { constants, linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,9 +35,9 @@ async function readerResponse(root: FileHandle, cwd: string, request: { scope: s
     return await new Promise<unknown>((resolve, reject) => {
       timer = setTimeout(() => reject(new Error('Reader did not respond')), 5000);
       helper.child.once('error', reject);
-      helper.child.once('message', resolve);
+      helper.onMessage(resolve, reject);
       void helper.exited.then(() => reject(new Error('Reader exited before responding')));
-      helper.child.send(request, error => { if (error) reject(error); });
+      helper.send(request, error => { if (error) reject(error); });
     });
   } finally { clearTimeout(timer); await helper.stop(async () => {}); }
 }
@@ -145,7 +146,7 @@ it('Darwin validates the check acknowledgement before accepting metadata', { ski
       const rejected = assert.rejects(files.checkScope(), /reference unavailable/);
       const owner = await pausedHelpers(files, 1);
       const helper = [...owner.helpers][0]!;
-      helper.child.emit('message', { ok: true, result });
+      helper.child.stdout!.emit('data', encodeFrame({ ok: true, result }));
       await rejected; await helper.exited;
       assert.equal(owner.helpers.size, 0);
       assert.ok(owner.root.fd >= 0);

@@ -202,14 +202,14 @@ export class WorkflowBuilderFiles {
       const result = await new Promise<unknown>((resolve, reject) => {
         timer = setTimeout(() => reject(new Error()), 5000);
         helper.child.once('error', reject);
-        helper.child.once('disconnect', () => reject(new Error()));
+        helper.child.stdout?.once('close', () => reject(new Error()));
         void helper.exited.then(() => reject(new Error()));
-        helper.child.once('message', (message: unknown) => {
+        helper.onMessage((message: unknown) => {
           const response = message as { ok?: boolean; result?: unknown } | null;
           if (!response || response.ok !== true) reject(new Error());
           else resolve(response.result);
-        });
-        helper.child.send({ scope: this.scope, operation, path: normalized }, error => { if (error) reject(error); });
+        }, reject);
+        helper.send({ scope: this.scope, operation, path: normalized }, error => { if (error) reject(error); });
       });
       await helper.stop(async () => {});
       if (this.closed || !this.allowed(absolute)) throw new Error();
@@ -251,7 +251,7 @@ export class WorkflowBuilderFiles {
     return this.closing ??= (async () => {
       await Promise.all([...this.helpers].map(helper => helper.stop(async () => {})));
       if (this.active) await new Promise<void>(resolve => this.drained.push(resolve));
-      // fd4 inheritance stays valid until every active operation has terminated.
+      // fd3 inheritance stays valid until every active operation has terminated.
       await this.root.close().catch(() => {});
     })();
   }

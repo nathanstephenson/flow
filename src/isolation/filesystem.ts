@@ -21,8 +21,8 @@ export type FilesystemIsolationOptions = {
   command: string;
   args: string[];
   env?: NodeJS.ProcessEnv;
-  /** The caller must supply fd 3 (Node IPC), with serialization: "advanced", when spawning. */
-  ipc?: boolean;
+  /** Marks the launch as a Backend worker, which speaks framed messages on stdin and stdout. */
+  worker?: boolean;
   /** Execution assets hidden by masks, mounted read-only at real paths; narrow lookup aliases are preserved. */
   readablePaths?: string[];
   credentials?: "pi" | "claude" | "none";
@@ -75,7 +75,7 @@ function expandHome(path: string, home: string): string {
   return path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
 }
 
-async function probeBoundary(command: string, args: string[], env: NodeJS.ProcessEnv, fds: (number | "ignore")[]): Promise<void> {
+async function probeBoundary(command: string, args: string[], env: NodeJS.ProcessEnv, fds: number[]): Promise<void> {
   await new Promise<void>((resolveProbe, reject) => {
     const child = spawn(command, args, { env, stdio: ["ignore", "ignore", "pipe", ...fds] });
     let stderr = "";
@@ -217,7 +217,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     if (before.dev !== after.dev || before.ino !== after.ino || realpathSync(`/proc/self/fd/${fd}`) !== path) {
       throw new Error(`Execution mount source changed during preparation: ${path}`);
     }
-    return String((options.ipc ? 4 : 3) + sources.length - 1);
+    return String(3 + sources.length - 1);
   };
   try {
     const { inherited, home, credentialHome, piDir, claudeDir, claudeAuthDir, flowRoots, protectedPaths, scope } = scopeContext(options);
@@ -370,18 +370,13 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     // Probe the actual mount policy and namespaces, not merely `bwrap --version`. Never run the
     // requested program when unavailable; no cached probe can turn a later failure into fallback.
     try {
-      // Reserve fd 3 in the probe exactly as in an IPC worker launch.
-      await probeBoundary(bwrap, [...args, "--", "/bin/true"], env,
-        [...(options.ipc ? ["ignore" as const] : []), ...sources]);
+      await probeBoundary(bwrap, [...args, "--", "/bin/true"], env, sources);
     } catch (error) {
       // execFile's default message includes every --setenv argument, including provider keys.
       const failure = error as NodeJS.ErrnoException & { stderr?: string; signal?: string };
       throw new Error(`Bubblewrap namespace/mount probe failed (${failure.signal ?? failure.code ?? "unknown"}): ${(failure.stderr ?? "").trim().slice(-2048)}`);
     }
-    // Bubblewrap (unlike some other sandbox launchers) retains inherited application fds;
-    // it has no --preserve-fds option. Restore Node's spawn-time IPC environment after clearenv.
-    if (options.ipc) args.push("--setenv", "NODE_CHANNEL_FD", "3", "--setenv", "NODE_CHANNEL_SERIALIZATION_MODE", "advanced",
-      "--setenv", "FLOW_BACKEND_WORKER", "1");
+    if (options.worker) args.push("--setenv", "FLOW_BACKEND_WORKER", "1");
     args.push("--", command, ...options.args);
     return { command: bwrap, args, env, stdioFds: sources.slice(), scope, stateDir: virtualState, cleanup };
   } catch (error) {

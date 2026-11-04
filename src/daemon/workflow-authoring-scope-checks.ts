@@ -93,14 +93,14 @@ export class WorkflowAuthoringScopeChecks {
         reader = { cancel: () => finish(unavailable()), cleanup };
         this.readers.add(reader);
         helper.child.once('error', () => finish(unavailable()));
-        helper.child.once('disconnect', () => finish(unavailable()));
+        helper.child.stdout?.once('close', () => finish(unavailable()));
         void helper.exited.then(() => finish(unavailable()));
-        helper.child.once('message', (message: unknown) => {
+        helper.onMessage((message: unknown) => {
           const response = message as { ok?: unknown; result?: unknown } | null;
           if (!response || response.ok !== true || !validDirectory(response.result)) finish(request.operation === 'check' ? changed() : unavailable());
           else finish(undefined, response.result);
-        });
-        helper.child.send(request, error => { if (error) finish(unavailable()); });
+        }, () => finish(unavailable()));
+        helper.send(request, error => { if (error) finish(unavailable()); });
       } catch { finish(unavailable()); }
     });
   }
