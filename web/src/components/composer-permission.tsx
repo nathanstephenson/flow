@@ -3,6 +3,7 @@ import { useRef } from "react";
 import type { PermissionChoice } from "../../../src/client/permission.ts";
 import type { OpenPermission } from "../../../src/client/reduce.ts";
 import { cn } from "@/lib/utils.ts";
+import { ToolName } from "@/components/tool-name.tsx";
 
 /**
  * What wants to run, above the box that cannot send a message until it is decided.
@@ -78,7 +79,7 @@ export function ComposerPermission({
                 aria-live="polite"
                 className="flex items-baseline gap-2 px-3 pt-2 pb-1 text-xs text-muted-foreground"
               >
-                <span className="font-medium text-foreground">Authorise {shown.authorising.tool}?</span>
+                <span className="font-medium text-foreground">Authorise <ToolName name={shown.authorising.tool} />?</span>
                 <span>this session has not been allowed to run it</span>
               </div>
 

@@ -15,6 +15,7 @@ import {
 import { signInMcp } from "./mcp-actions.ts";
 import { useWorkflowResource, workflowApi } from "./workflow-api.ts";
 import { toast } from "./ui/toaster.tsx";
+import { connectionId } from "@/presentation/mcp-id.ts";
 
 type HeaderRow = { name: string; kind: "value" | "secret"; value: string };
 
@@ -189,7 +190,7 @@ export default function McpSettings() {
             ]),
           );
           const common = {
-            id: editing ?? crypto.randomUUID(),
+            id: editing ?? connectionId(name, connections.map((connection) => connection.id)),
             name,
             enabledByDefault,
           };

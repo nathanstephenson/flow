@@ -12,6 +12,7 @@ import { useNow } from "@/lib/use-now.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
+import { ToolName } from "@/components/tool-name.tsx";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -190,7 +191,7 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
       >
         <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
           <ToolStatusDot status={entry.status} />
-          <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.name}</span>
+          <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
           {precis === undefined ? null : (
             <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
           )}
