@@ -55,7 +55,8 @@ import {
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
-import { probeSkills } from "./skills.ts";
+import { probeSkills, type HeldSession } from "./skills.ts";
+import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { SharedSandbox } from "../isolation/shared-sandbox.ts";
 import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
@@ -303,6 +304,8 @@ export class SessionHost {
   private readonly backends = new Map<string, AgentBackend>();
   /** Model probes by backend name, held in flight rather than resolved — see `models`. */
   private readonly modelProbes = new Map<string, Promise<BackendModels>>();
+  /** One warm Skills session per Backend Adapter, for the last Scope asked — see `skillsFor` (ADR 0035). */
+  private readonly skillSessions = new Map<string, HeldSession>();
   /**
    * Skill probes by Backend Adapter and Scope, held *only* while in flight — see `skillsFor`.
    *
@@ -561,7 +564,8 @@ export class SessionHost {
     const probes = [...this.backends.values()].map((backend) => {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
-      const probe = probeModels(backend, scope);
+      const probe = this.timed("models", backend, false, (timed) =>
+        probeModels(timed, scope, false, (held) => this.holdSkillSession(backend.name, held, false)));
       this.modelProbes.set(backend.name, probe);
       return probe;
     });
@@ -576,13 +580,12 @@ export class SessionHost {
    * it is here and not folded into that: they share a word and nothing else, and a shared helper
    * would be one `try` bought by dragging one of two return shapes onto the other.
    *
-   * **Held in flight and never after.** The entry is deleted as the probe settles, so two clients
-   * asking at once spawn one backend between them, and the next ask after that spawns another. That
-   * is deliberately unlike `models` directly above: a model list changes when an account's
-   * entitlements do, while a Skill directory changes when somebody saves a file, and ADR 0020
-   * already drew that line between `/api/models` and `/api/branches`. Skills are on the
-   * `/api/branches` side. What makes the spawn affordable is the client asking early — when its
-   * Scope field settles rather than when the menu opens — not the host holding a stale answer.
+   * **The answer is held in flight; the session is kept warm (ADR 0035).** Two clients asking at
+   * once share one probe. After it settles, its Backend Session stays in `skillSessions` for that
+   * backend and Scope, and the next ask calls `skills()` on it again, which reads the disk again. A
+   * new Scope replaces the warm session. A warm session that reported an error, or whose `skills()`
+   * throws, is dropped and the ask falls back to one cold probe. The startup model probe fills an
+   * empty slot, so the first ask after host start is warm too.
    *
    * Never throws, so the route never falls through to `serve`'s blanket 500: an unknown Backend
    * Adapter is reported as a `problem` like any other reason a list might be empty.
@@ -597,11 +600,52 @@ export class SessionHost {
     const held = this.skillProbes.get(key);
     if (held) return await held;
 
-    const probe = probeSkills(backend, scope).finally(() => {
+    const probe = this.askSkills(backend, scope).finally(() => {
       this.skillProbes.delete(key);
     });
     this.skillProbes.set(key, probe);
     return await probe;
+  }
+
+  private async askSkills(backend: AgentBackend, scope: string): Promise<ScopeSkills> {
+    const warm = this.skillSessions.get(backend.name);
+    if (warm?.scope === scope && !warm.dead && warm.session.skills) {
+      try {
+        return await this.timed("skills", backend, true, async () => ({ backend: backend.name, scope, skills: await warm.session.skills!() }));
+      } catch {
+        this.skillSessions.delete(backend.name);
+        void warm.session.dispose().catch(() => {});
+      }
+    }
+    return await this.timed("skills", backend, false, (timed) =>
+      probeSkills(timed, scope, (held) => this.holdSkillSession(backend.name, held, true)));
+  }
+
+  /** `replace` is false for the model probe: it fills an empty or dead slot and never replaces a live one. */
+  private holdSkillSession(name: string, held: HeldSession, replace: boolean): void {
+    const old = this.skillSessions.get(name);
+    if (this.workflowShutdown || (old && !old.dead && !replace)) {
+      void held.session.dispose().catch(() => {});
+      return;
+    }
+    this.skillSessions.set(name, held);
+    if (old) void old.session.dispose().catch(() => {});
+  }
+
+  /** Records `create` (time in `backend.create`), `answer` and `total` to the timings file. */
+  private async timed<T>(kind: "models" | "skills", backend: AgentBackend, warm: boolean, probe: (backend: AgentBackend) => Promise<T>): Promise<T> {
+    const begin = performance.now();
+    let create = 0;
+    const timed: AgentBackend = { name: backend.name, create: async (options) => {
+      const start = performance.now();
+      try { return await backend.create(options); } finally { create = performance.now() - start; }
+    } };
+    try {
+      return await probe(timed);
+    } finally {
+      const total = performance.now() - begin;
+      if (this.store) recordTiming(this.store.root, { kind, backend: backend.name, warm, create: Math.round(create), answer: Math.round(total - create), total: Math.round(total) });
+    }
   }
 
   logFor(sessionId: string): SessionLog {
@@ -2107,6 +2151,9 @@ export class SessionHost {
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
     // `SummaryModelSpare.dispose`.
     this.summarySpare.dispose();
+    const warm = [...this.skillSessions.values()];
+    this.skillSessions.clear();
+    await Promise.all(warm.map((held) => held.session.dispose().catch(() => {})));
     await Promise.all(this.backendFailures);
     for (const record of this.sessions.values()) {
       if (!record.session) continue;

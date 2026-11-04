@@ -15,6 +15,7 @@ import { acquireHost, readHost, oidcFingerprint, type HostIdentity } from './own
 import type { AssetManifest } from '../web/assets.ts';
 import type { Installation } from '../cli/install-guard.ts';
 import { WebUpdateController } from '../cli/web-update.ts';
+import { trimTimings } from './timings.ts';
 
 export async function startRuntime(options: {
   root: string;
@@ -81,6 +82,7 @@ export async function startRuntime(options: {
     })();
     cleanup = stop;
     registerBackends(host);
+    trimTimings(root);
     void host.models(config.projectRoot() ?? process.cwd());
     const workflows = new WorkflowStore(root);
     const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());

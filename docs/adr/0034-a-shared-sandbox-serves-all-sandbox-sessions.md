@@ -45,3 +45,10 @@ state, transcripts and files of all sessions and all Projects under the Project 
 session can make all other sessions slow. A Project Root change takes effect only when no session
 holds the VM. The supervisor (ADR 0032) still stops one command tree without an effect on the other
 sessions.
+
+## Evictable holds amendment
+
+A hold can be evictable. Warm Skills sessions (ADR 0035) take evictable holds. If a session needs a
+mount that the VM does not have, and all holds are evictable, Flow asks each holder to release. Flow
+then waits for the releases and creates the VM again. If one hold is not evictable, Flow refuses the
+session, as before.

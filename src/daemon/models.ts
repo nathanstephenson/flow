@@ -1,5 +1,6 @@
 import type { AgentBackend } from "../backend/types.ts";
-import type { BackendEvent, BackendModels, ModelInfo } from "../protocol/events.ts";
+import type { BackendModels, ModelInfo } from "../protocol/events.ts";
+import { probeSession, release, type HeldSession } from "./skills.ts";
 
 /**
  * Which models a Backend Adapter can actually reach, asked without an Agent Session.
@@ -11,8 +12,8 @@ import type { BackendEvent, BackendModels, ModelInfo } from "../protocol/events.
  * all until this existed.
  *
  * A machine-wide Default Model and Summary Model cannot wait for a session that does not exist yet.
- * So this opens a throwaway one — the same device the Summary Model uses (ADR 0020), tools and all
- * off — reads its Capabilities, and disposes of it.
+ * So this opens one — the same device the Summary Model uses (ADR 0020), tools and all off — reads
+ * its Capabilities, and gives it to `keep` or disposes of it.
  */
 
 /**
@@ -36,7 +37,7 @@ export type { BackendModels };
  * Never throws: a backend that cannot answer reports a `problem`, and its section of the Settings
  * offers a text field instead of a list. A refusal here must not make the whole page unreachable.
  */
-export async function probeModels(backend: AgentBackend, scope: string, workflowBuilder = false): Promise<BackendModels> {
+export async function probeModels(backend: AgentBackend, scope: string, workflowBuilder = false, keep?: (held: HeldSession) => void): Promise<BackendModels> {
   let models: ModelInfo[] = [];
   let settle: (() => void) | undefined;
   // Claude reports a provisional Capabilities at create and the real list moments later, over
@@ -45,40 +46,38 @@ export async function probeModels(backend: AgentBackend, scope: string, workflow
   const listed = new Promise<void>((resolve) => {
     settle = resolve;
   });
-  const emit = (event: BackendEvent): void => {
+  const { held, options } = probeSession(scope, (event) => {
     if (event.type !== "capabilities_changed") return;
     models = [...event.capabilities.models];
     settle?.();
-  };
+  });
 
   let session;
   try {
     const refuseTool = async () => { throw new Error("Model discovery cannot use workflow builder tools"); };
-    session = await backend.create({ scope, tools: "none", emit, ...(workflowBuilder ? { workflowBuilder: {
+    session = await backend.create({ ...options, ...(workflowBuilder ? { workflowBuilder: {
       instructions: "List available models only.", read: refuseTool, list: refuseTool, write: refuseTool,
     } } : {}) });
   } catch (error) {
     return { backend: backend.name, models: [], problem: message(error) };
   }
+  held.session = session;
 
-  try {
-    /*
-     * A backend that already knows is not waited on.
-     *
-     * pi and the fake build their whole list before `create` resolves and never emit
-     * `capabilities_changed` again, so waiting for one costs the entire timeout and answers with
-     * exactly what was on the session all along. Only Claude, which fetches over its control
-     * channel after the session is up, has anything to wait for.
-     */
-    if (session.capabilities.models.length > 0) return { backend: backend.name, models: [...session.capabilities.models], ...(session.capabilities.autoCompaction ? { autoCompaction: session.capabilities.autoCompaction } : {}) };
-
-    await within(listed, PROBE_TIMEOUT_MS);
-    return models.length > 0
-      ? { backend: backend.name, models, ...(session.capabilities.autoCompaction ? { autoCompaction: session.capabilities.autoCompaction } : {}) }
-      : { backend: backend.name, models: [], problem: `${backend.name} listed no models` };
-  } finally {
-    await session.dispose().catch(() => {});
-  }
+  /*
+   * A backend that already knows is not waited on.
+   *
+   * pi and the fake build their whole list before `create` resolves and never emit
+   * `capabilities_changed` again, so waiting for one costs the entire timeout and answers with
+   * exactly what was on the session all along. Only Claude, which fetches over its control
+   * channel after the session is up, has anything to wait for.
+   */
+  if (session.capabilities.models.length > 0) models = [...session.capabilities.models];
+  else await within(listed, PROBE_TIMEOUT_MS);
+  const answer: BackendModels = models.length > 0
+    ? { backend: backend.name, models, ...(session.capabilities.autoCompaction ? { autoCompaction: session.capabilities.autoCompaction } : {}) }
+    : { backend: backend.name, models: [], problem: `${backend.name} listed no models` };
+  await release(held, models.length > 0 ? keep : undefined);
+  return answer;
 }
 
 function message(error: unknown): string {

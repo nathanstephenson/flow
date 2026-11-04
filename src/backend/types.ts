@@ -26,6 +26,8 @@ export type PromptAttachment = {
 export type BackendCreateOptions = {
   /** Host-owned startup cancellation; never serialized into a worker or exposed to the model. */
   signal?: AbortSignal;
+  /** Host-only: asks the holder to dispose this session so a Shared Sandbox can be re-created. Never serialized into a worker. */
+  evict?: () => void;
   /** Restricted host-mediated authoring. Overrides all other tool configuration, including tools:none. */
   workflowBuilder?: import("./workflow-builder.ts").WorkflowBuilder;
   workflow?: import("./workflow-tools.ts").WorkflowParent;
