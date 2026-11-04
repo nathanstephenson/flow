@@ -18,7 +18,7 @@ export function KeyboardSettings() {
           <dl className="flex flex-col">
             {group.shortcuts.map((shortcut) => (
               <div
-                key={shortcut.binding}
+                key={shortcut.description}
                 className="flex items-baseline justify-between gap-4 border-b py-1.5 last:border-b-0"
               >
                 <dt className="text-sm">{shortcut.description}</dt>
@@ -26,6 +26,7 @@ export function KeyboardSettings() {
                   {/* ⌘ on a Mac and Ctrl everywhere else come from one entry in the table, so the
                       cap says both rather than guessing which machine is reading it. */}
                   {shortcut.chord === true ? <Kbd>⌘/Ctrl</Kbd> : null}
+                  {shortcut.shift === true ? <Kbd>Shift</Kbd> : null}
                   {shortcut.keys.map((key) => (
                     <Kbd key={key}>{displayKey(key)}</Kbd>
                   ))}

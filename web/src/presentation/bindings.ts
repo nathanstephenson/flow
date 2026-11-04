@@ -2,7 +2,7 @@
  * Keyboard bindings, resolved as data.
  *
  * One `keydown` listener on `window` asks this function what a key meant; everything DOM-shaped —
- * reading the event target, calling `preventDefault`, actually opening the picker — stays in the
+ * reading the event target, calling `preventDefault`, actually opening the Settings — stays in the
  * component that owns it. So the map is testable under `node --test`, which is the only way a
  * shortcut table stays honest as it grows.
  *
@@ -20,19 +20,15 @@ import type { Route } from "./route.ts";
 export type Binding =
   /** Opens the dialog with the defaults prefilled — it does not create anything. */
   | "new-agent-session"
-  | "command-palette"
   | "sidebar-next"
   | "sidebar-previous"
   | "sidebar-first"
   | "sidebar-last"
   /** Move focus into the selected Agent Session's pane. */
   | "focus-pane"
-  | "model-picker"
-  | "effort-picker"
   | "search"
   /** Blur a typing surface if one has focus, otherwise abort the focused pane's turn. */
   | "blur-or-abort"
-  | "settle"
   /** Show or minimise a Dock. Minimising it does not end the Shells inside it. */
   | "toggle-bottom-dock"
   | "toggle-right-dock"
@@ -52,17 +48,13 @@ export type Binding =
  */
 const EVERY_BINDING = {
   "new-agent-session": true,
-  "command-palette": true,
   "sidebar-next": true,
   "sidebar-previous": true,
   "sidebar-first": true,
   "sidebar-last": true,
   "focus-pane": true,
-  "model-picker": true,
-  "effort-picker": true,
   search: true,
   "blur-or-abort": true,
-  settle: true,
   "toggle-bottom-dock": true,
   "toggle-right-dock": true,
   "toggle-rail": true,
@@ -98,13 +90,12 @@ export type BindingContext = {
 /**
  * The bindings that survive in the Settings.
  *
- * Everything else addresses an Agent Session — a rail cursor, a pane, a Dock, a model — and the
+ * Everything else addresses an Agent Session — a rail cursor, a pane, a Dock — and the
  * Settings have none of those. `n` stays because starting an Agent Session is reasonable from
  * anywhere, and `?` stays because it lands on a section of the Settings itself.
  */
 const IN_SETTINGS = new Set<Binding>([
   "new-agent-session",
-  "command-palette",
   "toggle-rail",
   "keyboard-settings",
 ]);
@@ -124,18 +115,11 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
    * `modalOpen` used to be here, suppressing everything while a dialog owned the keyboard. Its only
    * supplier was the New Agent Session dialog, which is a routed view now, so the field could only
    * ever have been a hardwired `false`.
-   *
-   * One exposure this makes visible rather than introduces, worth stating so a reader does not have
-   * to find it: `s` reaches Settle while a Base UI `Select` or the End Agent Session `AlertDialog`
-   * has focus. That was already true — the pane header's model picker never told this table it was
-   * open either — and closing it means asking every popup to report itself, which is a different
-   * change from this one.
    */
   // ⌘ on a Mac, Ctrl everywhere else, from one table. A chord survives a typing surface because it
   // cannot be typed into one.
   if (event.ctrlKey || event.metaKey) {
     if (event.repeat) return undefined;
-    if (event.key === "k" || event.key === "K") return "command-palette";
     // ⌘B is what shadcn's Sidebar binds, and the muscle memory is worth matching — but it is
     // resolved here rather than by the component's own window listener, so it can be suppressed
     // while a dialog owns the keyboard and can be printed in the Settings' Keyboard section.
@@ -156,8 +140,8 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
 
   if (context.typing) return undefined;
 
-  // Auto-repeat walks the list, which is what holding `j` is for. Nothing else repeats: a held `s`
-  // would try to Settle an Agent Session several times over.
+  // Auto-repeat walks the list, which is what holding `j` is for. Nothing else repeats: a held `n`
+  // would open the New Agent Session view several times over.
   switch (event.key) {
     case "j":
     case "ArrowDown":
@@ -184,12 +168,6 @@ function resolveKey(event: BindingEvent, context: BindingContext): Binding | und
       return "new-agent-session";
     case "Enter":
       return "focus-pane";
-    case "m":
-      return "model-picker";
-    case "e":
-      return "effort-picker";
-    case "s":
-      return "settle";
     // The backtick, because every other terminal toggle a reader has met is on this key, and its
     // shifted twin for the other Dock — one physical key, one finger, two sides. Both are safe as
     // unmodified bindings under the first principle above: showing a Dock spends nothing and sends
@@ -217,8 +195,8 @@ const TYPING_TAGS = new Set(["input", "textarea", "select"]);
  * the background.
  *
  * `inShell` is the fourth, and it is not optional politeness: a Shell draws itself on a canvas and
- * takes keys through it, so nothing about the element says "text goes here". Without it, typing `s`
- * at a prompt Settles the Agent Session, and four Shells across two Docks make that a matter of time.
+ * takes keys through it, so nothing about the element says "text goes here". Without it, typing `n`
+ * at a prompt opens the New Agent Session view, and four Shells across two Docks make that a matter of time.
  */
 export function isTypingTarget(
   tagName: string,
