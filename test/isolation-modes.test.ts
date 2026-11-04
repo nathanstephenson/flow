@@ -71,7 +71,7 @@ export default { name: 'fixture', async create(options) {
   let enabled = false, snapshots = 0;
   const events: BackendEvent[] = [];
   const backend = new WorkerBackend({ backendModule: pathToFileURL(module).href,
-    isolationEnabled: () => { snapshots++; return enabled; },
+    isolationMode: () => { snapshots++; return enabled ? "bubblewrap" as const : "none" as const; },
     readablePaths: ['/missing-assets-should-not-be-discovered'], stateRoot: f.directory,
     env: { FLOW_TEST_CREDENTIAL: 'normal-host-secret', HOME: f.directory,
       PI_CODING_AGENT_DIR: f.directory, CLAUDE_CONFIG_DIR: f.directory } });
@@ -101,7 +101,7 @@ test('unrestricted worker keeps reverse MCP/Workflow IPC and owned Subagent hand
       assert.deepEqual(input, { fixture: true }); assert.ok(signal instanceof AbortSignal); assert.equal(timeout, 1234);
       calls++; return { content: [{ type: 'text', text: 'host result' }] };
     } };
-  const session = await new WorkerBackend({ backendModule, isolationEnabled: () => false }).create({
+  const session = await new WorkerBackend({ backendModule, isolationMode: () => "none" as const }).create({
     scope: f.scope, emit: () => {}, mcp: { tools: () => [tool] } as McpSession,
     workflow: { inspect: async () => { inspections++; return null; }, recover: async () => null,
       relayEnquiry: async () => null, relayPermission: async () => null },
@@ -126,9 +126,9 @@ test('unrestricted worker keeps reverse MCP/Workflow IPC and owned Subagent hand
 test('unrestricted worker initialization failures still dispose the owned process', async t => {
   missingEnforcement(t);
   const f = fixture(t);
-  const backend = new WorkerBackend({ backendModule, isolationEnabled: () => false, shutdownTimeoutMs: 100 });
+  const backend = new WorkerBackend({ backendModule, isolationMode: () => "none" as const, shutdownTimeoutMs: 100 });
   await assert.rejects(backend.create({ scope: f.scope, modelId: 'create-error', emit: () => {} }), /fixture create failed/);
-  await assert.rejects(new WorkerBackend({ backendModule, isolationEnabled: () => false, startupTimeoutMs: 100, shutdownTimeoutMs: 100 })
+  await assert.rejects(new WorkerBackend({ backendModule, isolationMode: () => "none" as const, startupTimeoutMs: 100, shutdownTimeoutMs: 100 })
     .create({ scope: f.scope, modelId: 'create-hang', emit: () => {} }), /cancelled/i);
   const file = join(f.directory, 'not-a-directory'); writeFileSync(file, 'x');
   await assert.rejects(backend.create({ scope: file, emit: () => {} }), /Scope must be a directory/);
@@ -139,7 +139,7 @@ test('unrestricted stdio MCP skips policy, permits outside-Scope write/delete, r
   const f = fixture(t), alias = join(f.directory, 'alias');
   symlinkSync(f.scope, alias, 'dir');
   const sentinel = join(f.directory, 'sentinel'); writeFileSync(sentinel, 'intact');
-  const mcp = new McpSession([connection], alias, undefined, false, undefined, [f.directory], f.directory, false);
+  const mcp = new McpSession([connection], alias, undefined, false, undefined, [f.directory], f.directory, "none");
   try {
     await mcp.open();
     assert.equal(mcp.status()[0]?.state, 'connected');
@@ -165,7 +165,7 @@ process.exit(1);
 `);
   const saved = process.env.FLOW_TEST_CREDENTIAL;
   process.env.FLOW_TEST_CREDENTIAL = 'host-only-secret';
-  const mcp = new McpSession([{ ...connection, args: [script] }], f.scope, undefined, false, undefined, undefined, undefined, false);
+  const mcp = new McpSession([{ ...connection, args: [script] }], f.scope, undefined, false, undefined, undefined, undefined, "none");
   try {
     await mcp.open();
     assert.equal(mcp.status()[0]?.state, 'failed');
@@ -184,7 +184,7 @@ test('unrestricted Workflow Shell and QuickJS invocation work without enforcemen
   try {
     // Deliberately inside a protected host-state fixture: false must not apply restricted Scope policy.
     const executors = await createCodeExecutors({ runtimePath, nodePath: process.execPath, scope: alias,
-      stateRoot: f.directory, isolationEnabled: false });
+      stateRoot: f.directory, isolationMode: "none" as const });
     const ctx = context(alias);
     ctx.step = { id: 'a', name: 'a', kind: 'shell', command: `printf written > ${quote(sentinel)}; cat ${quote(sentinel)}; rm ${quote(sentinel)}; printf '%s' "\${FLOW_TEST_CREDENTIAL-unset}" >&2; pwd` };
     assert.deepEqual(await executors.shell.execute(ctx), { exitCode: 0, stdout: `written${realpathSync(f.scope)}\n`, stderr: 'unset' });
@@ -212,7 +212,7 @@ test('unrestricted Node readiness is absolute, version checked, asynchronous and
   const timer = setInterval(() => ticks++, 50);
   try {
     for (const nodePath of ['node', join(f.directory, 'missing-node'), old, slow]) {
-      const executors = await createCodeExecutors({ runtimePath, nodePath, isolationEnabled: false });
+      const executors = await createCodeExecutors({ runtimePath, nodePath, isolationMode: "none" as const });
       assert.throws(() => executors.shell.check(context(f.scope).step, { sessionId: 's', scope: f.scope, backend: 'pi' }), /Host Node 22 or later/);
     }
     assert.ok(ticks >= 10, 'Node probes must not block Session Host heartbeat');
@@ -222,17 +222,17 @@ test('unrestricted Node readiness is absolute, version checked, asynchronous and
 test('explicit enabled and omitted library defaults fail closed on missing enforcement', async t => {
   missingEnforcement(t);
   const f = fixture(t), marker = join(f.scope, 'launched');
-  for (const isolationEnabled of [undefined, () => true]) {
-    await assert.rejects(new WorkerBackend({ backendModule, ...(isolationEnabled ? { isolationEnabled } : {}) })
+  for (const isolationMode of [undefined, () => "bubblewrap" as const]) {
+    await assert.rejects(new WorkerBackend({ backendModule, ...(isolationMode ? { isolationMode } : {}) })
       .create({ scope: f.scope, emit: () => {} }), /unrestricted launch refused/);
   }
   for (const enabled of [true, undefined]) {
     const mcp = new McpSession([{ ...connection, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`] }],
-      f.scope, undefined, false, undefined, undefined, undefined, enabled);
+      f.scope, undefined, false, undefined, undefined, undefined, enabled ? "bubblewrap" : undefined);
     try { await mcp.open(); assert.equal(mcp.status()[0]?.state, 'failed'); }
     finally { await mcp.dispose(); }
     const executors = await createCodeExecutors({ runtimePath, nodePath: process.execPath,
-      ...(enabled !== undefined ? { isolationEnabled: enabled } : {}) });
+      ...(enabled !== undefined ? { isolationMode: "bubblewrap" as const } : {}) });
     const ctx = context(f.scope); ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'touch launched' };
     await assert.rejects(executors.shell.execute(ctx), /unrestricted launch refused/);
   }
@@ -255,7 +255,7 @@ test('HTTP MCP is unchanged in either isolation mode, even with missing enforcem
     for (const enabled of [true, false]) {
       const mcp: McpSession = new McpSession([{ id: 'remote', name: 'Remote', transport: 'http', enabledByDefault: true,
         url: `http://127.0.0.1:${address.port}/mcp`, headers: {}, oauth: false }], '/not-a-local-scope',
-        undefined, false, undefined, undefined, undefined, enabled);
+        undefined, false, undefined, undefined, undefined, enabled ? "bubblewrap" as const : "none" as const);
       try {
         await mcp.open(); assert.equal(mcp.status()[0]?.state, 'connected');
         assert.deepEqual((await mcp.tools()[0]!.call({})).content, [{ type: 'text', text: 'remote' }]);

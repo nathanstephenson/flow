@@ -33,7 +33,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
 });
 `);
   const config = new ConfigStore(join(root, 'state'));
-  config.update({ projects: { root: scope }, filesystemIsolation: false, mcp: [{ id: 'local', name: 'Local', transport: 'stdio', command: process.execPath, args: [script], enabledByDefault: true }] });
+  config.update({ projects: { root: scope }, filesystemIsolation: "none", mcp: [{ id: 'local', name: 'Local', transport: 'stdio', command: process.execPath, args: [script], enabledByDefault: true }] });
   const host = new SessionHost({ mcpConnections: config.mcpConnections });
   const authoring = new WorkflowMcpAuthoringService({ host, config, scope: root });
   const start = SupervisedStdioTransport.prototype.start;

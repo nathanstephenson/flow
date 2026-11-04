@@ -233,6 +233,13 @@ describe("machine-wide filesystem isolation", () => {
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
   const file = (): Record<string, unknown> => JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
 
+  it("migrates stored booleans to modes and keeps absent as automatic", () => {
+    for (const [stored, mode] of [[true, "bubblewrap"], [false, "none"], [undefined, undefined]] as const) {
+      writeFileSync(join(root, "config.json"), JSON.stringify(stored === undefined ? {} : { filesystemIsolation: stored }));
+      assert.equal(new ConfigStore(root).view().filesystemIsolation, mode);
+    }
+  });
+
   for (const supported of [true, false]) {
     it(`resolves automatic selection with support=${supported} without persisting the decision`, async () => {
       let calls = 0;
@@ -242,15 +249,15 @@ describe("machine-wide filesystem isolation", () => {
         return supported ? { supported } : { supported, reason: "namespaces unavailable" };
       });
       assert.deepEqual(store.filesystemIsolationStatus(), {
-        supported: false, enabled: true, automatic: true, checking: true,
+        mode: "bubblewrap", automatic: true, checking: true, supported: false, sandbox: { supported: false, reason: "No sandbox provider is configured." },
       });
       assert.equal("filesystemIsolation" in store.view(), false);
       await Promise.all([store.initializeFilesystemIsolation(), store.initializeFilesystemIsolation()]);
       await store.initializeFilesystemIsolation();
       assert.equal(calls, 1, "support is latched, never retried to downgrade later work");
       assert.deepEqual(store.filesystemIsolationStatus(), {
-        supported, enabled: supported, automatic: true, checking: false,
-        ...(supported ? {} : { reason: "namespaces unavailable" }),
+        mode: supported ? "bubblewrap" : "none", automatic: true, checking: false, supported,
+        ...(supported ? {} : { reason: "namespaces unavailable" }), sandbox: { supported: false, reason: "No sandbox provider is configured." },
       });
       store.update({ fonts: { chrome: "Berkeley Mono" } });
       assert.equal("filesystemIsolation" in file(), false, "unrelated saves cannot pin automatic defaults");
@@ -258,14 +265,14 @@ describe("machine-wide filesystem isolation", () => {
       assert.equal("filesystemIsolation" in new ConfigStore(root).view(), false);
 
       for (const enabled of [true, false]) {
-        store.update({ filesystemIsolation: enabled });
+        store.update({ filesystemIsolation: enabled ? "bubblewrap" as const : "none" as const });
         store.update({ retention: { settled: "36h" } });
-        assert.equal(store.filesystemIsolationEnabled(), enabled);
+        assert.equal(store.filesystemIsolationMode(), enabled ? "bubblewrap" as const : "none" as const);
         assert.equal(store.filesystemIsolationStatus().automatic, false);
-        assert.equal(file().filesystemIsolation, enabled);
-        assert.equal(new ConfigStore(root).view().filesystemIsolation, enabled);
+        assert.equal(file().filesystemIsolation, enabled ? "bubblewrap" : "none");
+        assert.equal(new ConfigStore(root).view().filesystemIsolation, enabled ? "bubblewrap" : "none");
         store.update({ filesystemIsolation: null });
-        assert.equal(store.filesystemIsolationEnabled(), supported);
+        assert.equal(store.filesystemIsolationMode(), supported ? "bubblewrap" as const : "none" as const);
         assert.equal(store.filesystemIsolationStatus().automatic, true);
         assert.equal("filesystemIsolation" in file(), false, "reset really deletes the stored override");
       }
@@ -275,18 +282,18 @@ describe("machine-wide filesystem isolation", () => {
   it("honours explicit overrides while checking and keeps true fail-closed after a failed probe", async () => {
     let finish!: (value: { supported: boolean; reason: string }) => void;
     const store = new ConfigStore(root, () => new Promise((resolve) => { finish = resolve; }));
-    store.update({ filesystemIsolation: false });
+    store.update({ filesystemIsolation: "none" });
     const pending = store.initializeFilesystemIsolation();
     await Promise.resolve();
-    assert.equal(store.filesystemIsolationEnabled(), false);
+    assert.equal(store.filesystemIsolationMode(), "none");
     assert.equal(store.filesystemIsolationStatus().checking, true);
-    store.update({ filesystemIsolation: true });
-    assert.equal(store.filesystemIsolationEnabled(), true);
+    store.update({ filesystemIsolation: "bubblewrap" });
+    assert.equal(store.filesystemIsolationMode(), "bubblewrap");
     finish({ supported: false, reason: "real mount launch refused" });
     await pending;
     // The launch consumer must choose restricted/refused work, never unrestricted work.
     assert.deepEqual(store.filesystemIsolationStatus(), {
-      supported: false, enabled: true, automatic: false, checking: false, reason: "real mount launch refused",
+      mode: "bubblewrap", automatic: false, checking: false, supported: false, reason: "real mount launch refused", sandbox: { supported: false, reason: "No sandbox provider is configured." },
     });
   });
 
@@ -296,7 +303,7 @@ describe("machine-wide filesystem isolation", () => {
     await store.initializeFilesystemIsolation();
     await store.initializeFilesystemIsolation();
     assert.equal(calls, 1);
-    assert.equal(store.filesystemIsolationEnabled(), false);
+    assert.equal(store.filesystemIsolationMode(), "none");
     assert.equal(store.filesystemIsolationStatus().reason, "probe failed");
   });
 
@@ -304,7 +311,7 @@ describe("machine-wide filesystem isolation", () => {
     it(`warns and omits invalid disk isolation value ${JSON.stringify(invalid)}`, () => {
       writeFileSync(join(root, "config.json"), JSON.stringify({ filesystemIsolation: invalid, retention: { settled: "36h" } }));
       const store = new ConfigStore(root);
-      assert.match(store.warning ?? "", /filesystemIsolation.*true or false/);
+      assert.match(store.warning ?? "", /filesystemIsolation must be "none", "bubblewrap" or "sandbox"/);
       assert.equal("filesystemIsolation" in store.view(), false);
       assert.equal(store.view().retention.settled, "36h");
       store.update({ fonts: { chrome: "Berkeley Mono" } });
@@ -314,12 +321,12 @@ describe("machine-wide filesystem isolation", () => {
 
   it("strictly rejects invalid patches atomically", () => {
     const store = new ConfigStore(root);
-    store.update({ filesystemIsolation: true });
+    store.update({ filesystemIsolation: "bubblewrap" });
     const before = readFileSync(join(root, "config.json"), "utf8");
-    for (const invalid of ["true", "false", 0, 1, {}, []]) {
+    for (const invalid of [true, false, "true", "Bubblewrap", 0, 1, {}, []]) {
       assert.throws(() => store.update({ filesystemIsolation: invalid, retention: { settled: "36h" } } as never), /filesystemIsolation/);
       assert.equal(store.view().retention.settled, "1d");
-      assert.equal(store.view().filesystemIsolation, true);
+      assert.equal(store.view().filesystemIsolation, "bubblewrap");
       assert.equal(readFileSync(join(root, "config.json"), "utf8"), before);
     }
   });
@@ -487,18 +494,18 @@ describe("the Settings over the wire", () => {
     assert.equal((await get()).retention.settled, "1d", "nothing changed");
   });
 
-  it("accepts only explicit booleans or reset-to-automatic isolation patches", async () => {
-    for (const enabled of [true, false]) {
-      const response = await put({ filesystemIsolation: enabled });
+  it("accepts only isolation modes or reset-to-automatic isolation patches", async () => {
+    for (const mode of ["sandbox", "bubblewrap", "none"] as const) {
+      const response = await put({ filesystemIsolation: mode });
       assert.equal(response.status, 200);
-      assert.equal(((await response.json()) as Settings).filesystemIsolation, enabled);
-      assert.equal((await get()).filesystemIsolation, enabled);
+      assert.equal(((await response.json()) as Settings).filesystemIsolation, mode);
+      assert.equal((await get()).filesystemIsolation, mode);
     }
-    for (const invalid of ["true", "false", 1, 0, {}, []]) {
+    for (const invalid of [true, false, "true", 1, 0, {}, []]) {
       const response = await put({ filesystemIsolation: invalid, retention: { settled: "36h" } });
       assert.equal(response.status, 400);
       assert.match(((await response.json()) as { error: string }).error, /filesystemIsolation/);
-      assert.equal((await get()).filesystemIsolation, false);
+      assert.equal((await get()).filesystemIsolation, "none");
       assert.equal((await get()).retention.settled, "1d");
     }
     assert.equal((await put({ filesystemIsolation: null })).status, 200);

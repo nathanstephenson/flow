@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
+import { sandboxUnavailable } from "../../isolation/sandbox.ts";
+import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
 import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
@@ -21,8 +23,8 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
   backendModule?: string;
   /** Trusted execution assets hidden by temporary-directory masks, never writable roots. */
   readablePaths?: string[];
-  /** Host-resolved launch policy, snapshotted once per Backend Session. Defaults to restricted. */
-  isolationEnabled?: () => boolean;
+  /** Host-resolved launch policy, snapshotted once per Backend Session. Defaults to Bubblewrap. */
+  isolationMode?: () => FilesystemIsolationMode;
 };
 
 /** One owned worker per Backend Session, optionally enforcing a filesystem boundary. */
@@ -32,8 +34,9 @@ export class WorkerBackend implements AgentBackend {
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     options.signal?.throwIfAborted();
-    const isolationEnabled = this.options.isolationEnabled?.() ?? true;
-    if (!isolationEnabled) {
+    const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
+    if (isolationMode === "sandbox") throw sandboxUnavailable();
+    if (isolationMode === "none") {
       const scope = realpathSync(options.scope);
       if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");
       // Pi retains its ordinary full environment. Claude needs an owned projects tree in both

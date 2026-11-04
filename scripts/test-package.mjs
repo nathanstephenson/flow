@@ -119,8 +119,8 @@ try {
   assert.equal(typeof runtimeStatus.available, 'boolean', JSON.stringify(runtimeStatus));
   const isolationStatus = (await (await request('/api/config')).json()).filesystemIsolationStatus;
   assert.equal(isolationStatus.automatic, true, JSON.stringify(isolationStatus));
-  assert.equal(isolationStatus.enabled, isolationStatus.supported, JSON.stringify(isolationStatus));
-  if (process.platform !== 'linux') assert.equal(isolationStatus.enabled, false, JSON.stringify(isolationStatus));
+  assert.equal(isolationStatus.mode, isolationStatus.supported ? 'bubblewrap' : 'none', JSON.stringify(isolationStatus));
+  if (process.platform !== 'linux') assert.equal(isolationStatus.mode, 'none', JSON.stringify(isolationStatus));
   if (process.platform === 'darwin') assert.equal(runtimeStatus.available, true, JSON.stringify(runtimeStatus));
   // Linux CI must actually exercise isolation, not silently accept automatic unrestricted mode.
   if (process.platform === 'linux' && process.env.CI) {

@@ -85,7 +85,7 @@ for (const modes of [[false, true, false], [true, false, true]]) {
     const events: BackendEvent[] = [];
     for (const [index, enabled] of modes.entries()) {
       const session = await new WorkerBackend({ backend: "claude", env: f.env,
-        readablePaths: [f.executable], isolationEnabled: () => enabled }).create({
+        readablePaths: [f.executable], isolationMode: () => enabled ? "bubblewrap" as const : "none" as const }).create({
         scope: f.scope, stateDir: f.stateDir, ...(resume ? { resume } : {}), emit: event => events.push(event),
         ...(index === 1 ? { autoCompaction: { mode: "disabled" as const } } : {}),
       });
@@ -134,7 +134,7 @@ for (const enabled of [false, true]) {
     writeFileSync(join(legacy, `${resume}.jsonl`), JSON.stringify("before-restart") + "\n");
     writeFileSync(join(legacy, "another-conversation.jsonl"), "must not import");
     const session = await new WorkerBackend({ backend: "claude", env: f.env,
-      readablePaths: [f.executable], isolationEnabled: () => enabled }).create({
+      readablePaths: [f.executable], isolationMode: () => enabled ? "bubblewrap" as const : "none" as const }).create({
       scope: f.scope, stateDir: f.stateDir, resume, emit: event => events.push(event),
     });
     try {
@@ -176,11 +176,11 @@ test("direct Claude adapter honors stateDir without changing the process environ
 
 test("enabled Claude mode remains fail closed, even when unrestricted owned records already exist", async t => {
   const f = fixture(t), events: BackendEvent[] = [];
-  const session = await new WorkerBackend({ backend: "claude", env: f.env, isolationEnabled: () => false })
+  const session = await new WorkerBackend({ backend: "claude", env: f.env, isolationMode: () => "none" as const })
     .create({ scope: f.scope, stateDir: f.stateDir, emit: event => events.push(event) });
   let resume: string | undefined;
   try { await turn(session, events, "first"); resume = session.resumeToken(); }
   finally { await session.dispose(); }
   await assert.rejects(new WorkerBackend({ backend: "claude", env: { ...f.env, FLOW_BWRAP_PATH: "/missing-bwrap" },
-    isolationEnabled: () => true }).create({ scope: f.scope, stateDir: f.stateDir, ...(resume ? { resume } : {}), emit: () => {} }), /unrestricted launch refused/);
+    isolationMode: () => "bubblewrap" as const }).create({ scope: f.scope, stateDir: f.stateDir, ...(resume ? { resume } : {}), emit: () => {} }), /unrestricted launch refused/);
 });

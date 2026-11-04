@@ -229,7 +229,7 @@ type SessionRecord = {
 
 export type SessionHostOptions = {
   /** Operator-owned machine policy, read only when starting a Backend Session or local MCP client. */
-  filesystemIsolationEnabled?: () => boolean;
+  filesystemIsolationMode?: () => import("../protocol/settings.ts").FilesystemIsolationMode;
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
@@ -469,13 +469,13 @@ export class SessionHost {
     (kept: { path: string; branch: string; reason: string }) => void
   >();
 
-  private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationEnabled"];
+  private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationMode"];
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
   private readonly resolveSecret: SessionHostOptions["resolveSecret"];
 
   constructor(options: SessionHostOptions = {}) {
-    this.filesystemIsolation = options.filesystemIsolationEnabled;
+    this.filesystemIsolation = options.filesystemIsolationMode;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
     this.resolveSecret = options.resolveSecret;
@@ -2223,23 +2223,23 @@ export class SessionHost {
   filesystemStateRoot(): string | undefined { return this.store?.root; }
 
   /** A host without configured Settings keeps the safe, restricted library default. */
-  filesystemIsolationEnabled(): boolean { return this.filesystemIsolation?.() ?? true; }
+  filesystemIsolationMode(): import("../protocol/settings.ts").FilesystemIsolationMode { return this.filesystemIsolation?.() ?? "bubblewrap"; }
 
-  async openWorkflowMcp(id: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled()) {
+  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled);
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
   }
 
   /** Metadata discovery owned by authoring, never by an Agent/Backend Session. */
-  async openWorkflowMcpAuthoring(scope: string, connectionId: string, isolationEnabled = this.filesystemIsolationEnabled(), expectedScopeIdentity?: string) {
+  async openWorkflowMcpAuthoring(scope: string, connectionId: string, isolationMode = this.filesystemIsolationMode(), expectedScopeIdentity?: string) {
     const connection = (this.mcpConnections?.() ?? []).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection removed. Refresh the workflow editor.');
     const { McpSession } = await import('../backend/mcp.ts');
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined,
-      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationEnabled, expectedScopeIdentity);
+      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, expectedScopeIdentity);
   }
 
   mcpStatus(id: string) {
@@ -2309,7 +2309,7 @@ export class SessionHost {
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
     const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
-      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret, undefined, this.filesystemStateRoot(), this.filesystemIsolationEnabled());
+      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret, undefined, this.filesystemStateRoot(), this.filesystemIsolationMode());
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);

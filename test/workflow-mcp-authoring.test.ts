@@ -33,10 +33,11 @@ function fixture(initial: McpConnection[] = [connection(), connection('manual', 
   let configure: (fake: Fake) => void = () => {};
   const starts: Array<{ scope: string; id: string; isolation: boolean | undefined; scopeIdentity: string | undefined }> = [];
   const sessions: Fake[] = [];
-  const config: WorkflowMcpAuthoringOptions['config'] = { projectRoot: () => projectRoot, projectInclude: () => include, mcpConnections: () => structuredClone(connections), filesystemIsolationEnabled: () => isolation };
+  const config: WorkflowMcpAuthoringOptions['config'] = { projectRoot: () => projectRoot, projectInclude: () => include, mcpConnections: () => structuredClone(connections), filesystemIsolationMode: () => isolation ? "bubblewrap" as const : "none" as const };
   const host = {
     workflowMcpCredentials: () => credentials,
-    openWorkflowMcpAuthoring: async (scope: string, id: string, isolated?: boolean, scopeIdentity?: string) => {
+    openWorkflowMcpAuthoring: async (scope: string, id: string, mode?: string, scopeIdentity?: string) => {
+      const isolated = mode !== "none";
       starts.push({ scope, id, isolation: isolated, scopeIdentity });
       const chosen = connections.find(connection => connection.id === id)!;
       if (createWait) await createWait;

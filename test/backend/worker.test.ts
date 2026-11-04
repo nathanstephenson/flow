@@ -96,7 +96,7 @@ test("Claude MCP bridges retain selected connections across delayed discovery an
   const tools: McpTool[] = [];
   let calls = 0;
   const mcp = { connections: [{ id: "fixture" }, { id: "offline" }], tools: () => tools } as unknown as McpSession;
-  const backend = new WorkerBackend({ backendModule, isolationEnabled: () => false });
+  const backend = new WorkerBackend({ backendModule, isolationMode: () => "none" as const });
   const session = await backend.create({ scope, mcp, emit: (event) => events.push(event) });
   t.after(async () => { await session.dispose(); await rm(scope, { recursive: true, force: true }); });
   const listing = async () => {

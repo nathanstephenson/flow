@@ -352,9 +352,10 @@ got wrong from a browser window showing one Scope, and the Standing Authorisatio
 it wrong costs the most.
 
 Filesystem isolation is a machine-wide policy in **Settings → General → Filesystem isolation**.
-`filesystemIsolation?: boolean` is an optional persisted override: `true` requires enforcement,
-`false` selects unrestricted execution, and omission selects the capability-dependent automatic
-default. PUT `/api/config` accepts `null` to remove the override; omitting the key in a patch leaves
+`filesystemIsolation?: "none" | "bubblewrap" | "sandbox"` is an optional persisted override:
+`"bubblewrap"` or `"sandbox"` requires that enforcement, `"none"` selects unrestricted execution, and
+omission selects the capability-dependent automatic default, which never selects sandbox. Stored
+booleans load as `true` → `"bubblewrap"` and `false` → `"none"`. PUT `/api/config` accepts `null` to remove the override; omitting the key in a patch leaves
 it unchanged. The initial real Linux Bubblewrap capability check chooses ON when supported and
 UNRESTRICTED otherwise, including missing Bubblewrap or unavailable namespaces. That automatic
 choice is latched for the Session Host's lifetime, not silently reconsidered after a failed launch.

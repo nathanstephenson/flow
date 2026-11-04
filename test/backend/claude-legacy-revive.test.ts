@@ -167,7 +167,7 @@ test("a legacy Claude Agent Session revives after a Host update and keeps owned 
   mkdirSync(join(globalScope, "memory"), { recursive: true });
   writeFileSync(join(globalScope, "memory", "unrelated-global-memory.md"), "global project memory must not migrate");
 
-  const worker = () => new WorkerBackend({ backend: "claude", env, isolationEnabled: () => false });
+  const worker = () => new WorkerBackend({ backend: "claude", env, isolationMode: () => "none" as const });
   const beforeLoad = requests.length;
   const second = await host(worker());
   assert.equal(second.statusOf(id), "dormant");

@@ -75,8 +75,8 @@ export class WorkflowExecutionService {
   private readonly newestRelayBySession = new Map<string, RelayRequest>();
   private relayOrder = 0;
   private readonly secretValues = new Map<string, string[]>();
-  private readonly runtimeSnapshots = new Map<string, { nodePath?: string; isolationEnabled: boolean }>();
-  private runtimeOptions!: { nodePath?: string; isolationEnabled: boolean };
+  private readonly runtimeSnapshots = new Map<string, { nodePath?: string; isolationMode: import('../protocol/settings.ts').FilesystemIsolationMode }>();
+  private runtimeOptions!: { nodePath?: string; isolationMode: import('../protocol/settings.ts').FilesystemIsolationMode };
   private checkingCode: WorkflowExecutors | undefined;
   private readonly cancelling = new Map<string, { sessionId: string; done: Promise<WorkflowExecution> }>();
 
@@ -135,7 +135,7 @@ export class WorkflowExecutionService {
 
   refresh(): void {
     const discovered = workflowRuntimeOptions(this.config.view().workflowRuntime);
-    const options = { ...(discovered.nodePath ? { nodePath: discovered.nodePath } : {}), isolationEnabled: this.config.filesystemIsolationEnabled() };
+    const options = { ...(discovered.nodePath ? { nodePath: discovered.nodePath } : {}), isolationMode: this.config.filesystemIsolationMode() };
     const key = JSON.stringify(options);
     if (key === this.runtimeKey) return;
     this.runtimeKey = key;
@@ -144,7 +144,7 @@ export class WorkflowExecutionService {
     this.code = {};
     this.ready = (async () => {
       try {
-        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), isolationEnabled: options.isolationEnabled, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
+        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), isolationMode: options.isolationMode, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
         if (key !== this.runtimeKey) return;
         this.code = executors;
         executors.shell.check({ id: 'probe', name: 'probe', kind: 'shell', command: 'true' }, { sessionId: 'probe', backend: 'probe', scope: '/' });
@@ -458,7 +458,7 @@ export class WorkflowExecutionService {
       tools.push(step.tool);
       pinned.set(step.tool.connectionId, tools);
     }
-    for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools, snapshot.runtime.isolationEnabled);
+    for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools, snapshot.runtime.isolationMode);
     this.host.assertWorkflowSession(sessionId, session.session);
     // All setup above may yield. Resolve an overlapping retry by its durable identity before
     // treating the session as occupied, then make occupancy the final check before the synchronous
@@ -487,9 +487,9 @@ export class WorkflowExecutionService {
     if (saved.status !== 'recovery-required') throw new WorkflowConflict();
     this.privateView(sessionId, executionId);
     // Pre-toggle records were always restricted. Missing historical policy must never downgrade them.
-    const options = this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationEnabled: true };
+    const options = this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationMode: 'bubblewrap' as const };
     const needsCode = saved.definition.steps.some(step => ['shell', 'typescript'].includes(step.kind));
-    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), isolationEnabled: options.isolationEnabled, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
+    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), isolationMode: options.isolationMode, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
     if (saved.definition.projectId && !sameProject(saved.definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
     const values = this.referencedSecrets(saved.definition, saved.testStepId);
     assertNoSecrets({ ...saved, definition: publicDefinition(saved.definition), action }, values);
@@ -644,10 +644,10 @@ export class WorkflowExecutionService {
     validateMcpSchemas(tool);
   }
 
-  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[], isolationEnabled = this.config.filesystemIsolationEnabled()): Promise<McpToolDiscovery> {
+  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[], isolationMode = this.config.filesystemIsolationMode()): Promise<McpToolDiscovery> {
     const pinned = expected ? (Array.isArray(expected) ? expected : [expected]) : [];
     for (const tool of pinned) this.checkMcp(sessionId, tool);
-    const session = await this.host.openWorkflowMcp(sessionId, connectionId, isolationEnabled);
+    const session = await this.host.openWorkflowMcp(sessionId, connectionId, isolationMode);
     try {
       await session.open();
       if (session.status()[0]?.state !== 'connected') throw new Error('MCP connection unavailable. Sign in in MCP Settings or reconfigure the server, then retry manually.');
@@ -725,8 +725,8 @@ export class WorkflowExecutionService {
     await this.mcpPermission(context);
     this.checkMcp(context.sessionId, expected);
     context.signal.throwIfAborted();
-    const isolationEnabled = this.runtimeSnapshots.get(context.executionId)?.isolationEnabled ?? true;
-    const session = await this.host.openWorkflowMcp(context.sessionId, expected.connectionId, isolationEnabled);
+    const isolationMode = this.runtimeSnapshots.get(context.executionId)?.isolationMode ?? 'bubblewrap';
+    const session = await this.host.openWorkflowMcp(context.sessionId, expected.connectionId, isolationMode);
     const abort = () => { void session.dispose(); };
     context.signal.addEventListener('abort', abort, { once: true });
     const values = () => [...(this.secretValues.get(context.executionId) ?? []), ...this.host.workflowMcpCredentials()];
@@ -925,7 +925,7 @@ export class WorkflowExecutionService {
         const saved = JSON.parse(readFileSync(this.privatePath(sessionId, executionId), 'utf8'));
         const { runtime, ...activity } = saved;
         if (runtime && typeof runtime === 'object') {
-          this.runtimeSnapshots.set(executionId, { nodePath: runtime.nodePath, isolationEnabled: runtime.isolationEnabled !== false });
+          this.runtimeSnapshots.set(executionId, { nodePath: runtime.nodePath, isolationMode: ['none', 'bubblewrap', 'sandbox'].includes(runtime.isolationMode) ? runtime.isolationMode : runtime.isolationEnabled === false ? 'none' : 'bubblewrap' });
         }
         view = activity as PrivateView; view.enquiries = []; view.permissions = [];
       }

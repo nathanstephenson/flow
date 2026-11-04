@@ -11,7 +11,7 @@ import { WorkflowAuthoringScopeChecks } from './workflow-authoring-scope-checks.
 import { connectionIdentity, snapshotTool } from './workflow-mcp.ts';
 
 export type WorkflowMcpAuthoringOptions = {
-  config: Pick<ConfigStore, 'projectRoot' | 'projectInclude' | 'mcpConnections' | 'filesystemIsolationEnabled'>;
+  config: Pick<ConfigStore, 'projectRoot' | 'projectInclude' | 'mcpConnections' | 'filesystemIsolationMode'>;
   host: Pick<SessionHost, 'openWorkflowMcpAuthoring' | 'workflowMcpCredentials'>;
   scope: string;
 };
@@ -20,7 +20,7 @@ type Entry = {
   scope: string;
   directory: WorkflowAuthoringDirectory;
   connection: McpConnection;
-  isolation: boolean;
+  isolation: import('../protocol/settings.ts').FilesystemIsolationMode;
   generation: number;
   promise: Promise<McpToolDiscovery>;
   resolve: (value: McpToolDiscovery) => void;
@@ -145,7 +145,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
   private refresh(): void {
     if (this.stopped) throw new Error('Workflow MCP authoring stopped');
     const config = this.options.config;
-    const fingerprint = createHash('sha256').update(JSON.stringify([config.projectRoot(), config.projectInclude(), config.mcpConnections(), config.filesystemIsolationEnabled(), this.options.host.workflowMcpCredentials()])).digest('hex');
+    const fingerprint = createHash('sha256').update(JSON.stringify([config.projectRoot(), config.projectInclude(), config.mcpConnections(), config.filesystemIsolationMode(), this.options.host.workflowMcpCredentials()])).digest('hex');
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;
       this.invalidate(new Error('MCP configuration changed; discover again'));
@@ -178,7 +178,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     }
     let resolve!: Entry['resolve'], reject!: Entry['reject'];
     const promise = new Promise<McpToolDiscovery>((yes, no) => { resolve = yes; reject = no; });
-    const entry: Entry = { scope: scope.path, directory: scope, connection: structuredClone(connection), isolation: this.options.config.filesystemIsolationEnabled(), generation: this.generation, promise, resolve, reject, controller: new AbortController(), expires: 0, timer: undefined };
+    const entry: Entry = { scope: scope.path, directory: scope, connection: structuredClone(connection), isolation: this.options.config.filesystemIsolationMode(), generation: this.generation, promise, resolve, reject, controller: new AbortController(), expires: 0, timer: undefined };
     entry.controller.signal.addEventListener('abort', () => {
       clearTimeout(entry.timer);
       entry.expires = Date.now() + TTL;

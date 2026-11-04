@@ -15,7 +15,7 @@ for (const isolated of [false, true]) {
     isolated ? isolationIntegration : {}, async t => {
       const scope = mkdtempSync(join(tmpdir(), "flow-worker-permission-fallback-"));
       t.after(() => rmSync(scope, { recursive: true, force: true }));
-      const backend = new WorkerBackend({ backend: "claude", backendModule, isolationEnabled: () => isolated });
+      const backend = new WorkerBackend({ backend: "claude", backendModule, isolationMode: () => isolated ? "bubblewrap" as const : "none" as const });
       await assert.rejects(backend.create({ scope, permissionMode: "auto", modelId: "auto-unavailable", emit: () => {} }),
         error => error instanceof AutoPermissionUnavailable && error.message === "fixture Auto unsupported");
       // Ordinary startup errors must never be reclassified as a permission-policy fallback.

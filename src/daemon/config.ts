@@ -10,6 +10,7 @@ import {
 } from "../protocol/fonts.ts";
 import {
   DEFAULT_WORKFLOW_RUNTIME,
+  type FilesystemIsolationMode,
   type WorkflowRuntimeSettings,
   formatDuration,
   parseDuration,
@@ -47,7 +48,7 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
  */
 export type Config = {
   /** Omitted means automatic; resolved runtime defaults are never written here. */
-  filesystemIsolation?: boolean;
+  filesystemIsolation?: FilesystemIsolationMode;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
@@ -219,19 +220,23 @@ function readWorkflowRuntime(parsed: unknown, warnings: string[]): WorkflowRunti
   return result;
 }
 
-function readFilesystemIsolation(parsed: unknown, warnings: string[]): boolean | undefined {
+const isolationModes: readonly unknown[] = ["none", "bubblewrap", "sandbox"] satisfies FilesystemIsolationMode[];
+
+function readFilesystemIsolation(parsed: unknown, warnings: string[]): FilesystemIsolationMode | undefined {
   const value = (parsed as { filesystemIsolation?: unknown } | null)?.filesystemIsolation;
   if (value === undefined) return undefined;
-  if (typeof value === "boolean") return value;
-  warnings.push("filesystemIsolation must be true or false; using automatic selection");
+  if (value === true) return "bubblewrap";
+  if (value === false) return "none";
+  if (isolationModes.includes(value)) return value as FilesystemIsolationMode;
+  warnings.push('filesystemIsolation must be "none", "bubblewrap" or "sandbox"; using automatic selection');
   return undefined;
 }
 
-function patchFilesystemIsolation(current: boolean | undefined, value: unknown): boolean | undefined {
+function patchFilesystemIsolation(current: FilesystemIsolationMode | undefined, value: unknown): FilesystemIsolationMode | undefined {
   if (value === undefined) return current;
   if (value === null) return undefined;
-  if (typeof value !== "boolean") throw new ConfigError("filesystemIsolation must be true, false, or null");
-  return value;
+  if (!isolationModes.includes(value)) throw new ConfigError('filesystemIsolation must be "none", "bubblewrap", "sandbox", or null');
+  return value as FilesystemIsolationMode;
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {

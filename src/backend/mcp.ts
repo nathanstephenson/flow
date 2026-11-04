@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, openSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { prepareFilesystemIsolation, type FilesystemIsolation } from "../isolation/filesystem.ts";
+import { sandboxUnavailable } from "../isolation/sandbox.ts";
+import type { FilesystemIsolationMode } from "../protocol/settings.ts";
 import { SupervisedStdioTransport } from "./mcp-stdio-supervisor.ts";
 import { nodeExecutionAssets } from "../isolation/node-assets.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -67,7 +69,7 @@ export class McpSession {
   private readonly resolveSecret: ((name: string) => string) | undefined;
   private readonly protectedPaths: string[] | undefined;
   private readonly stateRoot: string | undefined;
-  private readonly isolationEnabled: boolean;
+  private readonly isolationMode: FilesystemIsolationMode;
   private readonly expectedScopeIdentity: string | undefined;
   constructor(
     connections: readonly McpConnection[],
@@ -77,7 +79,7 @@ export class McpSession {
     resolveSecret?: (name: string) => string,
     protectedPaths?: string[],
     stateRoot?: string,
-    isolationEnabled = true,
+    isolationMode: FilesystemIsolationMode = "bubblewrap",
     expectedScopeIdentity?: string,
   ) {
     this.connections = structuredClone(connections);
@@ -87,7 +89,7 @@ export class McpSession {
     this.resolveSecret = resolveSecret;
     this.protectedPaths = protectedPaths;
     this.stateRoot = stateRoot;
-    this.isolationEnabled = isolationEnabled;
+    this.isolationMode = isolationMode;
     this.expectedScopeIdentity = expectedScopeIdentity;
   }
   registrationFailed(): void {
@@ -169,7 +171,8 @@ export class McpSession {
         return;
       }
       const configured = connection.transport === "http" ? this.configuredHeaders(connection.headers) : {};
-      if (connection.transport === "stdio" && !this.isolationEnabled) {
+      if (connection.transport === "stdio" && this.isolationMode === "sandbox") throw sandboxUnavailable();
+      if (connection.transport === "stdio" && this.isolationMode === "none") {
         // Refuse unsupported authoring before touching a potentially stalled Scope path.
         if (this.expectedScopeIdentity !== undefined && process.platform !== "linux")
           throw new Error("Descriptor-bound MCP authoring requires Linux");

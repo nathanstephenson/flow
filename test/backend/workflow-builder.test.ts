@@ -42,7 +42,7 @@ it("host cancellation stops a worker whose adapter creation has not resolved", {
   t.after(() => rm(scope, { recursive: true, force: true }));
   const controller = new AbortController();
   let reached = false;
-  const backend = new WorkerBackend({ backend: "pi", isolationEnabled: () => false,
+  const backend = new WorkerBackend({ backend: "pi", isolationMode: () => "none" as const,
     backendModule: new URL("./workflow-builder-worker-fixture.ts", import.meta.url).href,
     startupTimeoutMs: 2000, shutdownTimeoutMs: 20,
   });
@@ -121,7 +121,7 @@ it("restricted Pi builder starts, uses host tools, reopens, and discovers models
   symlinkSync(ambient, join(f.scope, "skills"));
   writeFileSync(join(f.scope, "auth.json"), '{"flow-test":{"type":"api_key","key":"test-only"}}');
   const credentials = ["auth.json", "models.json", "settings.json"].map(name => [name, readFileSync(join(f.scope, name), "utf8")] as const);
-  const backend = new WorkerBackend({ backend: "pi", isolationEnabled: () => true,
+  const backend = new WorkerBackend({ backend: "pi", isolationMode: () => "bubblewrap" as const,
     env: { PI_CODING_AGENT_DIR: f.scope, PI_OFFLINE: "1", FLOW_BWRAP_PATH: bwrap } });
   const host = new SessionHost();
   host.registerBackend(backend);
@@ -225,7 +225,7 @@ it("worker serializes only builder instructions, proxies three host closures, an
   const mcp = { tools: () => { throw new Error("Builder serialized MCP"); } } as unknown as McpSession;
   // No filesystem isolation is needed to enforce builder authority.
   const backend = new WorkerBackend({ backendModule: new URL("./workflow-builder-worker-fixture.ts", import.meta.url).href,
-    isolationEnabled: () => false });
+    isolationMode: () => "none" as const });
   const session = await backend.create({ scope: root, workflowBuilder: builder, workflow, mcp, emit: event => events.push(event) });
   t.after(() => session.dispose());
   assert.equal(session.refreshMcp, undefined);
@@ -246,7 +246,7 @@ it("builder host rejects other reverse RPC capabilities even from a misbehaving 
   t.after(() => rm(root, { recursive: true, force: true }));
   const { builder, calls } = builderFixture();
   const events: BackendEvent[] = [];
-  const session = await new WorkerBackend({ isolationEnabled: () => false,
+  const session = await new WorkerBackend({ isolationMode: () => "none" as const,
     entry: fileURLToPath(new URL("./workflow-builder-rpc-fixture.ts", import.meta.url)),
   }).create({ scope: root, workflowBuilder: builder, workflow, mcp: { tools: () => { throw new Error("MCP must not be consulted"); } } as unknown as McpSession,
     emit: event => events.push(event) });
@@ -308,7 +308,7 @@ for (const isolated of [false, true]) it(`${isolated ? "restricted" : "direct"} 
     ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`, ANTHROPIC_API_KEY: "dummy-local-key",
     ANTHROPIC_AUTH_TOKEN: undefined, CLAUDE_CODE_OAUTH_TOKEN: undefined, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     CLAUDE_CODE_USE_BEDROCK: undefined, CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined };
-  const backend = isolated ? new WorkerBackend({ backend: "claude", isolationEnabled: () => true, env })
+  const backend = isolated ? new WorkerBackend({ backend: "claude", isolationMode: () => "bubblewrap" as const, env })
     : new ClaudeBackend({ query: args => query({ ...args, options: { ...args.options, env: { ...args.options?.env, ...env } } }) });
   const options = { scope, stateDir, workflowBuilder: builder, permissionMode: "always" as const, emit: (event: BackendEvent) => events.push(event) };
   const session = await backend.create(options);
