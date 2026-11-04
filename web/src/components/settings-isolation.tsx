@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { FilesystemIsolationMode } from "../../../src/protocol/settings.ts";
+import type { FilesystemIsolationMode, SandboxSharing } from "../../../src/protocol/settings.ts";
 import { useHost } from "@/host.tsx";
 import { SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import {
@@ -16,6 +16,10 @@ const LABELS: Record<FilesystemIsolationMode, string> = {
   bubblewrap: "Bubblewrap",
   sandbox: "Sandbox",
 };
+const SHARING: Record<SandboxSharing, string> = {
+  session: "One VM per session",
+  shared: "One VM for all sessions",
+};
 
 /** The host resolves automatic mode; rendering this control never persists a fallback. */
 export function IsolationSettings() {
@@ -29,6 +33,8 @@ export function IsolationSettings() {
   const supported = status?.supported ?? false;
   const sandboxSupported = status?.sandbox.supported ?? false;
   const enforceable = mode === "bubblewrap" ? supported : mode === "sandbox" ? sandboxSupported : true;
+  const sharing = config.sandboxSharing ?? "session";
+  const projectRoot = config.projects?.root;
   const automaticLabel = `Automatic — ${checking ? "checking…" : LABELS[mode]}`;
 
   // The launch probe can finish after the first config response. Refresh its answer, without
@@ -73,6 +79,35 @@ export function IsolationSettings() {
           </SelectItem>
         </SelectContent>
       </Select>
+      {mode === "sandbox" ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-sm font-medium">Sandbox sharing</span>
+          <Select
+            value={sharing}
+            disabled={saving}
+            onValueChange={(next) => {
+              if (next === "session" || next === "shared") void save({ sandboxSharing: next }, "Sandbox sharing saved — applies to new work.");
+            }}
+          >
+            <SelectTrigger className="w-full sm:max-w-sm" aria-label="Sandbox sharing">
+              <SelectValue>{SHARING[sharing]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="session">{SHARING.session}</SelectItem>
+              <SelectItem value="shared">{SHARING.shared}</SelectItem>
+            </SelectContent>
+          </Select>
+          {sharing === "shared" ? (
+            projectRoot ? (
+              <p className="text-xs text-muted-foreground">
+                Scopes must be under the Project Root {projectRoot} or the Worktrees folder. Every session in the VM can read and write the others' files.
+              </p>
+            ) : (
+              <p className="text-sm text-destructive" role="alert">Set a Project Root first. Until then, sandbox sessions cannot start.</p>
+            )
+          ) : null}
+        </div>
+      ) : null}
       <div id="filesystem-isolation-support" className="flex flex-col gap-1 text-xs text-muted-foreground" role="status">
         <p>
           {checking
