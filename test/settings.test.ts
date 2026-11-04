@@ -890,3 +890,25 @@ describe("the Default Models and the Summary Model", () => {
     assert.equal(backend.latest.modelId, "fake-2");
   });
 });
+
+describe("sandbox sharing", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "flow-sandbox-sharing-")); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("defaults to one VM per session and saves a valid choice", () => {
+    const store = new ConfigStore(root);
+    assert.equal(store.sandboxSharing(), "session");
+    store.update({ sandboxSharing: "shared" });
+    assert.equal(new ConfigStore(root).sandboxSharing(), "shared");
+    assert.equal(new ConfigStore(root).view().sandboxSharing, "shared");
+  });
+
+  it("warns and ignores an invalid disk value, and refuses an invalid patch", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ sandboxSharing: "all" }));
+    const store = new ConfigStore(root);
+    assert.match(store.warning ?? "", /sandboxSharing must be "session" or "shared"/);
+    assert.equal(store.sandboxSharing(), "session");
+    assert.throws(() => store.update({ sandboxSharing: "all" } as never), /sandboxSharing/);
+  });
+});

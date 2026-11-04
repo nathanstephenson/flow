@@ -24,6 +24,9 @@ export const DEFAULT_WORKFLOW_RUNTIME: WorkflowRuntimeSettings = {};
 
 export type FilesystemIsolationMode = "none" | "bubblewrap" | "sandbox";
 
+/** One VM per Agent Session, or one Shared Sandbox for all sandbox sessions of the Session Host. */
+export type SandboxSharing = "session" | "shared";
+
 /** Runtime capability and resolved machine-wide policy; never persisted as a default. */
 export interface FilesystemIsolationStatus {
   mode: FilesystemIsolationMode;
@@ -38,6 +41,8 @@ export interface FilesystemIsolationStatus {
 export type Settings = {
   /** Omitted chooses Bubblewrap only when the machine's real launch probe succeeds. Never sandbox. */
   filesystemIsolation?: FilesystemIsolationMode;
+  /** Omitted means "session". */
+  sandboxSharing?: SandboxSharing;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
@@ -142,6 +147,7 @@ export type AutoCompaction = { mode: "disabled" } | { mode: "enabled"; targetPer
 export type SettingsPatch = {
   /** null restores automatic selection; a restricted mode never permits an unrestricted launch fallback. */
   filesystemIsolation?: FilesystemIsolationMode | null;
+  sandboxSharing?: SandboxSharing;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };
