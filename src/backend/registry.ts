@@ -4,7 +4,7 @@ import type { SessionHost } from "../daemon/host.ts";
 
 export function registerBackends(host: SessionHost): void {
   const stateRoot = host.filesystemStateRoot();
-  const policy = { ...(stateRoot ? { stateRoot } : {}), isolationMode: () => host.filesystemIsolationMode() };
+  const policy = { ...(stateRoot ? { stateRoot } : {}), isolationMode: () => host.filesystemIsolationMode(), sandbox: () => host.sandboxSupport() };
   host.registerBackend(new WorkerBackend({ backend: "claude", ...policy }));
   host.registerBackend(new WorkerBackend({ backend: "pi", ...policy }));
   host.registerBackend(new FakeBackend());

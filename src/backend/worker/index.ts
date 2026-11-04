@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
-import { sandboxUnavailable } from "../../isolation/sandbox.ts";
+import { createSandbox, sandboxMounts, sandboxUnavailable, type SandboxSupport } from "../../isolation/sandbox.ts";
+import { validateFilesystemScope } from "../../isolation/filesystem.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
@@ -25,6 +27,8 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
   readablePaths?: string[];
   /** Host-resolved launch policy, snapshotted once per Backend Session. Defaults to Bubblewrap. */
   isolationMode?: () => FilesystemIsolationMode;
+  /** Host-probed sandbox provider, read when a sandbox-mode Backend Session starts. */
+  sandbox?: () => SandboxSupport | undefined;
 };
 
 /** One owned worker per Backend Session, optionally enforcing a filesystem boundary. */
@@ -32,10 +36,66 @@ export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  private async createSandboxed(options: BackendCreateOptions): Promise<BackendSession> {
+    const support = this.options.sandbox?.();
+    if (!support?.supported) throw new Error(`${sandboxUnavailable().message}: ${support?.reason ?? "no sandbox provider"}`);
+    if (isSea()) throw new Error(`${sandboxUnavailable().message}: single-executable builds cannot run in a sandbox`);
+    const stateDir = options.stateDir;
+    if (!stateDir) throw new Error(`${sandboxUnavailable().message}: no backend state directory`);
+    const scope = validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
+      ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
+    const plan = workerCommand(this.options);
+    const assets = [fileURLToPath(new URL("../../..", import.meta.url)), ...(this.options.readablePaths ?? [])];
+    if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
+    if (this.options.entry) assets.push(this.options.entry);
+    assets.push(...nodeExecutionAssets(assets));
+    const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
+      ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
+    const cleanups: (() => void)[] = [];
+    if (this.name === "claude") {
+      const claude = prepareClaudeState(stateDir, { ...process.env, ...this.options.env }, scope, options.resume,
+        { viewRoot: stateDir, secureStorage: support.provider.claudeAuthDir ?? null });
+      cleanups.push(claude.cleanup);
+      env.CLAUDE_CONFIG_DIR = claude.env.CLAUDE_CONFIG_DIR!;
+      if (claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+      env.FLOW_CLAUDE_PATH = support.provider.claudePath;
+      for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
+        const link = join(env.CLAUDE_CONFIG_DIR, entry);
+        if (lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
+      }
+    } else {
+      const source = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
+      const agent = join(stateDir, "pi-agent");
+      rmSync(agent, { recursive: true, force: true });
+      mkdirSync(agent, { recursive: true, mode: 0o700 });
+      cleanups.push(() => rmSync(agent, { recursive: true, force: true }));
+      for (const name of ["auth.json", "models.json", "settings.json"]) {
+        if (existsSync(join(source, name))) copyFileSync(join(source, name), join(agent, name));
+      }
+      env.PI_CODING_AGENT_DIR = agent;
+      env.PI_CODING_AGENT_SESSION_DIR = join(stateDir, "sessions");
+    }
+    const cleanup = () => { for (const step of cleanups.splice(0)) step(); };
+    let proxy: WorkerSession | undefined;
+    try {
+      const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
+        workspace: scope, mounts: sandboxMounts([scope, stateDir], assets), env: {} };
+      const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
+      cleanups.push(() => { void sandbox.remove().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
+      const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
+      proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
+      await proxy.open(options.signal);
+      return proxy;
+    } catch (error) {
+      if (proxy) await proxy.dispose(); else cleanup();
+      throw error;
+    }
+  }
+
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     options.signal?.throwIfAborted();
     const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
-    if (isolationMode === "sandbox") throw sandboxUnavailable();
+    if (isolationMode === "sandbox") return this.createSandboxed(options);
     if (isolationMode === "none") {
       const scope = realpathSync(options.scope);
       if (!statSync(scope).isDirectory()) throw new Error("Scope must be a directory");

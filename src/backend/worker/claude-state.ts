@@ -123,7 +123,8 @@ export function migrateLegacyClaudeState(stateDir: string | undefined, inherited
  * restricted launches already bind projects into a narrowly staged config root and must NEVER
  * receive the host auth override.
  */
-export function prepareClaudeState(stateDir: string | undefined, inherited: NodeJS.ProcessEnv = process.env, scope = process.cwd(), resume?: string): {
+export function prepareClaudeState(stateDir: string | undefined, inherited: NodeJS.ProcessEnv = process.env, scope = process.cwd(), resume?: string,
+  options: { viewRoot?: string; secureStorage?: string | null } = {}): {
   env: NodeJS.ProcessEnv;
   cleanup(): void;
 } {
@@ -143,7 +144,8 @@ export function prepareClaudeState(stateDir: string | undefined, inherited: Node
 
   // Unrestricted config view. Do not alter the user's global projects link, copy any global
   // transcripts, or persist credentials in backend state (which restricted workers can read).
-  const config = mkdtempSync(join(tmpdir(), "flow-claude-config-"));
+  const config = options.viewRoot ? join(options.viewRoot, "claude-config") : mkdtempSync(join(tmpdir(), "flow-claude-config-"));
+  if (options.viewRoot) { rmSync(config, { recursive: true, force: true }); mkdirSync(config, { mode: 0o700 }); }
   const cleanup = () => rmSync(config, { recursive: true, force: true });
   try {
     symlinkSync(projects, join(config, "projects"), "dir");
@@ -154,6 +156,10 @@ export function prepareClaudeState(stateDir: string | undefined, inherited: Node
     for (const name of ["CLAUDE.md", "settings.json", "commands", "skills", "agents", "rules", "plugins"]) {
       const from = join(source, name);
       if (existsSync(from)) symlinkSync(from, join(config, name), statSync(from).isDirectory() ? "dir" : "file");
+    }
+    if (options.secureStorage !== undefined) {
+      const { CLAUDE_SECURESTORAGE_CONFIG_DIR: _, ...rest } = inherited;
+      return { env: { ...rest, CLAUDE_CONFIG_DIR: config, ...(options.secureStorage === null ? {} : { CLAUDE_SECURESTORAGE_CONFIG_DIR: options.secureStorage }) }, cleanup };
     }
     const env: NodeJS.ProcessEnv = { ...inherited, CLAUDE_CONFIG_DIR: config,
       // Use the original spelling, including the empty default: macOS hashes this string for
