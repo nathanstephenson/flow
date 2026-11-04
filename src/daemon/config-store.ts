@@ -16,6 +16,7 @@ import {
   type FilesystemIsolationSupport,
   type FilesystemIsolationSupportDetector,
 } from '../isolation/support.ts';
+import { detectSandboxSupport, type SandboxSupport, type SandboxSupportDetector } from '../isolation/sandbox.ts';
 import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
 
@@ -38,11 +39,15 @@ export class ConfigStore {
   private isolationSupport: FilesystemIsolationSupport | undefined;
   private isolationInitialization: Promise<void> | undefined;
   private readonly isolationDetector: FilesystemIsolationSupportDetector;
+  private readonly sandboxDetector: SandboxSupportDetector;
+  private sandbox: SandboxSupport | undefined;
   /** Why part of the file on disk was ignored, for the daemon to print on the way up. */
   readonly warning: string | undefined;
 
-  constructor(root: string = defaultStateRoot(), detector: FilesystemIsolationSupportDetector = detectFilesystemIsolationSupport) {
+  constructor(root: string = defaultStateRoot(), detector: FilesystemIsolationSupportDetector = detectFilesystemIsolationSupport,
+    sandboxDetector: SandboxSupportDetector = detectSandboxSupport) {
     this.isolationDetector = detector;
+    this.sandboxDetector = sandboxDetector;
     this.root = root;
     this.path = join(root, "config.json");
     const loaded = loadConfig(root);
@@ -55,13 +60,14 @@ export class ConfigStore {
    * A later failed restricted launch must never turn this policy off.
    */
   async initializeFilesystemIsolation(): Promise<void> {
-    this.isolationInitialization ??= Promise.resolve().then(async () => {
-      try {
-        this.isolationSupport = { ...await this.isolationDetector({ stateRoot: this.root }) };
-      } catch (error) {
-        this.isolationSupport = { supported: false, reason: error instanceof Error ? error.message : String(error) };
-      }
-    });
+    this.isolationInitialization ??= Promise.resolve().then(() => Promise.all([
+      this.isolationDetector({ stateRoot: this.root }).then(
+        (support) => { this.isolationSupport = { ...support }; },
+        (error: unknown) => { this.isolationSupport = { supported: false, reason: error instanceof Error ? error.message : String(error) }; }),
+      this.sandboxDetector({ stateRoot: this.root }).then(
+        (support) => { this.sandbox = support; },
+        (error: unknown) => { this.sandbox = { supported: false, reason: error instanceof Error ? error.message : String(error) }; }),
+    ])).then(() => {});
     await this.isolationInitialization;
   }
 
@@ -72,11 +78,13 @@ export class ConfigStore {
   readonly filesystemIsolationStatus = (): FilesystemIsolationStatus => ({
     mode: this.filesystemIsolationMode(),
     automatic: this.config.filesystemIsolation === undefined,
-    checking: this.isolationSupport === undefined,
+    checking: this.isolationSupport === undefined || this.sandbox === undefined,
     supported: this.isolationSupport?.supported ?? false,
     ...(this.isolationSupport?.reason === undefined ? {} : { reason: this.isolationSupport.reason }),
-    sandbox: { supported: false, reason: "No sandbox provider is configured." },
+    sandbox: this.sandbox?.supported ? { supported: true, path: this.sandbox.path } : { supported: false, reason: this.sandbox?.reason ?? "Checking the sandbox provider." },
   });
+
+  readonly sandboxSupport = (): SandboxSupport | undefined => this.sandbox;
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */
   current(): Config {

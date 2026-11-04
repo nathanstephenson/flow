@@ -60,7 +60,7 @@ it('reports automatic unsupported mode and explicit fail-closed choice through a
   try {
     assert.equal((await fetch(server.url + '/api/config', { method: 'PUT', body: JSON.stringify({ filesystemIsolation: "none" }) })).status, 401);
     assert.deepEqual((await (await request('GET')).json() as SettingsResponse).filesystemIsolationStatus,
-      { mode: 'none', automatic: true, checking: false, supported: false, reason: 'Test namespaces unavailable', sandbox: { supported: false, reason: "No sandbox provider is configured." } });
+      { mode: 'none', automatic: true, checking: false, supported: false, reason: 'Test namespaces unavailable', sandbox: { supported: false, reason: `No sandbox provider file at ${join(f.stateRoot, "sandbox-provider.json")}.` } });
     assert.equal(f.host.filesystemIsolationMode(), "none");
     const manual = await (await request('PUT', { filesystemIsolation: "bubblewrap" })).json() as SettingsResponse;
     assert.equal(manual.filesystemIsolation, "bubblewrap");
