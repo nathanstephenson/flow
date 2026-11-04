@@ -27,6 +27,10 @@ Flow refuses a session whose Scope is not under the Project Root, the Worktrees 
 folder. Flow also refuses all shared sessions when no Project Root is set. The error names the
 Project Root. Flow never falls back to a per-session VM.
 
+Throwaway Summary Model sessions (ADR 0020) use the empty folder `flow-workflow-builders/summary` as
+their Scope. Thus they run in the shared VM with no new mount. The old Scope, the temporary
+directory, failed in both modes: `/tmp` is a reserved isolation path.
+
 Flow creates the VM for the first shared session and keeps it while the Session Host runs. Each
 session holds the VM and releases it when its work stops. When the Session Host stops, Flow removes
 the VM after all holds are released. If a VM is left from a crash, Flow removes it before the next

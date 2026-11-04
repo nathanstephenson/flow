@@ -1,4 +1,4 @@
-import { tmpdir } from "node:os";
+import { summaryFolder } from "../isolation/shared-sandbox.ts";
 import { credentialJsonSerializer } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
@@ -68,7 +68,7 @@ export async function summarisePublish(request: SummaryRequest): Promise<Publish
   void answered.catch(() => {});
   const work = async (): Promise<PublishSummary> => {
     session = await request.backend.create({
-      scope: SUMMARY_SCOPE, modelId: request.modelId, tools: "none",
+      scope: SUMMARY_SCOPE(), modelId: request.modelId, tools: "none",
       emit: (event) => {
         if (event.type === "message" && event.producer === undefined) messages.set(event.id, event.text);
         if (event.type === "turn_ended") finish();
@@ -193,7 +193,7 @@ export type SummaryRequest = {
  * CLAUDE.md no longer loads into the summariser's context. It should be naming from the transcript
  * it was handed, not from the conventions of whatever repository the session happens to sit in.
  */
-const SUMMARY_SCOPE = tmpdir();
+const SUMMARY_SCOPE = summaryFolder;
 
 /**
  * One tool-less Backend Session and the sink its events go to.
@@ -282,7 +282,7 @@ export class SummaryModelSpare {
       modelId: model.modelId,
       sink,
       session: backend
-        .create({ scope: SUMMARY_SCOPE, modelId: model.modelId, tools: "none", emit: (event) => sink.deliver(event) })
+        .create({ scope: SUMMARY_SCOPE(), modelId: model.modelId, tools: "none", emit: (event) => sink.deliver(event) })
         .then((session) => this.keep(session))
         .catch(() => undefined),
     };
@@ -417,7 +417,7 @@ export async function summariseToName(request: SummaryRequest): Promise<string |
     // `resume`, no `priorSpend`, and no `standingAuthorisations` — nobody granted a tool for a
     // session no human is watching, and `tools: "none"` would make the list meaningless anyway.
     session = await backend.create({
-      scope: SUMMARY_SCOPE,
+      scope: SUMMARY_SCOPE(),
       modelId,
       tools: "none",
       emit: (event) => sink.deliver(event),

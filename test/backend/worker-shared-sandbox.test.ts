@@ -6,6 +6,7 @@ import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { SharedSandbox, workflowBuilderFolder } from "../../src/isolation/shared-sandbox.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
+import { summariseToName } from "../../src/daemon/summariser.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
 
 const backendModule = new URL("./worker-fixture.ts", import.meta.url).href;
@@ -89,4 +90,15 @@ test("a shared spec left by a crash is removed before create", async (t) => {
   await (await backend.create({ scope: f.scope, stateDir: stateDir("s1"), emit: () => {} })).dispose();
   await vm.close();
   assert.deepEqual(f.calls().slice(0, 2), [`remove ${f.spec().name}`, "create"]);
+});
+
+test("a Summary Model naming session starts in the shared VM", async (t) => {
+  const { f, vm, backend } = shared(t);
+  const errors: unknown[] = [];
+  const create = backend.create.bind(backend);
+  backend.create = (options) => create(options).catch((error: unknown) => { errors.push(error); throw error; });
+  await summariseToName({ backend, modelId: "fixture-model", text: "hello", timeoutMs: 10_000 });
+  assert.deepEqual(errors.map(String), []);
+  assert.equal(f.calls()[0], "create");
+  await vm.close();
 });

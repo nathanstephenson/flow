@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { createSandbox, sandboxUnavailable, type Sandbox, type SandboxMount, type SandboxProvider } from "./sandbox.ts";
 
-/** The fixed folder for Workflow builder Scopes and temporary sandbox state, so that one mount covers them. */
+/** The fixed folder for Workflow builder Scopes, the Summary Model Scope and temporary sandbox state, so that one mount covers them. */
 export function workflowBuilderFolder(): string {
   const path = join(tmpdir(), "flow-workflow-builders");
   mkdirSync(path, { recursive: true, mode: 0o700 });
   return realpathSync(path);
+}
+
+/** The empty, neutral Scope of every throwaway Summary Model session. It is in the builder folder, so a shared VM mounts it. */
+export function summaryFolder(): string {
+  const path = join(workflowBuilderFolder(), "summary");
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  return path;
 }
 
 /** One VM for all sandbox sessions of a Session Host. sbx cannot add mounts after create, so it mounts fixed roots. */
