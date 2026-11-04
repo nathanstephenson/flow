@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test-host stand-in for `sbx env create <base> {spec}`: the stock images need Docker inside the VM.
+set -eu
+IMAGE=${SBX_IMAGE:-docker.io/library/node:24-bookworm}
+name=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).name)' "$1")
+paths=$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log([s.workspace,...s.additionalWorkspaces.map(x=>x.path+(x.readOnly?":ro":""))].join("\n"))' "$1")
+set -f; IFS='
+'
+exec sbx create --no-progress --name "$name" -t "$IMAGE" shell $paths </dev/null >&2
