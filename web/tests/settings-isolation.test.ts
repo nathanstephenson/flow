@@ -79,7 +79,7 @@ const { fixture, render } = compiled.exports as {
     messages: { type: string; message: string }[];
     select: { value: string; disabled: boolean; onValueChange: (value: string) => void };
     sharing: { value: string; onValueChange: (value: string) => void };
-    items: Record<string, { disabled?: boolean }>;
+    items: Record<string, { disabled?: boolean; tip?: string }>;
     error?: string;
   };
   render: () => string;
@@ -108,11 +108,10 @@ test("automatic supported mode resolves to Bubblewrap without saving on render",
   const html = show({});
   assert.match(html, /Machine-wide/);
   assert.match(html, /Automatic uses Bubblewrap when supported/);
-  assert.match(html, /Bubblewrap supported — Linux, bubblewrap \(bwrap\), and namespaces/);
+  assert.equal(fixture.items.bubblewrap?.tip, "Supported: Linux, bwrap and namespaces passed the startup check. Checked at Session Host start.");
   assert.match(html, /Automatic — Bubblewrap/);
-  assert.match(html, /Automatic choice/);
-  assert.match(html, /Bubblewrap isolation for new work/);
-  assert.match(html, /Sandbox unsupported. No sandbox provider is configured./);
+  assert.doesNotMatch(html, /Automatic choice|Bubblewrap supported|Sandbox unsupported|Support is checked/);
+  assert.equal(fixture.items.sandbox?.tip, "Unsupported. No sandbox provider is configured.");
   assert.doesNotMatch(html, /role="alert"/);
   assert.equal(fixture.select.value, "automatic");
   assert.equal(fixture.select.disabled, false);
@@ -124,8 +123,8 @@ test("automatic supported mode resolves to Bubblewrap without saving on render",
 for (const reason of ["Linux is required", "bwrap was not found", "User namespaces are unavailable"]) {
   test(`unsupported automatic mode explains ${reason} and warns without saving a fallback`, async () => {
     const html = show({ supported: false, mode: "none", reason });
-    assert.match(html, /Bubblewrap unsupported/);
-    assert.ok(html.includes(reason));
+    assert.equal(fixture.items.bubblewrap?.tip, `Unsupported: needs Linux, bubblewrap (bwrap) and usable namespaces. ${reason} Checked at Session Host start.`);
+    assert.ok(!html.includes(reason));
     assert.match(html, /Automatic — Unrestricted/);
     assert.match(html, /role="alert"/);
     assert.match(html, /Unrestricted filesystem access/);
@@ -145,8 +144,6 @@ for (const reason of ["Linux is required", "bwrap was not found", "User namespac
 
 test("manual unrestricted mode warns on a supported machine and can choose Bubblewrap", async () => {
   const html = show({}, "none");
-  assert.match(html, /Manual choice/);
-  assert.match(html, /unrestricted for new work/);
   assert.match(html, /Unrestricted filesystem access for new work/);
   assert.equal(fixture.select.value, "none");
   assert.equal(fixture.items.bubblewrap?.disabled, false);
@@ -170,9 +167,7 @@ test("choosing a mode is an immediate save; choosing Automatic sends null, not a
 
 test("explicit Bubblewrap on an unsupported machine is not represented as successful isolation", async () => {
   const html = show({ supported: false, reason: "bwrap missing" }, "bubblewrap");
-  assert.match(html, /Bubblewrap isolation requested, but cannot run/);
   assert.match(html, /New work requiring it cannot run/);
-  assert.doesNotMatch(html, /Bubblewrap isolation for new work/);
   assert.equal(fixture.select.value, "bubblewrap");
   assert.equal(fixture.items.bubblewrap?.disabled, false); // The current choice stays selectable.
   fixture.select.onValueChange("none");
@@ -182,8 +177,7 @@ test("explicit Bubblewrap on an unsupported machine is not represented as succes
 
 test("explicit Sandbox without a sandbox provider shows its reason and cannot run", () => {
   const html = show({}, "sandbox");
-  assert.match(html, /Sandbox unsupported. No sandbox provider is configured./);
-  assert.match(html, /Sandbox isolation requested, but cannot run/);
+  assert.equal(fixture.items.sandbox?.tip, "Unsupported. No sandbox provider is configured.");
   assert.match(html, /Isolation cannot be enforced on this machine/);
   assert.doesNotMatch(html, /Unrestricted filesystem access/);
   assert.equal(fixture.select.value, "sandbox");
@@ -192,7 +186,8 @@ test("explicit Sandbox without a sandbox provider shows its reason and cannot ru
 
 test("supported Sandbox is selectable and saved as sandbox", async () => {
   const html = show({ sandbox: { supported: true, path: "/etc/flow/sandbox-provider.json" } });
-  assert.match(html, /Sandbox supported — provider \/etc\/flow\/sandbox-provider.json\./);
+  assert.equal(fixture.items.sandbox?.tip, "Provider: /etc/flow/sandbox-provider.json");
+  assert.doesNotMatch(html, /sandbox-provider/);
   assert.equal(fixture.items.sandbox?.disabled, false);
   fixture.select.onValueChange("sandbox");
   await flushed();
@@ -201,10 +196,8 @@ test("supported Sandbox is selectable and saved as sandbox", async () => {
 
 test("checking support does not present an unchecked probe as unsupported or allow Bubblewrap", () => {
   const html = show({ checking: true, supported: false });
-  assert.match(html, /Checking filesystem isolation support/);
-  assert.match(html, /effective mode not yet confirmed/);
+  assert.equal(fixture.items.bubblewrap?.tip, "Checking support… Checked at Session Host start.");
   assert.match(html, /Automatic — checking…/);
-  assert.doesNotMatch(html, /Bubblewrap unsupported/);
   assert.doesNotMatch(html, /role="alert"/);
   assert.equal(fixture.items.bubblewrap?.disabled, true);
   assert.deepEqual(fixture.patches, []);
@@ -224,9 +217,8 @@ test("lifetime copy states that existing work retains its starting mode", () => 
   const html = show({});
   assert.match(html, /new Backend Sessions \(including Revive\), new Workflow Executions, and new local/);
   assert.match(html, /MCP clients. Existing work keeps the mode it started with, including Workflow recovery/);
-  assert.match(html, /Support is checked at Session Host startup/);
   assert.match(html, /aria-label="Filesystem isolation mode"/);
-  assert.match(html, /aria-describedby="filesystem-isolation-support"/);
+  assert.doesNotMatch(html, /aria-describedby|filesystem-isolation-support/);
 });
 
 test("sandbox mode offers one VM for all sessions and names the Project Root it needs", async () => {
@@ -243,5 +235,7 @@ test("sandbox mode offers one VM for all sessions and names the Project Root it 
   assert.match(html, /One VM for all sessions/);
   assert.match(html, /Set a Project Root first/);
   fixture.config.projects = { root: "~/repos" };
-  assert.match(render(), /Scopes must be under the Project Root ~\/repos/);
+  html = render();
+  assert.doesNotMatch(html, /Scopes must be under/);
+  assert.match(fixture.items.shared?.tip ?? "", /^Scopes must be under the Project Root ~\/repos or the Worktrees folder\. Every session in the VM can read and write the others' files\.$/);
 });
