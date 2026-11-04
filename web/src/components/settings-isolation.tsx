@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ComponentProps } from "react";
 import type { FilesystemIsolationMode, SandboxSharing } from "../../../src/protocol/settings.ts";
 import { useHost } from "@/host.tsx";
 import { SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 
 const AUTOMATIC = "automatic";
 const LABELS: Record<FilesystemIsolationMode, string> = {
@@ -20,6 +21,17 @@ const SHARING: Record<SandboxSharing, string> = {
   session: "One VM per session",
   shared: "One VM for all sessions",
 };
+
+function TipItem({ tip, ...props }: ComponentProps<typeof SelectItem> & { tip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<div />}>
+        <SelectItem {...props} />
+      </TooltipTrigger>
+      <TooltipContent side="right">{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** The host resolves automatic mode; rendering this control never persists a fallback. */
 export function IsolationSettings() {
@@ -36,6 +48,14 @@ export function IsolationSettings() {
   const sharing = config.sandboxSharing ?? "session";
   const projectRoot = config.projects?.root;
   const automaticLabel = `Automatic — ${checking ? "checking…" : LABELS[mode]}`;
+  const bubblewrapTip = `${checking
+    ? "Checking support…"
+    : supported
+      ? "Supported: Linux, bwrap and namespaces passed the startup check."
+      : `Unsupported: needs Linux, bubblewrap (bwrap) and usable namespaces.${status?.reason ? ` ${status.reason}` : ""}`} Checked at Session Host start.`;
+  const sandboxTip = sandboxSupported
+    ? `Provider: ${status?.sandbox.path ?? ""}`
+    : `Unsupported.${status?.sandbox.reason ? ` ${status.sandbox.reason}` : ""}`;
 
   // The launch probe can finish after the first config response. Refresh its answer, without
   // writing a preference or inferring a fallback in the browser.
@@ -64,19 +84,18 @@ export function IsolationSettings() {
         <SelectTrigger
           className="w-full sm:max-w-sm"
           aria-label="Filesystem isolation mode"
-          aria-describedby="filesystem-isolation-support"
         >
           <SelectValue>{automatic ? automaticLabel : LABELS[mode]}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={AUTOMATIC}>{automaticLabel}</SelectItem>
           <SelectItem value="none">{LABELS.none}</SelectItem>
-          <SelectItem value="bubblewrap" disabled={(checking || !supported) && choice !== "bubblewrap"}>
+          <TipItem value="bubblewrap" tip={bubblewrapTip} disabled={(checking || !supported) && choice !== "bubblewrap"}>
             {LABELS.bubblewrap}
-          </SelectItem>
-          <SelectItem value="sandbox" disabled={!sandboxSupported && choice !== "sandbox"}>
+          </TipItem>
+          <TipItem value="sandbox" tip={sandboxTip} disabled={!sandboxSupported && choice !== "sandbox"}>
             {LABELS.sandbox}
-          </SelectItem>
+          </TipItem>
         </SelectContent>
       </Select>
       {mode === "sandbox" ? (
@@ -94,46 +113,19 @@ export function IsolationSettings() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="session">{SHARING.session}</SelectItem>
-              <SelectItem value="shared">{SHARING.shared}</SelectItem>
+              <TipItem
+                value="shared"
+                tip={`Scopes must be under the Project Root${projectRoot ? ` ${projectRoot}` : ""} or the Worktrees folder. Every session in the VM can read and write the others' files.`}
+              >
+                {SHARING.shared}
+              </TipItem>
             </SelectContent>
           </Select>
-          {sharing === "shared" ? (
-            projectRoot ? (
-              <p className="text-xs text-muted-foreground">
-                Scopes must be under the Project Root {projectRoot} or the Worktrees folder. Every session in the VM can read and write the others' files.
-              </p>
-            ) : (
-              <p className="text-sm text-destructive" role="alert">Set a Project Root first. Until then, sandbox sessions cannot start.</p>
-            )
+          {sharing === "shared" && !projectRoot ? (
+            <p className="text-sm text-destructive" role="alert">Set a Project Root first. Until then, sandbox sessions cannot start.</p>
           ) : null}
         </div>
       ) : null}
-      <div id="filesystem-isolation-support" className="flex flex-col gap-1 text-xs text-muted-foreground" role="status">
-        <p>
-          {checking
-            ? "Checking filesystem isolation support…"
-            : supported
-              ? "Bubblewrap supported — Linux, bubblewrap (bwrap), and namespaces passed the startup check."
-              : "Bubblewrap unsupported — it requires Linux, bubblewrap (bwrap), and usable namespaces."}
-          {status?.reason ? ` ${status.reason}` : ""}
-        </p>
-        <p>
-          {sandboxSupported ? `Sandbox supported — provider ${status?.sandbox.path ?? ""}.` : "Sandbox unsupported."}
-          {!sandboxSupported && status?.sandbox.reason ? ` ${status.sandbox.reason}` : ""}
-        </p>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Support is checked at Session Host startup. Restart the host after changing Bubblewrap or namespace settings.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        {automatic ? "Automatic" : "Manual"} choice · {checking
-          ? "effective mode not yet confirmed"
-          : mode === "none"
-            ? "unrestricted for new work"
-            : enforceable
-              ? `${LABELS[mode]} isolation for new work`
-              : `${LABELS[mode]} isolation requested, but cannot run on this machine`}.
-      </p>
       {!checking && !enforceable ? (
         <p className="text-sm text-destructive" role="alert">
           Isolation cannot be enforced on this machine. New work requiring it cannot run.
