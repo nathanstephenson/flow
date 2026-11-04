@@ -149,8 +149,14 @@ _Avoid_: config, preferences, profile
 **Isolation Mode**: The machine-wide filesystem policy for new work: none (unrestricted), Bubblewrap, or Sandbox. Automatic selection never chooses Sandbox.
 _Avoid_: isolation on/off, enabled
 
-**Sandbox**: The Docker Sandboxes (sbx) microVM serving one Agent Session in Sandbox mode, shared by its Backend Session, MCP clients and Workflow code. Never restarted: removed when its owned work stops, and replaced on Revive.
+**Sandbox**: The Docker Sandboxes (sbx) microVM serving one Agent Session in Sandbox mode, or all of them when it is the Shared Sandbox. Its Backend Sessions, MCP clients and Workflow code run in it. Never restarted: a per-session Sandbox is removed when its owned work stops, and replaced on Revive.
 _Avoid_: container, VM (alone)
+
+**Sandbox Sharing**: The setting that selects one Sandbox for each Agent Session, or one Shared Sandbox for all of them.
+_Avoid_: VM reuse, pooling
+
+**Shared Sandbox**: The one Sandbox that serves all Agent Sessions in Sandbox mode when Sandbox Sharing is shared. It lives while the Session Host runs. It accepts only Scopes under the Project Root, a Worktree or a Workflow builder.
+_Avoid_: global VM, pool
 
 **Sandbox Provider**: The file naming the sbx commands and guest paths that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
 _Avoid_: harness (the harness only supplies a base environment)

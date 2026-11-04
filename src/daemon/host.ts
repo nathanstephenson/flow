@@ -57,6 +57,7 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { probeSkills } from "./skills.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
+import { SharedSandbox } from "../isolation/shared-sandbox.ts";
 import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
 
 /**
@@ -231,6 +232,9 @@ export type SessionHostOptions = {
   /** Operator-owned machine policy, read only when starting a Backend Session or local MCP client. */
   filesystemIsolationMode?: () => import("../protocol/settings.ts").FilesystemIsolationMode;
   sandboxSupport?: () => import("../isolation/sandbox.ts").SandboxSupport | undefined;
+  sandboxSharing?: () => import("../protocol/settings.ts").SandboxSharing;
+  /** The Project Root that a Shared Sandbox mounts. */
+  projectRoot?: () => string | undefined;
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
@@ -472,6 +476,8 @@ export class SessionHost {
 
   private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationMode"];
   private readonly sandbox: SessionHostOptions["sandboxSupport"];
+  private readonly sandboxSharing: SessionHostOptions["sandboxSharing"];
+  private readonly shared: SharedSandbox | undefined;
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
   private readonly resolveSecret: SessionHostOptions["resolveSecret"];
@@ -479,6 +485,8 @@ export class SessionHost {
   constructor(options: SessionHostOptions = {}) {
     this.filesystemIsolation = options.filesystemIsolationMode;
     this.sandbox = options.sandboxSupport;
+    this.sandboxSharing = options.sandboxSharing;
+    this.shared = options.store ? new SharedSandbox(options.store.root, options.projectRoot ?? (() => undefined)) : undefined;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
     this.resolveSecret = options.resolveSecret;
@@ -2116,6 +2124,7 @@ export class SessionHost {
       record.log.append({ type: "session_dormant", reason: "host shutdown" });
       this.persist(record);
     }
+    await this.shared?.close().catch((error: unknown) => console.error(`Shared sandbox removal failed: ${(error as Error).message}`));
   }
 
   async execute(command: Command): Promise<unknown> {
@@ -2234,6 +2243,8 @@ export class SessionHost {
   /** A host without configured Settings keeps the safe, restricted library default. */
   filesystemIsolationMode(): import("../protocol/settings.ts").FilesystemIsolationMode { return this.filesystemIsolation?.() ?? "bubblewrap"; }
   sandboxSupport(): import("../isolation/sandbox.ts").SandboxSupport | undefined { return this.sandbox?.(); }
+  /** The Shared Sandbox, when the Settings choose one VM for all sandbox sessions. */
+  sharedSandbox(): SharedSandbox | undefined { return this.sandboxSharing?.() === "shared" ? this.shared : undefined; }
 
   async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
     if (isolationMode === "sandbox") {

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, chmod, mkdir, rm, writeFile, rename } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { BackendSession, BackendCreateOptions } from '../backend/types.ts';
@@ -14,6 +13,7 @@ import type { ConfigStore } from './config-store.ts';
 import type { SessionHost } from './host.ts';
 import { workflowAuthoringScope } from './workflow-authoring-scope.ts';
 import { WorkflowBuilderFiles } from './workflow-builder-files.ts';
+import { workflowBuilderFolder } from '../isolation/shared-sandbox.ts';
 import { workflowBuilderInstructions } from './workflow-builder-guidance.ts';
 
 const MAX_DEFINITION = 256_000;
@@ -199,7 +199,7 @@ export class WorkflowBuilderService {
     const files = await WorkflowBuilderFiles.create(root, stateRoot);
     if (entry.closed) { await files.close(); this.check(entry); }
     entry.files = files; entry.view.scope = files.scope;
-    const directory = await mkdtemp(join(tmpdir(), 'flow-workflow-builder-'));
+    const directory = await mkdtemp(join(workflowBuilderFolder(), 'flow-workflow-builder-'));
     if (entry.closed) { await rm(directory, { recursive: true, force: true }); this.check(entry); }
     entry.directory = directory;
     files.protect(directory);

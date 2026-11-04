@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
 import { createSandbox, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
 import { validateFilesystemScope } from "../../isolation/filesystem.ts";
+import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/shared-sandbox.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
@@ -32,6 +33,8 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
   sandbox?: () => SandboxSupport | undefined;
   /** The VM this worker session owns; Workflow code of the same Agent Session runs in it. */
   sandboxed?: Sandbox;
+  /** The host's Shared Sandbox when sandbox sessions share one VM, read when a sandbox-mode Backend Session starts. */
+  sharedSandbox?: () => SharedSandbox | undefined;
 };
 
 /** One owned worker per Backend Session, optionally enforcing a filesystem boundary. */
@@ -49,7 +52,12 @@ export class WorkerBackend implements AgentBackend {
     if (!existsSync(bundle)) throw new Error(`${sandboxUnavailable().message}: worker bundle ${bundle} is missing; run npm run build:worker`);
     const scope = options.workflowBuilder ? realpathSync(options.scope) : validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
-    const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(tmpdir(), "flow-sandbox-")));
+    const shared = this.options.sharedSandbox?.();
+    const roots = shared?.roots();
+    if (roots && !roots.slice(0, 3).some((root) => scope === root || scope.startsWith(root + sep))) {
+      throw new Error(`${sandboxUnavailable().message}: Scope ${scope} is not under the Project Root ${roots[0]}`);
+    }
+    const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(shared ? workflowBuilderFolder() : tmpdir(), "flow-sandbox-")));
     const stateDir = options.stateDir ?? temp!;
     const plan = workerCommand({ ...this.options, entry: bundle });
     const assets = [packageRoot, bundle, ...(this.options.readablePaths ?? [])];
@@ -88,17 +96,26 @@ export class WorkerBackend implements AgentBackend {
     };
     let proxy: WorkerSession | undefined;
     try {
-      const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
-        workspace: scope, mounts: sandboxMounts([scope, stateDir, ...(this.name === "claude" && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [])], assets), env: {} };
+      const auth = support.provider.claudeAuthDir && (shared || this.name === "claude") ? [support.provider.claudeAuthDir] : [];
+      const mounts = sandboxMounts([...roots ?? [scope, stateDir], ...auth], assets);
       const prepare = performance.now() - begin;
-      const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
-      cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
+      let sandbox: Sandbox, startup: Sandbox["startup"];
+      if (shared) {
+        const acquired = await shared.acquire(support.provider, roots![0]!, mounts, options.signal);
+        ({ sandbox, startup } = acquired);
+        cleanups.push(acquired.release);
+      } else {
+        sandbox = await createSandbox(support.provider, { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
+          workspace: scope, mounts, env: {} }, join(stateDir, "sandbox.json"), options.signal);
+        ({ startup } = sandbox);
+        cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
+      }
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       const opening = performance.now();
       const worker = await proxy.open(options.signal);
       const ms = (value = 0) => `${Math.round(value)}ms`;
-      console.error(`Sandbox ${sandbox.name} start: prepare ${ms(prepare)}, remove ${ms(sandbox.startup.remove)}, create ${ms(sandbox.startup.create)}, `
+      console.error(`Sandbox ${sandbox.name} start: prepare ${ms(prepare)}, remove ${ms(startup.remove)}, create ${ms(startup.create)}, `
         + `open ${ms(performance.now() - opening)} (worker ready ${ms(worker?.ready)}, import ${ms(worker?.import)}, backend ${ms(worker?.create)})`);
       return proxy;
     } catch (error) {

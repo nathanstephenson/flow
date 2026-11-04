@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_WORKFLOW_RUNTIME,
   type FilesystemIsolationMode,
+  type SandboxSharing,
   type WorkflowRuntimeSettings,
   formatDuration,
   parseDuration,
@@ -49,6 +50,7 @@ export { DEFAULT_CHROME_FONT, DEFAULT_MONOSPACE_FONT };
 export type Config = {
   /** Omitted means automatic; resolved runtime defaults are never written here. */
   filesystemIsolation?: FilesystemIsolationMode;
+  sandboxSharing?: SandboxSharing;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
@@ -161,12 +163,14 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const permissions = parsePermissions(parsed, warnings);
   const providers = parseProviders(parsed, warnings);
   const filesystemIsolation = readFilesystemIsolation(parsed, warnings);
+  const sandboxSharing = readSandboxSharing(parsed, warnings);
 
   return {
     config: {
       retention,
       fonts,
       ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
+      ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
       mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
       ...(projects === undefined ? {} : { projects }),
@@ -237,6 +241,21 @@ function patchFilesystemIsolation(current: FilesystemIsolationMode | undefined, 
   if (value === null) return undefined;
   if (!isolationModes.includes(value)) throw new ConfigError('filesystemIsolation must be "none", "bubblewrap", "sandbox", or null');
   return value as FilesystemIsolationMode;
+}
+
+const sharingModes: readonly unknown[] = ["session", "shared"] satisfies SandboxSharing[];
+
+function readSandboxSharing(parsed: unknown, warnings: string[]): SandboxSharing | undefined {
+  const value = (parsed as { sandboxSharing?: unknown } | null)?.sandboxSharing;
+  if (value === undefined || sharingModes.includes(value)) return value as SandboxSharing | undefined;
+  warnings.push('sandboxSharing must be "session" or "shared"; using "session"');
+  return undefined;
+}
+
+function patchSandboxSharing(current: SandboxSharing | undefined, value: unknown): SandboxSharing | undefined {
+  if (value === undefined) return current;
+  if (!sharingModes.includes(value)) throw new ConfigError('sandboxSharing must be "session" or "shared"');
+  return value as SandboxSharing;
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
@@ -522,13 +541,15 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   const filesystemIsolation = patchFilesystemIsolation(current.filesystemIsolation, body.filesystemIsolation);
+  const sandboxSharing = patchSandboxSharing(current.sandboxSharing, body.sandboxSharing);
   return {
     ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
+    ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
     mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },

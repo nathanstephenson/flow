@@ -47,7 +47,7 @@ const bundle = await build({
         contents: `import { fixture } from '@/host.tsx';\n` + readFileSync(path, "utf8")
           .replace(
             "const Select = SelectPrimitive.Root",
-            "const Select = (props) => { fixture.select = props; return <SelectPrimitive.Root {...props} />; }",
+            "const Select = (props) => { fixture[['session', 'shared'].includes(props.value) ? 'sharing' : 'select'] = props; return <SelectPrimitive.Root {...props} />; }",
           )
           .replace(
             "  return (\n    <SelectPrimitive.Portal>",
@@ -74,10 +74,11 @@ new Function("module", "exports", "require", bundle.outputFiles[0]!.text)(
 );
 const { fixture, render } = compiled.exports as {
   fixture: {
-    config: { filesystemIsolation?: FilesystemIsolationMode; filesystemIsolationStatus?: FilesystemIsolationStatus };
+    config: { filesystemIsolation?: FilesystemIsolationMode; filesystemIsolationStatus?: FilesystemIsolationStatus; sandboxSharing?: string; projects?: { root?: string } };
     patches: unknown[];
     messages: { type: string; message: string }[];
     select: { value: string; disabled: boolean; onValueChange: (value: string) => void };
+    sharing: { value: string; onValueChange: (value: string) => void };
     items: Record<string, { disabled?: boolean }>;
     error?: string;
   };
@@ -226,4 +227,21 @@ test("lifetime copy states that existing work retains its starting mode", () => 
   assert.match(html, /Support is checked at Session Host startup/);
   assert.match(html, /aria-label="Filesystem isolation mode"/);
   assert.match(html, /aria-describedby="filesystem-isolation-support"/);
+});
+
+test("sandbox mode offers one VM for all sessions and names the Project Root it needs", async () => {
+  assert.doesNotMatch(show({}), /Sandbox sharing/);
+  let html = show({ sandbox: { supported: true } }, "sandbox");
+  assert.match(html, /aria-label="Sandbox sharing"/);
+  assert.match(html, /One VM per session/);
+  assert.equal(fixture.sharing.value, "session");
+  fixture.sharing.onValueChange("shared");
+  await flushed();
+  assert.deepEqual(fixture.patches, [{ sandboxSharing: "shared" }]);
+  fixture.config.sandboxSharing = "shared";
+  html = render();
+  assert.match(html, /One VM for all sessions/);
+  assert.match(html, /Set a Project Root first/);
+  fixture.config.projects = { root: "~/repos" };
+  assert.match(render(), /Scopes must be under the Project Root ~\/repos/);
 });

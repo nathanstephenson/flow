@@ -24,6 +24,7 @@ export type HostConfig = {
   filesystemIsolation?: Settings["filesystemIsolation"];
   /** Fresh machine capability and effective mode, reported by the Session Host. */
   filesystemIsolationStatus?: FilesystemIsolationStatus;
+  sandboxSharing?: Settings["sandboxSharing"];
   /** Browser gate in use. Provider details and tokens are intentionally never exposed. */
   authentication?: "token" | "oidc";
   scope: string;
@@ -181,6 +182,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
               // infer capability from the saved preference or retain a previous effective mode.
               filesystemIsolation: body.filesystemIsolation,
               filesystemIsolationStatus: body.filesystemIsolationStatus,
+              sandboxSharing: body.sandboxSharing,
               // Spread-with-undefined would leave a stale value behind once a section is cleared.
               // Both optional sections need it, and for `permissions` it is not tidiness: a stale
               // list would leave a revoked row on screen, and revoking a second grant would send the
