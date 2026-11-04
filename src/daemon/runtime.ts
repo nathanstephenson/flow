@@ -54,6 +54,7 @@ export async function startRuntime(options: {
       store, resolveSecret: name => secrets.resolve(name), retention: config.retention,
       mcpConnections: config.mcpConnections, mcpAuth,
       filesystemIsolationMode: config.filesystemIsolationMode, sandboxSupport: config.sandboxSupport,
+      sandboxSharing: config.sandboxSharing, projectRoot: config.projectRoot,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
