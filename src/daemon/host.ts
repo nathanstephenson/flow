@@ -2312,8 +2312,13 @@ export class SessionHost {
     record.endedTurnIds = new Set();
     const backend = this.backendFor(record.backendName);
     const { McpSession } = await import("../backend/mcp.ts");
-    const mcp = new McpSession((this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id)), record.scope,
-      this.mcpAuth ? (connection) => this.mcpAuth!.provider(connection) : undefined, false, this.resolveSecret, undefined, this.filesystemStateRoot(), this.filesystemIsolationMode());
+    const { SandboxMcpSession } = await import("../backend/worker/sandbox-mcp.ts");
+    const selected = (this.mcpConnections?.() ?? []).filter((connection) => record.mcpConnectionIds?.includes(connection.id));
+    const oauth = this.mcpAuth ? (connection: import("../protocol/mcp.ts").McpConnection) => this.mcpAuth!.provider(connection) : undefined;
+    const isolationMode = this.filesystemIsolationMode();
+    const mcp = isolationMode === "sandbox"
+      ? new SandboxMcpSession(selected, record.scope, oauth, this.resolveSecret)
+      : new McpSession(selected, record.scope, oauth, false, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);

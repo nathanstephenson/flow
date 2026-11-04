@@ -1,5 +1,5 @@
 import type { AgentBackend, BackendSession, WorkflowSubagentHandle, PromptAttachment } from "../types.ts";
-import type { McpSession, McpTool } from "../mcp.ts";
+import { McpSession, type McpTool } from "../mcp.ts";
 import type { WorkflowParent } from "../workflow-tools.ts";
 import type { WorkflowBuilder } from "../workflow-builder.ts";
 import type { EffortLevel, PermissionDecision } from "../../protocol/events.ts";
@@ -30,6 +30,7 @@ export function runWorker(): void {
   let closing = false;
   let shutdown: Promise<void> | undefined;
   let tools: McpTool[] = [];
+  let localMcp: McpSession | undefined;
   const workflows = new Map<string, WorkflowSubagentHandle>();
   const send = (message: unknown) => {
     if (!process.stdout.writable) throw new Error("Backend worker disconnected");
@@ -39,7 +40,7 @@ export function runWorker(): void {
     if (method === "create") {
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, mcpConnectionIds, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
         instructions: workflowBuilderInstructions,
         read: (path) => rpc.call("workflowBuilder.read", [path]),
@@ -47,6 +48,9 @@ export function runWorker(): void {
         write: (content) => rpc.call("workflowBuilder.write", [content]),
       };
       updateTools(mcpTools ?? []);
+      if (mcpSandbox) localMcp = new McpSession(mcpSandbox, options.scope, undefined, false, undefined, undefined, undefined, "none", undefined,
+        (connectionId, refresh) => rpc.call("mcp.token", [connectionId, refresh]));
+      if (localMcp) localMcp.connectTimeoutMs = 120_000;
       const workflow: WorkflowParent = {
         inspect: (input) => rpc.call("workflow.inspect", [input]),
         recover: (input, signal) => rpc.call("workflow.recover", [input], signal),
@@ -67,7 +71,8 @@ export function runWorker(): void {
       session = await backend.create({
         ...options,
         ...(workflowBuilder ? { workflowBuilder } : {
-          ...(mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),
+          ...(localMcp ? { mcp: localMcp }
+            : mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),
           ...(workflowEnabled ? { workflow } : {}),
         }),
         emit: (event) => {
@@ -104,7 +109,9 @@ export function runWorker(): void {
       case "skills": result = await session.skills?.(); break;
       case "answerEnquiry": result = await session.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
       case "answerPermission": result = await session.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
-      case "refreshMcp": updateTools(args[0] as McpToolMetadata[]); result = await session.refreshMcp?.(); break;
+      case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session.refreshMcp?.(); break;
+      case "mcp.open": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.open(); result = localMcp.status(); break;
+      case "mcp.retry": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.retry(args[0] as string); result = localMcp.status(); break;
       case "workflow.start": {
         if (!session.startWorkflowSubagent) throw new Error("Workflow Subagents are not supported");
         const id = args[0] as string;
@@ -133,6 +140,7 @@ export function runWorker(): void {
     closing = true;
     await Promise.allSettled([...workflows.values()].map((handle) => handle.cancel()));
     await session?.dispose();
+    await localMcp?.dispose({ waitForExit: true });
   }
   function stop(): Promise<void> {
     return shutdown ??= (async () => {

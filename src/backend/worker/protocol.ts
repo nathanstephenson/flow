@@ -8,6 +8,8 @@ export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workfl
   workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];
   mcpConnectionIds?: string[];
+  /** Sandbox mode (ADR 0033): definitions for MCP clients that run in this worker. */
+  mcpSandbox?: import("../../protocol/mcp.ts").McpConnection[];
   workflowEnabled: boolean;
   /** Trusted launcher configuration, never accepted from model RPC. */
   backendModule?: string;
