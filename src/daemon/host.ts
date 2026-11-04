@@ -2216,6 +2216,12 @@ export class SessionHost {
     return values;
   }
 
+  /** Sandbox mode: the Agent Session's VM, reviving the session when needed. */
+  async workflowSandbox(sessionId: string): Promise<import("../isolation/sandbox.ts").Sandbox> {
+    const { session } = await this.openWorkflowSession(sessionId);
+    if (!session?.sandbox) throw new Error("Sandbox isolation is unavailable; unrestricted launch refused: the Agent Session has no sandbox");
+    return session.sandbox;
+  }
   workflowMcpConnections(id: string) {
     const record = this.sessions.get(id);
     if (!record) throw new Error('Unknown Agent Session');
@@ -2230,6 +2236,13 @@ export class SessionHost {
   sandboxSupport(): import("../isolation/sandbox.ts").SandboxSupport | undefined { return this.sandbox?.(); }
 
   async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
+    if (isolationMode === "sandbox") {
+      await this.openWorkflowSession(id);
+      const { SandboxMcpSession } = await import("../backend/worker/sandbox-mcp.ts");
+      const mcp = this.record(id).mcp;
+      if (!(mcp instanceof SandboxMcpSession)) throw new Error("Sandbox isolation is unavailable; unrestricted launch refused: the Agent Session has no sandbox");
+      return mcp.directView(connectionId);
+    }
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');

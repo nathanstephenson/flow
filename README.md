@@ -531,6 +531,9 @@ isolation status with the resolved `mode`, `automatic`, `checking`, Bubblewrap `
 (`sbx`). The file holds `version: 1`, the guest's absolute `nodePath` and `claudePath`, an optional
 `claudeAuthDir`, and argv templates for `probe`, `create` (with `{spec}`, optionally `{name}`), `exec`
 (with `{name}` and `{cwd}`) and `remove` (with `{name}`). Sandbox is available only when `probe` exits 0.
+`claudeAuthDir` is a host folder that holds Claude's `.credentials.json`. Flow mounts it writable in the
+VM, so refreshed tokens stay on the host. For a harness `/login`, use
+`~/.local/state/goodstack-ai-harness/<name>/claude` (as an absolute path).
 For example, with a base environment from `harness plan --out <dir>`:
 
 ```json
@@ -538,6 +541,7 @@ For example, with a base environment from `harness plan --out <dir>`:
   "version": 1,
   "nodePath": "/usr/local/bin/node",
   "claudePath": "/home/agent/.local/bin/claude",
+  "claudeAuthDir": "/Users/<you>/.local/state/goodstack-ai-harness/goodstack/claude",
   "probe": ["sbx", "ls", "--json"],
   "create": ["sbx", "env", "create", "<dir>", "{spec}", "--force"],
   "exec": ["sbx", "exec", "-i", "-w", "{cwd}", "{name}"],

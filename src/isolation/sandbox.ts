@@ -75,8 +75,11 @@ export type SandboxMount = { path: string; readOnly: boolean; dev: number; ino: 
 export type SandboxSpec = { name: string; workspace: string; mounts: SandboxMount[]; env: Record<string, string> };
 export type Sandbox = {
   name: string;
+  nodePath: string;
   command(cwd: string, argv: string[], env: Record<string, string>): { command: string; args: string[] };
-  remove(): Promise<void>;
+  /** Keeps the VM while other owned work runs; the VM is removed when the owner closes and no hold remains. */
+  hold(): () => void;
+  close(): Promise<void>;
 };
 
 export function sandboxMounts(writable: string[], readable: string[]): SandboxMount[] {
@@ -120,13 +123,27 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
   await remove().catch(() => {});
   try { await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
   catch (error) { await remove().catch(() => {}); throw error; }
+  let holds = 0, closed = false, removing = false;
+  let finish!: (outcome: Promise<void>) => void;
+  const removed = new Promise<void>((resolve) => { finish = resolve as (outcome: Promise<void>) => void; });
+  removed.catch(() => {});
+  const settle = () => {
+    if (closed && !holds && !removing) { removing = true; finish(remove()); }
+  };
   return {
     name: spec.name,
+    nodePath: provider.nodePath,
+    hold: () => {
+      if (closed) throw new Error(`Sandbox ${spec.name} is stopping`);
+      holds++;
+      let released = false;
+      return () => { if (!released) { released = true; holds--; settle(); } };
+    },
+    close: () => { closed = true; settle(); return removed; },
     command: (cwd, argv, env) => {
       const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
       return { command: command!, args: [...args, provider.nodePath, "-e", sandboxSupervisorSource, "--", "env",
         ...Object.entries(env).map(([key, value]) => `${key}=${value}`), ...argv] };
     },
-    remove,
   };
 }

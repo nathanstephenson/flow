@@ -36,7 +36,7 @@ export function runWorker(): void {
     if (!process.stdout.writable) throw new Error("Backend worker disconnected");
     writeFrame(encodeFrame(message), (error) => { if (error) void stop(); });
   };
-  const rpc = new WorkerRpc(send, async (method, args) => {
+  const rpc = new WorkerRpc(send, async (method, args, signal) => {
     if (method === "create") {
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
@@ -112,6 +112,20 @@ export function runWorker(): void {
       case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session.refreshMcp?.(); break;
       case "mcp.open": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.open(); result = localMcp.status(); break;
       case "mcp.retry": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.retry(args[0] as string); result = localMcp.status(); break;
+      case "mcp.direct": {
+        if (!localMcp) throw new Error("No sandbox MCP clients");
+        const id = args[0] as string;
+        if (localMcp.status().find((state) => state.id === id)?.state !== "connected") await localMcp.retry(id).catch(() => {});
+        result = { status: localMcp.status().find((state) => state.id === id) ?? { id, state: "failed", tools: 0 },
+          tools: localMcp.tools().filter((tool) => tool.connectionId === id).map(({ call: _, ...tool }) => tool) };
+        break;
+      }
+      case "mcp.callTool": {
+        const tool = localMcp?.tools().find((entry) => entry.name === args[0]);
+        if (!tool) throw new Error("Unknown MCP tool");
+        result = await tool.call(args[1] as Record<string, unknown>, signal, args[2] as number | undefined);
+        break;
+      }
       case "workflow.start": {
         if (!session.startWorkflowSubagent) throw new Error("Workflow Subagents are not supported");
         const id = args[0] as string;

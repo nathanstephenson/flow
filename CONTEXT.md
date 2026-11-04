@@ -117,7 +117,7 @@ _Avoid_: closed, deleted, settled
 
 ### Directories and shells
 
-**Scope**: The working directory an Agent Session is bound to; with filesystem isolation enabled, local model work may write there and in private execution state, not elsewhere on the host. In unrestricted mode it is only a working directory, not a filesystem boundary.
+**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary.
 _Avoid_: workspace, project, repo
 
 **Project**: A directory its owner has opted into as a candidate Scope, independent of any Agent Session.
@@ -145,6 +145,15 @@ _Avoid_: transcript, history, log
 
 **Settings**: Session Host values governing all Agent Sessions on the machine, not one Scope.
 _Avoid_: config, preferences, profile
+
+**Isolation Mode**: The machine-wide filesystem policy for new work: none (unrestricted), Bubblewrap, or Sandbox. Automatic selection never chooses Sandbox.
+_Avoid_: isolation on/off, enabled
+
+**Sandbox**: The Docker Sandboxes (sbx) microVM serving one Agent Session in Sandbox mode, shared by its Backend Session, MCP clients and Workflow code. Never restarted: removed when its owned work stops, and replaced on Revive.
+_Avoid_: container, VM (alone)
+
+**Sandbox Provider**: The file naming the sbx commands and guest paths that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
+_Avoid_: harness (the harness only supplies a base environment)
 
 **MCP Connection**: A machine-wide definition of an external tool service. Selected for an Agent Session and inherited by its Subagents and Workflow Steps. Its identity survives edits.
 _Avoid_: Provider, extension, plugin

@@ -2,7 +2,7 @@ import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client
 import type { McpConnection, McpStatus } from "../../protocol/mcp.ts";
 import { McpSession, type McpTool } from "../mcp.ts";
 
-type WorkerCall = (method: string, args: unknown[]) => Promise<unknown>;
+type WorkerCall = (method: string, args: unknown[], signal?: AbortSignal) => Promise<unknown>;
 
 /** Host stand-in for MCP clients that run in a sandbox worker (ADR 0033). The host keeps
  * definitions, OAuth and status; the worker owns the clients and their tool calls. */
@@ -13,11 +13,13 @@ export class SandboxMcpSession extends McpSession {
   private cached: McpStatus[];
   private readonly oauth: ((connection: McpConnection) => OAuthClientProvider) | undefined;
   private readonly secret: ((name: string) => string) | undefined;
+  private readonly root: string;
 
   constructor(connections: readonly McpConnection[], scope: string,
     oauth?: (connection: McpConnection) => OAuthClientProvider, resolveSecret?: (name: string) => string) {
     super(connections, scope);
     this.oauth = oauth;
+    this.root = scope;
     this.secret = resolveSecret;
     this.cached = connections.map((connection) => ({ id: connection.id, state: "connecting", tools: 0 }));
     this.attached = new Promise((resolve) => { this.resolveAttached = resolve; });
@@ -57,8 +59,42 @@ export class SandboxMcpSession extends McpSession {
     this.cached = await this.worker!("mcp.retry", [id]) as McpStatus[];
   }
 
+  async directView(connectionId: string): Promise<McpSession> {
+    const connection = this.connections.find((entry) => entry.id === connectionId);
+    if (!connection) throw new Error("MCP connection is not selected for this Agent Session");
+    await this.attached;
+    return new SandboxDirectMcpSession(connection, this.root, this.worker!);
+  }
+
   override status(): McpStatus[] { return this.cached.map((state) => ({ ...state })); }
   override tools(): McpTool[] { return []; }
   override registrationFailed(): void { this.cached = this.cached.map((state) => ({ ...state, state: "failed", tools: 0 })); }
+  override async dispose(): Promise<void> {}
+}
+
+/** A direct MCP Workflow Step's view of one connection in the sandbox worker (ADR 0033). */
+class SandboxDirectMcpSession extends McpSession {
+  private readonly worker: WorkerCall;
+  private readonly connectionId: string;
+  private state: McpStatus;
+  private listed: McpTool[] = [];
+
+  constructor(connection: McpConnection, scope: string, worker: WorkerCall) {
+    super([connection], scope);
+    this.worker = worker;
+    this.connectionId = connection.id;
+    this.state = { id: connection.id, state: "connecting", tools: 0 };
+  }
+
+  override async open(): Promise<void> {
+    const result = await this.worker("mcp.direct", [this.connectionId]) as { status: McpStatus; tools: Omit<McpTool, "call">[] };
+    this.state = result.status;
+    this.listed = result.tools.map((tool) => ({ ...tool,
+      call: (input, signal, timeoutMs) => this.worker("mcp.callTool", [tool.name, input, timeoutMs], signal) }) as McpTool);
+  }
+
+  override async retry(): Promise<void> { await this.open(); }
+  override status(): McpStatus[] { return [{ ...this.state }]; }
+  override tools(): McpTool[] { return this.listed; }
   override async dispose(): Promise<void> {}
 }

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
-import { createSandbox, sandboxMounts, sandboxUnavailable, type SandboxSupport } from "../../isolation/sandbox.ts";
+import { createSandbox, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
 import { validateFilesystemScope } from "../../isolation/filesystem.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
@@ -30,6 +30,8 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
   isolationMode?: () => FilesystemIsolationMode;
   /** Host-probed sandbox provider, read when a sandbox-mode Backend Session starts. */
   sandbox?: () => SandboxSupport | undefined;
+  /** The VM this worker session owns; Workflow code of the same Agent Session runs in it. */
+  sandboxed?: Sandbox;
 };
 
 /** One owned worker per Backend Session, optionally enforcing a filesystem boundary. */
@@ -41,10 +43,10 @@ export class WorkerBackend implements AgentBackend {
     const support = this.options.sandbox?.();
     if (!support?.supported) throw new Error(`${sandboxUnavailable().message}: ${support?.reason ?? "no sandbox provider"}`);
     if (isSea()) throw new Error(`${sandboxUnavailable().message}: single-executable builds cannot run in a sandbox`);
-    const stateDir = options.stateDir;
-    if (!stateDir) throw new Error(`${sandboxUnavailable().message}: no backend state directory`);
-    const scope = validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
+    const scope = options.workflowBuilder ? realpathSync(options.scope) : validateFilesystemScope({ scope: options.scope, expectedScope: resolve(options.scope),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}) });
+    const temp = options.stateDir ? undefined : realpathSync(mkdtempSync(join(tmpdir(), "flow-sandbox-")));
+    const stateDir = options.stateDir ?? temp!;
     const plan = workerCommand(this.options);
     const assets = [fileURLToPath(new URL("../../..", import.meta.url)), ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
@@ -53,6 +55,7 @@ export class WorkerBackend implements AgentBackend {
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
     const cleanups: (() => void)[] = [];
+    let removed: Promise<unknown> = Promise.resolve();
     if (this.name === "claude") {
       const claude = prepareClaudeState(stateDir, { ...process.env, ...this.options.env }, scope, options.resume,
         { viewRoot: stateDir, secureStorage: support.provider.claudeAuthDir ?? null });
@@ -62,7 +65,7 @@ export class WorkerBackend implements AgentBackend {
       env.FLOW_CLAUDE_PATH = support.provider.claudePath;
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
-        if (lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
+        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
       }
     } else {
       const source = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
@@ -76,15 +79,18 @@ export class WorkerBackend implements AgentBackend {
       env.PI_CODING_AGENT_DIR = agent;
       env.PI_CODING_AGENT_SESSION_DIR = join(stateDir, "sessions");
     }
-    const cleanup = () => { for (const step of cleanups.splice(0)) step(); };
+    const cleanup = () => {
+      for (const step of cleanups.splice(0)) step();
+      if (temp) void removed.then(() => rmSync(temp, { recursive: true, force: true }));
+    };
     let proxy: WorkerSession | undefined;
     try {
       const spec = { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
-        workspace: scope, mounts: sandboxMounts([scope, stateDir], assets), env: {} };
+        workspace: scope, mounts: sandboxMounts([scope, stateDir, ...(this.name === "claude" && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [])], assets), env: {} };
       const sandbox = await createSandbox(support.provider, spec, join(stateDir, "sandbox.json"), options.signal);
-      cleanups.push(() => { void sandbox.remove().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
+      cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
-      proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
+      proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       await proxy.open(options.signal);
       return proxy;
     } catch (error) {
@@ -147,6 +153,7 @@ export class WorkerBackend implements AgentBackend {
 
 class WorkerSession implements BackendSession {
   capabilities!: Capabilities;
+  get sandbox(): Sandbox | undefined { return this.launchOptions.sandboxed; }
   private resume: string | undefined;
   private readonly worker: ReturnType<typeof launchWorker>;
   private readonly rpc: WorkerRpc;
@@ -241,7 +248,7 @@ class WorkerSession implements BackendSession {
         ...(this.launchOptions.backendModule ? { backendModule: this.launchOptions.backendModule } : {}),
       }], controller.signal);
       this.updateSnapshot(state);
-      if (mcp instanceof SandboxMcpSession) mcp.attach((method, args) => this.rpc.call(method, args));
+      if (mcp instanceof SandboxMcpSession) mcp.attach((method, args, signal) => this.rpc.call(method, args, signal));
       const methods = new Set(state.methods);
       if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
