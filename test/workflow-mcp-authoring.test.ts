@@ -567,7 +567,8 @@ test('startup rejection remains safe and does not create a cached successful dis
   } finally { await f.cleanup(); }
 });
 
-test('routes serve only metadata and explicit discovery; reject extra/repeated query parameters and execution endpoints', async () => {
+test('routes serve only metadata and explicit discovery; reject extra/repeated query parameters and execution endpoints', async t => {
+  t.mock.method(console, 'error', () => {});
   const f = fixture();
   const server = createServer(async (request, response) => {
     const handled = await workflowMcpAuthoringRoutes(request, response, new URL(request.url!, 'http://localhost'), f.service);
@@ -586,6 +587,9 @@ test('routes serve only metadata and explicit discovery; reject extra/repeated q
     assert.equal(f.starts[0]!.scope, f.project);
     for (const path of ['/api/workflow-mcp?unknown=1', '/api/workflow-mcp?projectId=a&projectId=b', '/api/workflow-mcp?projectId=', '/api/workflow-mcp?projectId=%00', '/api/workflow-mcp/%2F', '/api/workflow-mcp/manual/call', '/api/workflow-mcp/missing', '/api/workflow-mcp?projectId=unlisted']) {
       assert.equal((await fetch(base + path)).status, 400, path);
+    }
+    for (const [path, reason] of [['/api/workflow-mcp/missing', /: Unknown MCP connection$/], ['/api/workflow-mcp?projectId=unlisted', /: Workflow Project is not opted in$/]] as const) {
+      assert.match((await (await fetch(base + path)).json() as { error: string }).error, reason, path);
     }
     assert.equal((await fetch(base + '/api/workflow-mcp/manual', { method: 'POST' })).status, 405);
     assert.equal((await fetch(base + '/api/other')).status, 404);

@@ -124,6 +124,28 @@ test('capacity includes timed-out readers until cleanup; excess requests are not
   await f.checks.shutdown();
 });
 
+test('a failed reader stop releases its capacity', async () => {
+  const launch: typeof launchWorker = () => {
+    const child = new EventEmitter();
+    return {
+      child: child as ChildProcess, exited: new Promise<void>(() => {}), diagnostics: () => '',
+      send: (_request: unknown, callback: (error?: Error | null) => void) => callback(null),
+      onMessage: (listener: (message: unknown) => void) => { child.on('message', listener); },
+      stop: async () => { throw new Error('kill EPERM'); },
+    };
+  };
+  const checks = new WorkflowAuthoringScopeChecks({ launch: options => {
+    const helper = launch(options);
+    setImmediate(() => helper.child.emit('message', { ok: true, result: { path: '/scope', identity: '1:2' } }));
+    return helper;
+  } });
+  for (let index = 0; index < 6; index++) {
+    assert.deepEqual(await checks.read('/scope'), { path: '/scope', identity: '1:2' });
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(checks.hasActiveWork(), false);
+});
+
 test('concurrent identical checks share only pending work and refresh after settlement', async () => {
   const f = fakeReaders();
   const directory = { path: '/scope', identity: '1:2' };

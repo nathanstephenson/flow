@@ -75,10 +75,7 @@ export class WorkflowAuthoringScopeChecks {
         clearTimeout(timer);
         if (error) reject(error); else accept(result!);
         if (!helper) { finishCleanup(); return; }
-        void helper.stop(async () => {}).then(() => {
-          this.readers.delete(reader!);
-          finishCleanup();
-        }, failCleanup);
+        void helper.stop(async () => {}).finally(() => this.readers.delete(reader!)).then(finishCleanup, failCleanup);
       };
       const timer = setTimeout(() => finish(unavailable()), 5000);
       const source = import.meta.url.endsWith('.ts');
