@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  McpToolDiscovery,
+  McpToolSnapshot,
   WorkflowDefinition,
   WorkflowStep,
 } from "../../../src/protocol/workflows.ts";
@@ -11,7 +11,10 @@ import {
   initialTemplate,
   templateValue,
 } from "../presentation/workflow-json-schema.ts";
-import type { WorkflowMcpConnections } from "../../../src/protocol/workflow-mcp-authoring.ts";
+import type {
+  WorkflowMcpConnections,
+  WorkflowMcpDiscovery,
+} from "../../../src/protocol/workflow-mcp-authoring.ts";
 import { workflowMcpApi } from "./workflow-api.ts";
 import { JsonSchemaEditor } from "./workflow-json-schema.tsx";
 import { Button } from "./ui/button.tsx";
@@ -84,9 +87,11 @@ export function McpStepEditor({
     : undefined;
   const [discovery, setDiscovery] = useState<{
     path: string;
-    data?: McpToolDiscovery;
+    data?: WorkflowMcpDiscovery;
     error?: string;
   }>();
+  const [toolFetch, setToolFetch] = useState<{ error?: string }>();
+  const toolRequest = useRef<AbortController | undefined>(undefined);
   const [discoveryRefresh, setDiscoveryRefresh] = useState(0);
   const consumedDiscoveryRefresh = useRef(0);
   const discoveryVersion = useRef(0);
@@ -96,8 +101,9 @@ export function McpStepEditor({
     const refresh = discoveryRefresh !== consumedDiscoveryRefresh.current;
     consumedDiscoveryRefresh.current = discoveryRefresh;
     setDiscovery(undefined);
+    setToolFetch(undefined);
     if (discoveryPath) {
-      void workflowMcpApi<McpToolDiscovery>(
+      void workflowMcpApi<WorkflowMcpDiscovery>(
         refresh ? `${discoveryPath}${query ? "&" : "?"}refresh=1` : discoveryPath,
         controller.signal,
       )
@@ -113,11 +119,35 @@ export function McpStepEditor({
     return () => {
       discoveryVersion.current++;
       controller.abort();
+      toolRequest.current?.abort();
     };
   }, [discoveryPath, discoveryRefresh]);
   const result = discovery?.path === discoveryPath ? discovery : undefined;
   const busy = !!discoveryPath && !result;
   const tools = result?.data?.tools ?? [];
+  const selectTool = (toolName: string) => {
+    if (!discoveryPath || !tools.some((tool) => tool.toolName === toolName))
+      return;
+    toolRequest.current?.abort();
+    const controller = (toolRequest.current = new AbortController());
+    setToolFetch({});
+    void workflowMcpApi<McpToolSnapshot>(
+      `/api/workflow-mcp/${encodeURIComponent(connectionId)}/tools/${encodeURIComponent(toolName)}${query}`,
+      controller.signal,
+    )
+      .then((tool) => {
+        if (controller.signal.aborted) return;
+        setToolFetch(undefined);
+        onChange({
+          ...step,
+          tool,
+          mapping: { kind: "template", template: initialTemplate(tool.inputSchema) },
+        });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setToolFetch({ error: String(error) });
+      });
+  };
   const toolErrors = result?.data?.errors ?? [];
   const compatible = tools.length;
   const incompatible = toolErrors.length;
@@ -248,20 +278,17 @@ export function McpStepEditor({
           </section>
         )}
         <Select
-          value={JSON.stringify(step.tool)}
-          disabled={busy || !tools.length}
-          onValueChange={(snapshot) => {
-            const tool = tools.find((tool) => JSON.stringify(tool) === snapshot);
-            if (tool)
-              onChange({
-                ...step,
-                tool,
-                mapping: {
-                  kind: "template",
-                  template: initialTemplate(tool.inputSchema),
-                },
-              });
-          }}
+          value={
+            tools.find(
+              (tool) =>
+                tool.connectionId === step.tool.connectionId &&
+                tool.toolName === step.tool.toolName &&
+                tool.identity === step.tool.identity &&
+                tool.serverIdentity === step.tool.serverIdentity,
+            )?.toolName ?? ""
+          }
+          disabled={busy || !tools.length || (!!toolFetch && !toolFetch.error)}
+          onValueChange={(toolName) => toolName && selectTool(toolName)}
         >
           <SelectTrigger aria-label="MCP tool">
             <SelectValue>
@@ -272,8 +299,13 @@ export function McpStepEditor({
           </SelectTrigger>
           <SelectContent>
             {tools.map((tool) => (
-              <SelectItem key={tool.toolName} value={JSON.stringify(tool)}>
+              <SelectItem key={tool.toolName} value={tool.toolName}>
                 {tool.toolName}
+                {tool.description && (
+                  <span className="max-w-80 truncate text-xs text-muted-foreground">
+                    {tool.description}
+                  </span>
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -282,6 +314,11 @@ export function McpStepEditor({
           Tool identity and original schemas are pinned. Changed servers or
           schemas require explicit reselection, not automatic retargeting.
         </p>
+        {toolFetch?.error && (
+          <p className="text-xs text-destructive" role="alert">
+            {toolFetch.error}
+          </p>
+        )}
         {result?.error && (
           <p className="text-xs text-destructive" role="alert">
             {result.error}

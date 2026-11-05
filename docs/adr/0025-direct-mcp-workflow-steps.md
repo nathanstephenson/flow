@@ -12,6 +12,8 @@ while incompatible tools carry their name, input/output schema context and the u
 error. A schema failure in one tool does not hide other tools. Start preflight checks only pinned tools;
 start and every attempted call compare them with fresh discovery. Missing, incompatible or changed
 connections, servers, tools and schemas fail without retargeting.
+Authoring discovery lists tools without schemas. The editor gets the schemas of one tool only when
+the user selects it (ADR 0031).
 
 Each attempt owns a separate `McpSession`, reusing existing configuration and OAuth credential
 storage. It never disposes or retries the parent Backend Session's MCP client. The direct HTTP

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { McpSession } from '../backend/mcp.ts';
 import type { McpConnection } from '../protocol/mcp.ts';
-import type { WorkflowMcpAuthoring, WorkflowMcpCatalogue, WorkflowMcpConnections } from '../protocol/workflow-mcp-authoring.ts';
-import type { McpToolDiscovery } from '../protocol/workflows.ts';
+import type { WorkflowMcpAuthoring, WorkflowMcpCatalogue, WorkflowMcpConnections, WorkflowMcpDiscovery } from '../protocol/workflow-mcp-authoring.ts';
+import type { McpToolDiscovery, McpToolListing, McpToolSnapshot } from '../protocol/workflows.ts';
 import type { ConfigStore } from './config-store.ts';
 import type { SessionHost } from './host.ts';
 import { redactCredentials } from './credential-redaction.ts';
@@ -16,14 +16,15 @@ export type WorkflowMcpAuthoringOptions = {
   scope: string;
 };
 
+type Discovery = { tools: Array<{ listing: McpToolListing; snapshot: McpToolSnapshot }>; errors: McpToolDiscovery['errors'] };
 type Entry = {
   scope: string;
   directory: WorkflowAuthoringDirectory;
   connection: McpConnection;
   isolation: import('../protocol/settings.ts').FilesystemIsolationMode;
   generation: number;
-  promise: Promise<McpToolDiscovery>;
-  resolve: (value: McpToolDiscovery) => void;
+  promise: Promise<Discovery>;
+  resolve: (value: Discovery) => void;
   reject: (error: Error) => void;
   controller: AbortController;
   expires: number;
@@ -36,6 +37,11 @@ const MAX_BYTES = 192_000;
 const MAX_TOOLS = 256;
 const MAX_ERRORS = 128;
 const MAX_TOOL_BYTES = 48_000;
+const MAX_CACHED_BYTES = 2_000_000;
+const MAX_DESCRIPTION = 300;
+
+export class UnknownMcpTool extends Error {}
+export const validMcpToolName = (name: string) => /^[^\x00-\x1f\x7f]{1,128}$/.test(name);
 
 export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
   private readonly options: WorkflowMcpAuthoringOptions;
@@ -67,23 +73,40 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     } catch (error) { throw this.safeError(error); }
   }
 
-  discover(projectId: string | undefined, connectionId: string, refresh = false): Promise<McpToolDiscovery> {
-    return this.bounded(deadline => this.discoverWithin(projectId, connectionId, refresh, deadline));
+  discover(projectId: string | undefined, connectionId: string, refresh = false): Promise<WorkflowMcpDiscovery> {
+    return this.bounded(async deadline => {
+      const result = await this.discoverWithin(projectId, connectionId, refresh, deadline);
+      return this.redact(structuredClone({ tools: result.tools.map(tool => tool.listing), errors: result.errors }));
+    });
   }
 
-  private async discoverWithin(projectId: string | undefined, connectionId: string, refresh: boolean, deadline: number): Promise<McpToolDiscovery> {
+  tool(projectId: string | undefined, connectionId: string, toolName: string, expectedScope?: Pick<WorkflowMcpCatalogue, 'scope' | 'scopeIdentity'>): Promise<McpToolSnapshot> {
+    return this.bounded(async deadline => {
+      if (!validMcpToolName(toolName)) throw new Error('Invalid MCP tool name');
+      const result = await this.discoverWithin(projectId, connectionId, false, deadline, expectedScope, true);
+      const found = result.tools.find(tool => tool.snapshot.toolName === toolName);
+      if (!found) throw new UnknownMcpTool('Unknown MCP tool');
+      return this.redact(structuredClone(found.snapshot));
+    });
+  }
+
+  private async discoverWithin(projectId: string | undefined, connectionId: string, refresh: boolean, deadline: number, expectedScope?: Pick<WorkflowMcpCatalogue, 'scope' | 'scopeIdentity'>, known = false): Promise<Discovery> {
     const scope = await this.scope(projectId);
     this.checkDeadline(deadline);
+    if (expectedScope && (scope.path !== expectedScope.scope || scope.identity !== expectedScope.scopeIdentity))
+      throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
     const generation = this.generation;
     const connection = this.options.config.mcpConnections().find(connection => connection.id === connectionId);
     if (!connection) throw new Error('Unknown MCP connection');
+    if (known && !connection.enabledByDefault && !this.entries.has(this.key(scope, connection)))
+      throw new Error('MCP connection is not discovered; discover it in the MCP editor first');
     const result = await this.request(scope, connection, deadline, generation, refresh);
     this.checkDeadline(deadline);
     await this.scopes.check(scope);
     this.checkDeadline(deadline);
     this.refresh();
     if (generation !== this.generation) throw new Error('MCP configuration changed; discover again');
-    return this.redact(structuredClone(result));
+    return result;
   }
 
   catalogue(projectId?: string, expectedScope?: Pick<WorkflowMcpCatalogue, 'scope' | 'scopeIdentity'>): Promise<WorkflowMcpCatalogue> {
@@ -120,8 +143,8 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     }
     for (const { connection, discovery } of results) {
       const source = { connectionId: connection.id, connectionName: connection.name };
-      for (const tool of discovery?.tools ?? []) {
-        result.tools.push(this.redact(tool));
+      for (const { listing: tool } of discovery?.tools ?? []) {
+        result.tools.push(this.redact(structuredClone(tool)));
         if (result.tools.length > MAX_TOOLS || !fits()) {
           result.tools.pop();
           addError({ ...source, toolName: this.text(tool.toolName, 120), message: 'MCP catalogue limit exceeded; tool omitted' });
@@ -161,7 +184,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
 
   private key(scope: WorkflowAuthoringDirectory, connection: McpConnection): string { return JSON.stringify([scope.path, scope.identity, connectionIdentity(connection)]); }
 
-  private async request(scope: WorkflowAuthoringDirectory, connection: McpConnection, deadline: number, generation: number, refresh = false): Promise<McpToolDiscovery> {
+  private async request(scope: WorkflowAuthoringDirectory, connection: McpConnection, deadline: number, generation: number, refresh = false): Promise<Discovery> {
     this.checkDeadline(deadline);
     await this.scopes.check(scope);
     this.refresh();
@@ -177,7 +200,7 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
       this.entries.delete(oldest[0]);
     }
     let resolve!: Entry['resolve'], reject!: Entry['reject'];
-    const promise = new Promise<McpToolDiscovery>((yes, no) => { resolve = yes; reject = no; });
+    const promise = new Promise<Discovery>((yes, no) => { resolve = yes; reject = no; });
     const entry: Entry = { scope: scope.path, directory: scope, connection: structuredClone(connection), isolation: this.options.config.filesystemIsolationMode(), generation: this.generation, promise, resolve, reject, controller: new AbortController(), expires: 0, timer: undefined };
     entry.controller.signal.addEventListener('abort', () => {
       clearTimeout(entry.timer);
@@ -255,26 +278,30 @@ export class WorkflowMcpAuthoringService implements WorkflowMcpAuthoring {
     }
   }
 
-  private snapshot(connection: McpConnection, session: McpSession): McpToolDiscovery {
-    const result: McpToolDiscovery = { tools: [], errors: [] };
+  /** Keeps full snapshots for the cache. Responses carry listings; tool() serves one snapshot. */
+  private snapshot(connection: McpConnection, session: McpSession): Discovery {
+    const result: Discovery = { tools: [], errors: [] };
     let omitted = false;
     const error = (toolName: string, message: string) => {
       if (result.errors.length >= MAX_ERRORS) { omitted = true; return; }
       result.errors.push({ toolName: this.text(toolName, 120), message: this.text(message, 600) });
-      if (bytes(result) > MAX_BYTES - 1_024) { result.errors.pop(); omitted = true; }
     };
-    const tools = session.tools();
-    for (const tool of tools.slice(0, MAX_TOOLS)) {
+    const tools = session.tools().slice(0, MAX_TOOLS);
+    let cached = 0;
+    for (const [index, tool] of tools.entries()) {
       try {
-        const data = { connectionId: connection.id, connectionName: connection.name, serverIdentity: tool.serverIdentity, toolName: tool.definition.name, inputSchema: tool.definition.inputSchema, outputSchema: tool.definition.outputSchema };
+        const data = { connectionId: connection.id, connectionName: connection.name, serverIdentity: tool.serverIdentity, toolName: tool.definition.name, description: tool.definition.description, inputSchema: tool.definition.inputSchema, outputSchema: tool.definition.outputSchema };
         this.assertNoSecrets(data);
         if (bytes(data) > MAX_TOOL_BYTES) throw new Error('MCP tool exceeds the discovery size limit');
+        cached += bytes(data);
+        if (cached > MAX_CACHED_BYTES) { error('', `MCP discovery memory limit exceeded; ${tools.length - index} tools omitted`); break; }
         const snapshot = snapshotTool(connection, tool);
-        result.tools.push(snapshot);
-        if (bytes(result) > MAX_BYTES - 64_000) { result.tools.pop(); throw new Error('MCP discovery size limit exceeded; tool omitted'); }
+        const { inputSchema: _input, outputSchema: _output, ...listing } = snapshot;
+        const description = tool.definition.description?.slice(0, MAX_DESCRIPTION);
+        result.tools.push({ snapshot, listing: description === undefined ? listing : { ...listing, description } });
       } catch (failure) { error(tool.definition.name, this.safeError(failure).message); }
     }
-    if (tools.length > MAX_TOOLS) error('', 'MCP tool count limit exceeded; additional tools omitted');
+    if (session.tools().length > MAX_TOOLS) error('', 'MCP tool count limit exceeded; additional tools omitted');
     if (omitted) result.errors.push({ toolName: '', message: 'MCP diagnostic limit exceeded; additional diagnostics omitted' });
     return result;
   }

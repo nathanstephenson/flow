@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { McpSession, McpTool } from '../src/backend/mcp.ts';
 import type { McpConnection } from '../src/protocol/mcp.ts';
-import { WorkflowMcpAuthoringService, type WorkflowMcpAuthoringOptions } from '../src/daemon/workflow-mcp-authoring.ts';
+import { UnknownMcpTool, WorkflowMcpAuthoringService, type WorkflowMcpAuthoringOptions } from '../src/daemon/workflow-mcp-authoring.ts';
 import { workflowMcpAuthoringRoutes } from '../src/daemon/workflow-mcp-authoring-routes.ts';
 import { connectionIdentity } from '../src/daemon/workflow-mcp.ts';
 import { workflowAuthoringDirectory, workflowAuthoringScope } from '../src/daemon/workflow-authoring-scope.ts';
@@ -309,14 +309,14 @@ test('credential-bearing schemas, keys, names and errors are excluded or redacte
   } finally { await f.cleanup(); }
 });
 
-test('oversized tools are omitted whole with diagnostics; total catalogue bytes and tool counts are bounded', async () => {
+test('oversized tools are omitted whole with diagnostics; catalogue listings carry no schemas and tool counts are bounded', async () => {
   const f = fixture(Array.from({ length: 8 }, (_, i) => connection(`server${i}`)));
   try {
-    f.configure(fake => { fake.tools = [tool('oversized', { type: 'object', description: 'x'.repeat(48_000) }), ...Array.from({ length: 30 }, (_, i) => tool(`valid${i}`, { type: 'object', description: 'x'.repeat(4_000) }))]; });
+    f.configure(fake => { fake.tools = [tool('oversized', { type: 'object', description: 'x'.repeat(48_000) }), ...Array.from({ length: 40 }, (_, i) => tool(`valid${i}`, { type: 'object', description: 'x'.repeat(4_000) }))]; });
     const result = await f.service.catalogue();
     assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 192_000);
-    assert.ok(result.tools.length > 0 && result.tools.length < 240);
-    assert.ok(result.tools.every(tool => tool.toolName !== 'oversized' && (tool.inputSchema as { description: string }).description.length === 4_000));
+    assert.equal(result.tools.length, 256);
+    assert.ok(result.tools.every(tool => tool.toolName !== 'oversized' && !('inputSchema' in tool)));
     assert.ok(result.errors.some(error => /size limit/.test(error.message)));
     assert.ok(result.errors.some(error => /catalogue limit/.test(error.message)));
     f.connections([connection()]);
@@ -325,6 +325,43 @@ test('oversized tools are omitted whole with diagnostics; total catalogue bytes 
     assert.equal(many.tools.length, 256);
     assert.ok(many.errors.some(error => /count limit/.test(error.message)));
     assert.ok(Buffer.byteLength(JSON.stringify(many)) <= 192_000);
+  } finally { await f.cleanup(); }
+});
+
+test('discovery lists every tool past 128 KB of schemas and serves one full snapshot from the cache', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000 });
+  const f = fixture();
+  try {
+    f.configure(fake => { fake.tools = [...Array.from({ length: 60 }, (_, i) => { const listed = tool(`granola__${i}`, { type: 'object', description: 'x'.repeat(4_000) }); listed.definition.description = `Tool ${i}`; return listed; }), tool('incompatible', { type: 'object', unknownKeyword: true })]; });
+    const listed = await f.service.discover(undefined, 'default');
+    assert.equal(listed.tools.length, 60);
+    assert.ok(listed.tools.every(tool => !('inputSchema' in tool)));
+    assert.equal(listed.tools[59]!.description, 'Tool 59');
+    assert.deepEqual(listed.errors.map(error => error.toolName), ['incompatible']);
+    const snapshot = await f.service.tool(undefined, 'default', 'granola__59');
+    assert.deepEqual(snapshot, { connectionId: 'default', connectionName: 'default', identity: listed.tools[59]!.identity, serverIdentity: 'fixture-server', toolName: 'granola__59', inputSchema: { type: 'object', description: 'x'.repeat(4_000) } });
+    assert.equal(f.starts.length, 1);
+    await assert.rejects(f.service.tool(undefined, 'default', 'incompatible'), UnknownMcpTool);
+    await assert.rejects(f.service.tool(undefined, 'default', 'bad\nname'), /Invalid MCP tool name/);
+    await assert.rejects(f.service.tool(undefined, 'default', 'x'.repeat(129)), /Invalid MCP tool name/);
+    await assert.rejects(f.service.tool(undefined, 'manual', 'read'), /discover it in the MCP editor/);
+    assert.equal(f.starts.length, 1);
+    t.mock.timers.tick(60_001);
+    await f.service.tool(undefined, 'default', 'granola__0');
+    assert.equal(f.starts.length, 2);
+    await f.service.discover(undefined, 'manual');
+    assert.equal((await f.service.tool(undefined, 'manual', 'granola__0')).connectionId, 'manual');
+  } finally { await f.cleanup(); }
+});
+
+test('a connection past 2 MB of snapshots reports one memory limit error', async () => {
+  const f = fixture();
+  try {
+    f.configure(fake => { fake.tools = Array.from({ length: 60 }, (_, i) => tool(`big${i}`, { type: 'object', description: 'x'.repeat(40_000) })); });
+    const result = await f.service.discover(undefined, 'default');
+    assert.ok(result.tools.length > 40 && result.tools.length < 60);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0]!.message, new RegExp(`memory limit exceeded; ${60 - result.tools.length} tools omitted`));
   } finally { await f.cleanup(); }
 });
 
@@ -590,6 +627,14 @@ test('routes serve only metadata and explicit discovery; reject extra/repeated q
     }
     for (const [path, reason] of [['/api/workflow-mcp/missing', /: Unknown MCP connection$/], ['/api/workflow-mcp?projectId=unlisted', /: Workflow Project is not opted in$/]] as const) {
       assert.match((await (await fetch(base + path)).json() as { error: string }).error, reason, path);
+    }
+    const project = '?' + new URLSearchParams({ projectId: f.project });
+    const snapshot = await fetch(base + '/api/workflow-mcp/manual/tools/read' + project);
+    assert.equal(snapshot.status, 200);
+    assert.deepEqual((await snapshot.json() as { inputSchema: unknown }).inputSchema, { type: 'object', properties: { id: { type: 'string' } } });
+    assert.equal((await fetch(base + '/api/workflow-mcp/manual/tools/missing' + project)).status, 404);
+    for (const path of ['/api/workflow-mcp/manual/tools/read%0A', `/api/workflow-mcp/manual/tools/${'x'.repeat(129)}`, '/api/workflow-mcp/manual/tools/', '/api/workflow-mcp/manual/tools/read/extra', '/api/workflow-mcp/manual/tools/read?refresh=1', '/api/workflow-mcp/manual/tools/%E0%A4%A']) {
+      assert.equal((await fetch(base + path)).status, 400, path);
     }
     assert.equal((await fetch(base + '/api/workflow-mcp/manual', { method: 'POST' })).status, 405);
     assert.equal((await fetch(base + '/api/other')).status, 404);

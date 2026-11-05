@@ -46,7 +46,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     const catalogue = await authoring.catalogue(undefined, { scope, scopeIdentity: directory.identity });
     assert.equal(catalogue.errors.length, 0);
     assert.equal(catalogue.scopeIdentity, directory.identity);
-    const inputSchema = catalogue.tools[0]!.inputSchema;
+    const { inputSchema } = await authoring.tool(undefined, 'local', catalogue.tools[0]!.toolName, { scope, scopeIdentity: directory.identity });
     assert.ok(typeof inputSchema === 'object' && inputSchema !== null);
     assert.equal(inputSchema.description, directory.identity);
     assert.ok(readFileSync(join(scope, 'methods'), 'utf8').includes('tools/list'));

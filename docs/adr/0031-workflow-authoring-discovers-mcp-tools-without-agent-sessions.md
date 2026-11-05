@@ -22,6 +22,9 @@ stdio starts from a validated, retained directory descriptor; Bubblewrap validat
 Scope descriptor it mounts. Platforms without descriptor-bound stdio launch fail closed for
 stdio authoring discovery; HTTP discovery remains available. Concurrent readers share discovery,
 not callable handles.
+Discovery responses list tools without schemas. The cache keeps the full snapshots, up to 2 MB for
+each connection. A tool request returns one snapshot from the cache, and discovers again when the
+entry has expired. Thus a connection with many large schemas lists all of its tools.
 Unavailable connections and incompatible tools carry safe diagnostics; one failure need not hide
 compatible tools. The ten-second authoring deadline starts at request admission and includes Scope
 checks, queue wait, initialization and disposal response waits. Expired queued work is removed and
@@ -35,8 +38,10 @@ transport close. Host shutdown stops admission and retains ownership through tha
 
 The restricted builder reads a virtual `mcp-tools.json` through its existing host read capability.
 The catalogue discovers default-enabled connections and includes explicitly discovered cached
-connections. It contains exact tool snapshots and diagnostics, not URLs, arguments, credentials,
-MCP clients or invocation functions. Schemas and other service-provided metadata are untrusted data.
+connections. It lists tools without schemas, and gives diagnostics. It does not contain URLs,
+arguments, credentials, MCP clients or invocation functions. A virtual
+`mcp-tools/<connectionId>/<toolName>.json` read gives the exact snapshot of one tool. The host serves
+it from the discovery cache, never from the filesystem. Schemas and other service-provided metadata are untrusted data.
 Writes can introduce only snapshots supplied by the host, or preserve original snapshots unchanged;
 the model cannot fabricate or edit their identity/schema fields. The authoring Scope must still
 match the builder's pinned Scope. The builder supplies its pinned directory identity to discovery,

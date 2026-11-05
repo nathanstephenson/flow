@@ -35,7 +35,8 @@ for (const projectSpecific of [false, true]) it(`isolated ${projectSpecific ? 'P
   t.after(() => host.shutdown());
   const service = new WorkflowBuilderService({ host, stateRoot, scope,
     config: { projectRoot: () => scope, projectInclude: () => [scope], defaultModel: () => 'flow-test/parent', defaultEffort: () => 'off' },
-    mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }),
+    mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [{ connectionId, connectionName: tool.connectionName, identity, serverIdentity, toolName }], errors: [] }),
+    mcpTool: async () => structuredClone(tool),
   });
   t.after(() => service.shutdown());
   const view = await service.create({ definition });
