@@ -156,18 +156,26 @@ export function TranscriptView({
    * font swaps, and row disclosures. Those can grow a freshly opened transcript *after* its last
    * React commit, including an Idle Agent Session that will never get another streaming tick.
    * Setting `scrollTop` changes neither box's size, so this cannot feed itself.
+   *
+   * The same changes can show or hide the scrollbar, so this also writes its width as
+   * `--scrollbar-width`. The Composer's fade stops there and does not cover the scrollbar.
    */
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
+    const pane = element.closest<HTMLElement>("[data-pane]");
 
     const observer = new ResizeObserver(() => {
+      pane?.style.setProperty("--scrollbar-width", `${element.offsetWidth - element.clientWidth}px`);
       followBottom();
       scheduleObserved();
     });
     observer.observe(element);
     if (content.current) observer.observe(content.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      pane?.style.removeProperty("--scrollbar-width");
+    };
   }, [followBottom, scheduleObserved]);
 
   /**

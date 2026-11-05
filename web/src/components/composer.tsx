@@ -705,7 +705,7 @@ export function Composer({
       className={cn(
         floating
           ? [
-              "safe-composer-bottom pointer-events-none absolute inset-x-0 bottom-0 px-3 pt-8 pb-3",
+              "safe-composer-bottom pointer-events-none absolute right-[var(--scrollbar-width,0px)] bottom-0 left-0 px-3 pt-8 pb-3",
               "bg-gradient-to-t from-background via-background to-transparent",
             ]
           : "relative",
