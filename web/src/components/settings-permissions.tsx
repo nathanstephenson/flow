@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { useHost } from "@/host.tsx";
 import { SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { ToolName } from "@/components/tool-name.tsx";
 
 /**
  * The Standing Authorisations: tools this machine runs without asking, and how to take one back.
@@ -59,7 +60,7 @@ export function PermissionsSettings() {
               className="flex items-baseline justify-between gap-3 border-b py-1.5 last:border-b-0"
             >
               {/* Monospace: a tool name is an identifier the backend chose, not prose. */}
-              <span className="min-w-0 truncate font-mono text-xs">{name}</span>
+              <span className="min-w-0 truncate font-mono text-xs"><ToolName name={name} /></span>
               <Button variant="ghost" size="icon-sm" aria-label={`Revoke ${name}`} onClick={() => revoke(name)}>
                 <X aria-hidden />
               </Button>

@@ -18,6 +18,10 @@ OAuth uses one identity per connection and endpoint on the machine. Credentials 
 
 An HTTP connection can also carry custom request headers, for a server that wants a static token or a tenant identifier instead of OAuth. A header value is either a literal string or the name of a Secret. A Secret name keeps the value in the Secret file with mode `0600` and out of Settings responses; a literal value is stored in Settings and is readable by any client holding the token. A Secret-backed header value is always redacted from transcripts and Workflow Executions; a literal one is redacted only when its header name reads as a credential, because redaction is substring replacement and an innocuous value would corrupt unrelated output. A connection whose header names a missing Secret fails rather than connecting without it. Headers are sent before the OAuth token, so on a connection using both, OAuth owns `Authorization`.
 
+## Amendment: readable connection IDs
+
+A new connection gets an ID made from its name, for example `github` or `github-2`. The ID has a maximum of 20 characters. The ID does not change when the name changes. Existing IDs stay as they are, because Standing Authorisations and Agent Session selections use them. The web UI shows an MCP tool as `<connection name> › <tool>` and shows the full tool name in a tooltip.
+
 ## Consequences
 
 Agent Session creation remains nonblocking. The first model prompt and Workflow Step wait for bounded discovery and registration before starting. Failed connections remain visible with Retry rather than preventing unrelated work. Registration cannot overlap parent turns, Subagents, Background Calls, or Workflow Steps.
