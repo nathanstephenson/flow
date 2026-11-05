@@ -183,7 +183,7 @@ export function installation(slot: string) {
       const barrier = readBarrier(barrierPath);
       if (barrier) {
         const allowed = barrier.capability;
-        if (!processAlive(barrier.pid) || !allowed || !capability || allowed.token !== capability || allowed.root !== root || JSON.stringify(allowed.args) !== JSON.stringify(args)) throw new Error(`Flow startup blocked by ${barrierPath}. An update is active or needs manual repair; see README, Updating Flow.`);
+        if (!processAlive(barrier.pid) || !allowed || !capability || allowed.token !== capability || allowed.root !== root || JSON.stringify(allowed.args) !== JSON.stringify(args)) throw new Error(`Flow startup blocked by ${barrierPath}. An update is active or needs manual repair; see docs/updating.md, Manual repair.`);
         delete barrier.capability;
         save(barrier);
       }

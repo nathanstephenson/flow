@@ -63,7 +63,7 @@ const BACKOFF_MAX_MS = 8_000;
 
 /**
  * The Session Host sends no heartbeat, so at this layer a stream that has gone quiet is
- * indistinguishable from an Agent Session with nothing to say. README documents `--address 0.0.0.0`
+ * indistinguishable from an Agent Session with nothing to say. docs/remote-access.md documents `--address 0.0.0.0`
  * for containers, where a proxy's idle timeout drops a quiet stream without telling either end.
  * Treating silence as death costs one resumed reconnect when the stream was merely idle, and is the
  * only thing that recovers the case where it was real.
