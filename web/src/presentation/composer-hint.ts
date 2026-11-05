@@ -28,15 +28,13 @@ export type Answering = { index: number; count: number; multiSelect: boolean };
 /**
  * What the composer says while an Enquiry has the turn.
  *
- * The keys are the whole of what this has to say. What the placeholder normally carries — that this
- * Revives — is about a *message*, and while an Enquiry is open no message is going anywhere.
+ * It says how to answer, and names only Space, the one key a reader would not guess. What the
+ * placeholder normally carries — that this revives — is about a *message*, and while an Enquiry is
+ * open no message is going anywhere.
  */
 export function answeringPlaceholder({ index, count, multiSelect }: Answering): string {
-  const where = count > 1 ? `Question ${index + 1} of ${count}` : "Answer above";
-  const how = multiSelect
-    ? "space to choose any that apply, Enter to answer"
-    : "↑↓ to choose, Enter to answer";
-  return `${where} — ${how}, or type your own`;
+  const how = `${multiSelect ? "press Space to choose all that apply" : "choose an answer above"}, or type your own`;
+  return count > 1 ? `Question ${index + 1} of ${count}: ${how}` : how[0]!.toUpperCase() + how.slice(1);
 }
 
 export function composerPlaceholder(chrome: Chrome, answering?: Answering): string {
@@ -55,8 +53,8 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
    */
   if (chrome.asking && answering) return answeringPlaceholder(answering);
   /*
-   * Beside the Enquiry's line and on the same argument: the keys are the whole of what there is to
-   * say, because nothing about a *message* is true while a tool call is holding the turn.
+   * Beside the Enquiry's line and on the same argument: nothing about a *message* is true while a
+   * tool call is holding the turn. It names only Esc, the one key a reader would not guess.
    *
    * The tool is named here even though the panel above already names it, which the Enquiry's line
    * does not do for its Question. The difference is what is being asked: a Question is a sentence
@@ -64,7 +62,7 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
    * the box — so the box has to say what they are about to authorise.
    */
   if (chrome.authorising) {
-    return `Authorise ${chrome.authorising.tool}? — ↑↓ to choose, Enter to decide, Esc to refuse`;
+    return `Allow ${chrome.authorising.tool} to run? Choose above, or press Esc to refuse`;
   }
   /*
    * Before the status cases, and named rather than left as a generic "running".
@@ -74,7 +72,7 @@ export function composerPlaceholder(chrome: Chrome, answering?: Answering): stri
    * what is happening.
    */
   if (chrome.compacting) return "Compacting the Conversation Context…";
-  if (canRevive(chrome.status)) return "Message… — this Revives the Agent Session";
+  if (canRevive(chrome.status)) return "Send a message to revive this Agent Session";
   return "Message…";
 }
 

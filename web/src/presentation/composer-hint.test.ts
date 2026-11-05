@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { composerPlaceholder, sendLabel } from "./composer-hint.ts";
+import { answeringPlaceholder, composerPlaceholder, sendLabel } from "./composer-hint.ts";
 import type { Chrome } from "../store/contract.ts";
 
 const chrome = (over: Partial<Chrome>): Chrome => ({
@@ -29,8 +29,8 @@ const chrome = (over: Partial<Chrome>): Chrome => ({
 describe("what the composer promises about the next message", () => {
   it("says a Dormant or Settled Agent Session will be Revived", () => {
     // ADR 0003: the next message *is* the Revive, so this is a consequence and not a prompt.
-    assert.match(composerPlaceholder(chrome({ status: "dormant" })), /Revives the Agent Session/);
-    assert.match(composerPlaceholder(chrome({ status: "settled" })), /Revives the Agent Session/);
+    assert.equal(composerPlaceholder(chrome({ status: "dormant" })), "Send a message to revive this Agent Session");
+    assert.equal(composerPlaceholder(chrome({ status: "settled" })), "Send a message to revive this Agent Session");
     assert.match(sendLabel(chrome({ status: "dormant" })), /^Revive this Agent Session and send$/);
   });
 
@@ -53,7 +53,7 @@ describe("what the composer promises about the next message", () => {
   });
 
   // A compaction Revives first (ADR 0003), so this is the state a session is really in when someone
-  // compacts one they have just come back to — and "this Revives the Agent Session" is stale by then.
+  // compacts one they have just come back to — and "Send a message to revive this Agent Session" is stale by then.
   it("says it is compacting even from a status that would otherwise offer a Revive", () => {
     assert.match(
       composerPlaceholder(chrome({ status: "dormant", compacting: true })),
@@ -78,5 +78,19 @@ describe("what the composer promises about the next message", () => {
     // The idle "Enter sends, Shift+Enter for a newline" boilerplate is gone: read once, noise after.
     assert.equal(composerPlaceholder(chrome({})), "Message…");
     assert.equal(sendLabel(chrome({})), "Send this message");
+  });
+});
+
+describe("what the composer says while a decision is open", () => {
+  it("names the question and the way to answer it", () => {
+    assert.equal(answeringPlaceholder({ index: 0, count: 1, multiSelect: false }), "Choose an answer above, or type your own");
+    assert.equal(answeringPlaceholder({ index: 0, count: 3, multiSelect: false }), "Question 1 of 3: choose an answer above, or type your own");
+    assert.equal(answeringPlaceholder({ index: 0, count: 1, multiSelect: true }), "Press Space to choose all that apply, or type your own");
+    assert.equal(answeringPlaceholder({ index: 1, count: 3, multiSelect: true }), "Question 2 of 3: press Space to choose all that apply, or type your own");
+  });
+
+  it("asks whether a tool may run", () => {
+    const authorising = { tool: "Bash" } as Chrome["authorising"];
+    assert.equal(composerPlaceholder(chrome({ authorising })), "Allow Bash to run? Choose above, or press Esc to refuse");
   });
 });
