@@ -13,12 +13,23 @@ function ownedProjects(stateDir: string): string {
 }
 
 /** Claude's Scope key, including the CLI's suffix for paths longer than 200 characters. */
-function projectKey(scope: string): string {
+export function projectKey(scope: string): string {
   const key = scope.replace(/[^a-zA-Z0-9]/g, "-");
   if (key.length <= 200) return key;
   let hash = 0;
   for (let i = 0; i < scope.length; i++) hash = ((hash << 5) - hash + scope.charCodeAt(i)) | 0;
   return `${key.slice(0, 200)}-${Math.abs(hash).toString(36)}`;
+}
+
+/** Move the owned records of Scope `from` to Scope `to`. Does nothing when there is no record. */
+export function relocateClaudeState(stateDir: string, from: string, to: string): void {
+  if (!existsSync(join(stateDir, "claude-projects"))) return;
+  const projects = ownedProjects(stateDir);
+  const source = join(projects, projectKey(from));
+  const destination = join(projects, projectKey(to));
+  if (!existsSync(source) || source === destination) return;
+  if (existsSync(destination)) throw new Error(`A Claude record for ${to} already exists`);
+  renameSync(source, destination);
 }
 
 /** Copy only regular, unlinked records; never follow a link into other host state. */

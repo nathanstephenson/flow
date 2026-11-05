@@ -130,6 +130,10 @@ export type SessionSummary = {
    * the first.
    */
   worktree?: true;
+  /** Set when the Agent Session is stopped and its Scope no longer exists, so it must relocate before a Revive. */
+  scopeMissing?: true;
+  /** A folder that is probably the missing Scope, for the relocation dialog to offer. */
+  suggestedScope?: string;
 };
 
 export type Command =
@@ -179,6 +183,8 @@ export type Command =
   | { type: "cancel_queued"; sessionId: string; messageId: string }
   | { type: "abort"; sessionId: string }
   | { type: "revive"; sessionId: string }
+  /** Bind a stopped Agent Session whose Scope is gone to `scope` (ADR 0036). `repo` is required for a Worktree. */
+  | { type: "relocate"; sessionId: string; scope: string; repo?: string }
   | { type: "dispose"; sessionId: string }
   | { type: "settle"; sessionId: string }
   /**

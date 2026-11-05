@@ -33,7 +33,7 @@ describe("durability and revive", () => {
 
   it("replays a Presentation Transcript across a restart", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.say("hi there");
     first.backend.latest.completeTurn();
@@ -55,7 +55,7 @@ describe("durability and revive", () => {
     const firstHost = new SessionHost({ store, defaultModel: () => "fake-1", defaultEffort: () => "max" });
     firstHost.registerBackend(firstBackend);
     await firstHost.load();
-    const id = await firstHost.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await firstHost.create({ scope: tmpdir(), backend: "fake" });
     await firstHost.shutdown();
 
     const second = await freshHost();
@@ -69,7 +69,7 @@ describe("durability and revive", () => {
 
   it("loads previously running sessions as Dormant, spending nothing", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.completeTurn();
     await first.host.shutdown();
@@ -81,7 +81,7 @@ describe("durability and revive", () => {
 
   it("closes a turn torn by an unclean shutdown", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     // No completeTurn and no shutdown: the process simply vanishes mid-turn.
 
@@ -102,7 +102,7 @@ describe("durability and revive", () => {
     // the only record it existed is the transcript. Left alone, a Revive shows a subagent running
     // forever with a spinner nothing will stop.
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.beginSubagent("explorer", "read package.json");
 
@@ -121,7 +121,7 @@ describe("durability and revive", () => {
      * transcript replayed with a trailing `asked` would lock every client that loaded it.
      */
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.ask([
       { header: "Library", question: "Which library?", multiSelect: false, options: [{ label: "zod" }] },
@@ -138,7 +138,7 @@ describe("durability and revive", () => {
 
   it("leaves an Enquiry answered before the crash alone", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     const askId = first.backend.latest.ask([
       { header: "Library", question: "Which library?", multiSelect: false, options: [{ label: "zod" }] },
@@ -160,7 +160,7 @@ describe("durability and revive", () => {
      * already gone Dormant.
      */
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.askPermission("mcp__gdrive__trash_file", { fileId: "abc" });
 
@@ -180,7 +180,7 @@ describe("durability and revive", () => {
 
   it("leaves a Permission Prompt decided before the crash alone", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     const callId = first.backend.latest.askPermission("Bash", { command: "gt log" });
     await first.host.answerPermission(id, callId, "allow");
@@ -194,7 +194,7 @@ describe("durability and revive", () => {
 
   it("leaves a Subagent that finished before the crash alone", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.beginSubagent("explorer").finish("complete");
 
@@ -208,7 +208,7 @@ describe("durability and revive", () => {
     // A backend counts only its own run, so a Revive hands the next one what came before. Restored
     // from the transcript, because on a restart nothing was ever in memory.
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     first.backend.latest.reportSpend({
       tokens: 1_000,
       cached: 400,
@@ -225,7 +225,7 @@ describe("durability and revive", () => {
 
   it("revives on demand, continuing the same transcript behind a marker", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.completeTurn();
     await first.host.shutdown();
@@ -247,7 +247,7 @@ describe("durability and revive", () => {
 
   it("hands the Backend Adapter its resume token when reviving", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.completeTurn();
     await first.host.shutdown();
@@ -259,7 +259,7 @@ describe("durability and revive", () => {
 
   it("revives implicitly on the next message", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.shutdown();
 
     const second = await freshHost();
@@ -271,7 +271,7 @@ describe("durability and revive", () => {
 
   it("keeps sequence numbers contiguous across a restart", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     first.backend.latest.completeTurn();
     await first.host.shutdown();
@@ -286,7 +286,7 @@ describe("durability and revive", () => {
 
   it("survives a torn final line in the transcript file", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     await first.host.shutdown();
 
@@ -299,7 +299,7 @@ describe("durability and revive", () => {
 
   it("lists Dormant sessions so a client can offer to resume them", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "a title from the first message", "now");
     await first.host.shutdown();
 
@@ -315,7 +315,7 @@ describe("durability and revive", () => {
    */
   it("closes a Permission Prompt torn by a restart and loads with nothing open", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "go", "now");
     first.backend.latest.askPermission("Bash");
     assert.equal(first.host.statusOf(id), "awaiting", "precondition: blocked on a person");
@@ -339,7 +339,7 @@ describe("durability and revive", () => {
     // something that will never finish (ADR 0021). Left alone it would render on the next load as a
     // job running forever, with nothing that could ever stop it.
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "go", "now");
     first.backend.latest.backgroundCall();
     assert.equal(first.host.list().find((summary) => summary.id === id)?.activeBackgroundCalls, 1);
@@ -358,7 +358,7 @@ describe("durability and revive", () => {
 
   it("loads an Agent Session written before the lifecycle/activity split", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.settle(id);
     await first.host.shutdown();
 
@@ -381,7 +381,7 @@ describe("durability and revive", () => {
 
   it("does not restart the retention clock when a Settled Agent Session is touched", async () => {
     const first = await freshHost();
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.settle(id);
     const settledAt = store.readMeta(id)?.settledAt;
     assert.ok(settledAt);

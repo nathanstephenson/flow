@@ -467,7 +467,8 @@ export type AgentEvent =
   | { type: "notice"; level: NoticeLevel; text: string }
   | { type: "session_dormant"; reason: string }
   | { type: "session_settled" }
-  | { type: "revived"; fromSeq: number }
+  /** `scope` is where the Agent Session is now bound; it changes only after a relocation (ADR 0036). */
+  | { type: "revived"; fromSeq: number; scope?: string }
   | { type: "session_ended"; reason: string };
 
 export type AgentEventType = AgentEvent["type"];

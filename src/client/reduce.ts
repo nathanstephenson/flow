@@ -711,6 +711,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "revived":
       return {
         ...state,
+        ...(event.scope === undefined ? {} : { scope: event.scope }),
         lifecycle: "live",
         turnInFlight: false,
         entries: [

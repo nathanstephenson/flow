@@ -18,7 +18,8 @@ import { WorkerRpc } from "./rpc.ts";
 import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
-import { migrateLegacyClaudeState, prepareClaudeState } from "./claude-state.ts";
+import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState } from "./claude-state.ts";
+import { relocatePiState } from "../pi/state.ts";
 import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
@@ -127,6 +128,11 @@ export class WorkerBackend implements AgentBackend {
       if (proxy) await proxy.dispose(); else cleanup();
       throw error;
     }
+  }
+
+  relocate(stateDir: string, from: string, to: string): void {
+    if (this.name === "claude") relocateClaudeState(stateDir, from, to);
+    else relocatePiState(stateDir, from, to);
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {

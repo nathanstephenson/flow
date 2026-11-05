@@ -117,7 +117,7 @@ _Avoid_: closed, deleted, settled
 
 ### Directories and shells
 
-**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary.
+**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036).
 _Avoid_: workspace, project, repo
 
 **Project**: A directory its owner has opted into as a candidate Scope, independent of any Agent Session.
