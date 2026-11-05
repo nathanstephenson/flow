@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { canSettle, occupied, railGroup } from "@client/status.ts";
+import { occupied, railGroup } from "@client/status.ts";
 import { useAgentSessionChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useDocks } from "@/docks.ts";
@@ -214,9 +214,6 @@ export function AppShell() {
               focusInPane("[data-transcript-search]");
             },
           }),
-      settle: () => {
-        if (focusedId !== undefined && chrome !== undefined && canSettle(chrome.status)) settle(focusedId);
-      },
       // Silently ignored where the host has no pty, for the same reason the buttons are absent
       // there: a shortcut that reports a capability you do not have teaches nothing.
       "toggle-bottom-dock": () => {
@@ -256,7 +253,6 @@ export function AppShell() {
       moveCursor,
       run,
       sessions,
-      settle,
     ],
   );
 

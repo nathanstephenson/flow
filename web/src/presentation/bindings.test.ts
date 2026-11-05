@@ -19,9 +19,6 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("Home"), idle), "sidebar-first");
     assert.equal(resolveBinding(press("End"), idle), "sidebar-last");
     assert.equal(resolveBinding(press("Enter"), idle), "focus-pane");
-    assert.equal(resolveBinding(press("m"), idle), "model-picker");
-    assert.equal(resolveBinding(press("e"), idle), "effort-picker");
-    assert.equal(resolveBinding(press("s"), idle), "settle");
     assert.equal(resolveBinding(press("`"), idle), "toggle-bottom-dock");
     assert.equal(resolveBinding(press("~"), idle), "toggle-right-dock");
     assert.equal(resolveBinding(press("?", { shiftKey: true }), idle), "keyboard-settings");
@@ -29,8 +26,8 @@ describe("resolving a keystroke to a binding", () => {
   });
 
   it("maps ⌘ and Ctrl to the same chords", () => {
-    assert.equal(resolveBinding(press("k", { metaKey: true }), idle), "command-palette");
-    assert.equal(resolveBinding(press("k", { ctrlKey: true }), idle), "command-palette");
+    assert.equal(resolveBinding(press("b", { metaKey: true }), idle), "toggle-rail");
+    assert.equal(resolveBinding(press("b", { ctrlKey: true }), idle), "toggle-rail");
     assert.equal(resolveBinding(press("f", { metaKey: true }), idle), "search");
     assert.equal(resolveBinding(press("f", { ctrlKey: true }), idle), "search");
   });
@@ -38,6 +35,7 @@ describe("resolving a keystroke to a binding", () => {
   it("leaves the browser's chords alone", () => {
     assert.equal(resolveBinding(press("r", { metaKey: true }), idle), undefined);
     assert.equal(resolveBinding(press("s", { metaKey: true }), idle), undefined);
+    assert.equal(resolveBinding(press("k", { metaKey: true }), idle), undefined);
   });
 
   it("does not fire a shifted letter as its unshifted binding", () => {
@@ -63,7 +61,7 @@ describe("resolving a keystroke to a binding", () => {
     });
 
     it("still resolves the chords, which cannot be typed", () => {
-      assert.equal(resolveBinding(press("k", { metaKey: true }), typing), "command-palette");
+      assert.equal(resolveBinding(press("b", { metaKey: true }), typing), "toggle-rail");
     });
   });
 
@@ -79,7 +77,7 @@ describe("resolving a keystroke to a binding", () => {
       assert.equal(resolveBinding(press("Enter", { repeat: true }), idle), undefined);
       // Holding Home would only re-arrive at the row it already reached.
       assert.equal(resolveBinding(press("Home", { repeat: true }), idle), undefined);
-      assert.equal(resolveBinding(press("k", { metaKey: true, repeat: true }), idle), undefined);
+      assert.equal(resolveBinding(press("b", { metaKey: true, repeat: true }), idle), undefined);
     });
   });
 
@@ -89,11 +87,12 @@ describe("resolving a keystroke to a binding", () => {
     assert.equal(resolveBinding(press("`"), { typing: true, view: "session" }), undefined);
   });
 
-  it("has no binding for sending a message or Reviving an Agent Session", () => {
+  it("has no binding for Settling, sending a message or Reviving an Agent Session", () => {
     // Deliberately absent: nothing that spends money or sends text is reachable from one key, and
     // ⌘Enter as "send now, interrupting" would be a second Steering Queue in a keybinding (ADR 0002).
     assert.equal(resolveBinding(press("Enter", { metaKey: true }), idle), undefined);
     assert.equal(resolveBinding(press("r"), idle), undefined);
+    assert.equal(resolveBinding(press("s"), idle), undefined);
   });
   /**
    * The Settings have no rail cursor, no pane, no Shell and no model, so the keys that address those
@@ -110,10 +109,10 @@ describe("resolving a keystroke to a binding", () => {
     });
 
     it("keeps the three that still mean something", () => {
-      // Starting an Agent Session is reasonable from anywhere, the palette is global, and `?` lands
-      // on a section of the Settings itself.
+      // Starting an Agent Session is reasonable from anywhere, the rail is global, and `?` lands on
+      // a section of the Settings itself.
       assert.equal(resolveBinding(press("n"), settings), "new-agent-session");
-      assert.equal(resolveBinding(press("k", { metaKey: true }), settings), "command-palette");
+      assert.equal(resolveBinding(press("b", { metaKey: true }), settings), "toggle-rail");
       // ⌘F is not one of them: there is no Presentation Transcript here, so it goes back to being
       // find-in-page.
       assert.equal(resolveBinding(press("f", { metaKey: true }), settings), undefined);
@@ -148,7 +147,7 @@ describe("recognising a typing surface", () => {
 
   /**
    * A Shell paints itself on a canvas, so the element focus lands on says nothing about what a
-   * keystroke means there. Without this, `s` at a prompt Settles the Agent Session.
+   * keystroke means there. Without this, `n` at a prompt opens the New Agent Session view.
    */
   it("counts a focused Shell, whatever it is drawn on", () => {
     assert.equal(isTypingTarget("canvas", false, undefined, true), true);

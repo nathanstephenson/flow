@@ -12,9 +12,7 @@ import type { Route } from "@/presentation/route.ts";
  * which was too strict in a way that read as flakiness: after clicking any button, focus is on that
  * button, and every shortcut silently stopped working.
  *
- * Handlers are optional. `command-palette` resolves today but has nothing to open yet, and the two
- * picker bindings would need the header's popovers to become controlled components; leaving them
- * unhandled is visible here rather than hidden in the table.
+ * Handlers are optional: an unhandled binding is not `preventDefault`'d, so the browser keeps the key.
  *
  * `view` is passed straight through to the table, which is what decides that `j` addresses nothing
  * while the Settings are on screen. The alternative — the app shell quietly not passing those
