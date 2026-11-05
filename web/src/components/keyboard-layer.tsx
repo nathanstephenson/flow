@@ -1,7 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 
 import { isTypingTarget, resolveBinding, type Binding } from "@/presentation/bindings.ts";
-import type { Route } from "@/presentation/route.ts";
 
 /**
  * One `keydown` listener on `window`, asking a pure function what the key meant.
@@ -14,19 +13,19 @@ import type { Route } from "@/presentation/route.ts";
  *
  * Handlers are optional: an unhandled binding is not `preventDefault`'d, so the browser keeps the key.
  *
- * `view` is passed straight through to the table, which is what decides that `j` addresses nothing
- * while the Settings are on screen. The alternative — the app shell quietly not passing those
+ * `settingsOpen` is passed straight through to the table, which is what decides that `j` addresses
+ * nothing while the Settings are open. The alternative — the app shell quietly not passing those
  * handlers — hides the reason in a useMemo instead of stating it where the bindings live.
  */
 export type KeyboardHandlers = Partial<Record<Binding, () => void>>;
 
 export function KeyboardLayer({
   handlers,
-  view,
+  settingsOpen,
   children,
 }: {
   handlers: KeyboardHandlers;
-  view: Route["view"];
+  settingsOpen: boolean;
   children: ReactNode;
 }) {
   useEffect(() => {
@@ -53,6 +52,8 @@ export function KeyboardLayer({
        * those call sites, which is the same rule written once per handler instead of once here.
        */
       if (event.defaultPrevented) return;
+      // Escape in a Dialog belongs to that Dialog, even if it closed before this listener ran.
+      if (event.key === "Escape" && target?.closest('[role="dialog"]')) return;
       // Native disclosure activation happens after bubbling. Let summary keep
       // Enter instead of treating it as the rail's global "focus pane" shortcut.
       if (event.key === "Enter" && target?.closest("summary")) return;
@@ -65,14 +66,12 @@ export function KeyboardLayer({
           shiftKey: event.shiftKey,
           repeat: event.repeat,
         },
-        { typing, view },
+        { typing, settingsOpen },
       );
       if (binding === undefined) return;
 
-      // Escape while typing means "leave this surface", and only the DOM knows what has focus. Both
-      // of Escape's meanings are caught, so a first Escape in a Settings field blurs it rather than
-      // leaving the page out from under a half-typed value.
-      if (typing && (binding === "blur-or-abort" || binding === "leave-settings")) {
+      // Escape while typing means "leave this surface", and only the DOM knows what has focus.
+      if (typing && binding === "blur-or-abort") {
         target?.blur();
         event.preventDefault();
         return;
@@ -86,7 +85,7 @@ export function KeyboardLayer({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handlers, view]);
+  }, [handlers, settingsOpen]);
 
   return <>{children}</>;
 }

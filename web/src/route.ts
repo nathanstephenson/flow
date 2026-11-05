@@ -1,13 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import {
-  formatRoute,
-  parseRoute,
-  returnPoint,
-  routedSessionId,
-  type Route,
-  type SettingsSection,
-} from "@/presentation/route.ts";
+import { DEFAULT_ROUTE, formatRoute, parseRoute, type Route, type SettingsSection } from "@/presentation/route.ts";
 
 /**
  * What is on screen, kept in `location.hash`.
@@ -25,7 +18,7 @@ import {
  */
 export type Navigation = {
   route: Route;
-  /** The Agent Session in the pane, or undefined — including while the Settings are on screen. */
+  /** The Agent Session in the pane, or undefined. */
   sessionId: string | undefined;
   focus: (sessionId: string) => void;
   /**
@@ -37,37 +30,13 @@ export type Navigation = {
    */
   openNewAgentSession: () => void;
   openSettings: (section?: SettingsSection) => void;
-  /**
-   * Leave the Settings for whatever was on screen before them.
-   *
-   * Not `history.back()`: the hash is written with `replaceState` so that reading through a few
-   * Agent Sessions does not fill the back button, which means there is no entry to pop.
-   *
-   * "Whatever", including the New Agent Session view. That view is the Agent Session route naming
-   * none, so `undefined` is a real destination here and not merely the absence of one — somebody who
-   * pressed `?` while halfway through typing a first message has to come back to it. Their Draft
-   * survives either way, but landing them on an unrelated transcript would leave them looking for
-   * words that are still there.
-   */
+  /** Close the Settings Dialog. The Agent Session view behind it stays as it is. */
   leaveSettings: () => void;
 };
 
 export function useRoute(): Navigation {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
-  const sessionId = routedSessionId(route);
-
-  /*
-   * Where to come back to. A ref rather than state: nothing renders differently because of it, so
-   * making it state would re-render the whole shell on every change of focus for no visible reason.
-   *
-   * Recorded whenever the Agent Session view is on screen, `undefined` included — that is the New
-   * Agent Session view, which is somewhere a reader can be and therefore somewhere they can be
-   * returned to. Only the Settings are skipped, because leaving them for themselves is not a move.
-   */
-  const lastSessionId = useRef<string | undefined>(sessionId);
-  useEffect(() => {
-    lastSessionId.current = returnPoint(route, lastSessionId.current);
-  }, [route]);
+  const sessionId = route.sessionId;
 
   // Hash in. A deep link is a link, so an external navigation has to reach the selection.
   useEffect(() => {
@@ -88,20 +57,17 @@ export function useRoute(): Navigation {
     );
   }, [route]);
 
-  const focus = useCallback((next: string) => setRoute({ view: "session", sessionId: next }), []);
+  const focus = useCallback((next: string) => setRoute({ sessionId: next }), []);
 
-  const openNewAgentSession = useCallback(
-    () => setRoute({ view: "session", sessionId: undefined }),
-    [],
-  );
+  const openNewAgentSession = useCallback(() => setRoute(DEFAULT_ROUTE), []);
 
   const openSettings = useCallback(
-    (section: SettingsSection = "general") => setRoute({ view: "settings", section }),
+    (section: SettingsSection = "general") => setRoute((current) => ({ ...current, settings: section })),
     [],
   );
 
   const leaveSettings = useCallback(
-    () => setRoute({ view: "session", sessionId: lastSessionId.current }),
+    () => setRoute(({ settings: _, ...current }) => current),
     [],
   );
 

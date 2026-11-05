@@ -1,7 +1,7 @@
 /**
  * Deep links, as string transformations.
  *
- * `#/s/<id>` names the Agent Session on screen and `#/settings/<section>` names a section of the
+ * `#/s/<id>` names the Agent Session on screen and `?settings=<section>` names the open section of the
  * Settings, parsed and formatted by hand. No router: a router costs a second source of truth for a
  * selection the app shell already owns, and — decisively — real paths would need the Session Host's
  * SPA fallback to be right about every URL anyone might bookmark, whereas a fragment is never sent
@@ -12,9 +12,8 @@
  * the half with the edge cases in it.
  *
  * Settings are routed rather than held in a component's state so that reloading does not throw you
- * out of them and a section can be linked to. They are *not* nested under an Agent Session, because
- * they are machine-wide (src/protocol/settings.ts): a URL implying otherwise would be a lie about
- * their scope.
+ * out of them and a section can be linked to. They are a Dialog over the Agent Session view, so the
+ * section is a query beside the session path. The old `#/settings/<section>` hash still opens them.
  */
 
 /** The sections of the Settings, in the order the rail lists them. */
@@ -32,66 +31,54 @@ export const SETTINGS_SECTIONS = [
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
-export type Route =
-  /** The Agent Session view. `sessionId` is undefined when the URL names none. */
-  | { view: "session"; sessionId: string | undefined; backend?: string }
-  | { view: "settings"; section: SettingsSection };
+export type Route = {
+  /** Undefined when the URL names no Agent Session. */
+  sessionId: string | undefined;
+  backend?: string;
+  /** The open section of the Settings Dialog. Undefined when the Dialog is closed. */
+  settings?: SettingsSection;
+};
 
 /** What an app with a clean URL is looking at. */
-export const DEFAULT_ROUTE: Route = { view: "session", sessionId: undefined };
+export const DEFAULT_ROUTE: Route = { sessionId: undefined };
 
 export function parseRoute(hash: string): Route {
-  const parts = hash
-    .replace(/^#\/?/, "")
-    .split("/")
-    .filter((part) => part !== "");
+  const [path = "", query = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  const parts = path.split("/").filter((part) => part !== "");
 
-  if (parts[0] === "settings") {
-    // An unknown section lands on the first one rather than on nothing. Sections get renamed and
-    // bookmarks do not, and "the Settings, at the top" is always a useful answer.
-    return { view: "settings", section: asSection(parts[1]) ?? SETTINGS_SECTIONS[0] };
-  }
+  if (parts[0] === "settings") return { sessionId: undefined, settings: asSection(parts[1]) };
 
-  if (parts[0] === "new" && parts[1]) return { view: "session", sessionId: undefined, backend: decode(parts[1]) };
+  const route = sessionPart(parts);
+  const section = new URLSearchParams(query).get("settings");
+  return section === null ? route : { ...route, settings: asSection(section) };
+}
+
+function sessionPart(parts: string[]): Route {
+  if (parts[0] === "new" && parts[1]) return { sessionId: undefined, backend: decode(parts[1]) };
   if (parts[0] !== "s" || parts[1] === undefined) return DEFAULT_ROUTE;
 
   const sessionId = decode(parts[1]);
   // Whatever follows the id is ignored rather than treated as unparseable. A bookmark may carry
   // trailing segments this app no longer writes, and opening the Agent Session it names first is
   // more use to its reader than opening nothing at all.
-  return { view: "session", sessionId: sessionId === "" ? undefined : sessionId };
+  return { sessionId: sessionId === "" ? undefined : sessionId };
 }
 
 export function formatRoute(route: Route): string {
-  if (route.view === "settings") return `#/settings/${route.section}`;
-  if (route.sessionId === undefined && route.backend) return `#/new/${encodeURIComponent(route.backend)}`;
-  return route.sessionId === undefined ? "" : `#/s/${encodeURIComponent(route.sessionId)}`;
+  const path =
+    route.sessionId !== undefined
+      ? `#/s/${encodeURIComponent(route.sessionId)}`
+      : route.backend
+        ? `#/new/${encodeURIComponent(route.backend)}`
+        : "";
+  if (route.settings === undefined) return path;
+  return `${path || "#/"}?settings=${route.settings}`;
 }
 
-/** The Agent Session a route names, if it names one. Saves every caller a `view` check. */
-export function routedSessionId(route: Route): string | undefined {
-  return route.view === "session" ? route.sessionId : undefined;
-}
-
-/**
- * Where leaving the Settings should return to, as the route on screen changes.
- *
- * `undefined` is a **destination and not the absence of one**: the Agent Session route naming none is
- * the New Agent Session view, which is somewhere a reader can be halfway through typing a first
- * message. Recording only defined ids — which is what this replaced — sent them to an unrelated
- * transcript on the way back out of the Settings, and left them looking for words that were still
- * held.
- *
- * Here rather than inline in the hook because that distinction is the whole of the rule and is
- * invisible at the call site, where it reads as an ordinary null check.
- */
-export function returnPoint(route: Route, remembered: string | undefined): string | undefined {
-  // The Settings are not a place to come back to, so they leave the last answer standing.
-  return route.view === "session" ? route.sessionId : remembered;
-}
-
-function asSection(part: string | undefined): SettingsSection | undefined {
-  return SETTINGS_SECTIONS.find((section) => section === decode(part ?? ""));
+// An unknown section lands on the first one rather than on nothing. Sections get renamed and
+// bookmarks do not, and "the Settings, at the top" is always a useful answer.
+function asSection(part: string | undefined): SettingsSection {
+  return SETTINGS_SECTIONS.find((section) => section === decode(part ?? "")) ?? SETTINGS_SECTIONS[0];
 }
 
 function decode(part: string): string {

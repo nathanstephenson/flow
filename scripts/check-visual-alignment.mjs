@@ -266,22 +266,6 @@ async function newModes(label, width) {
   assert.equal(await chat.getAttribute('aria-selected'), 'true');
   assert.ok(await chat.evaluate(node => node === document.activeElement && node.matches(':focus-visible')));
 }
-async function footer(label, width) {
-  const back = page.getByRole('button', { name: 'Back to Agent Sessions', exact: true });
-  await back.waitFor(); await page.waitForTimeout(250); await frames();
-  const geometry = await back.evaluate(node => {
-    const footer = node.closest('[data-sidebar="footer"]'), box = node.getBoundingClientRect(), parent = footer.getBoundingClientRect(), css = getComputedStyle(footer);
-    return { x: box.x, width: box.width, height: box.height, bottom: box.bottom, parentX: parent.x, parentWidth: parent.width, parentBottom: parent.bottom, padding: css.padding, gap: css.gap, radius: getComputedStyle(node).borderRadius };
-  });
-  assert.equal(geometry.padding, '0px'); assert.equal(geometry.gap, '0px'); assert.equal(geometry.radius, '0px');
-  assert.ok(Math.abs(geometry.width - geometry.parentWidth) < 1 && Math.abs(geometry.x - geometry.parentX) < 1);
-  assert.ok(geometry.height >= 42 && Math.abs(geometry.bottom - geometry.parentBottom) < 1);
-  await bounds(back, width, label);
-  await back.focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab'); await frames();
-  assert.ok(await back.evaluate(node => node === document.activeElement && node.matches(':focus-visible') && getComputedStyle(node).boxShadow !== 'none'), 'Back keeps native focus ring');
-  await gloss(back, label);
-  await capture(label);
-}
 
 async function accentContrast(mode) {
   const values = await page.evaluate(() => {
@@ -478,16 +462,21 @@ try {
       assert.equal(await page.getByRole('switch').count(), 2);
       await capture(`mcp-${mode}`); await trigger.press('Enter'); assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
     });
-    await check(`${mode}: full-width Settings and dedicated Back footer`, async () => {
+    await check(`${mode}: Settings Dialog over the Agent Sessions`, async () => {
       const settings = page.locator('[data-sidebar="footer"]').getByRole('button', { name: 'Settings', exact: true });
       await bounds(settings, 1440, 'Rail Settings shortcut');
-      await settings.click(); await page.locator('[data-sidebar="menu"][aria-label="Settings sections"]').waitFor();
-      const selectedSettings = page.locator('[data-sidebar="menu-button"][aria-current="page"]');
+      await settings.click();
+      const dialog = page.getByRole('dialog', { name: 'Settings', exact: true }); await dialog.waitFor();
+      await page.waitForTimeout(250); await frames(); await bounds(dialog, 1440, 'Settings Dialog');
+      const sections = dialog.getByRole('navigation', { name: 'Settings sections', exact: true });
+      const selectedSettings = sections.locator('[aria-current="page"]');
+      assert.equal(await selectedSettings.count(), 1);
       assert.equal((await surface(selectedSettings, '::before')).image, 'none', 'Settings keeps native selection, not rail Flow material');
-      await gloss(rows().filter({ hasText: 'Which models to use' }), `${mode} delegated Settings row`);
-      await footer(`settings-footer-${mode}`, 1440);
-      await page.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).press('Space');
-      await page.waitForFunction(() => !location.hash.includes('/settings/'));
+      await gloss(sections.getByRole('button').filter({ hasText: 'Which models to use' }), `${mode} delegated Settings row`);
+      assert.ok(await rows().first().isVisible(), 'The rail stays behind the Settings');
+      await capture(`settings-${mode}`);
+      await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'hidden' });
+      await page.waitForFunction(() => !location.hash.includes('settings'));
     });
     await check(`${mode}: mobile drawer and narrow bounds`, async () => {
       await navigate('#/new/fake'); await page.getByRole('heading', { name: 'New Agent Session', exact: true }).waitFor();
@@ -500,8 +489,9 @@ try {
       await drawer.waitFor({ state: 'hidden' }); await newModes(`mobile-${mode}`, 390);
       await page.locator('[data-sidebar="trigger"]').click(); await drawer.waitFor();
       await drawer.getByRole('button', { name: 'Settings', exact: true }).click(); await drawer.waitFor({ state: 'hidden' });
-      await page.locator('[data-sidebar="trigger"]').click(); await drawer.waitFor(); await footer(`mobile-settings-footer-${mode}`, 390);
-      await drawer.getByRole('button', { name: 'Back to Agent Sessions', exact: true }).press('Space'); await drawer.waitFor({ state: 'hidden' });
+      const settings = page.getByRole('dialog', { name: 'Settings', exact: true }); await settings.waitFor(); await page.waitForTimeout(250);
+      await bounds(settings, 390, 'Mobile Settings Dialog'); await capture(`mobile-settings-${mode}`);
+      await settings.getByRole('button', { name: 'Close', exact: true }).click(); await settings.waitFor({ state: 'hidden' });
       await page.setViewportSize({ width: 320, height: 720 }); await newModes(`narrow-${mode}`, 320);
       assert.ok(await page.locator('body').evaluate(node => node.scrollWidth <= node.clientWidth), 'No horizontal overflow at 320px');
       await capture(`narrow-${mode}`);

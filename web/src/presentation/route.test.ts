@@ -5,15 +5,13 @@ import {
   DEFAULT_ROUTE,
   formatRoute,
   parseRoute,
-  routedSessionId,
   SETTINGS_SECTIONS,
   type Route,
-  returnPoint,
 } from "./route.ts";
 
 describe("deep links to an Agent Session", () => {
   it("reads the Agent Session a hash names", () => {
-    assert.deepEqual(parseRoute("#/s/abc"), { view: "session", sessionId: "abc" });
+    assert.deepEqual(parseRoute("#/s/abc"), { sessionId: "abc" });
   });
 
   /**
@@ -21,8 +19,8 @@ describe("deep links to an Agent Session", () => {
    * name something real, so the first id is honoured and the rest of the hash is dropped.
    */
   it("opens the first Agent Session named by a hash with trailing segments", () => {
-    assert.equal(routedSessionId(parseRoute("#/s/abc/split/def")), "abc");
-    assert.equal(routedSessionId(parseRoute("#/s/abc/anything/at/all")), "abc");
+    assert.equal(parseRoute("#/s/abc/split/def").sessionId, "abc");
+    assert.equal(parseRoute("#/s/abc/anything/at/all").sessionId, "abc");
   });
 
   it("ignores a hash that names no Agent Session", () => {
@@ -32,14 +30,14 @@ describe("deep links to an Agent Session", () => {
   });
 
   it("survives a hand-edited hash with a stray percent", () => {
-    assert.equal(routedSessionId(parseRoute("#/s/%")), undefined);
+    assert.equal(parseRoute("#/s/%").sessionId, undefined);
   });
 
   it("round-trips an id that needs escaping", () => {
     const sessionId = "scope/with a space";
-    const hash = formatRoute({ view: "session", sessionId });
+    const hash = formatRoute({ sessionId });
     assert.equal(hash.includes(" "), false);
-    assert.equal(routedSessionId(parseRoute(hash)), sessionId);
+    assert.equal(parseRoute(hash).sessionId, sessionId);
   });
 
   /**
@@ -54,58 +52,48 @@ describe("deep links to an Agent Session", () => {
 });
 
 describe("deep links to the Settings", () => {
-  it("reads every section", () => {
+  it("reads every section beside the Agent Session", () => {
     for (const section of SETTINGS_SECTIONS) {
-      assert.deepEqual(parseRoute(`#/settings/${section}`), { view: "settings", section });
+      assert.deepEqual(parseRoute(`#/s/abc?settings=${section}`), { sessionId: "abc", settings: section });
     }
   });
 
-  it("lands on the first section when none is named", () => {
-    assert.deepEqual(parseRoute("#/settings"), { view: "settings", section: "general" });
-    assert.deepEqual(parseRoute("#/settings/"), { view: "settings", section: "general" });
+  it("reads a section beside the New Agent Session view", () => {
+    assert.deepEqual(parseRoute("#/new/codex?settings=mcp"), {
+      sessionId: undefined,
+      backend: "codex",
+      settings: "mcp",
+    });
+    assert.deepEqual(parseRoute("#/?settings=mcp"), { sessionId: undefined, settings: "mcp" });
   });
 
   /** Sections get renamed; bookmarks do not. "The Settings, at the top" is always a useful answer. */
   it("lands on the first section when the named one is gone", () => {
-    assert.deepEqual(parseRoute("#/settings/typography"), { view: "settings", section: "general" });
-    assert.deepEqual(parseRoute("#/settings/%"), { view: "settings", section: "general" });
+    assert.equal(parseRoute("#/s/abc?settings=typography").settings, "general");
+    assert.equal(parseRoute("#/s/abc?settings=%").settings, "general");
+    assert.equal(parseRoute("#/s/abc?settings=").settings, "general");
   });
 
-  it("round-trips every section", () => {
-    for (const section of SETTINGS_SECTIONS) {
-      const route: Route = { view: "settings", section };
-      assert.deepEqual(parseRoute(formatRoute(route)), route);
+  /** Old bookmarks and the MCP OAuth return use this form. */
+  it("reads the old Settings hash as the Settings over no Agent Session", () => {
+    assert.deepEqual(parseRoute("#/settings/mcp"), { sessionId: undefined, settings: "mcp" });
+    assert.deepEqual(parseRoute("#/settings"), { sessionId: undefined, settings: "general" });
+    assert.deepEqual(parseRoute("#/settings/typography"), { sessionId: undefined, settings: "general" });
+  });
+
+  it("round-trips every section with each kind of route", () => {
+    for (const settings of SETTINGS_SECTIONS) {
+      const routes: Route[] = [
+        { sessionId: "scope/with a space", settings },
+        { sessionId: undefined, backend: "codex", settings },
+        { sessionId: undefined, settings },
+      ];
+      for (const route of routes) assert.deepEqual(parseRoute(formatRoute(route)), route);
     }
   });
 
-  /**
-   * The Settings are machine-wide, so no route may imply they belong to one Agent Session — a URL
-   * that said otherwise would be a lie about their scope (src/protocol/settings.ts).
-   */
-  it("names no Agent Session", () => {
-    assert.equal(routedSessionId(parseRoute("#/settings/appearance")), undefined);
-    assert.equal(formatRoute({ view: "settings", section: "general" }).includes("/s/"), false);
-  });
-});
-
-/**
- * Where leaving the Settings comes back to.
- *
- * The case worth pinning is the one that shipped broken: the New Agent Session view is the Agent
- * Session route naming none, so `undefined` has to be remembered as a real destination. Recording
- * only defined ids sent a reader who pressed `?` mid-message to an unrelated transcript.
- */
-describe("the place leaving the Settings returns to", () => {
-  it("remembers the Agent Session on screen", () => {
-    assert.equal(returnPoint({ view: "session", sessionId: "abc" }, undefined), "abc");
-  });
-
-  it("remembers the New Agent Session view, which names no Agent Session", () => {
-    assert.equal(returnPoint({ view: "session", sessionId: undefined }, "abc"), undefined);
-  });
-
-  it("leaves the last answer standing while the Settings are on screen", () => {
-    assert.equal(returnPoint({ view: "settings", section: "keyboard" }, "abc"), "abc");
-    assert.equal(returnPoint({ view: "settings", section: "keyboard" }, undefined), undefined);
+  it("keeps the Agent Session part of the hash", () => {
+    assert.equal(formatRoute({ sessionId: "abc", settings: "keyboard" }), "#/s/abc?settings=keyboard");
+    assert.equal(formatRoute({ sessionId: undefined, settings: "keyboard" }), "#/?settings=keyboard");
   });
 });

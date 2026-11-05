@@ -69,11 +69,7 @@ test("validation issues are readable", () => {
 });
 test("matching Backend Adapter route uses the existing creation surface", () => {
   const route = parseRoute("#/new/pi");
-  assert.deepEqual(route, {
-    view: "session",
-    sessionId: undefined,
-    backend: "pi",
-  });
+  assert.deepEqual(route, { sessionId: undefined, backend: "pi" });
   assert.equal(formatRoute(route), "#/new/pi");
 });
 test("visual schema defaults preserve required and optional field semantics", () => {
