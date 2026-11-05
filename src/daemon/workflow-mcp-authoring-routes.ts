@@ -23,8 +23,10 @@ export async function workflowMcpAuthoringRoutes(request: IncomingMessage, respo
   } catch { send(response, 400, { error: 'Invalid workflow MCP request' }); return true; }
   try {
     send(response, 200, connectionId === undefined ? await service.connections(projectId) : await service.discover(projectId, connectionId, refresh));
-  } catch {
-    send(response, 400, { error: 'Workflow MCP connection or Scope unavailable. Check MCP Settings and the selected Project.' });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Check MCP Settings and the selected Project.';
+    console.error(`Workflow MCP authoring request failed: ${reason}`);
+    send(response, 400, { error: `Workflow MCP connection or Scope unavailable: ${reason}` });
   }
   return true;
 }

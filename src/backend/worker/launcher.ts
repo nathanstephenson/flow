@@ -82,6 +82,10 @@ export async function killWorkerTree(child: ChildProcess): Promise<void> {
     });
   } else {
     try { process.kill(-child.pid, "SIGKILL"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const exited = child.exitCode !== null || child.signalCode !== null;
+      if (code !== "ESRCH" && !(code === "EPERM" && exited)) throw error;
+    }
   }
 }
