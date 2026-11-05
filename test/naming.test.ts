@@ -698,7 +698,10 @@ describe("naming an Agent Session", () => {
 
     // The automatic half is silent and the human half is not: somebody clicked this and is waiting.
     summary.autoReply = "No";
-    await assert.rejects(host.execute({ type: "rename", sessionId: id }), /Could not name this Agent Session: the answer was not a usable name/);
+    await assert.rejects(host.execute({ type: "rename", sessionId: id }), /Could not name this Agent Session: the answer was not a usable name: "No"/);
+
+    summary.autoReply = "";
+    await assert.rejects(host.execute({ type: "rename", sessionId: id }), /Could not name this Agent Session: the answer was empty/);
     assert.equal(titleOf(id), "Add retry to the uploader");
   });
 });

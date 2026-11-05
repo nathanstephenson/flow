@@ -492,9 +492,11 @@ async function nameWith(
     problem?.(message(error));
     return undefined;
   }
-  const name = nameFrom([...said.values()].join("\n"));
+  const answer = [...said.values()].join("\n").trim();
+  const name = nameFrom(answer);
   if (name === undefined) {
-    problem?.(sink.error ?? (ended ? "the answer was not a usable name" : `no answer within ${timeoutMs / 1000}s`));
+    const rejected = answer ? `the answer was not a usable name: ${JSON.stringify(answer.slice(0, 200))}` : "the answer was empty";
+    problem?.(sink.error ?? (ended ? rejected : `no answer within ${timeoutMs / 1000}s`));
   }
   return name;
 }
