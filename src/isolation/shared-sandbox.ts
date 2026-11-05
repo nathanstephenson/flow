@@ -21,7 +21,7 @@ export function summaryFolder(): string {
 /** One VM for all sandbox sessions of a Session Host. sbx cannot add mounts after create, so it mounts fixed roots. */
 export class SharedSandbox {
   private vm: { sandbox: Sandbox; mounts: SandboxMount[] } | undefined;
-  private holds = 0;
+  private readonly holds = new Set<{ evict: (() => void) | undefined; released: Promise<void> }>();
   private queue: Promise<unknown> = Promise.resolve();
   private readonly stateRoot: string;
   private readonly projectRoot: () => string | undefined;
@@ -36,19 +36,22 @@ export class SharedSandbox {
     return [realpathSync(projectRoot), realpathSync(worktrees), workflowBuilderFolder(), realpathSync(sessions)];
   }
 
-  /** Single-flight: creates the VM when none fits the mounts and no session holds it. */
-  acquire(provider: SandboxProvider, workspace: string, mounts: SandboxMount[], signal?: AbortSignal) {
-    const next = this.queue.then(() => this.take(provider, workspace, mounts, signal));
+  /** Single-flight: creates the VM when none fits the mounts and every session that holds it can be evicted. */
+  acquire(provider: SandboxProvider, workspace: string, mounts: SandboxMount[], signal?: AbortSignal, evict?: () => void) {
+    const next = this.queue.then(() => this.take(provider, workspace, mounts, signal, evict));
     this.queue = next.catch(() => {});
     return next;
   }
 
-  private async take(provider: SandboxProvider, workspace: string, mounts: SandboxMount[], signal?: AbortSignal) {
+  private async take(provider: SandboxProvider, workspace: string, mounts: SandboxMount[], signal?: AbortSignal, evict?: () => void) {
     let startup = { remove: 0, create: 0 };
     const missing = mounts.filter((mount) => !this.vm?.mounts.some((vm) =>
       (mount.path === vm.path || mount.path.startsWith(vm.path + sep)) && (mount.readOnly || !vm.readOnly)));
     if (this.vm && missing.length) {
-      if (this.holds) throw new Error(`${sandboxUnavailable().message}: the shared sandbox is in use and does not mount ${missing.map((mount) => mount.path).join(", ")}`);
+      const holds = [...this.holds];
+      if (holds.some((hold) => !hold.evict)) throw new Error(`${sandboxUnavailable().message}: the shared sandbox is in use and does not mount ${missing.map((mount) => mount.path).join(", ")}`);
+      for (const hold of holds) hold.evict!();
+      await Promise.all(holds.map((hold) => hold.released));
       await this.vm.sandbox.close();
       this.vm = undefined;
     }
@@ -60,10 +63,11 @@ export class SharedSandbox {
       this.vm = { sandbox, mounts };
       startup = sandbox.startup;
     }
-    const hold = this.vm.sandbox.hold();
-    this.holds++;
-    let released = false;
-    return { sandbox: this.vm.sandbox, startup, release: () => { if (!released) { released = true; this.holds--; hold(); } } };
+    const unhold = this.vm.sandbox.hold();
+    let release!: () => void;
+    const entry = { evict, released: new Promise<void>((resolve) => { release = resolve; }) };
+    this.holds.add(entry);
+    return { sandbox: this.vm.sandbox, startup, release: () => { if (this.holds.delete(entry)) { unhold(); release(); } } };
   }
 
   /** Removes the VM when the Session Host stops, after every hold is released. */

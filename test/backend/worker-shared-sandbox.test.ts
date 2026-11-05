@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
@@ -82,6 +82,22 @@ test("a mount change re-creates an idle VM and is refused while a session holds 
   const name = f.spec().name;
   assert.equal(f.spec().workspace, next);
   assert.deepEqual(f.calls(), ["create", `exec ${name} ${f.scope}`, `remove ${name}`, "create", `exec ${name} ${next}`, `remove ${name}`]);
+});
+
+test("a mount change evicts holds that allow it, and records each start", async (t) => {
+  const { f, vm, backend, stateDir, dir, setProjectRoot } = shared(t);
+  let a: Awaited<ReturnType<typeof backend.create>> | undefined;
+  a = await backend.create({ scope: f.scope, stateDir: stateDir("s1"), emit: () => {}, evict: () => void a?.dispose() });
+  const next = dir(join(f.stateRoot, "..", "next"));
+  setProjectRoot(next);
+  const b = await backend.create({ scope: next, stateDir: stateDir("s2"), emit: () => {} });
+  await b.dispose();
+  await vm.close();
+  assert.equal(f.spec().workspace, next);
+  const name = f.spec().name;
+  assert.deepEqual(f.calls(), ["create", `exec ${name} ${f.scope}`, `remove ${name}`, "create", `exec ${name} ${next}`, `remove ${name}`]);
+  const starts = readFileSync(join(f.stateRoot, "timings.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(starts.map((start) => [start.kind, start.isolation, start.sharing]), [["start", "sandbox", "shared"], ["start", "sandbox", "shared"]]);
 });
 
 test("a shared spec left by a crash is removed before create", async (t) => {

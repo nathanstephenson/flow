@@ -144,9 +144,9 @@ no tools and spends nothing, but it will show up in `ps` with no Agent Session b
 one-shot runner ever disposes it deliberately. An idle-expiry rule would trade that back for a cold
 first name; it has not been worth it yet.
 
-**Deliberately not warmed at daemon start.** That would give the first clicked Rename its six
-seconds, but starting `flow` would then spawn a model process nobody asked for — close enough to
-what ADR 0003 refused that it should be a decision somebody makes, not a side effect of this one.
+**The naming spare is not warmed at daemon start.** The Session Host does start a model process at
+daemon start: it probes the models of each Backend Adapter (see the Host-start model probe
+amendment). That probe does not serve naming, so the first clicked Rename still boots cold.
 
 **A Summary Model cleared in the Settings can outlive its own configuration.** Nothing pushes a
 Settings change (ADR 0009), so a held spare is only dropped at the next read-through, which is the
@@ -163,3 +163,12 @@ in a fresh tool-less Backend Session. It drafts a commit message and pull reques
 from local changes and branch commits. Reading Git status never prompts a model. The reader can
 edit the text before confirming; a missing or failed Summary Model leaves manual entry available.
 This call is outside the Agent Session's Spend, like naming. It performs no Git writes.
+
+## Host-start model probe amendment
+
+The Session Host probes the models of each Backend Adapter when it starts, without waiting for the
+result. This replaces the earlier rule that daemon start spawns no model process. The New Agent
+Session view cannot offer a model until the probe answers, and a cold probe takes tens of seconds,
+more in sandbox mode. Starting the probe at host start moves that wait away from the reader. In
+Shared Sandbox mode, the probe also creates the Shared Sandbox (ADR 0034). The probe keeps its session as
+the warm Skills session (ADR 0035).

@@ -1,5 +1,5 @@
-import type { AgentBackend, BackendSession } from "../backend/types.ts";
-import type { ScopeSkills } from "../protocol/events.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession } from "../backend/types.ts";
+import type { BackendEvent, ScopeSkills } from "../protocol/events.ts";
 
 /**
  * Which Skills a Scope offers, asked without an Agent Session.
@@ -7,8 +7,8 @@ import type { ScopeSkills } from "../protocol/events.ts";
  * The sibling of ./models.ts, and for the same reason: the New Agent Session view has to offer a
  * Skill menu for a Scope nobody has created a session in yet, and `skills()` lives on
  * `BackendSession` rather than on `AgentBackend` — there is no session-free path. So this opens a
- * throwaway one, the same device the Summary Model uses (ADR 0020), tools and all off, and disposes
- * of it.
+ * session, the same device the Summary Model uses (ADR 0020), tools and all off. The caller can
+ * keep it warm for the next ask (ADR 0035).
  *
  * **What this costs: measured, and it is not what ./summariser.ts says.** That file's 24–44 seconds
  * times `prompt → turn_ended`, a spawn *and* a full inference round-trip, and its remark about
@@ -19,15 +19,37 @@ import type { ScopeSkills } from "../protocol/events.ts";
  * comfortably under the nine that `PROBE_TIMEOUT_MS` in ./models.ts records for the model list. pi
  * spawns no process at all, its `skills()` being a directory scan, and answers in milliseconds.
  *
- * **Nothing here is cached, which is the whole point.** A Skill directory changes between one
- * keystroke and the next, which is why `BackendSession.skills` is "asked each time rather than
- * cached" and why no transcript ever carries a copy. ADR 0020 already drew this line: `/api/models`
- * is memoised for the daemon's life because entitlements change when an account does, while
- * `/api/branches` beside it is asked fresh because its answer changes outside Flow. Skills are on the
- * `/api/branches` side of that line. The nine seconds is hidden by asking early — the client probes
- * when its Scope field settles, so the spawn overlaps with somebody choosing a backend and typing a
- * first message — rather than by holding an answer that has stopped being true.
+ * **No answer is cached.** A Skill directory changes between one keystroke and the next, which is
+ * why `BackendSession.skills` is "asked each time rather than cached" and why no transcript ever
+ * carries a copy. A kept session is not a kept answer: `skills()` reads the disk again on each ask.
  */
+
+/** A probe session that the host can keep. `dead` is set by an error notice or an eviction. */
+export type HeldSession = { scope: string; session: BackendSession; dead: boolean };
+
+/** Create options for a probe session, and the `HeldSession` that its events and eviction update. */
+export function probeSession(scope: string, listen: (event: BackendEvent) => void = () => {}) {
+  const held = { scope, dead: false } as HeldSession;
+  const options: BackendCreateOptions = {
+    scope,
+    tools: "none",
+    emit: (event) => {
+      if (event.type === "notice" && event.level === "error") held.dead = true;
+      listen(event);
+    },
+    evict: () => {
+      held.dead = true;
+      void held.session?.dispose().catch(() => {});
+    },
+  };
+  return { held, options };
+}
+
+/** Give a finished probe session to `keep`, or dispose of it when there is no keeper or it is dead. */
+export async function release(held: HeldSession, keep: ((held: HeldSession) => void) | undefined): Promise<void> {
+  if (keep && !held.dead) keep(held);
+  else await held.session.dispose().catch(() => {});
+}
 
 /**
  * A backend that has not answered in this long is not going to.
@@ -44,7 +66,7 @@ const PROBE_TIMEOUT_MS = 45_000;
  * backend that cannot answer reports a `problem` and the menu says so. A refusal here must not be
  * able to take down the view that asked.
  */
-export async function probeSkills(backend: AgentBackend, scope: string): Promise<ScopeSkills> {
+export async function probeSkills(backend: AgentBackend, scope: string, keep?: (held: HeldSession) => void): Promise<ScopeSkills> {
   const failure = (problem: string): ScopeSkills => ({
     backend: backend.name,
     scope,
@@ -61,7 +83,8 @@ export async function probeSkills(backend: AgentBackend, scope: string): Promise
    * disposes whatever eventually arrives rather than orphaning a CLI — hence the `then` below and
    * not a dropped reference.
    */
-  const started = backend.create({ scope, tools: "none", emit: () => {} });
+  const { held, options } = probeSession(scope);
+  const started = backend.create(options);
   const session = await within(started, PROBE_TIMEOUT_MS);
   if (session === undefined) {
     void started.then(
@@ -71,7 +94,9 @@ export async function probeSkills(backend: AgentBackend, scope: string): Promise
     return failure(`${backend.name} did not start in time`);
   }
   if (session instanceof Error) return failure(message(session));
+  held.session = session;
 
+  let answered = false;
   try {
     /*
      * An adapter whose session has no notion of Skills is a `problem` rather than an empty list, for
@@ -79,11 +104,13 @@ export async function probeSkills(backend: AgentBackend, scope: string): Promise
      * answers, and only one of them means the reader should stop looking.
      */
     if (!session.skills) return failure(`${backend.name} has no notion of Skills`);
-    return { backend: backend.name, scope, skills: await session.skills() };
+    const skills = await session.skills();
+    answered = true;
+    return { backend: backend.name, scope, skills };
   } catch (error) {
     return failure(message(error));
   } finally {
-    await session.dispose().catch(() => {});
+    await release(held, answered ? keep : undefined);
   }
 }
 

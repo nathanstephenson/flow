@@ -61,6 +61,7 @@ export class FakeSession implements BackendSession {
   readonly workflow: BackendCreateOptions['workflow'];
   /** Whether this session was created as a one-shot text call, for asserting the Summary Model's. */
   readonly toolless: boolean;
+  readonly scope: string;
   /** Every Subagent begun in this session, in the style of `prompts`. */
   readonly subagents: FakeSubagent[] = [];
   readonly workflowSubagents: FakeWorkflowSubagent[] = [];
@@ -144,6 +145,7 @@ export class FakeSession implements BackendSession {
     this.standingAuthorisations = options.standingAuthorisations ?? [];
     this.workflow = options.workflow;
     this.toolless = options.tools === "none";
+    this.scope = options.scope;
     this.backendAutoReply = backendAutoReply;
     if (this.capabilities.enquiries) {
       this.answerEnquiry = async (askId: string, answers: string[][]) => {

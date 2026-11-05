@@ -865,10 +865,9 @@ describe("listing the Skills an Agent Session offers", () => {
  * The same question for a Scope with no Agent Session in it — what the New Agent Session view asks.
  *
  * The pair above it is the point of comparison: that one is free, because the Backend Session is
- * already running. This one has to open one, which is why it alone dedupes concurrent askers — and
- * why it deliberately holds nothing once they have been answered. A Skill directory changes when
- * somebody saves a file, so an answer kept is an answer that has stopped being true; the spawn is
- * made affordable by the client asking early, not by the host remembering.
+ * already running. This one has to open one, which is why it dedupes concurrent askers and keeps
+ * one warm session per backend (ADR 0035). It keeps the session, not the answer: `skills()` reads
+ * the disk again on each ask.
  */
 describe("listing the Skills a Scope offers", () => {
   let backend: FakeBackend;
@@ -880,7 +879,7 @@ describe("listing the Skills a Scope offers", () => {
     host.registerBackend(backend);
   });
 
-  it("answers from a throwaway session that runs no tools and is disposed of", async () => {
+  it("answers from a session that runs no tools and is kept warm", async () => {
     assert.deepEqual(await host.skillsFor("/tmp/scope", "fake"), {
       backend: "fake",
       scope: "/tmp/scope",
@@ -892,7 +891,7 @@ describe("listing the Skills a Scope offers", () => {
 
     assert.equal(backend.sessions.length, 1);
     assert.equal(backend.sessions[0]?.toolless, true, "a probe runs no tools (ADR 0020)");
-    assert.equal(backend.sessions[0]?.disposed, true);
+    assert.equal(backend.sessions[0]?.disposed, false);
     assert.deepEqual(host.list(), [], "a probe must not become an Agent Session");
   });
 
@@ -909,15 +908,58 @@ describe("listing the Skills a Scope offers", () => {
     assert.deepEqual(left, right);
   });
 
-  /*
-   * The deliberate absence of a cache, and the one behaviour a reader would otherwise assume away
-   * given `models` directly above it holds its probes for the daemon's life.
-   */
-  it("asks again once the first answer has settled", async () => {
+  it("asks the warm session again for the same Scope", async () => {
     await host.skillsFor("/tmp/scope", "fake");
-    await host.skillsFor("/tmp/scope", "fake");
+    backend.sessions[0]!.skillList = [];
+
+    assert.deepEqual((await host.skillsFor("/tmp/scope", "fake")).skills, []);
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]?.disposed, false);
+  });
+
+  it("replaces the warm session when another Scope asks", async () => {
+    await host.skillsFor("/tmp/one", "fake");
+    await host.skillsFor("/tmp/two", "fake");
 
     assert.equal(backend.sessions.length, 2);
+    assert.equal(backend.sessions[0]?.disposed, true);
+    assert.equal(backend.sessions[1]?.scope, "/tmp/two");
+    assert.equal(backend.sessions[1]?.disposed, false);
+  });
+
+  it("asks a cold session when the warm one throws", async () => {
+    await host.skillsFor("/tmp/scope", "fake");
+    backend.sessions[0]!.skills = async () => { throw new Error("gone"); };
+
+    const answer = await host.skillsFor("/tmp/scope", "fake");
+    assert.equal(answer.problem, undefined);
+    assert.equal(answer.skills.length, 2);
+    assert.equal(backend.sessions.length, 2);
+    assert.equal(backend.sessions[0]?.disposed, true);
+  });
+
+  it("asks a cold session after the warm one reports an error", async () => {
+    await host.skillsFor("/tmp/scope", "fake");
+    backend.sessions[0]!.fail();
+
+    await host.skillsFor("/tmp/scope", "fake");
+    assert.equal(backend.sessions.length, 2);
+    assert.equal(backend.sessions[0]?.disposed, true);
+  });
+
+  it("keeps the model probe's session for the first Skills ask", async () => {
+    await host.models("/tmp/scope");
+    await host.skillsFor("/tmp/scope", "fake");
+
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]?.disposed, false);
+  });
+
+  it("disposes the warm session at shutdown", async () => {
+    await host.skillsFor("/tmp/scope", "fake");
+    await host.shutdown();
+
+    assert.equal(backend.sessions[0]?.disposed, true);
   });
 
   /*

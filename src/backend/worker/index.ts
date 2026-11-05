@@ -19,6 +19,7 @@ import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { migrateLegacyClaudeState, prepareClaudeState } from "./claude-state.ts";
+import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
   backend?: "pi" | "claude";
@@ -42,6 +43,15 @@ export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  private async opened(proxy: WorkerSession, signal: AbortSignal | undefined, isolation: FilesystemIsolationMode, begin: number,
+    sandbox?: { sharing: "shared" | "own"; remove: number; create: number }): Promise<void> {
+    const opening = performance.now();
+    const worker = await proxy.open(signal);
+    if (!this.options.stateRoot) return;
+    const ms = (value = 0) => Math.round(value);
+    recordTiming(this.options.stateRoot, { kind: "start", backend: this.name, isolation, ...sandbox, prepare: ms(opening - begin), open: ms(performance.now() - opening),
+      worker: { ready: ms(worker?.ready), import: ms(worker?.import), create: ms(worker?.create) } });
+  }
   private async createSandboxed(options: BackendCreateOptions): Promise<BackendSession> {
     const begin = performance.now();
     const support = this.options.sandbox?.();
@@ -98,10 +108,9 @@ export class WorkerBackend implements AgentBackend {
     try {
       const auth = support.provider.claudeAuthDir && (shared || this.name === "claude") ? [support.provider.claudeAuthDir] : [];
       const mounts = sandboxMounts([...roots ?? [scope, stateDir], ...auth], assets);
-      const prepare = performance.now() - begin;
       let sandbox: Sandbox, startup: Sandbox["startup"];
       if (shared) {
-        const acquired = await shared.acquire(support.provider, roots![0]!, mounts, options.signal);
+        const acquired = await shared.acquire(support.provider, roots![0]!, mounts, options.signal, options.evict);
         ({ sandbox, startup } = acquired);
         cleanups.push(acquired.release);
       } else {
@@ -112,11 +121,7 @@ export class WorkerBackend implements AgentBackend {
       }
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
-      const opening = performance.now();
-      const worker = await proxy.open(options.signal);
-      const ms = (value = 0) => `${Math.round(value)}ms`;
-      console.error(`Sandbox ${sandbox.name} start: prepare ${ms(prepare)}, remove ${ms(startup.remove)}, create ${ms(startup.create)}, `
-        + `open ${ms(performance.now() - opening)} (worker ready ${ms(worker?.ready)}, import ${ms(worker?.import)}, backend ${ms(worker?.create)})`);
+      await this.opened(proxy, options.signal, "sandbox", begin, { sharing: shared ? "shared" : "own", remove: Math.round(startup.remove), create: Math.round(startup.create) });
       return proxy;
     } catch (error) {
       if (proxy) await proxy.dispose(); else cleanup();
@@ -125,6 +130,7 @@ export class WorkerBackend implements AgentBackend {
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
+    const begin = performance.now();
     options.signal?.throwIfAborted();
     const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
     if (isolationMode === "sandbox") return this.createSandboxed(options);
@@ -138,7 +144,7 @@ export class WorkerBackend implements AgentBackend {
       try {
         proxy = new WorkerSession({ ...options, scope },
           claude ? { ...this.options, env: claude.env } : this.options, claude?.cleanup ?? (() => {}));
-        await proxy.open(options.signal); return proxy;
+        await this.opened(proxy, options.signal, "none", begin); return proxy;
       } catch (error) {
         if (proxy) await proxy.dispose(); else claude?.cleanup();
         throw error;
@@ -167,7 +173,7 @@ export class WorkerBackend implements AgentBackend {
         { ...process.env, ...this.options.env }, isolation.scope, options.resume);
       proxy = new WorkerSession({ ...options, scope: isolation.scope, stateDir: isolation.stateDir },
         { ...this.options, command: isolation.command, args: isolation.args, env: isolation.env, stdioFds: isolation.stdioFds }, isolation.cleanup);
-      await proxy.open(options.signal);
+      await this.opened(proxy, options.signal, "bubblewrap", begin);
       return proxy;
     } catch (error) {
       if (proxy) await proxy.dispose(); else isolation.cleanup();
@@ -258,7 +264,7 @@ class WorkerSession implements BackendSession {
   }
 
   async open(signal?: AbortSignal): Promise<SessionSnapshot["startup"]> {
-    const { emit: _emit, onFailure: _onFailure, signal: _signal, mcp, workflow, workflowBuilder, ...options } = this.options;
+    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, ...options } = this.options;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
     if (signal?.aborted) cancel();

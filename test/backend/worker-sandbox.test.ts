@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
@@ -47,14 +47,17 @@ test("a Revive after a clean close skips the pre-create remove; a spec left by a
 
 test("a sandbox start writes one timing line and runs the bundled worker", async (t) => {
   const f = fakeProvider(t);
-  const lines: string[] = [];
-  t.mock.method(console, "error", (line: string) => { lines.push(line); });
   const events: BackendEvent[] = [];
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: (event) => events.push(event) });
   t.after(() => session.dispose());
+  const lines = readFileSync(join(f.stateRoot, "timings.jsonl"), "utf8").trim().split("\n");
   assert.equal(lines.length, 1);
-  assert.match(lines[0]!, /^Sandbox flow-[0-9a-f]{16} start: prepare \d+ms, remove \d+ms, create \d+ms, open \d+ms \(worker ready \d+ms, import \d+ms, backend \d+ms\)$/);
+  const { at, ...start } = JSON.parse(lines[0]!);
+  assert.equal(typeof at, "string");
+  const number = (value: unknown) => typeof value === "number" ? 0 : value;
+  assert.deepEqual(JSON.parse(JSON.stringify(start, (_, value) => number(value))), { kind: "start", backend: "pi", isolation: "sandbox", sharing: "own",
+    prepare: 0, remove: 0, create: 0, open: 0, worker: { ready: 0, import: 0, create: 0 } });
   await session.prompt("entry");
   const entry = events.find((event) => event.type === "message" && event.id === "entry");
   assert.equal(entry?.type === "message" && entry.text, resolve("build/backend-worker.mjs"));
