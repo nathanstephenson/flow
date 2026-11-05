@@ -936,7 +936,7 @@ function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void 
   const label = activityLabel(chrome);
   if (label === undefined) return null;
 
-  const shell = "flex w-full items-center gap-2 rounded-t-xl border-b border-border/40 px-3 py-1.5 text-xs";
+  const shell = cn("flex w-full items-center gap-2 border-b border-border/40 px-3 py-1.5 text-xs", !chrome.queuedMessages?.length && "rounded-t-xl");
   const dot = <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />;
 
   // Inert where there is nowhere to send a reader — a Background Call has no pane of its own — the
