@@ -42,8 +42,9 @@ remote schema fetching. Draft-07, 2019-09 and 2020-12 are supported, with 2020-1
 Unsupported dialects, unresolved external references, unknown formats and validation keywords fail
 explicitly, with the underlying AJV reason retained. Recognized annotation-only extensions (`example`,
 `externalDocs`, `xml`, `markdownDescription`, `enumDescriptions`, `enumNames`, `enumTitles`) are accepted
-as metadata without rewriting the pinned schema. There is no blanket allowance for custom keywords
-or `x-*` extensions. The schema-driven editor exposes composition, local refs, conditional/dependent
+as metadata without rewriting the pinned schema. `x-*` vendor extensions are also annotations, as
+JSON Schema 2019-09 and later treat unknown keywords; servers use them for metadata such as
+`x-mcp-header`, and the server still validates its own input. Any other unknown keyword still fails. The schema-driven editor exposes composition, local refs, conditional/dependent
 fields, tuples, maps, primitives and structured JSON construction alongside the original constraints;
 no raw JSON editor is required. Presentation hints are not validators; the original schema is
 authoritative once all references resolve.

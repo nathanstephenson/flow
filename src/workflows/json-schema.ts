@@ -4,14 +4,24 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import { default as formats } from 'ajv-formats';
 import type { Json, JsonSchema } from '../protocol/workflows.ts';
 
-// Only recognizable presentation annotations may be ignored, never validation extensions.
+// Recognizable presentation annotations and `x-*` vendor extensions are ignored. Any other unknown keyword fails.
 const annotationKeywords = ['example', 'externalDocs', 'xml', 'markdownDescription', 'enumDescriptions', 'enumNames', 'enumTitles'];
 
+function extensionKeywords(value: unknown, found = new Set<string>()): Set<string> {
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      if (key.startsWith('x-')) found.add(key);
+      extensionKeywords(child, found);
+    }
+  }
+  return found;
+}
+
 // No coercion, defaults, removal of properties or remote schema fetching.
-function engineFor(Engine: typeof Ajv) {
+function engineFor(Engine: typeof Ajv, schema: JsonSchema) {
   const engine = new Engine({ strict: true, strictTypes: false, strictTuples: false, strictRequired: false, allowUnionTypes: true, allErrors: true });
   (formats as unknown as (ajv: Ajv) => void)(engine);
-  for (const keyword of annotationKeywords) engine.addKeyword({ keyword, valid: true });
+  for (const keyword of [...annotationKeywords, ...extensionKeywords(schema)]) engine.addKeyword({ keyword, valid: true });
   return engine;
 }
 const cache = new Map<string, ReturnType<Ajv['compile']>>();
@@ -20,7 +30,7 @@ export function compileJsonSchema(schema: JsonSchema) {
   const prior = cache.get(key);
   if (prior) return prior;
   const dialect = typeof schema === 'object' ? schema.$schema : undefined;
-  const engine = engineFor(typeof dialect === 'string' && dialect.includes('draft-07') ? Ajv : typeof dialect === 'string' && dialect.includes('2019-09') ? Ajv2019 : Ajv2020);
+  const engine = engineFor(typeof dialect === 'string' && dialect.includes('draft-07') ? Ajv : typeof dialect === 'string' && dialect.includes('2019-09') ? Ajv2019 : Ajv2020, schema);
   try {
     const validator = engine.compile(schema);
     if ('$async' in validator) throw new Error('Asynchronous schemas are not supported');
