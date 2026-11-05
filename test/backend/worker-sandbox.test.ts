@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
+import { summariseToName } from "../../src/daemon/summariser.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
 
 const backendModule = new URL("./worker-fixture.ts", import.meta.url).href;
@@ -111,4 +112,15 @@ test("a Claude sandbox session mounts the provider's Claude sign-in folder writa
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
   t.after(() => session.dispose());
   assert.ok(f.spec().additionalWorkspaces.some((mount) => mount.path === realpathSync(auth) && !mount.readOnly));
+});
+
+test("a Summary Model naming session starts in an own sandbox", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const errors: unknown[] = [];
+  const create = backend.create.bind(backend);
+  backend.create = (options) => create(options).catch((error: unknown) => { errors.push(error); throw error; });
+  await summariseToName({ backend, modelId: "fixture-model", text: "hello", timeoutMs: 10_000 });
+  assert.deepEqual(errors.map(String), []);
+  assert.equal(f.calls()[0], "create");
 });
