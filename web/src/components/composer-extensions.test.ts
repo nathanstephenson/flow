@@ -226,7 +226,7 @@ describe("the Composer's extensions", () => {
     assert.deepEqual(placeholders, ["Message…"]);
   });
 
-  // The status changes what the placeholder says — Reviving, queueing, ended — so it is reconfigured
+  // The status changes what the placeholder says — Reviving, compacting, ended — so it is reconfigured
   // on a live editor rather than baked in. That is the path the duplicate appeared on.
   it("still installs exactly one after the status changes it", () => {
     const hint = new Compartment();
