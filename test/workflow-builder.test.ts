@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { BackendCreateOptions, BackendSession } from '../src/backend/types.ts';
-import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
+import type { McpToolSnapshot, WorkflowDefinition } from '../src/protocol/workflows.ts';
 import { WorkflowBuilderService, type WorkflowBuilderServiceOptions } from '../src/daemon/workflow-builder.ts';
 import { serve } from '../src/daemon/server.ts';
 import { SessionHost } from '../src/daemon/host.ts';
@@ -206,29 +206,63 @@ it('returns an immediate running turn, snapshots assistant messages/Spend, rejec
   } finally { await f.cleanup(); }
 });
 
-it('provides real MCP schemas through a read-only virtual file and rejects fabricated or altered tool snapshots', async () => {
+function mcp(tools: McpToolSnapshot[], calls = { catalogue: 0, tool: 0 }): Partial<WorkflowBuilderServiceOptions> {
+  return {
+    mcpCatalogue: async (scope, _projectId, scopeIdentity) => { calls.catalogue++; return { scope, scopeIdentity, connections: [{ id: 'configured', name: 'Configured service', transport: 'http', enabledByDefault: true }], tools: tools.map(({ inputSchema: _input, outputSchema: _output, ...listing }) => listing), errors: [] }; },
+    mcpTool: async (scope, _projectId, scopeIdentity, connectionId, toolName) => {
+      calls.tool++;
+      assert.ok(scope && scopeIdentity);
+      const tool = tools.find(tool => tool.connectionId === connectionId && tool.toolName === toolName);
+      if (!tool) throw new Error('Unknown MCP tool');
+      return structuredClone(tool);
+    },
+  };
+}
+
+it('lists MCP tools without schemas, reads one full snapshot through a virtual file and rejects fabricated or altered snapshots', async () => {
   const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] } };
-  let calls = 0;
-  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => { calls++; return { scope, scopeIdentity, connections: [{ id: 'configured', name: 'Configured service', transport: 'http', enabledByDefault: true }], tools: [tool], errors: [] }; } });
+  const calls = { catalogue: 0, tool: 0 };
+  const f = fixture(mcp([tool], calls));
   try {
     const view = await f.service.create({ definition: draft() });
     f.service.message(view.id, 'Use the configured lookup tool');
     const capabilities = f.sessions[0]!.options.workflowBuilder!;
-    assert.ok(f.sessions[0]!.options.workflowBuilder!.instructions.includes('mcp-tools.json'));
-    const mcp: WorkflowDefinition = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { q: { kind: 'literal', value: 'hello' } } } } }] };
-    await assert.rejects(capabilities.write(JSON.stringify(mcp)), /exact tools/);
+    assert.ok(f.sessions[0]!.options.workflowBuilder!.instructions.includes('mcp-tools/<connectionId>/<toolName>.json'));
     const catalogue = JSON.parse(await capabilities.read('mcp-tools.json'));
-    assert.deepEqual(catalogue.tools, [tool]); assert.equal(calls, 1);
-    assert.ok(!JSON.stringify(catalogue).includes('callTool'));
-    await capabilities.write(JSON.stringify(mcp));
+    assert.deepEqual(catalogue.tools, [{ connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup' }]);
+    assert.ok(!JSON.stringify(catalogue).includes('inputSchema'));
+    assert.deepEqual(JSON.parse(await capabilities.read('mcp-tools/configured/lookup.json')), tool);
+    assert.deepEqual(calls, { catalogue: 1, tool: 1 });
+    const mcpStep: WorkflowDefinition = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool, mapping: { kind: 'template', template: { kind: 'object', fields: { q: { kind: 'literal', value: 'hello' } } } } }] };
+    await capabilities.write(JSON.stringify(mcpStep));
     assert.equal(f.service.view(view.id).definition.steps[0]!.kind, 'mcp');
-    const tampered = structuredClone(mcp);
-    (tampered.steps[0] as Extract<WorkflowDefinition['steps'][number], {kind:'mcp'}>).tool.serverIdentity = 'c'.repeat(64);
-    await assert.rejects(capabilities.write(JSON.stringify(tampered)), /exact tools/);
-    assert.deepEqual(f.service.view(view.id).definition, mcp);
+    for (const change of [{ serverIdentity: 'c'.repeat(64) }, { toolName: 'fabricated' }]) {
+      const tampered = structuredClone(mcpStep);
+      Object.assign((tampered.steps[0] as Extract<WorkflowDefinition['steps'][number], {kind:'mcp'}>).tool, change);
+      await assert.rejects(capabilities.write(JSON.stringify(tampered)), /exact tools/);
+      assert.deepEqual(f.service.view(view.id).definition, mcpStep);
+    }
     await f.service.abort(view.id);
     await assert.rejects(capabilities.read('mcp-tools.json'));
-    assert.equal(calls, 1);
+    await assert.rejects(capabilities.read('mcp-tools/configured/lookup.json'));
+    assert.equal(calls.catalogue, 1);
+  } finally { await f.cleanup(); }
+});
+
+it('serves mcp-tools/ paths only through the authoring service, never the filesystem', async () => {
+  const calls = { catalogue: 0, tool: 0 };
+  const f = fixture(mcp([], calls));
+  try {
+    mkdirSync(join(f.machine, 'mcp-tools', 'configured'), { recursive: true });
+    writeFileSync(join(f.machine, 'mcp-tools', 'configured', 'notes.txt'), 'REAL FILE');
+    writeFileSync(join(f.machine, 'mcp-tools', 'configured', 'lookup.json'), 'REAL FILE');
+    const view = await f.service.create({ definition: draft() });
+    f.service.message(view.id, 'Read');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    for (const path of ['mcp-tools/configured/notes.txt', 'mcp-tools/configured/lookup.json', 'mcp-tools/../workflow.json', 'mcp-tools/configured/', 'mcp-tools/bad id/lookup.json']) {
+      await assert.rejects(capabilities.read(path), error => !String(error).includes('REAL FILE'), path);
+    }
+    assert.equal(calls.tool, 1);
   } finally { await f.cleanup(); }
 });
 
@@ -236,14 +270,12 @@ it('resolves compact MCP references to exact host snapshots without accepting al
   const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string', description: 'Exact description' } }, required: ['q'] }, outputSchema: { type: 'object', properties: { answer: { type: 'string' } } } };
   const { connectionId, identity, serverIdentity, toolName } = tool;
   const reference = { connectionId, identity, serverIdentity, toolName };
-  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+  const f = fixture(mcp([tool]));
   try {
     const view = await f.service.create({ definition: draft() });
     f.service.message(view.id, 'Use lookup');
     const capabilities = f.sessions[0]!.options.workflowBuilder!;
     const compact = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool: reference }] };
-    await assert.rejects(capabilities.write(JSON.stringify(compact)), /MCP step "lookup"/);
-    await capabilities.read('mcp-tools.json');
     await capabilities.write(JSON.stringify(compact));
     const accepted = { ...compact, steps: [{ ...compact.steps[0]!, tool }] };
     assert.deepEqual(f.service.view(view.id).definition, accepted);
@@ -258,6 +290,7 @@ it('resolves compact MCP references to exact host snapshots without accepting al
       await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [{ ...compact.steps[0]!, tool: changed }] })), /previous draft preserved/);
       assert.deepEqual(f.service.view(view.id).definition, accepted);
     }
+    await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [{ ...compact.steps[0]!, tool: { ...reference, toolName: 'other' } }] })), /MCP step "lookup".*Unknown MCP tool/);
     await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [{ ...compact.steps[0]!, tool: { ...tool, inputSchema: false } }] })), /MCP step "lookup".*exact tools/);
   } finally { await f.cleanup(); }
   const existing = fixture();
@@ -269,20 +302,17 @@ it('resolves compact MCP references to exact host snapshots without accepting al
   } finally { await existing.cleanup(); }
 });
 
-it('compact MCP references prefer the current catalogue while full original snapshots can be preserved', async () => {
+it('compact MCP references prefer the current host snapshot while full original snapshots can be preserved', async () => {
   const original = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', description: 'Old schema' } };
   const current = { ...original, inputSchema: { type: 'object', description: 'Current schema' } };
   const { connectionId, identity, serverIdentity, toolName } = original;
-  const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [current], errors: [] }) });
+  const f = fixture(mcp([current]));
   try {
     const initial = { ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp' as const, tool: original }] };
     const view = await f.service.create({ definition: initial });
     f.service.message(view.id, 'Update lookup');
     const capabilities = f.sessions[0]!.options.workflowBuilder!;
     const compact = { ...initial, steps: [{ ...initial.steps[0]!, tool: { connectionId, identity, serverIdentity, toolName } }] };
-    await capabilities.write(JSON.stringify(compact));
-    assert.deepEqual(f.service.view(view.id).definition, initial);
-    await capabilities.read('mcp-tools.json');
     await capabilities.write(JSON.stringify(compact));
     assert.deepEqual(f.service.view(view.id).definition, { ...initial, steps: [{ ...initial.steps[0]!, tool: current }] });
     await capabilities.write(JSON.stringify(initial));
@@ -298,7 +328,7 @@ it('bounds expanded MCP bytes, nodes and step count as well as compact authoring
   ]) {
     const tool = { connectionId: 'configured', connectionName: 'Configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema };
     const { connectionId, identity, serverIdentity, toolName } = tool;
-    const f = fixture({ mcpCatalogue: async (scope, _projectId, scopeIdentity) => ({ scope, scopeIdentity, connections: [], tools: [tool], errors: [] }) });
+    const f = fixture(mcp([tool]));
     try {
       const view = await f.service.create({ definition: valid() });
       f.service.message(view.id, 'Build');
@@ -512,17 +542,21 @@ it('records retiring final Spend while rejecting cancelled tools/messages and la
 });
 
 it('owns an interrupted host draft write even after the Backend Session has stopped', async () => {
-  const f = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = fixture({ mcpTool: async () => { await gate; throw new Error('Unknown MCP tool'); } });
   try {
     const view = await f.service.create({ definition: draft() });
     const session = f.sessions[0]!;
     f.service.message(view.id, 'Build');
-    const writing = assert.rejects(session.options.workflowBuilder!.write(JSON.stringify(valid())), /previous draft preserved/);
+    const reference = { connectionId: 'configured', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup' };
+    const writing = assert.rejects(session.options.workflowBuilder!.write(JSON.stringify({ ...valid(), steps: [{ id: 'lookup', name: 'Lookup', kind: 'mcp', tool: reference }] })), /previous draft preserved/);
     const stopped = await f.service.abort(view.id);
     assert.equal(stopped.stopping, true);
     assert.ok(f.service.hasActiveWork());
     assert.ok(existsSync(session.options.scope));
     assert.throws(() => f.service.message(view.id, 'Too soon'), /busy/);
+    release();
     await Promise.all([writing, f.service.close(view.id)]);
     assert.ok(!existsSync(session.options.scope));
     assert.ok(!f.service.hasActiveWork());
@@ -582,6 +616,7 @@ it('mounts authoring discovery behind authentication and Origin checks without a
     connections: () => { calls++; return { scope: '/authoring', connections: [] }; },
     discover: async () => { calls++; return { tools: [], errors: [] }; },
     catalogue: async () => ({ scope: '/authoring', scopeIdentity: '', connections: [], tools: [], errors: [] }),
+    tool: async () => { throw new Error('Unused'); },
     hasActiveWork: () => false, shutdown: async () => {},
   };
   const running = await serve({ host: new SessionHost(), token: 'test', assets: {}, workflowMcpAuthoring: authoring });

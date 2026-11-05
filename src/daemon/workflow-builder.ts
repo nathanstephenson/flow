@@ -34,6 +34,8 @@ export interface WorkflowBuilderServiceOptions {
   validateDefinition?: (definition: WorkflowDefinition) => void;
   /** Host-owned metadata only; never callable MCP tools or transport credentials. */
   mcpCatalogue?: (scope: string, projectId: string | undefined, scopeIdentity: string) => Promise<WorkflowMcpCatalogue>;
+  /** One full host snapshot from the MCP discovery cache, for the per-tool virtual file and compact references. */
+  mcpTool?: (scope: string, projectId: string | undefined, scopeIdentity: string, connectionId: string, toolName: string) => Promise<McpToolSnapshot>;
   /** Internal lifecycle tuning, primarily for tests. Not an HTTP option. */
   limits?: Partial<Limits>;
 }
@@ -58,8 +60,8 @@ type Entry = {
   effort?: EffortLevel;
   models: ModelInfo[];
   originalMcpTools: McpToolSnapshot[];
-  catalogueMcpTools: McpToolSnapshot[];
 };
+type McpToolLookup = (connectionId: string, toolName: string) => Promise<McpToolSnapshot>;
 
 export class WorkflowBuilderRequestError extends Error {
   readonly status: number;
@@ -82,7 +84,8 @@ function bounded(value: unknown): void {
 }
 const stepValidators = workflowDefinitionValidator.shape.steps.element.options;
 const mcpReferenceValidator = stepValidators[5].shape.tool.omit({ connectionName: true, inputSchema: true, outputSchema: true });
-const mcpDiagnostic = (id: unknown) => `MCP step ${JSON.stringify(id)} must use unchanged existing snapshots or exact tools from mcp-tools.json`;
+const mcpDiagnostic = (id: unknown) => `MCP step ${JSON.stringify(id)} must use unchanged existing snapshots or exact tools from mcp-tools/<connectionId>/<toolName>.json`;
+const mcpToolPath = /^mcp-tools\/([A-Za-z0-9_-]{1,40})\/(.+)\.json$/;
 const draftName = { name: stepValidators[0].shape.name.or(z.literal('')) };
 const draftStepValidator = z.discriminatedUnion('kind', [
   stepValidators[0].extend({ ...draftName, model: z.string() }),
@@ -99,7 +102,7 @@ function definition(value: unknown, draft = false): WorkflowDefinition {
   const parsed = draftValidator.parse(value) as WorkflowDefinition;
   return draft ? parsed : validateDefinition(parsed).definition;
 }
-function builderDefinition(value: unknown, entry: Entry): WorkflowDefinition {
+async function builderDefinition(value: unknown, entry: Entry, lookup: McpToolLookup): Promise<WorkflowDefinition> {
   bounded(value);
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const draft = value as Record<string, unknown>;
@@ -110,9 +113,12 @@ function builderDefinition(value: unknown, entry: Entry): WorkflowDefinition {
         if (!step || typeof step !== 'object' || step.kind !== 'mcp') continue;
         const reference = mcpReferenceValidator.safeParse(step.tool);
         if (!reference.success) continue;
-        const tool = [...entry.catalogueMcpTools, ...entry.originalMcpTools].find(tool =>
+        let reason = '';
+        const current = await lookup(reference.data.connectionId, reference.data.toolName)
+          .catch((error: unknown) => { reason = `: ${error instanceof Error ? error.message : String(error)}`; return undefined; });
+        const tool = [...(current ? [current] : []), ...entry.originalMcpTools].find(tool =>
           Object.entries(reference.data).every(([key, value]) => tool[key as keyof McpToolSnapshot] === value));
-        if (!tool) throw new Error(mcpDiagnostic(step.id));
+        if (!tool) throw new Error(mcpDiagnostic(step.id) + reason);
         step.tool = tool;
         bounded(value);
         step.tool = structuredClone(tool);
@@ -160,7 +166,7 @@ export class WorkflowBuilderService {
       this.options.validateDefinition?.(draft);
     } catch { throw invalid(); }
     const now = Date.now();
-    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [], originalMcpTools: draft.steps.flatMap(step => step.kind === 'mcp' && step.tool.connectionId !== 'unselected' ? [structuredClone(step.tool)] : []), catalogueMcpTools: [] };
+    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [], originalMcpTools: draft.steps.flatMap(step => step.kind === 'mcp' && step.tool.connectionId !== 'unselected' ? [structuredClone(step.tool)] : []) };
     this.entries.set(entry.view.id, entry);
     try {
       await within(this.trackStartup(entry, () => this.start(entry, input)), this.limits.startupMs);
@@ -184,6 +190,16 @@ export class WorkflowBuilderService {
     });
     this.opening.set(entry, pending);
     return pending;
+  }
+
+  private async mcpTool(entry: Entry, connectionId: string, toolName: string): Promise<McpToolSnapshot> {
+    if (!this.options.mcpTool) throw new Error('MCP discovery unavailable');
+    await entry.files!.checkScope();
+    this.check(entry);
+    const tool = await this.options.mcpTool(entry.view.scope, entry.view.definition.projectId, entry.files!.scopeIdentity, connectionId, toolName);
+    await entry.files!.checkScope();
+    this.check(entry);
+    return tool;
   }
 
   private check(entry: Entry, starting = false): void {
@@ -252,8 +268,14 @@ export class WorkflowBuilderService {
             if (catalogue.scope !== entry.view.scope || catalogue.scopeIdentity !== entry.files!.scopeIdentity) throw new Error('MCP authoring Scope changed. Close and reopen the builder.');
             const content = JSON.stringify(catalogue);
             if (Buffer.byteLength(content) > 192_000) throw new Error('MCP tool catalogue is too large');
-            entry.catalogueMcpTools = structuredClone(catalogue.tools);
             return content;
+          }
+          if (path.startsWith('mcp-tools/')) {
+            const match = mcpToolPath.exec(path);
+            if (!match) throw new Error('Unknown MCP tool file. Use mcp-tools/<connectionId>/<toolName>.json.');
+            const tool = await this.mcpTool(entry, match[1]!, match[2]!);
+            live();
+            return JSON.stringify(tool);
           }
           const content = await entry.files!.read(path);
           live();
@@ -270,8 +292,14 @@ export class WorkflowBuilderService {
           const previous = JSON.stringify(entry.view.definition);
           try {
             if (typeof content !== 'string' || Buffer.byteLength(content) > MAX_DEFINITION) throw new Error();
+            const lookups = new Map<string, Promise<McpToolSnapshot>>();
+            const lookup: McpToolLookup = (connectionId, toolName) => {
+              const key = JSON.stringify([connectionId, toolName]);
+              if (!lookups.has(key)) lookups.set(key, this.mcpTool(entry, connectionId, toolName));
+              return lookups.get(key)!;
+            };
             let draft: WorkflowDefinition;
-            try { draft = builderDefinition(JSON.parse(content), entry); }
+            try { draft = await builderDefinition(JSON.parse(content), entry, lookup); }
             catch (error) {
               diagnostic = error instanceof z.ZodError
                 ? error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ').slice(0, 500)
@@ -288,10 +316,9 @@ export class WorkflowBuilderService {
               if (!model || (model.effortLevels?.length ? !model.effortLevels.includes(step.effort) : step.effort !== 'off')) throw new Error();
             }
             for (const step of draft.steps) {
-              if (step.kind === 'mcp' && ![...entry.originalMcpTools, ...entry.catalogueMcpTools].some(tool => isDeepStrictEqual(tool, step.tool))) {
-                diagnostic = mcpDiagnostic(step.id);
-                throw new Error();
-              }
+              if (step.kind !== 'mcp' || entry.originalMcpTools.some(tool => isDeepStrictEqual(tool, step.tool))) continue;
+              diagnostic = mcpDiagnostic(step.id);
+              if (!isDeepStrictEqual(await lookup(step.tool.connectionId, step.tool.toolName).catch(() => undefined), step.tool)) throw new Error();
             }
             diagnostic = 'Workflow credential or MCP snapshot validation failed';
             this.options.validateDefinition?.(draft);

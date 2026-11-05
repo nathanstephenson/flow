@@ -4,8 +4,8 @@ import { createRequire } from 'node:module';
 import { it } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
-import type { McpToolDiscovery, McpToolSnapshot, WorkflowDefinition, WorkflowStep } from '../src/protocol/workflows.ts';
-import type { WorkflowMcpConnections } from '../src/protocol/workflow-mcp-authoring.ts';
+import type { McpToolListing, McpToolSnapshot, WorkflowDefinition, WorkflowStep } from '../src/protocol/workflows.ts';
+import type { WorkflowMcpConnections, WorkflowMcpDiscovery } from '../src/protocol/workflow-mcp-authoring.ts';
 
 type Element = { type: string; props: Record<string, any> };
 type McpStep = Extract<WorkflowStep, { kind: 'mcp' }>;
@@ -17,7 +17,8 @@ const errors = [
   { toolName: 'bad-input', message: 'MCP tool bad-input input schema is incompatible: strict mode: unknown keyword: "example"' },
   { toolName: 'bad-output', message: 'MCP tool bad-output output schema is incompatible: no schema with key or ref "https://json-schema.org/draft/2020-12/schema"' },
 ];
-const compatible: McpToolDiscovery = { tools: [tool], errors: [] };
+const listing: McpToolListing = { connectionId: 'server', connectionName: 'Server', identity: 'tool-identity', serverIdentity: 'server-identity', toolName: 'usable', description: 'Reads one record' };
+const compatible: WorkflowMcpDiscovery = { tools: [listing], errors: [] };
 const catalogue: WorkflowMcpConnections = {
   scope: '/project-a',
   connections: [
@@ -146,7 +147,7 @@ function editor(projectId: string | undefined = 'project-a', pendingBody = false
   const select = (label: string) => find(render(), 'Select', node => elements(node).some(child => child.props['aria-label'] === label));
   const button = (label: RegExp = /tools|discovery|Discovering/) => find(render(), 'Button', node => label.test(text(node)));
   const latest = () => requests.at(-1)!;
-  const ready = async (data: McpToolDiscovery = compatible) => {
+  const ready = async (data: WorkflowMcpDiscovery = compatible) => {
     latest().resolve(catalogue);
     await settle();
     latest().resolve(data);
@@ -255,7 +256,7 @@ for (const target of ['project-b', undefined]) {
 
 it('keeps compatible tools selectable and shows collapsible input/output incompatibility reasons', async () => {
   const p = editor();
-  await p.ready({ tools: [tool], errors });
+  await p.ready({ tools: [listing], errors });
   const view = p.render();
   assert.equal(text(find(view, 'p', node => node.props.role === 'status')), '1 compatible tool available. 2 incompatible tools cannot be selected.');
   const details = elements(find(view, 'section', node => node.props['aria-label'] === 'Incompatible MCP tools')).filter(node => node.type === 'details');
@@ -268,10 +269,12 @@ it('keeps compatible tools selectable and shows collapsible input/output incompa
   });
   const picker = p.select('MCP tool');
   assert.equal(picker.props.disabled, false);
-  assert.deepEqual(elements(picker).filter(node => node.type === 'SelectItem').map(text), ['usable']);
+  assert.deepEqual(elements(picker).filter(node => node.type === 'SelectItem').map(text), ['usableReads one record']);
   assert.equal(p.changes.length, 0, 'Discovery must preserve pinned identity and mappings');
   assert.equal(find(view, 'JsonSchemaEditor').props.template, p.step.mapping?.kind === 'template' && p.step.mapping.template);
-  picker.props.onValueChange(JSON.stringify({ ...tool, toolName: 'bad-input' }));
+  const requests = p.requests.length;
+  picker.props.onValueChange('bad-input');
+  assert.equal(p.requests.length, requests, 'Incompatible tools are never fetched');
   assert.equal(p.changes.length, 0);
 });
 
@@ -292,7 +295,7 @@ it('distinguishes all-incompatible discovery from an empty server', async () => 
 
 it('clears stale tools on refresh and retry and renders API errors as safe alerts', async () => {
   const p = editor();
-  await p.ready({ tools: [tool], errors });
+  await p.ready({ tools: [listing], errors });
   const pending = p.refresh();
   requestScope(pending, '/api/workflow-mcp/server', 'project-a');
   assert.equal(pending.url.searchParams.get('refresh'), '1');
@@ -339,7 +342,7 @@ for (const target of ['project-b', undefined]) {
   for (const outcome of ['success', 'failure']) {
     it(`resets on ${target ? 'Project' : 'authoring Scope'} switch and rejects stale ${outcome}`, async () => {
       const p = editor();
-      await p.ready({ tools: [tool], errors });
+      await p.ready({ tools: [listing], errors });
       const oldDiscovery = p.refresh();
       const oldConnections = p.switchProject(target);
       assert.equal(oldDiscovery.signal.aborted, true);
@@ -347,7 +350,7 @@ for (const target of ['project-b', undefined]) {
       assert.equal(p.select('MCP tool').props.disabled, true);
       assert.doesNotMatch(text(p.render()), /incompatible|compatible tool available|Scope: \/project-a/);
       requestScope(oldConnections, '/api/workflow-mcp', target);
-      if (outcome === 'success') oldDiscovery.resolve({ tools: [tool], errors });
+      if (outcome === 'success') oldDiscovery.resolve({ tools: [listing], errors });
       else oldDiscovery.reject(new Error('stale discovery failure'));
       await p.settle();
       assert.doesNotMatch(text(p.render()), /incompatible|compatible tool available|stale discovery failure/);
@@ -377,7 +380,7 @@ for (const target of ['project-b', undefined]) {
 for (const outcome of ['success', 'failure']) {
   it(`fences stale discovery ${outcome} after a server switch`, async () => {
     const p = editor();
-    await p.ready({ tools: [tool], errors });
+    await p.ready({ tools: [listing], errors });
     const oldRequest = p.refresh();
     p.select('MCP server').props.onValueChange('other');
     p.render();
@@ -386,12 +389,12 @@ for (const outcome of ['success', 'failure']) {
     assert.equal(current.url.searchParams.get('refresh'), null);
     assert.equal(oldRequest.signal.aborted, true);
     assert.doesNotMatch(text(p.render()), /incompatible|compatible tool available/);
-    if (outcome === 'success') oldRequest.resolve({ tools: [tool], errors });
+    if (outcome === 'success') oldRequest.resolve({ tools: [listing], errors });
     else oldRequest.reject(new Error('stale failure'));
     await p.settle();
     assert.equal(p.button().props.disabled, true, 'Stale completion must not clear busy');
     assert.doesNotMatch(text(p.render()), /incompatible|compatible tool available|stale failure/);
-    current.resolve({ tools: [{ ...tool, connectionId: 'other' }], errors: [] });
+    current.resolve({ tools: [{ ...listing, connectionId: 'other' }], errors: [] });
     await p.settle();
     assert.equal(p.button().props.disabled, false);
     assert.match(text(p.render()), /1 compatible tool available\./);
@@ -445,7 +448,7 @@ for (const pendingBody of [false, true]) {
       retry.props.onClick();
       p.render();
       const current = p.latest();
-      pending.resolve(phase === 'connections' ? { ...catalogue, scope: '/late-scope' } : { tools: [tool], errors });
+      pending.resolve(phase === 'connections' ? { ...catalogue, scope: '/late-scope' } : { tools: [listing], errors });
       await p.settle();
       assert.doesNotMatch(text(p.render()), /late-scope|compatible tool available|incompatible/);
       assert.equal(p.button(phase === 'connections' ? /Loading servers/ : /Discovering/).props.disabled, true);
@@ -482,22 +485,46 @@ for (const pendingBody of [false, true]) {
   }
 }
 
-it('preserves pinned mappings during discovery and resets first-entry mapping on exact reselection', async () => {
+it('preserves pinned mappings during discovery and resets first-entry mapping after fetching the selected snapshot', async () => {
   const p = editor();
   const pinned = { ...p.step.tool };
+  const { inputSchema: _input, ...pinnedListing } = pinned;
   const changed = { ...pinned, identity: 'new-identity', inputSchema: { type: 'object', required: ['value'] } };
-  await p.ready({ tools: [pinned, changed], errors: [] });
+  await p.ready({ tools: [pinnedListing], errors: [] });
+  assert.equal(p.select('MCP tool').props.value, 'pinned');
+  p.refresh().resolve({ tools: [{ ...pinnedListing, identity: 'new-identity' }], errors: [] });
+  await p.settle();
   const picker = p.select('MCP tool');
-  assert.equal(picker.props.value, JSON.stringify(pinned));
+  assert.equal(picker.props.value, '', 'A changed identity must be selectable again');
   assert.equal(p.changes.length, 0);
   assert.equal(find(p.render(), 'JsonSchemaEditor').props.template, p.step.mapping?.kind === 'template' && p.step.mapping.template);
-  picker.props.onValueChange(pinned.toolName);
-  picker.props.onValueChange(JSON.stringify({ ...pinned, identity: 'unknown' }));
-  assert.equal(p.changes.length, 0, 'Names and unknown snapshots must not select a tool');
-  picker.props.onValueChange(JSON.stringify(changed));
+  const requests = p.requests.length;
+  picker.props.onValueChange('unknown');
+  assert.equal(p.requests.length, requests, 'Unknown names must not fetch a tool');
+  picker.props.onValueChange('pinned');
+  requestScope(p.latest(), '/api/workflow-mcp/server/tools/pinned', 'project-a');
+  assert.equal(p.changes.length, 0);
+  p.latest().resolve(changed);
+  await p.settle();
   const selected = p.changes.at(-1)!;
   assert.equal(selected.tool, changed);
   assert.equal(selected.mapping?.kind, 'template');
   assert.equal(JSON.stringify(selected.mapping), JSON.stringify({ kind: 'template', template: { kind: 'object', fields: {} } }));
   assert.equal(selected.repeatMapping, p.step.repeatMapping);
+});
+
+it('shows a tool fetch failure as a safe alert and drops a fetch made stale by refresh', async () => {
+  const p = editor();
+  await p.ready();
+  p.select('MCP tool').props.onValueChange('usable');
+  p.latest().reject(new Error('Workflow MCP connection or Scope unavailable: MCP configuration changed; discover again'));
+  await p.settle();
+  assert.match(text(find(p.render(), 'p', node => node.props.role === 'alert')), /discover again/);
+  p.select('MCP tool').props.onValueChange('usable');
+  const stale = p.latest();
+  p.refresh();
+  assert.equal(stale.signal.aborted, true);
+  stale.resolve(tool);
+  await p.settle();
+  assert.equal(p.changes.length, 0);
 });

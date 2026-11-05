@@ -91,6 +91,7 @@ export async function startRuntime(options: {
       host, config, scope: process.cwd(), stateRoot: root,
       validateDefinition: definition => workflowExecutions.validateDefinitionCredentials(definition),
       mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
+      mcpTool: (scope, projectId, scopeIdentity, connectionId, toolName) => workflowMcpAuthoring!.tool(projectId, connectionId, toolName, { scope, scopeIdentity }),
     });
     await host.load();
     workflowExecutions.reconcile();

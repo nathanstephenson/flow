@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { WorkflowMcpAuthoring } from '../protocol/workflow-mcp-authoring.ts';
 import { send } from './http.ts';
+import { UnknownMcpTool, validMcpToolName } from './workflow-mcp-authoring.ts';
 
 export async function workflowMcpAuthoringRoutes(request: IncomingMessage, response: ServerResponse, url: string | URL, service?: WorkflowMcpAuthoring): Promise<boolean> {
   const pathname = typeof url === 'string' ? url : url.pathname;
@@ -8,22 +9,27 @@ export async function workflowMcpAuthoringRoutes(request: IncomingMessage, respo
   response.setHeader('cache-control', 'no-store');
   if (!service) { send(response, 404, { error: 'Workflow MCP authoring unavailable' }); return true; }
   if (request.method !== 'GET') { send(response, 405, { error: 'Method not allowed' }); return true; }
-  let connectionId: string | undefined, projectId: string | undefined, refresh = false;
+  let connectionId: string | undefined, toolName: string | undefined, projectId: string | undefined, refresh = false;
   try {
-    const match = /^\/api\/workflow-mcp(?:\/([^/]+))?$/.exec(pathname);
+    const match = /^\/api\/workflow-mcp(?:\/([^/]+)(?:\/tools\/([^/]+))?)?$/.exec(pathname);
     if (!match) throw new Error();
     connectionId = match[1] === undefined ? undefined : decodeURIComponent(match[1]);
     if (connectionId !== undefined && !/^[A-Za-z0-9_-]{1,40}$/.test(connectionId)) throw new Error();
+    toolName = match[2] === undefined ? undefined : decodeURIComponent(match[2]);
+    if (toolName !== undefined && !validMcpToolName(toolName)) throw new Error();
     const query = (typeof url === 'string' ? new URL(request.url ?? pathname, 'http://localhost') : url).searchParams;
     if ([...query.keys()].some(key => !['projectId', 'refresh'].includes(key)) || query.getAll('projectId').length > 1 || query.getAll('refresh').length > 1) throw new Error();
-    if (query.has('refresh') && (query.get('refresh') !== '1' || connectionId === undefined)) throw new Error();
+    if (query.has('refresh') && (query.get('refresh') !== '1' || connectionId === undefined || toolName !== undefined)) throw new Error();
     refresh = query.get('refresh') === '1';
     projectId = query.get('projectId') ?? undefined;
     if (projectId !== undefined && (!projectId.length || projectId.length > 4_096 || projectId.includes('\0'))) throw new Error();
   } catch { send(response, 400, { error: 'Invalid workflow MCP request' }); return true; }
   try {
-    send(response, 200, connectionId === undefined ? await service.connections(projectId) : await service.discover(projectId, connectionId, refresh));
+    send(response, 200, connectionId === undefined ? await service.connections(projectId)
+      : toolName === undefined ? await service.discover(projectId, connectionId, refresh)
+        : await service.tool(projectId, connectionId, toolName));
   } catch (error) {
+    if (error instanceof UnknownMcpTool) { send(response, 404, { error: error.message }); return true; }
     const reason = error instanceof Error ? error.message : 'Check MCP Settings and the selected Project.';
     console.error(`Workflow MCP authoring request failed: ${reason}`);
     send(response, 400, { error: `Workflow MCP connection or Scope unavailable: ${reason}` });
