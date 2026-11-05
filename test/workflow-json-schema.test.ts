@@ -106,8 +106,16 @@ for (const dialect of dialects) {
     assert.throws(() => validateJsonSchema(dependencies, { extra: 1 }), /schema validation failed/);
   });
 
+  test(`${dialect}: x-* extensions are annotations and never relax the original constraints`, () => {
+    const schema: JsonSchema = { $schema: dialect, type: 'object', 'x-vendor': { any: 'thing' }, required: ['owner'],
+      properties: { owner: { type: 'string', minLength: 2, 'x-mcp-header': 'X-Owner' } } };
+    validateJsonSchema(schema, { owner: 'octo' });
+    assert.throws(() => validateJsonSchema(schema, { owner: 'o' }), /schema validation failed/);
+    assert.throws(() => validateJsonSchema(schema, {}), /schema validation failed/);
+  });
+
   test(`${dialect}: unknown keywords, validation extensions and formats fail with AJV reasons`, () => {
-    for (const keyword of ['customValidation', 'x-custom', 'x-markdownDescription', 'discriminator']) {
+    for (const keyword of ['customValidation', 'discriminator']) {
       cannotCompile({ $schema: dialect, type: 'string', [keyword]: true }, new RegExp(`unknown keyword: "${keyword}"`));
       cannotCompile({ $schema: dialect, type: 'object', properties: { nested: { type: 'string', [keyword]: true } } }, new RegExp(keyword));
     }
