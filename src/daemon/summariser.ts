@@ -179,6 +179,8 @@ export type SummaryRequest = {
   /** What to name. The user's first message, or `nameInput` over a whole transcript. */
   text: string;
   timeoutMs?: number;
+  /** Told why no name came back, so a refusal somebody reads can say it. */
+  problem?: (reason: string) => void;
 };
 
 /**
@@ -223,6 +225,8 @@ type Sink = {
    * timeout where the cold path would at least have had a live process.
    */
   dead: boolean;
+  /** The text of the last error `notice`, which is usually the real reason a naming failed. */
+  error?: string;
 };
 
 /**
@@ -301,13 +305,14 @@ export class SummaryModelSpare {
     model: { backend: string; modelId: string },
     text: string,
     timeoutMs?: number,
+    problem?: (reason: string) => void,
   ): Promise<string | undefined> {
     const claimed = this.claim(model);
     try {
       const spare = claimed ? await claimed.session : undefined;
       if (claimed && spare && !claimed.sink.dead) {
         try {
-          return await nameWith(spare, claimed.sink, text, timeoutMs ?? SUMMARY_TIMEOUT_MS);
+          return await nameWith(spare, claimed.sink, text, timeoutMs ?? SUMMARY_TIMEOUT_MS, problem);
         } finally {
           await spare.dispose().catch(() => {});
         }
@@ -320,6 +325,7 @@ export class SummaryModelSpare {
         modelId: model.modelId,
         text,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(problem === undefined ? {} : { problem }),
       });
     } finally {
       // Whatever happened, the next naming should not have to wait for a boot.
@@ -389,7 +395,10 @@ export class SummaryModelSpare {
 function idleSink(): Sink {
   const sink: Sink = {
     deliver: (event) => {
-      if (event.type === "notice" && event.level === "error") sink.dead = true;
+      if (event.type === "notice" && event.level === "error") {
+        sink.dead = true;
+        sink.error = event.text;
+      }
     },
     dead: false,
   };
@@ -422,12 +431,13 @@ export async function summariseToName(request: SummaryRequest): Promise<string |
       tools: "none",
       emit: (event) => sink.deliver(event),
     });
-  } catch {
+  } catch (error) {
+    request.problem?.(`${backend.name} did not start: ${message(error)}`);
     return undefined;
   }
 
   try {
-    return await nameWith(session, sink, text, request.timeoutMs ?? SUMMARY_TIMEOUT_MS);
+    return await nameWith(session, sink, text, request.timeoutMs ?? SUMMARY_TIMEOUT_MS, request.problem);
   } finally {
     // Every path: answered, junk, timed out, or the prompt itself throwing. A leaked adapter is a
     // leaked child process.
@@ -449,6 +459,7 @@ async function nameWith(
   sink: Sink,
   text: string,
   timeoutMs: number,
+  problem?: (reason: string) => void,
 ): Promise<string | undefined> {
   /*
    * Latest-wins per id, because `message` events are snapshots of one message as it streams rather
@@ -459,6 +470,7 @@ async function nameWith(
    * belt-and-braces rather than a case anybody has seen.
    */
   const said = new Map<string, string>();
+  let ended = false;
   let settle: (() => void) | undefined;
   const answered = new Promise<void>((resolve) => {
     settle = resolve;
@@ -466,16 +478,25 @@ async function nameWith(
 
   sink.deliver = (event: BackendEvent): void => {
     if (event.type === "message" && event.producer === undefined) said.set(event.id, event.text);
-    if (event.type === "turn_ended") settle?.();
+    if (event.type === "notice" && event.level === "error") sink.error = event.text;
+    if (event.type === "turn_ended") {
+      ended = true;
+      settle?.();
+    }
   };
 
   try {
     await session.prompt(namePrompt(text));
     await within(answered, timeoutMs);
-    return nameFrom([...said.values()].join("\n"));
-  } catch {
+  } catch (error) {
+    problem?.(message(error));
     return undefined;
   }
+  const name = nameFrom([...said.values()].join("\n"));
+  if (name === undefined) {
+    problem?.(sink.error ?? (ended ? "the answer was not a usable name" : `no answer within ${timeoutMs / 1000}s`));
+  }
+  return name;
 }
 
 /**
@@ -611,4 +632,8 @@ function within(work: Promise<void>, ms: number): Promise<void> {
       resolve();
     });
   });
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
