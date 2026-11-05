@@ -2088,8 +2088,9 @@ export class SessionHost {
     }
 
     const generation = (record.titleGeneration += 1);
-    const name = await this.summarySpare.name(backend, summary, nameInput(entries));
-    if (name === undefined) throw new CommandRefused("Could not name this Agent Session");
+    let reason: string | undefined;
+    const name = await this.summarySpare.name(backend, summary, nameInput(entries), undefined, (problem) => { reason = problem; });
+    if (name === undefined) throw new CommandRefused(`Could not name this Agent Session${reason ? `: ${reason}` : ""}`);
     // Refused rather than applied when something newer has already been asked for. A human who
     // clicked twice wants the second answer, and the first arriving afterwards must not undo it.
     if (record.titleGeneration !== generation) throw new CommandRefused("This Agent Session was renamed again");

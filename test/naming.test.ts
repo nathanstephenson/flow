@@ -265,6 +265,12 @@ describe("a Summary Model that will not answer", () => {
     assert.equal(backend.latest.disposed, true);
   });
 
+  it("says why when it gives up", async () => {
+    const reasons: string[] = [];
+    await summariseToName({ backend: new FakeBackend(), modelId: "fake-1", text: "Fix the uploader", timeoutMs: 20, problem: (reason) => reasons.push(reason) });
+    assert.deepEqual(reasons, ["no answer within 0.02s"]);
+  });
+
   it("reports nothing when the backend will not start at all", async () => {
     const broken = {
       name: "broken",
@@ -273,7 +279,9 @@ describe("a Summary Model that will not answer", () => {
       },
     };
 
-    assert.equal(await summariseToName({ backend: broken, modelId: "x", text: "hi" }), undefined);
+    const reasons: string[] = [];
+    assert.equal(await summariseToName({ backend: broken, modelId: "x", text: "hi", problem: (reason) => reasons.push(reason) }), undefined);
+    assert.deepEqual(reasons, ["broken did not start: not logged in"]);
   });
 });
 
@@ -690,7 +698,7 @@ describe("naming an Agent Session", () => {
 
     // The automatic half is silent and the human half is not: somebody clicked this and is waiting.
     summary.autoReply = "No";
-    await assert.rejects(host.execute({ type: "rename", sessionId: id }), /Could not name/);
+    await assert.rejects(host.execute({ type: "rename", sessionId: id }), /Could not name this Agent Session: the answer was not a usable name/);
     assert.equal(titleOf(id), "Add retry to the uploader");
   });
 });
