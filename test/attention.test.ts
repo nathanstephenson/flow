@@ -12,7 +12,7 @@ async function fixture(root?: string) {
   const backend = new FakeBackend({ enquiries: true, permissions: true });
   const host = new SessionHost(root ? { store: new TranscriptStore(root) } : {});
   host.registerBackend(backend);
-  const id = await host.create({ scope: "/tmp/attention", backend: "fake" });
+  const id = await host.create({ scope: tmpdir(), backend: "fake" });
   return { backend, host, id };
 }
 

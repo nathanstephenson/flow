@@ -177,19 +177,8 @@ function Candidates({
   );
 }
 
-/**
- * Adding a directory the Session Host would never suggest.
- *
- * A plain field with results beneath it rather than a Combobox, because the two are not the same
- * control: a Combobox picks from a list it was given, and this list arrives from the server per
- * keystroke and is never the whole set. It is also the escape hatch for a Project outside the
- * Project Root, which a list of candidates cannot be.
- *
- * Which of the two searches runs is decided by the first character — see `searchKind`. The label
- * says which, so "why is it not finding my repo" has an answer on screen.
- */
-function DirectorySearch({ onAdd }: { onAdd: (path: string) => void }) {
-  const [query, setQuery] = useState("");
+/** Directories matching `query` from `/api/directories`, debounced. Undefined until there is an answer. */
+export function useDirectoryMatches(query: string): DirectoryMatches | undefined {
   const [matches, setMatches] = useState<DirectoryMatches | undefined>(undefined);
   // Which query the displayed answer belongs to, so a slow reply cannot overwrite a newer one.
   const latest = useRef("");
@@ -226,6 +215,24 @@ function DirectorySearch({ onAdd }: { onAdd: (path: string) => void }) {
       clearTimeout(timer);
     };
   }, [query]);
+
+  return matches;
+}
+
+/**
+ * Adding a directory the Session Host would never suggest.
+ *
+ * A plain field with results beneath it rather than a Combobox, because the two are not the same
+ * control: a Combobox picks from a list it was given, and this list arrives from the server per
+ * keystroke and is never the whole set. It is also the escape hatch for a Project outside the
+ * Project Root, which a list of candidates cannot be.
+ *
+ * Which of the two searches runs is decided by the first character — see `searchKind`. The label
+ * says which, so "why is it not finding my repo" has an answer on screen.
+ */
+function DirectorySearch({ onAdd }: { onAdd: (path: string) => void }) {
+  const [query, setQuery] = useState("");
+  const matches = useDirectoryMatches(query);
 
   const kind = searchKind(query);
 

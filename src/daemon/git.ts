@@ -408,3 +408,19 @@ export async function removeWorktree(options: {
   if (!removed.ok) return removed;
   return { ok: true, value: undefined };
 }
+
+/**
+ * Reconnect a worktree and its repository after one or both moved. Run from the repository.
+ *
+ * git can accept a path that is not a worktree of this repository, so the link is read back.
+ */
+export async function repairWorktree(repo: string, path: string): Promise<GitResult<void>> {
+  const repaired = await run(repo, ["worktree", "repair", path], GIT_WRITE_TIMEOUT_MS);
+  if (!repaired.ok) return repaired;
+  const common = await run(path, ["rev-parse", "--path-format=absolute", "--git-common-dir"], GIT_READ_TIMEOUT_MS);
+  if (!common.ok) return common;
+  const expected = await run(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"], GIT_READ_TIMEOUT_MS);
+  if (!expected.ok) return expected;
+  if (common.value.trim() !== expected.value.trim()) return refuse(`worktree repair ${path}`, `${path} is not a worktree of ${repo}`);
+  return { ok: true, value: undefined };
+}

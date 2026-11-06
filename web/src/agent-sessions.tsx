@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { Command, SessionSummary } from "../../src/protocol/commands.ts";
+import { RelocateDialog } from "@/components/relocate-dialog.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 import { useHost } from "@/host.tsx";
 import { pruneRetainedWorkflowLaunch } from "@/workflow-launch.ts";
@@ -39,6 +40,8 @@ type SessionsValue = {
   loaded: boolean;
   /** Poll now. Called after every command, because a command is the thing most likely to change it. */
   nudge: () => void;
+  /** Open the Relocate dialog for an Agent Session whose Scope is gone. */
+  relocate: (sessionId: string) => void;
 };
 
 const SessionsContext = createContext<SessionsValue | undefined>(undefined);
@@ -53,6 +56,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   const { connection } = useHost();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [relocatingId, setRelocatingId] = useState<string | undefined>(undefined);
   const nudgeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -112,10 +116,12 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
   }, [connection]);
 
   const nudge = useCallback(() => nudgeRef.current(), []);
+  const relocating = sessions.find((session) => session.id === relocatingId);
 
   return (
-    <SessionsContext.Provider value={{ sessions, loaded, nudge }}>
+    <SessionsContext.Provider value={{ sessions, loaded, nudge, relocate: setRelocatingId }}>
       {children}
+      {relocating ? <RelocateDialog session={relocating} onClose={() => { setRelocatingId(undefined); nudge(); }} /> : null}
     </SessionsContext.Provider>
   );
 }
@@ -132,7 +138,7 @@ export function SessionsProvider({ children }: { children: ReactNode }) {
  */
 export function useCommand(): <T>(command: Command) => Promise<T | undefined> {
   const { connection } = useHost();
-  const { nudge } = useAgentSessions();
+  const { nudge, relocate } = useAgentSessions();
 
   return useCallback(
     async <T,>(command: Command): Promise<T | undefined> => {
@@ -141,11 +147,16 @@ export function useCommand(): <T>(command: Command) => Promise<T | undefined> {
         nudge();
         return result;
       } catch (error) {
+        if ((error as { code?: unknown }).code === "scope_missing" && "sessionId" in command) {
+          relocate(command.sessionId);
+          nudge();
+          return undefined;
+        }
         toast.error(`${command.type} failed`, error instanceof Error ? error.message : String(error));
         nudge();
         return undefined;
       }
     },
-    [connection, nudge],
+    [connection, nudge, relocate],
   );
 }

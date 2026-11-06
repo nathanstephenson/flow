@@ -201,4 +201,6 @@ export interface BackendSession {
 export interface AgentBackend {
   readonly name: string;
   create(options: BackendCreateOptions): Promise<BackendSession>;
+  /** Move this backend's records in `stateDir` from Scope `from` to Scope `to`, with no Backend Session running. */
+  relocate?(stateDir: string, from: string, to: string): void;
 }

@@ -42,7 +42,7 @@ describe("settling and reaping", () => {
 
   it("stops the Backend Session and records Settled without ending the Agent Session", async () => {
     const { host, backend } = await hostWith(DAY);
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     const session = backend.latest;
 
     await host.settle(id);
@@ -54,7 +54,7 @@ describe("settling and reaping", () => {
 
   it("un-settles on send, continuing the same Presentation Transcript", async () => {
     const { host } = await hostWith(DAY);
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.send(id, "before", "now");
     await host.settle(id);
 
@@ -74,7 +74,7 @@ describe("settling and reaping", () => {
 
   it("reaps a Settled Agent Session once its window has passed", async () => {
     const { host } = await hostWith(DAY);
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.settle(id);
 
     assert.deepEqual(await host.reap(Date.now() + DAY - 1000), [], "still inside the window");
@@ -87,9 +87,9 @@ describe("settling and reaping", () => {
 
   it("leaves Agent Sessions that were never settled alone, however old", async () => {
     const { host } = await hostWith(DAY);
-    const idle = await host.create({ scope: "/tmp/scope", backend: "fake" });
-    const dormant = await host.create({ scope: "/tmp/scope", backend: "fake" });
-    const ended = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const idle = await host.create({ scope: tmpdir(), backend: "fake" });
+    const dormant = await host.create({ scope: tmpdir(), backend: "fake" });
+    const ended = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.dispose(ended);
     await host.shutdown();
 
@@ -99,7 +99,7 @@ describe("settling and reaping", () => {
 
   it("never reaps when retention is disabled", async () => {
     const { host } = await hostWith("never");
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.settle(id);
 
     assert.deepEqual(await host.reap(Date.now() + 365 * DAY), []);
@@ -108,7 +108,7 @@ describe("settling and reaping", () => {
 
   it("keeps a session Settled across a restart, so the clock is not reset by a daemon bounce", async () => {
     const first = await hostWith(DAY);
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.settle(id);
 
     const second = await hostWith(DAY);
@@ -118,7 +118,7 @@ describe("settling and reaping", () => {
 
   it("sweeps on load, so a host that was off catches up on the way in", async () => {
     const first = await hostWith(DAY);
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.settle(id);
     // Backdate the settle so the window has already passed by the time the next host loads.
     const meta = store.readMeta(id);
@@ -138,7 +138,7 @@ describe("settling and reaping", () => {
    */
   it("closes an interrupted turn, so a restart still reduces to settled", async () => {
     const first = await hostWith(DAY);
-    const id = await first.host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await first.host.create({ scope: tmpdir(), backend: "fake" });
     await first.host.send(id, "hello", "now");
     await first.host.settle(id);
 
@@ -173,14 +173,14 @@ describe("settling and reaping", () => {
 
   it("refuses to settle an Agent Session that has ended", async () => {
     const { host } = await hostWith(DAY);
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.dispose(id);
     await assert.rejects(() => host.settle(id), /has ended/);
   });
 
   it("accepts a settle command over the wire", async () => {
     const { host } = await hostWith(DAY);
-    const id = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.execute({ type: "settle", sessionId: id });
     assert.equal(host.statusOf(id), "settled");
   });

@@ -306,9 +306,12 @@ async function requireOk(response: Response, token: string | undefined, authenti
   if (!response.ok) throw await responseError(response, token, authenticationRequired);
 }
 
+/** A refusal's `code`, when the host sent one, is kept on the Error so a client can act on it. */
 async function responseError(response: Response, token: string | undefined, authenticationRequired?: (response: Response) => void): Promise<Error> {
   if (!token) authenticationRequired?.(response);
-  return new Error(await describe(response));
+  const code = await response.clone().json().then((body: unknown) => (body as { code?: unknown } | null)?.code, () => undefined);
+  const error = new Error(await describe(response));
+  return typeof code === "string" ? Object.assign(error, { code }) : error;
 }
 
 async function describe(response: Response): Promise<string> {

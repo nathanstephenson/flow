@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
+import { tmpdir } from "node:os";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
@@ -29,7 +30,7 @@ describe("SessionHost", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
   });
 
   it("records session_started with the backend's capabilities", () => {
@@ -97,7 +98,7 @@ describe("SessionHost", () => {
       emit = options.emit;
       return backend.create(options);
     } });
-    const id = await tested.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await tested.create({ scope: tmpdir(), backend: "fake" });
     const pending = deferred();
     const session = backend.latest;
     const prompt = session.prompt.bind(session);
@@ -253,7 +254,7 @@ describe("SessionHost", () => {
     const unavailable = new FakeBackend({ models: [] });
     unavailableHost.registerBackend(unavailable);
     await assert.rejects(
-      unavailableHost.create({ scope: "/tmp/scope", backend: "fake" }),
+      unavailableHost.create({ scope: tmpdir(), backend: "fake" }),
       /Model capabilities are unavailable/,
     );
     assert.deepEqual(unavailableHost.list(), []);
@@ -268,20 +269,20 @@ describe("SessionHost", () => {
     const second = new FakeBackend();
     configured.registerBackend(first);
     configured.registerBackend({ name: "second", create: (options) => second.create(options) });
-    const id = await configured.execute({ type: "create", scope: "/tmp/scope" }) as string;
+    const id = await configured.execute({ type: "create", scope: tmpdir() }) as string;
     assert.equal(configured.list().find((item) => item.id === id)?.backend, "second");
     chosen = "fake";
     await configured.shutdown();
     await configured.revive(id);
     assert.equal(second.sessions.length, 2);
-    const explicit = await configured.create({ scope: "/tmp/scope", backend: "second" });
+    const explicit = await configured.create({ scope: tmpdir(), backend: "second" });
     assert.equal(configured.list().find((item) => item.id === explicit)?.backend, "second");
-    const next = await configured.create({ scope: "/tmp/scope" });
+    const next = await configured.create({ scope: tmpdir() });
     assert.equal(configured.list().find((item) => item.id === next)?.backend, "fake");
     chosen = "missing";
-    await assert.rejects(configured.create({ scope: "/tmp/scope" }), /Unknown backend: missing/);
+    await assert.rejects(configured.create({ scope: tmpdir() }), /Unknown backend: missing/);
     chosen = undefined;
-    const automatic = await configured.create({ scope: "/tmp/scope" });
+    const automatic = await configured.create({ scope: tmpdir() });
     assert.equal(configured.list().find((item) => item.id === automatic)?.backend, "fake");
     await configured.shutdown();
   });
@@ -291,13 +292,13 @@ describe("SessionHost", () => {
     const configured = new SessionHost({ defaultEffort: () => effort });
     const fake = new FakeBackend();
     configured.registerBackend(fake);
-    const id = await configured.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await configured.create({ scope: tmpdir(), backend: "fake" });
     assert.equal(fake.latest.effort, "high");
     effort = "low";
     await configured.shutdown();
     await configured.revive(id);
     assert.equal(fake.latest.effort, "high");
-    await configured.create({ scope: "/tmp/scope", backend: "fake", effort: "medium" });
+    await configured.create({ scope: tmpdir(), backend: "fake", effort: "medium" });
     assert.equal(fake.latest.effort, "medium");
     await configured.shutdown();
   });
@@ -306,7 +307,7 @@ describe("SessionHost", () => {
     const configured = new SessionHost({ defaultModel: () => "fake-1", defaultEffort: () => "max" });
     const fake = new FakeBackend();
     configured.registerBackend(fake);
-    const id = await configured.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await configured.create({ scope: tmpdir(), backend: "fake" });
     await assert.rejects(configured.send(id, "blocked", "now"), /Saved Default Effort “max”.*Choose one of low, medium, high/);
     assert.deepEqual(fake.latest.prompts, []);
     await configured.setEffort(id, "medium");
@@ -593,7 +594,7 @@ describe("a Subagent the turn left behind", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.send(sessionId, "go", "now");
   });
 
@@ -660,7 +661,7 @@ describe("steering past a backgrounded Subagent", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.send(sessionId, "one", "now");
   });
 
@@ -722,7 +723,7 @@ describe("compacting a Conversation Context", () => {
     backend = new FakeBackend({ compaction: true });
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
   });
 
   it("asks the backend, and carries instructions when there are any", async () => {
@@ -804,7 +805,7 @@ describe("compacting a Conversation Context", () => {
     const plain = new FakeBackend();
     const other = new SessionHost();
     other.registerBackend(plain);
-    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await other.create({ scope: tmpdir(), backend: "fake" });
 
     await assert.rejects(() => other.compact(id), /cannot compact/);
     assert.deepEqual(plain.latest.compactions, [], "the method exists; the flag is what gates it");
@@ -827,7 +828,7 @@ describe("listing the Skills an Agent Session offers", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
   });
 
   it("answers with what the backend reports, argument hints and all", async () => {
@@ -880,9 +881,9 @@ describe("listing the Skills a Scope offers", () => {
   });
 
   it("answers from a session that runs no tools and is kept warm", async () => {
-    assert.deepEqual(await host.skillsFor("/tmp/scope", "fake"), {
+    assert.deepEqual(await host.skillsFor(tmpdir(), "fake"), {
       backend: "fake",
-      scope: "/tmp/scope",
+      scope: tmpdir(),
       skills: [
         { name: "tdd", description: "Red, green, refactor" },
         { name: "review", description: "Review the diff", argumentHint: "[<pr#>|<branch>]" },
@@ -898,8 +899,8 @@ describe("listing the Skills a Scope offers", () => {
   it("spawns one backend for two callers asking at once", async () => {
     backend.holdCreate = true;
     const both = Promise.all([
-      host.skillsFor("/tmp/scope", "fake"),
-      host.skillsFor("/tmp/scope", "fake"),
+      host.skillsFor(tmpdir(), "fake"),
+      host.skillsFor(tmpdir(), "fake"),
     ]);
     backend.releaseCreate();
     const [left, right] = await both;
@@ -909,10 +910,10 @@ describe("listing the Skills a Scope offers", () => {
   });
 
   it("asks the warm session again for the same Scope", async () => {
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor(tmpdir(), "fake");
     backend.sessions[0]!.skillList = [];
 
-    assert.deepEqual((await host.skillsFor("/tmp/scope", "fake")).skills, []);
+    assert.deepEqual((await host.skillsFor(tmpdir(), "fake")).skills, []);
     assert.equal(backend.sessions.length, 1);
     assert.equal(backend.sessions[0]?.disposed, false);
   });
@@ -928,10 +929,10 @@ describe("listing the Skills a Scope offers", () => {
   });
 
   it("asks a cold session when the warm one throws", async () => {
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor(tmpdir(), "fake");
     backend.sessions[0]!.skills = async () => { throw new Error("gone"); };
 
-    const answer = await host.skillsFor("/tmp/scope", "fake");
+    const answer = await host.skillsFor(tmpdir(), "fake");
     assert.equal(answer.problem, undefined);
     assert.equal(answer.skills.length, 2);
     assert.equal(backend.sessions.length, 2);
@@ -939,24 +940,24 @@ describe("listing the Skills a Scope offers", () => {
   });
 
   it("asks a cold session after the warm one reports an error", async () => {
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor(tmpdir(), "fake");
     backend.sessions[0]!.fail();
 
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor(tmpdir(), "fake");
     assert.equal(backend.sessions.length, 2);
     assert.equal(backend.sessions[0]?.disposed, true);
   });
 
   it("keeps the model probe's session for the first Skills ask", async () => {
-    await host.models("/tmp/scope");
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.models(tmpdir());
+    await host.skillsFor(tmpdir(), "fake");
 
     assert.equal(backend.sessions.length, 1);
     assert.equal(backend.sessions[0]?.disposed, false);
   });
 
   it("disposes the warm session at shutdown", async () => {
-    await host.skillsFor("/tmp/scope", "fake");
+    await host.skillsFor(tmpdir(), "fake");
     await host.shutdown();
 
     assert.equal(backend.sessions[0]?.disposed, true);
@@ -989,9 +990,9 @@ describe("listing the Skills a Scope offers", () => {
       },
     });
 
-    assert.deepEqual(await host.skillsFor("/tmp/scope", "broken"), {
+    assert.deepEqual(await host.skillsFor(tmpdir(), "broken"), {
       backend: "broken",
-      scope: "/tmp/scope",
+      scope: tmpdir(),
       skills: [],
       problem: "not logged in",
     });
@@ -1009,8 +1010,8 @@ describe("listing the Skills a Scope offers", () => {
       },
     });
 
-    assert.equal((await host.skillsFor("/tmp/scope", "flaky")).problem, "not logged in");
-    assert.equal((await host.skillsFor("/tmp/scope", "flaky")).problem, undefined);
+    assert.equal((await host.skillsFor(tmpdir(), "flaky")).problem, "not logged in");
+    assert.equal((await host.skillsFor(tmpdir(), "flaky")).problem, undefined);
   });
 
   // A different answer from "there are none here", which is the reason `ScopeSkills` is an envelope
@@ -1025,16 +1026,16 @@ describe("listing the Skills a Scope offers", () => {
       },
     });
 
-    const answer = await host.skillsFor("/tmp/scope", "plain");
+    const answer = await host.skillsFor(tmpdir(), "plain");
     assert.deepEqual(answer.skills, []);
     assert.match(answer.problem ?? "", /no notion of Skills/);
   });
 
   // What keeps the route off `serve`'s blanket 500 — see `GET /api/skills`.
   it("names an unknown Backend Adapter rather than throwing", async () => {
-    assert.deepEqual(await host.skillsFor("/tmp/scope", "nope"), {
+    assert.deepEqual(await host.skillsFor(tmpdir(), "nope"), {
       backend: "nope",
-      scope: "/tmp/scope",
+      scope: tmpdir(),
       skills: [],
       problem: "No backend named nope",
     });
@@ -1072,7 +1073,7 @@ describe("an Enquiry the model asked", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.send(sessionId, "go", "now");
   });
 
@@ -1124,7 +1125,7 @@ describe("an Enquiry the model asked", () => {
     const plain = new FakeBackend({ enquiries: false });
     const other = new SessionHost();
     other.registerBackend(plain);
-    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await other.create({ scope: tmpdir(), backend: "fake" });
     await other.send(id, "go", "now");
 
     await assert.rejects(() => other.answerEnquiry(id, "any", [["zod"]]), /cannot carry an answer/);
@@ -1227,7 +1228,7 @@ describe("a Permission Prompt the model raised", () => {
       },
     });
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
     await host.send(sessionId, "go", "now");
   });
 
@@ -1250,7 +1251,7 @@ describe("a Permission Prompt the model raised", () => {
 
   it("hands the standing list to each Backend Session it starts", async () => {
     granted.push("mcp__graphite__run_gt_cmd");
-    const revived = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    const revived = await host.create({ scope: tmpdir(), backend: "fake" });
 
     // Read at create rather than watched: ADR 0009 rejected the observer shape a live-updating list
     // would need, so a grant reaches an older session on its next Revive and no sooner.
@@ -1317,7 +1318,7 @@ describe("a Permission Prompt the model raised", () => {
     const cannot = new FakeBackend({ permissions: false });
     const other = new SessionHost();
     other.registerBackend(cannot);
-    const id = await other.create({ scope: "/tmp/scope", backend: "fake" });
+    const id = await other.create({ scope: tmpdir(), backend: "fake" });
 
     // The flag, never the method — so an adapter cannot be half-capable and a client that hides its
     // affordance on the flag cannot reach a method that is not there.
@@ -1394,7 +1395,7 @@ describe("what an Agent Session is doing", () => {
     backend = new FakeBackend();
     host = new SessionHost();
     host.registerBackend(backend);
-    sessionId = await host.create({ scope: "/tmp/scope", backend: "fake" });
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake" });
   });
 
 

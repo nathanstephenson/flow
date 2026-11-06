@@ -663,7 +663,7 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
       // same asymmetry as `ConfigError` → 400, at the status `/api/shells` already answers when an
       // Agent Session's state forbids the request.
       if (!(error instanceof CommandRefused)) throw error;
-      send(response, 409, { error: error.message });
+      send(response, 409, { error: error.message, ...(error.code ? { code: error.code } : {}) });
     }
     return;
   }

@@ -2,7 +2,7 @@ import { MoreHorizontal, PanelBottom, PanelRight } from "lucide-react";
 import { useState } from "react";
 
 import { canRevive, occupied } from "@client/status.ts";
-import { useCommand } from "@/agent-sessions.tsx";
+import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import type { Docks } from "@/docks.ts";
 import { useHost } from "@/host.tsx";
 import type { DockSide } from "@/presentation/docks.ts";
@@ -139,6 +139,8 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
   const summaryModel = chrome.backend === undefined ? undefined
     : providers?.summaries?.[chrome.backend] ?? (providers?.summary?.backend === chrome.backend ? providers.summary : undefined);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const { sessions, relocate } = useAgentSessions();
+  const scopeMissing = sessions.find((session) => session.id === sessionId)?.scopeMissing;
 
   return (
     <>
@@ -156,7 +158,9 @@ function PaneOverflowMenu({ sessionId, chrome }: { sessionId: string; chrome: Ch
          * `min-w-32` upstream floors it at without fighting the anchor width.
          */}
         <DropdownMenuContent className="min-w-56">
-          {canRevive(chrome.status) ? (
+          {scopeMissing ? (
+            <DropdownMenuItem onClick={() => relocate(sessionId)}>Relocate…</DropdownMenuItem>
+          ) : canRevive(chrome.status) ? (
             <DropdownMenuItem onClick={() => void run({ type: "revive", sessionId })}>
               Revive this Agent Session
             </DropdownMenuItem>

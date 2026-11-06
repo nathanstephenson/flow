@@ -1,8 +1,9 @@
 import type { WorkflowParent } from "../backend/workflow-tools.ts";
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
 import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
@@ -51,6 +52,7 @@ import {
   isRepository,
   removeMergedBranch,
   removeWorktree,
+  repairWorktree,
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
@@ -67,9 +69,16 @@ import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from 
  *
  * Named for its subject the way `ConfigError` is, and its message written to be read by whoever
  * sent the command. That is the whole distinction it exists to draw: a refusal is the caller's to
- * fix and is safe to pass back, while anything else is ours and becomes a 500.
+ * fix and is safe to pass back, while anything else is ours and becomes a 500. `code` lets a client
+ * act on one refusal without reading its message.
  */
-export class CommandRefused extends Error {}
+export class CommandRefused extends Error {
+  readonly code: "scope_missing" | undefined;
+  constructor(message: string, code?: "scope_missing") {
+    super(message);
+    this.code = code;
+  }
+}
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
 type QueuedMessage = { id: string; text: string; attachments: string[] };
@@ -759,6 +768,10 @@ export class SessionHost {
           ...(record.capabilities ? { capabilities: record.capabilities } : {}),
           ...(record.branch ? { branch: record.branch } : {}),
           ...(record.worktree ? { worktree: true as const } : {}),
+          ...(record.session || existsSync(record.scope) ? {} : {
+            scopeMissing: true as const,
+            ...this.suggestion(record.scope),
+          }),
         };
       })
       /* Attention groups are newest qualifying event first. Ordinary groups retain Resting/filed
@@ -1043,6 +1056,9 @@ export class SessionHost {
   /** Attach a fresh Backend Session to a Dormant Agent Session, continuing the same transcript. */
   async revive(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
+    if (!record.session && !existsSync(record.scope)) {
+      throw new CommandRefused(`Scope ${record.scope} no longer exists. Relocate this Agent Session to revive it.`, "scope_missing");
+    }
     this.refuseGitOperation(record.scope);
     if (record.session) return;
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
@@ -1063,6 +1079,59 @@ export class SessionHost {
     }
   }
 
+  /**
+   * Bind a Dormant Agent Session to a new Scope, only because its old Scope is gone (ADR 0036).
+   *
+   * The backend record moves first and the meta is written last, so a failure leaves the old
+   * binding whole.
+   */
+  async relocate(sessionId: string, scope: string, repo?: string): Promise<void> {
+    const record = this.record(sessionId);
+    const from = record.scope;
+    if (record.session || record.reviving) throw new CommandRefused("This Agent Session is running. Only a stopped Agent Session can relocate.");
+    if (existsSync(from)) throw new CommandRefused(`Scope ${from} still exists. An Agent Session keeps its Scope while it exists.`);
+    const to = this.relocationFolder(scope);
+    let worktree = record.worktree;
+    if (worktree) {
+      if (!repo) throw new CommandRefused("Choose the repository of this Worktree.");
+      const repository = this.relocationFolder(repo);
+      if (!isRepository(repository)) throw new CommandRefused(`${repository} is not a git repository`);
+      const repaired = await repairWorktree(repository, to);
+      if (!repaired.ok) throw new CommandRefused(repaired.failure.message);
+      if (record.scope !== from || record.session || record.reviving) throw new CommandRefused("This Agent Session changed during the relocation. Try again.");
+      worktree = { ...worktree, path: to, repo: repository };
+    }
+    const backend = this.backendFor(record.backendName);
+    const stateDir = this.store?.backendDir(record.id);
+    if (stateDir) backend.relocate?.(stateDir, from, to);
+    const previous = record.worktree;
+    record.scope = to;
+    record.worktree = worktree;
+    try {
+      this.persist(record);
+    } catch (error) {
+      record.scope = from;
+      record.worktree = previous;
+      if (stateDir) backend.relocate?.(stateDir, to, from);
+      throw error;
+    }
+  }
+
+  /** A folder the user chose for a relocation, resolved and checked as a Scope is before a restricted launch. */
+  private relocationFolder(folder: string): string {
+    if (!existsSync(folder)) throw new CommandRefused(`${folder} does not exist`);
+    try {
+      return validateFilesystemScope({ scope: folder, expectedScope: resolve(folder), ...(this.store ? { stateRoot: this.store.root } : {}) });
+    } catch (error) {
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private suggestion(scope: string): { suggestedScope?: string } {
+    const suggested = this.store && suggestedScope(scope, this.store.worktreesRoot());
+    return suggested ? { suggestedScope: suggested } : {};
+  }
+
   private async reviveOnce(record: SessionRecord): Promise<void> {
     const fromSeq = record.log.lastSeq;
     record.buffered = [];
@@ -1079,7 +1148,7 @@ export class SessionHost {
     // one this Revive just undid.
     record.settledAt = undefined;
     record.restingAt = new Date().toISOString();
-    record.log.append({ type: "revived", fromSeq });
+    record.log.append({ type: "revived", fromSeq, scope: record.scope });
     this.flushBuffered(record);
     // A Dormant Agent Session may have sat for a week while its Scope was moved by hand.
     await this.refreshBranch(record);
@@ -2197,6 +2266,8 @@ export class SessionHost {
         return await this.abort(command.sessionId);
       case "revive":
         return await this.revive(command.sessionId);
+      case "relocate":
+        return await this.relocate(command.sessionId, command.scope, command.repo);
       case "dispose":
         return await this.dispose(command.sessionId);
       case "settle":
@@ -2963,6 +3034,15 @@ export class SessionHost {
     };
     this.store.writeMeta(meta);
   }
+}
+
+/** The same Worktree under this host's state root, when a Scope was a Worktree of another state root and it is here now. */
+export function suggestedScope(scope: string, worktreesRoot: string): string | undefined {
+  const marker = "/.flow/worktrees/";
+  const at = scope.indexOf(marker);
+  if (at < 0) return undefined;
+  const candidate = join(worktreesRoot, scope.slice(at + marker.length));
+  return candidate !== scope && existsSync(candidate) ? candidate : undefined;
 }
 
 /** The turn still open at the end of these entries, if any. */
