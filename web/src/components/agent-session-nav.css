@@ -70,11 +70,6 @@
   color: var(--sidebar-foreground);
 }
 
-.agent-session-rail-header [data-slot="button"] {
-  background: var(--sidebar);
-  color: var(--sidebar-foreground);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .agent-session-row[data-sidebar="menu-button"][data-active]::before {
     animation: none;
