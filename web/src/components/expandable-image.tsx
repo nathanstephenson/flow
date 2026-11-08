@@ -27,7 +27,7 @@ export function ExpandableImage({ src, alt, className }: { src: string; alt: str
   );
 }
 
-/** Wheel or pinch zooms at the pointer, drag pans, double-click toggles between fitted and 2×. */
+/** Pinch or Ctrl+wheel zooms at the pointer, scrolling and dragging pan, double-click toggles fitted and 2×. */
 function ZoomPanImage({ src, alt }: { src: string; alt: string }) {
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -37,12 +37,17 @@ function ZoomPanImage({ src, alt }: { src: string; alt: string }) {
     const element = box.current;
     if (!element) return;
     // Not React's onWheel: it is passive, and the page must not scroll behind the dialog.
+    // A trackpad pinch arrives as a wheel event with ctrlKey set; plain scrolling pans.
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = element.getBoundingClientRect();
-      const factor = Math.exp(-event.deltaY * 0.002);
+      const lines = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+      const dx = event.deltaX * lines;
+      const dy = event.deltaY * lines;
       setView((current) =>
-        zoomAt(current, factor, event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height),
+        event.ctrlKey
+          ? zoomAt(current, Math.exp(-Math.max(-50, Math.min(50, dy)) * 0.01), event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height)
+          : panBy(current, -dx, -dy, rect.width, rect.height),
       );
     };
     element.addEventListener("wheel", onWheel, { passive: false });
