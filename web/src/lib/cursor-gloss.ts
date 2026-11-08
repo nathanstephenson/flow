@@ -7,6 +7,7 @@ export function installCursorGloss(document: Document): () => void {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   let active: HTMLElement | null = null;
   let pending: HTMLElement | null = null;
+  let tilt: HTMLElement | null = null;
   let frame: number | undefined;
   let x = 0;
   let y = 0;
@@ -15,18 +16,26 @@ export function installCursorGloss(document: Document): () => void {
     if (frame !== undefined) window.cancelAnimationFrame(frame);
     frame = undefined;
     active?.removeAttribute("data-gloss-active");
-    active = pending = null;
+    tilt?.removeAttribute("data-tilt-active");
+    active = pending = tilt = null;
   };
   const paint = () => {
     frame = undefined;
     if (active !== pending || !pending?.isConnected) active?.removeAttribute("data-gloss-active");
     active = pending?.isConnected ? pending : null;
+    const host = active?.closest<HTMLElement>(".cursor-tilt") ?? null;
+    if (tilt !== host) tilt?.removeAttribute("data-tilt-active");
+    tilt = host;
     if (!active) return;
     const rect = active.getBoundingClientRect();
     const point = glossPoint(rect, x, y, reduced.matches);
     active.style.setProperty("--gloss-x", `${point.x}px`);
     active.style.setProperty("--gloss-y", `${point.y}px`);
     active.setAttribute("data-gloss-active", "");
+    if (!tilt) return;
+    tilt.style.setProperty("--tilt-x", `${point.x / rect.width - 0.5}`);
+    tilt.style.setProperty("--tilt-y", `${point.y / rect.height - 0.5}`);
+    tilt.setAttribute("data-tilt-active", "");
   };
   const move = (event: PointerEvent) => {
     if (event.pointerType === "touch") { clear(); return; }

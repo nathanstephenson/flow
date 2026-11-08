@@ -58,6 +58,27 @@
   to { background-position: -200% 50%; }
 }
 
+/* Hover lifts the whole item, actions included, towards the user, then tilts it towards the pointer. */
+.agent-session-item {
+  scale: 1;
+  transform: perspective(40rem) rotateX(0deg) rotateY(0deg);
+  transition: scale 150ms ease-out, transform 200ms ease-out;
+}
+
+.agent-session-item[data-tilt-active] {
+  z-index: 1;
+  scale: 1.02;
+  transform: perspective(40rem) rotateX(calc(var(--tilt-y, 0) * -10deg)) rotateY(calc(var(--tilt-x, 0) * 6deg));
+}
+
+.agent-session-item[data-tilt-active] > .agent-session-row[data-sidebar="menu-button"] {
+  box-shadow: 0 6px 16px -6px rgb(0 0 0 / 0.35);
+}
+
+.agent-session-row.cursor-gloss::after {
+  display: none;
+}
+
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {
   outline: 2px solid var(--sidebar-ring);
   outline-offset: -4px;
@@ -71,6 +92,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .agent-session-item,
+  .agent-session-item[data-tilt-active] {
+    scale: 1;
+    transform: none;
+    transition: none;
+  }
   .agent-session-row[data-sidebar="menu-button"][data-active]::before {
     animation: none;
     background-position: 50% 50%;
