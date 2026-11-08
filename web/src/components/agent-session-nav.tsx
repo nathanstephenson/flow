@@ -287,7 +287,7 @@ function AgentSessionRow({
     /* Upstream's own shape, kept: a `relative` item with the action positioned over the row rather
        than beside it. A flex line here instead would shrink the button to less than the row, and the
        selection highlight would visibly stop short of the action. */
-    <SidebarMenuItem>
+    <SidebarMenuItem className="cursor-tilt rounded-lg">
       <SidebarMenuButton
         size="lg"
         isActive={selected}

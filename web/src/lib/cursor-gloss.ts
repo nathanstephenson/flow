@@ -7,6 +7,8 @@ export function installCursorGloss(document: Document): () => void {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   let active: HTMLElement | null = null;
   let pending: HTMLElement | null = null;
+  let tilt: HTMLElement | null = null;
+  let pendingTilt: HTMLElement | null = null;
   let frame: number | undefined;
   let x = 0;
   let y = 0;
@@ -15,10 +17,21 @@ export function installCursorGloss(document: Document): () => void {
     if (frame !== undefined) window.cancelAnimationFrame(frame);
     frame = undefined;
     active?.removeAttribute("data-gloss-active");
-    active = pending = null;
+    tilt?.removeAttribute("data-tilt-active");
+    active = pending = tilt = pendingTilt = null;
   };
   const paint = () => {
     frame = undefined;
+    const host = pendingTilt?.isConnected ? pendingTilt : null;
+    if (tilt !== host) tilt?.removeAttribute("data-tilt-active");
+    tilt = host;
+    if (tilt) {
+      const point = glossPoint(tilt.getBoundingClientRect(), x, y, reduced.matches);
+      const { width, height } = tilt.getBoundingClientRect();
+      tilt.style.setProperty("--tilt-x", `${point.x / width - 0.5}`);
+      tilt.style.setProperty("--tilt-y", `${point.y / height - 0.5}`);
+      tilt.setAttribute("data-tilt-active", "");
+    }
     if (active !== pending || !pending?.isConnected) active?.removeAttribute("data-gloss-active");
     active = pending?.isConnected ? pending : null;
     if (!active) return;
@@ -37,6 +50,7 @@ export function installCursorGloss(document: Document): () => void {
       ? action.closest('[data-sidebar="menu-item"]')?.querySelector<HTMLElement>(".cursor-gloss")
       : hit?.closest<HTMLElement>(".cursor-gloss");
     pending = target && !target.matches(':disabled, [aria-disabled="true"], [data-disabled], summary, [data-slot="accordion-trigger"], h3 > button[aria-expanded]:not([aria-haspopup])') ? target : null;
+    pendingTilt = hit?.closest<HTMLElement>(".cursor-tilt") ?? null;
     x = event.clientX;
     y = event.clientY;
     if (frame === undefined) frame = window.requestAnimationFrame(paint);

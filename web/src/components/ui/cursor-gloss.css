@@ -39,3 +39,25 @@
     .cursor-gloss::after { display: none; }
   }
 }
+
+/* Hover lifts the element towards the user, then tilts it towards the pointer. Wide rows set
+ * smaller angles and lift, so their far edges do not swing out. Unlayered, so it beats utilities
+ * such as Button's `transition-all`. */
+.cursor-tilt {
+  scale: 1;
+  transform: perspective(40rem) rotateX(0deg) rotateY(0deg);
+  transition: scale 150ms ease-out, transform 50ms linear, box-shadow 150ms ease-out, background-color 150ms, color 150ms;
+}
+
+.cursor-tilt[data-tilt-active] {
+  z-index: 1;
+  scale: var(--tilt-lift, 1.02);
+  transform: perspective(40rem)
+    rotateX(calc(var(--tilt-y, 0) * -1 * var(--tilt-angle-x, 15deg)))
+    rotateY(calc(var(--tilt-x, 0) * var(--tilt-angle-y, 9deg)));
+  box-shadow: 0 6px 16px -6px rgb(0 0 0 / 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor-tilt, .cursor-tilt[data-tilt-active] { scale: 1; transform: none; transition: none; }
+}
