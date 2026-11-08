@@ -463,8 +463,8 @@ function sectionLabel(section: RailSection, sessions: SessionSummary[]): string 
  *
  * The rows sit outside `<details>`, so each open group is a flex child that scrolls when it would
  * otherwise make the rail too tall. They stay mounted but `inert` while closed, so they can animate
- * both ways. The height is measured rather than a `0fr`/`1fr` grid row: in a flex column, Chrome sizes
- * that grid at its full height at once, so the header jumped and the rows were revealed after it.
+ * both ways. Open groups take equal shares of the space, each capped at its measured height, so a
+ * short group keeps all of its rows and the tall groups share what is left.
  */
 function CollapsibleGroup({
   label,
@@ -491,7 +491,13 @@ function CollapsibleGroup({
   }, []);
 
   return (
-    <SidebarGroup className="min-h-0 p-0">
+    <SidebarGroup
+      style={{
+        maxHeight: open ? (rowsHeight === undefined ? "none" : `calc(2rem + ${rowsHeight}px)`) : "2rem",
+        transitionDuration: `${Math.min(500, 250 + (rowsHeight ?? 0) / 2)}ms`,
+      }}
+      className="min-h-0 flex-1 overflow-hidden p-0 transition-[max-height] ease-out motion-reduce:transition-none"
+    >
       <details className="shrink-0" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
         <SidebarGroupLabel
           render={<summary className="cursor-default gap-1 text-muted-foreground select-none" />}
@@ -500,18 +506,9 @@ function CollapsibleGroup({
           {label} · {count}
         </SidebarGroupLabel>
       </details>
-      <div
-        inert={!open}
-        style={{
-          height: open ? rowsHeight ?? "auto" : 0,
-          transitionDuration: `${Math.min(500, 250 + (rowsHeight ?? 0) / 2)}ms`,
-        }}
-        className="flex min-h-0 flex-col overflow-hidden transition-[height] ease-out motion-reduce:transition-none"
-      >
-        <SidebarGroupContent className="transcript-scroller min-h-0 overflow-y-auto">
-          <div ref={rows}>{children}</div>
-        </SidebarGroupContent>
-      </div>
+      <SidebarGroupContent inert={!open} className="transcript-scroller min-h-0 flex-1 overflow-y-auto">
+        <div ref={rows}>{children}</div>
+      </SidebarGroupContent>
     </SidebarGroup>
   );
 }
