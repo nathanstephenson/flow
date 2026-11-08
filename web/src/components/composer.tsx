@@ -38,6 +38,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 
 /**
  * Where a message goes in, and what the next turn will cost to run.
@@ -787,7 +788,7 @@ export function Composer({
                   {message.attachments?.length ? (
                     <div className="flex flex-wrap gap-2">
                       {message.attachments.map((attachmentId) => (
-                        <img
+                        <ExpandableImage
                           key={attachmentId}
                           src={`/api/sessions/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`}
                           alt="Queued attachment"

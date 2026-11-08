@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import type { PendingAttachment } from "@/presentation/drafts.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { cn } from "@/lib/utils.ts";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 
 /**
  * The Attachments a message will carry, above the box rather than below it.
@@ -28,7 +29,7 @@ export function AttachmentTray({
     <div className="flex flex-wrap gap-2 px-3 pt-3">
       {attachments.map((attachment) => (
         <div key={attachment.key} className="group relative">
-          <img
+          <ExpandableImage
             src={attachment.url}
             alt=""
             className="size-14 rounded-md border border-border object-cover"

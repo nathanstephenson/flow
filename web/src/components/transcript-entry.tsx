@@ -13,6 +13,7 @@ import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
 import { ToolName } from "@/components/tool-name.tsx";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -91,12 +92,13 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
  *
  * Capped in height rather than shown full size: a pasted screenshot is often taller than the pane,
  * and a transcript where one Entry pushes the rest off the screen has stopped being a document.
+ * Clicking one opens it at full size.
  */
 function Attachments({ ids, sessionId }: { ids: string[]; sessionId: string }) {
   return (
     <div className="mb-2 flex flex-wrap gap-2">
       {ids.map((id) => (
-        <img
+        <ExpandableImage
           key={id}
           src={`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(id)}`}
           alt=""
