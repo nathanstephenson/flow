@@ -301,14 +301,19 @@ describe("Agent Session rail DOM focus and material", () => {
   });
 
   for (const mode of ['light', 'dark']) {
-    it(`${mode}: status-hued selection preserves base/ink, transparent Settle and inset focus`, async () => {
+    it(`${mode}: status-hued selection preserves ink, hover lifts the base, transparent actions and inset focus`, async () => {
       await page.evaluate(mode => document.documentElement.classList.toggle('dark', mode === 'dark'), mode);
       const face = () => cursor().evaluate(node => {
         const style = getComputedStyle(node);
         const flow = getComputedStyle(node, '::before');
         const probe = document.createElement('span');
         const peak = style.getPropertyValue('--agent-session-flow-peak').trim() || '16%';
-        probe.style.color = `color-mix(in srgb, ${style.borderLeftColor} ${peak}, transparent)`;
+        const edgeProbe = document.createElement('span');
+        edgeProbe.style.color = style.getPropertyValue('--agent-session-status');
+        document.body.append(edgeProbe);
+        const edge = getComputedStyle(edgeProbe).color;
+        edgeProbe.remove();
+        probe.style.color = `color-mix(in srgb, ${edge} ${peak}, transparent)`;
         document.body.append(probe);
         const tint = getComputedStyle(probe).color;
         probe.remove();
@@ -316,7 +321,7 @@ describe("Agent Session rail DOM focus and material", () => {
           tint, peak,
           base: style.backgroundColor, ink: style.color, weight: style.fontWeight,
           muted: getComputedStyle(node.querySelector('.text-muted-foreground')).color,
-          edge: style.borderLeftColor, width: style.borderLeftWidth,
+          edge, width: style.backgroundSize, strip: style.backgroundImage,
           flow: flow.backgroundImage, animation: flow.animationName,
           outlineOffset: style.outlineOffset, shadow: style.boxShadow,
         };
@@ -327,17 +332,17 @@ describe("Agent Session rail DOM focus and material", () => {
         const selected = await face();
         assert.notEqual(selected.flow, 'none');
         assert.match(selected.animation, /agent-session-rail-flow/);
-        assert.equal(selected.width, '2px');
+        assert.equal(selected.width, '2px 100%');
+        assert.match(selected.strip, /linear-gradient/);
         assert.equal(selected.peak, mode === 'dark' && ['running', 'awaiting'].includes(status) ? '24%' : '16%');
         assert.ok(selected.flow.includes(selected.tint), `Selection uses its status edge hue: ${status}`);
         await cursor().hover();
         const hovered = await face();
         await page.evaluate(() => window.renderRail({ focusedId: 'other' }));
         const deselected = await face();
-        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) {
-          assert.equal(hovered[key], selected[key]);
-          assert.equal(deselected[key], selected[key]);
-        }
+        for (const key of ['ink', 'weight', 'muted', 'edge']) assert.equal(hovered[key], selected[key]);
+        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) assert.equal(deselected[key], hovered[key]);
+        assert.notEqual(hovered.base, selected.base, `Hover lifts the base: ${status}`);
         assert.equal(deselected.flow, 'none');
         await page.evaluate(() => window.renderRail({ focusedId: 'a' }));
       }

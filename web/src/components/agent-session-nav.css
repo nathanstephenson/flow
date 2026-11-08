@@ -1,21 +1,31 @@
-/* The Agent Session rail is one flat surface. Status owns the edge and the
- * selected flow; neither selection nor hover changes the base or label ink.
+/* Status owns the edge and the selected flow. Hover lifts the base to the
+ * accent, as on the Agents tab rows; selection never changes the base or ink.
  * Scoped, unlayered rules intentionally beat SidebarMenuButton's state utilities.
  */
 .agent-session-row[data-sidebar="menu-button"] {
   position: relative;
   isolation: isolate;
-  border-left: 2px solid var(--agent-session-status);
-  background: var(--sidebar);
+  /* A background strip rather than a border, so the rounded corners cut it off instead of bending it. */
+  padding-left: calc(0.5rem + 2px);
+  background-color: var(--sidebar);
+  background-image: linear-gradient(var(--agent-session-status), var(--agent-session-status));
+  background-position: left;
+  background-size: 2px 100%;
+  background-repeat: no-repeat;
   color: var(--sidebar-foreground);
   font-weight: inherit;
   box-shadow: none;
+}
+
+.agent-session-row[data-sidebar="menu-button"]:hover {
+  background-color: var(--sidebar-accent);
 }
 
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   z-index: -1;
   pointer-events: none;
   background-image: linear-gradient(
@@ -84,7 +94,7 @@
     clip: auto;
     white-space: normal;
   }
-  .agent-session-row[data-sidebar="menu-button"] { border-left-color: CanvasText; }
+  .agent-session-row[data-sidebar="menu-button"] { padding-left: 0.5rem; border-left: 2px solid CanvasText; }
   .agent-session-row[data-sidebar="menu-button"][data-active]::before { display: none; }
   .agent-session-row[data-sidebar="menu-button"][data-active] { border-left-color: Highlight; }
 }

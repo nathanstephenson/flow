@@ -47,7 +47,7 @@ export function SettingsDialog({
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <nav
           aria-label="Settings sections"
-          className="transcript-scroller flex shrink-0 overflow-x-auto border-b border-border pr-12 sm:w-60 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-r sm:border-b-0 sm:py-2 sm:pr-0"
+          className="transcript-scroller flex shrink-0 overflow-x-auto border-b border-border pr-12 sm:w-60 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto gap-1 p-1 sm:border-r sm:border-b-0 sm:p-2"
         >
           {SETTINGS_SECTIONS.map((name) => {
             const { label, hint, icon: Icon } = SECTIONS[name];
@@ -59,8 +59,10 @@ export function SettingsDialog({
                 aria-current={current ? "page" : undefined}
                 onClick={() => onSelect(name)}
                 className={cn(
-                  "h-auto justify-start gap-2 rounded-none border-0 border-b-2 border-transparent px-3 py-1.5 font-normal sm:w-full sm:border-b-0 sm:border-l-2",
-                  current && "border-primary bg-muted text-foreground",
+                  "h-auto justify-start gap-2 rounded-lg px-3 py-1.5 font-normal sm:w-full",
+                  // A straight strip clipped by the rounded corners, as on the session rows.
+                  current &&
+                    "bg-muted bg-[image:linear-gradient(var(--primary),var(--primary))] bg-[length:100%_2px] bg-bottom bg-no-repeat text-foreground sm:bg-[length:2px_100%] sm:bg-left",
                 )}
               >
                 <Icon aria-hidden />
@@ -76,7 +78,7 @@ export function SettingsDialog({
           })}
           {config.authentication === "oidc" ? (
             <form action="/oauth/logout" method="post" className="m-0 flex shrink-0 sm:mt-auto">
-              <Button type="submit" variant="ghost" className="h-auto w-full justify-start gap-2 rounded-none px-3 py-2 font-normal">
+              <Button type="submit" variant="ghost" className="h-auto w-full justify-start gap-2 rounded-lg px-3 py-2 font-normal">
                 <LogOut aria-hidden />
                 Sign out of Flow
               </Button>
