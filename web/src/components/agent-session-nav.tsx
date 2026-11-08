@@ -2,7 +2,6 @@ import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Set
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
-import type { LinkState } from "@client/connection.ts";
 import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { scopeKindLabel } from "@client/scope-kind.ts";
@@ -80,7 +79,6 @@ export type AgentSessionNavProps = {
   /** Pinned sessions show below Unread, whatever their activity, until they are Settled. */
   pinned: ReadonlySet<string>;
   onPinnedChange: (sessionId: string, pinned: boolean) => void;
-  link: LinkState | undefined;
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
   onNew: () => void;
@@ -198,7 +196,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter link={props.link} onOpenSettings={navigationProps.onOpenSettings} />
+      <RailFooter onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }
@@ -561,19 +559,13 @@ function CollapsibleGroup({
  *
  * The gear leads the row rather than trailing it: the Settings are the one thing here that is not
  * about the Agent Sessions above, and the bottom-left of the rail is where every app a reader has
- * met puts them. The link dot keeps the far end.
+ * met puts them.
  *
  * No keyboard hints. They advertised two keys out of the whole table, one of which (`/`) no longer
  * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
  * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
-function RailFooter({
-  link,
-  onOpenSettings,
-}: {
-  link: LinkState | undefined;
-  onOpenSettings: () => void;
-}) {
+function RailFooter({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
       <Tooltip>
@@ -593,8 +585,6 @@ function RailFooter({
         </TooltipTrigger>
         <TooltipContent>Settings</TooltipContent>
       </Tooltip>
-
-      <LinkDot link={link} />
     </SidebarFooter>
   );
 }
@@ -604,30 +594,5 @@ export function Kbd({ children }: { children: ReactNode }) {
     <kbd className="rounded-sm border bg-muted px-1 font-mono text-xs text-muted-foreground">
       {children}
     </kbd>
-  );
-}
-
-/**
- * The event stream, in one glyph. "gone" is the only terminal state, so it is the only one worth
- * colouring an error: the rest are stages of a loop that is still trying, and a UI that cries
- * outage every time a stream is quiet teaches people to ignore it.
- *
- * The other two states used to be `--chart-2` and `--chart-4`, which rhea renders as two greys a
- * hair apart. They take the Agent Session dot's shape vocabulary instead — filled when the stream is
- * live, a ring while it is still trying — and the word beside them was always the real signal.
- */
-function LinkDot({ link }: { link: LinkState | undefined }) {
-  if (link === undefined) return null;
-  return (
-    <span className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-      <span
-        aria-hidden
-        className={cn(
-          "inline-block size-1.5 rounded-full",
-          link === "gone" ? "bg-destructive" : link === "live" ? "bg-current" : "border border-current",
-        )}
-      />
-      {link}
-    </span>
   );
 }

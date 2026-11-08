@@ -308,7 +308,6 @@ export function AppShell() {
             onSectionOpenChange={railSections.setOpen}
             pinned={pinned}
             onPinnedChange={setPinned}
-            link={chrome?.link}
             onFocus={focus}
             onSettle={settle}
             onNew={openNewAgentSession}
