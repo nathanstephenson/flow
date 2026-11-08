@@ -1014,7 +1014,7 @@ function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpe
               tabIndex={leaving ? -1 : undefined}
               onClick={() => onOpen?.(card)}
               aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
-              className="cursor-gloss flex h-7 w-full items-center gap-2 rounded-t-xl px-3 text-left text-xs text-muted-foreground hover:text-foreground"
+              className="relative flex h-7 w-full items-center gap-2 rounded-t-xl px-3 text-left text-xs text-muted-foreground hover:text-foreground"
             >
               {card.kind === "agent" ? <Bot aria-hidden className="size-3.5 shrink-0" /> : <ToolIcon name={card.tool} />}
               <span className="shrink-0 text-foreground/80">{card.kind === "agent" ? card.name : card.tool}</span>

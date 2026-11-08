@@ -308,7 +308,7 @@ function AgentSessionRow({
           // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
           // The keyboard-only focus outline lives inside the face, clear of the status edge.
           // The retained cursor controls tab order, not decoration outside the rail.
-          "agent-session-row cursor-gloss h-auto rounded-lg py-1.5 pr-8",
+          "agent-session-row h-auto rounded-lg py-1.5 pr-8",
         )}
       >
         <span className="min-w-0 flex-1">
@@ -376,7 +376,7 @@ function AgentSessionRow({
           <TooltipTrigger
             render={
               <SidebarMenuAction
-                className="group/pin agent-session-pin cursor-gloss-transparent"
+                className="group/pin agent-session-pin"
                 showOnHover={!pinned}
                 aria-pressed={pinned}
                 tabIndex={tabIndex}
@@ -403,7 +403,7 @@ function AgentSessionRow({
           <TooltipTrigger
             render={
               <SidebarMenuAction
-                className="agent-session-settle cursor-gloss-transparent top-auto! bottom-2.5"
+                className="agent-session-settle top-auto! bottom-2.5"
                 showOnHover
                 // `top-auto!` beats upstream's `peer-data-[size=lg]/menu-button:top-2.5` on specificity.
                 tabIndex={tabIndex}

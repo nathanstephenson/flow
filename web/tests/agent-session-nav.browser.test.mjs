@@ -20,10 +20,10 @@ const bundle = await build({
       import { KeyboardLayer } from './web/src/components/keyboard-layer.tsx';
       import { SidebarProvider } from './web/src/components/ui/sidebar.tsx';
       import { statusIndicatorColor } from './web/src/components/status-indicator.tsx';
-      import { installCursorGloss } from './web/src/lib/cursor-gloss.ts';
+      import { installCursorTilt } from './web/src/lib/cursor-tilt.ts';
       window.statusColor = statusIndicatorColor;
       window.paneFocuses = 0;
-      installCursorGloss(document);
+      installCursorTilt(document);
       const root = createRoot(document.getElementById('root'));
       const summary = (id, status = 'idle') => ({
         id, title: id, status, backend: 'pi', scope: '/tmp/project',
@@ -350,10 +350,8 @@ describe("Agent Session rail DOM focus and material", () => {
       await page.keyboard.press('ArrowRight');
       const action = cursor().locator('..').locator('[data-sidebar="menu-action"]').first();
       await action.hover();
-      await page.waitForFunction(() => document.querySelector('[data-cursor="true"]').hasAttribute('data-gloss-active'));
+      await page.waitForFunction(() => document.querySelector('[data-cursor="true"]').parentElement.hasAttribute('data-tilt-active'));
       assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');
-      assert.equal(await action.getAttribute('data-gloss-active'), null);
-      assert.equal(await action.getAttribute('class').then(value => value.includes('cursor-gloss-transparent')), true);
       await page.keyboard.press('ArrowLeft');
       await focusedIs(cursor());
       assert.equal((await face()).outlineOffset, '-4px');
