@@ -1,5 +1,5 @@
-import { Activity, lazy, Suspense, useCallback, useRef, useState } from "react";
-import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
+import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Bot, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide, type DockTab } from "@/presentation/docks.ts";
 import type { MobileDetail } from "@/presentation/mobile-navigation.ts";
@@ -9,7 +9,6 @@ import { GitPane } from "@/components/git-pane.tsx";
 import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 
 const WorkflowsPane = lazy(() => import("./workflows-pane.tsx"));
@@ -49,6 +48,12 @@ export function Dock({
   mobileNavigation?: MobileDockNavigation;
 }) {
   const root = useRef<HTMLElement>(null);
+  const tablist = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    tablist.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [dock.activeId]);
   const [statuses, setStatuses] = useState<Record<string, ShellStatus>>({});
   const noteStatus = useCallback((tabId: string, status: ShellStatus) => {
     setStatuses((current) => ({ ...current, [tabId]: status }));
@@ -92,12 +97,13 @@ export function Dock({
             }}
           />
 
-          <div className="flex h-9 min-w-0 items-stretch border-b">
+          <div className="flex h-10 min-w-0 items-center gap-1 border-b px-1">
             <div
+              ref={tablist}
               role="tablist"
               aria-label={`${label} tabs`}
               aria-orientation="horizontal"
-              className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
+              className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]"
             >
               {dock.tabs.map((tab) => {
                 const status = statuses[tab.id];
@@ -105,7 +111,7 @@ export function Dock({
                   <div
                     key={tab.id}
                     className={cn(
-                      "cursor-gloss flex min-w-20 flex-1 basis-0 items-center justify-between gap-0.5 px-2.5 text-xs",
+                      "cursor-gloss flex h-8 max-w-56 shrink-0 items-center gap-0.5 rounded-lg pr-1 pl-3 text-sm",
                       tab.id === dock.activeId ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50",
                     )}
                   >
@@ -114,7 +120,7 @@ export function Dock({
                       role="tab"
                       aria-selected={tab.id === dock.activeId}
                       onClick={() => dispatch({ type: "activate", side, tabId: tab.id })}
-                      className="min-w-0 flex-1 self-stretch truncate py-1 text-left outline-none focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:ring-inset"
+                      className="min-w-0 flex-1 self-stretch truncate rounded-lg py-1 text-left outline-none focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/30 focus-visible:ring-inset"
                     >
                       {tabLabel(dock, tab.id)}
                       {status?.state === "gone" ? (
@@ -124,7 +130,7 @@ export function Dock({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      className="rounded-none"
+                      className="rounded-md"
                       onClick={() => dispatch({ type: "close-tab", side, tabId: tab.id })}
                       title={tab.content?.kind === "shell" ? "Close this tab — ends its Shell" : "Close this tab"}
                       aria-label={`Close ${tabLabel(dock, tab.id)}${tab.content?.kind === "shell" ? " — ends its Shell" : ""}`}
@@ -139,30 +145,13 @@ export function Dock({
             <Button
               variant="ghost"
               size="icon-xs"
-              className="h-auto w-8.5 shrink-0 self-stretch rounded-none"
+              className="size-8 shrink-0 rounded-lg"
               onClick={() => dispatch({ type: "add-tab", side })}
               title="New tab"
               aria-label={`New tab in the ${label}`}
             >
               <Plus aria-hidden />
             </Button>
-
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="h-auto w-8.5 shrink-0 self-stretch rounded-none"
-                    onClick={() => dispatch({ type: "toggle", side })}
-                    aria-label={`Minimise the ${label}`}
-                  />
-                }
-              >
-                {side === "bottom" ? <PanelBottomClose aria-hidden /> : <PanelRightClose aria-hidden />}
-              </TooltipTrigger>
-              <TooltipContent>Minimise — Shells keep running</TooltipContent>
-            </Tooltip>
           </div>
         </>
       )}
