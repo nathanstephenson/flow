@@ -293,6 +293,11 @@ export function TranscriptView({
         </div>
       </div>
 
+      {/* Rows fade out under the pane header rather than meeting a border. Clear of the scrollbar, as the Composer's fade is. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute top-0 right-[max(var(--scrollbar-width,0px),0.75rem)] left-0 h-6 bg-gradient-to-b from-background to-transparent"
+      />
       {atBottom ? null : <NewEntriesPill onClick={toBottom} />}
     </div>
   );
