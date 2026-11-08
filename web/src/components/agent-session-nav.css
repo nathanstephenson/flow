@@ -2,10 +2,6 @@
  * selected flow; neither selection nor hover changes the base or label ink.
  * Scoped, unlayered rules intentionally beat SidebarMenuButton's state utilities.
  */
-.agent-session-band > [data-sidebar="group-label"] {
-  display: none;
-}
-
 .agent-session-row[data-sidebar="menu-button"] {
   position: relative;
   isolation: isolate;

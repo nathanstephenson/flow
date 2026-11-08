@@ -23,12 +23,15 @@ describe("the Agent Session rail cursor", () => {
   it("retains identity when attention moves a row between groups", () => {
     const before = [session("a"), session("b"), session("c")];
     const after = [before[2]!, before[0]!, before[1]!];
-    assert.equal(retainSessionCursor(after, "b"), "b");
+    assert.equal(retainSessionCursor(before, after, "b"), "b");
   });
 
-  it("chooses a replacement only when the identity disappeared", () => {
-    assert.equal(retainSessionCursor([session("a"), session("c")], "b"), "a");
-    assert.equal(retainSessionCursor([], "b"), undefined);
+  it("chooses the neighbour only when the identity disappeared", () => {
+    const before = [session("a"), session("b"), session("c")];
+    assert.equal(retainSessionCursor(before, [session("a"), session("c")], "b"), "c");
+    assert.equal(retainSessionCursor(before, [session("a"), session("b")], "c"), "b");
+    assert.equal(retainSessionCursor([], [session("a")], undefined), "a");
+    assert.equal(retainSessionCursor(before, [], "b"), undefined);
   });
 
   it("moves through selectable sessions only, independent of group headings", () => {

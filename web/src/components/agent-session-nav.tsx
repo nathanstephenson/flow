@@ -7,7 +7,14 @@ import { relativeTime } from "@client/relative-time.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { scopeKindLabel } from "@client/scope-kind.ts";
 import { projectName } from "@client/project-name.ts";
-import { canSettle, railGroup, railGroupLabel, RAIL_GROUPS, working } from "@client/status.ts";
+import { canSettle, railGroupLabel, working } from "@client/status.ts";
+import {
+  collapsible,
+  railSection,
+  RAIL_SECTIONS,
+  type CollapsibleRailSection,
+  type RailSection,
+} from "@/presentation/rail-sections.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
 import { statusIndicatorColor } from "@/components/status-indicator.tsx";
@@ -23,7 +30,6 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
   useSidebar,
 } from "@/components/ui/sidebar.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
@@ -45,7 +51,7 @@ import "./agent-session-nav.css";
  *
  * - Rows contain their own button — settle — which `role="tab"` forbids; `SidebarMenuAction` exists
  *   for exactly this.
- * - The Settled group is a disclosure nested in the list, and a non-tab control inside a tablist is
+ * - The Working, Idle and Settled groups are disclosures nested in the list, and a non-tab control inside a tablist is
  *   invalid ARIA.
  * - Tab panels imply mounted content. One panel per Agent Session would mount every Presentation
  *   Transcript, and each mount acquires a store that opens an event stream, while browsers cap
@@ -68,6 +74,9 @@ export type AgentSessionNavProps = {
   focusedStatus: SessionStatus | undefined;
   /** Where the keyboard is in the rail, which is not the same thing as what is in the pane. */
   cursorId: string | undefined;
+  /** At most one collapsible section is open. The others hide their rows from the pointer and the keyboard cursor. */
+  openSection: CollapsibleRailSection | undefined;
+  onSectionOpenChange: (section: CollapsibleRailSection, open: boolean) => void;
   link: LinkState | undefined;
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
@@ -96,16 +105,24 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
       closeMobile();
     },
   };
-  const grouped = new Map(RAIL_GROUPS.map((group) => [group, [] as SessionSummary[]]));
-  for (const session of props.sessions) grouped.get(railGroup(session))?.push(session);
-  const groups = RAIL_GROUPS.map((group) => ({ group, sessions: grouped.get(group)! }))
+  const grouped = new Map(RAIL_SECTIONS.map((section) => [section, [] as SessionSummary[]]));
+  for (const session of props.sessions) grouped.get(railSection(session))?.push(session);
+  const sections = RAIL_SECTIONS.map((section) => ({ section, sessions: grouped.get(section)! }))
     .filter(({ sessions }) => sessions.length > 0);
-  const filedAway = groups.find(({ group }) => group === "filed-away");
-  const filedAwayHasEnded = filedAway?.sessions.some(summary => summary.status === "ended") ?? false;
-  const cursorGroup = props.sessions.find((session) => session.id === props.cursorId);
-  const cursorGroupId = cursorGroup ? railGroup(cursorGroup) : undefined;
-  const cursorInFiledAway = cursorGroupId === "filed-away";
-  const [filedAwayOpen, setFiledAwayOpen] = useState(false);
+  const attentionSections = sections.filter(({ section }) => !collapsible(section));
+  const collapsibleSections = sections.filter(
+    (entry): entry is { section: CollapsibleRailSection; sessions: SessionSummary[] } => collapsible(entry.section),
+  );
+  const menu = (section: RailSection, sessions: SessionSummary[]) => (
+    <AgentSessionMenu
+      {...navigationProps}
+      label={`${sectionLabel(section, sessions)} Agent Sessions`}
+      sessions={sessions}
+      now={now}
+    />
+  );
+  const cursorSession = props.sessions.find((session) => session.id === props.cursorId);
+  const cursorSectionId = cursorSession ? railSection(cursorSession) : undefined;
 
   const list = useRef<HTMLDivElement>(null);
   const rowHasFocus = useRef(false);
@@ -125,7 +142,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     const cursor = container.querySelector<HTMLElement>('[data-cursor="true"]');
     const cursorItem = cursor?.closest<HTMLElement>('[data-sidebar="menu-item"]');
     if (rowHasFocus.current && cursor && !cursorItem?.contains(focused)) cursor.focus();
-  }, [props.cursorId, cursorGroupId]);
+  }, [props.cursorId, cursorSectionId]);
 
   return (
     <>
@@ -138,7 +155,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
        */}
       <SidebarContent
         ref={list}
-        className="transcript-scroller gap-0"
+        className="gap-0 overflow-hidden"
         onKeyDown={moveWithinRow}
         onFocusCapture={(event) => {
           rowHasFocus.current = event.target.closest('[data-sidebar="menu-item"]') !== null;
@@ -149,44 +166,28 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
           if (event.target.isConnected) rowHasFocus.current = false;
         }}
       >
-        {groups.filter(({ group }) => group !== "filed-away").map(({ group, sessions }) => (
-          <SidebarGroup
-            key={group}
-            className={cn("p-0", group !== "needs-input" && group !== "unread" && "agent-session-band")}
-          >
-            <SidebarGroupLabel className="select-none text-muted-foreground">
-              {railGroupLabel(group)} · {sessions.length}
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <AgentSessionMenu
-                {...navigationProps}
-                label={`${railGroupLabel(group)} Agent Sessions`}
-                sessions={sessions}
-                now={now}
-              />
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ))}
+        <div className="transcript-scroller max-h-1/2 shrink-0 overflow-y-auto">
+          {attentionSections.map(({ section, sessions }) => (
+            <SidebarGroup key={section} className="p-0">
+              <SidebarGroupContent>{menu(section, sessions)}</SidebarGroupContent>
+            </SidebarGroup>
+          ))}
+        </div>
 
-        {filedAway ? (
-          <>
-            <SidebarSeparator className="mx-0" />
-            <FiledAwayGroup
-              count={filedAway.sessions.length}
-              hasEnded={filedAwayHasEnded}
-              // The group cannot be collapsed while the keyboard cursor is inside it: collapsing
-              // would strand focus on a row the browser will not focus.
-              open={filedAwayOpen || cursorInFiledAway}
-              onOpenChange={setFiledAwayOpen}
-            >
-              <AgentSessionMenu
-                {...navigationProps}
-                label={filedAwayHasEnded ? "Settled and Ended Agent Sessions" : "Settled Agent Sessions"}
-                sessions={filedAway.sessions}
-                now={now}
-              />
-            </FiledAwayGroup>
-          </>
+        {collapsibleSections.length > 0 ? (
+          <div className="mt-auto flex min-h-0 flex-col border-t border-sidebar-border">
+            {collapsibleSections.map(({ section, sessions }) => (
+              <CollapsibleGroup
+                key={section}
+                label={sectionLabel(section, sessions)}
+                count={sessions.length}
+                open={props.openSection === section}
+                onOpenChange={(open) => props.onSectionOpenChange(section, open)}
+              >
+                {menu(section, sessions)}
+              </CollapsibleGroup>
+            ))}
+          </div>
         ) : null}
 
         {props.sessions.length === 0 ? (
@@ -447,38 +448,70 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
 
 /**
  * Filed-away Agent Sessions remain readable (ADR 0006). Settled ones are Revivable;
- * Ended ones are not, so name both Lifecycles when this disclosure contains Ended rows.
- *
- * Still a native `<details>` — keyboard-accessible for free and expanded by the browser for
- * find-in-page — now wearing `SidebarGroupLabel` on its `<summary>`, which is upstream shadcn's own
+ * Ended ones are not, so name both Lifecycles when this section contains Ended rows.
+ */
+function sectionLabel(section: RailSection, sessions: SessionSummary[]): string {
+  if (section !== "filed-away") return railGroupLabel(section);
+  return sessions.some((summary) => summary.status === "ended") ? "Settled / Ended" : "Settled";
+}
+
+/**
+ * A native `<details>` for the toggle, keyboard-accessible for free, wearing `SidebarGroupLabel` on its `<summary>`, which is upstream shadcn's own
  * shape for a collapsible group. It keeps its own tab stop, deliberately: it is one control whose
  * cost does not grow with the list, and it is not an Agent Session, so it has no place in the row
  * cursor. Because a flex `<summary>` loses its native marker, the chevron is drawn.
+ *
+ * The rows sit outside `<details>`, so the open group is a flex child that scrolls when it would
+ * otherwise make the rail too tall. They stay mounted but `inert` while closed, so they can animate
+ * both ways. The height is measured rather than a `0fr`/`1fr` grid row: in a flex column, Chrome sizes
+ * that grid at its full height at once, so the header jumped and the rows were revealed after it.
  */
-function FiledAwayGroup({
+function CollapsibleGroup({
+  label,
   count,
-  hasEnded,
   open,
   onOpenChange,
   children,
 }: {
+  label: string;
   count: number;
-  hasEnded: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   children: ReactNode;
 }) {
+  const rows = useRef<HTMLDivElement>(null);
+  const [rowsHeight, setRowsHeight] = useState<number>();
+
+  useLayoutEffect(() => {
+    const element = rows.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setRowsHeight(element.offsetHeight));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <SidebarGroup className="p-0">
-      <details open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
+    <SidebarGroup className="min-h-0 p-0">
+      <details className="shrink-0" open={open} onToggle={(event) => onOpenChange(event.currentTarget.open)}>
         <SidebarGroupLabel
           render={<summary className="cursor-default gap-1 text-muted-foreground select-none" />}
         >
           <ChevronDown aria-hidden className={cn("transition-transform", !open && "-rotate-90")} />
-          {hasEnded ? "Settled / Ended" : "Settled"} · {count}
+          {label} · {count}
         </SidebarGroupLabel>
-        <SidebarGroupContent>{children}</SidebarGroupContent>
       </details>
+      <div
+        inert={!open}
+        style={{
+          height: open ? rowsHeight ?? "auto" : 0,
+          transitionDuration: `${Math.min(500, 250 + (rowsHeight ?? 0) / 2)}ms`,
+        }}
+        className="flex min-h-0 flex-col overflow-hidden transition-[height] ease-out motion-reduce:transition-none"
+      >
+        <SidebarGroupContent className="transcript-scroller min-h-0 overflow-y-auto">
+          <div ref={rows}>{children}</div>
+        </SidebarGroupContent>
+      </div>
     </SidebarGroup>
   );
 }

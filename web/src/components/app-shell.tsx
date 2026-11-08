@@ -7,8 +7,10 @@ import { useDocks } from "@/docks.ts";
 import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
+import { useRailSections } from "@/rail-sections.ts";
 import { useMobileViewport } from "@/lib/use-mobile-viewport.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
+import { visibleSessions } from "@/presentation/rail-sections.ts";
 import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
@@ -73,6 +75,8 @@ export function AppShell() {
    */
   const [searchOpen, setSearchOpen] = useState(false);
   const rail = useRailWidth();
+  const railSections = useRailSections();
+  const visible = useMemo(() => visibleSessions(sessions, railSections.open), [sessions, railSections.open]);
 
   /*
    * The focused Agent Session's Docks.
@@ -152,14 +156,18 @@ export function AppShell() {
   }, [landed, loaded, sessions, focusedId, focus, route.settings]);
 
   // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
-  // that identity was Reaped, never merely because it moved to another group.
+  // that identity was Reaped or hidden in a collapsed section, never merely because it moved to
+  // another open group.
+  const previousVisible = useRef(visible);
   useEffect(() => {
-    setCursorId((current) => retainSessionCursor(sessions, current));
-  }, [sessions]);
+    const previous = previousVisible.current;
+    previousVisible.current = visible;
+    setCursorId((current) => retainSessionCursor(previous, visible, current));
+  }, [visible]);
 
   const moveCursor = useCallback((step: number) => {
-    setCursorId((current) => moveSessionCursor(sessions, current, step));
-  }, [sessions]);
+    setCursorId((current) => moveSessionCursor(visible, current, step));
+  }, [visible]);
 
   useEffect(() => {
     setSearchOpen(false);
@@ -167,13 +175,18 @@ export function AppShell() {
 
   const settle = useCallback(
     (sessionId: string) => {
+      setCursorId((current) =>
+        current === sessionId
+          ? retainSessionCursor(visible, visible.filter((session) => session.id !== sessionId), current)
+          : current,
+      );
       void run({ type: "settle", sessionId }).then(() => {
         // States the reversal; does not offer to perform it. Undoing a Settle is a Revive, and a
         // Revive starts a Backend Session and spends money (ADR 0006, ADR 0003).
         toast.info("Settled — the next message Revives it.");
       });
     },
-    [run],
+    [run, visible],
   );
 
   /**
@@ -191,8 +204,8 @@ export function AppShell() {
       "new-agent-session": openNewAgentSession,
       "sidebar-next": () => moveCursor(1),
       "sidebar-previous": () => moveCursor(-1),
-      "sidebar-first": () => setCursorId(sessions[0]?.id),
-      "sidebar-last": () => setCursorId(sessions.at(-1)?.id),
+      "sidebar-first": () => setCursorId(visible[0]?.id),
+      "sidebar-last": () => setCursorId(visible.at(-1)?.id),
       "focus-pane": () => {
         if (cursorId) focus(cursorId);
         // The Composer's input, whatever element it is made of. It was a `textarea` until it became
@@ -248,7 +261,7 @@ export function AppShell() {
       openSettings,
       moveCursor,
       run,
-      sessions,
+      visible,
     ],
   );
 
@@ -280,6 +293,8 @@ export function AppShell() {
             focusedId={focusedId}
             focusedStatus={chrome?.status}
             cursorId={cursorId}
+            openSection={railSections.open}
+            onSectionOpenChange={railSections.setOpen}
             link={chrome?.link}
             onFocus={focus}
             onSettle={settle}

@@ -33,6 +33,10 @@ const bundle = await build({
       let props = {
         sessions: [summary('a'), summary('b'), summary('filed', 'settled')],
         cursorId: 'a', focusedId: 'a',
+        openSection: 'idle',
+        onSectionOpenChange(section, open) {
+          window.renderRail({ openSection: open ? section : props.openSection === section ? undefined : props.openSection });
+        },
         onFocus() {}, onSettle() {}, onNew() {}, onOpenSettings() {},
       };
       window.renderRail = (patch = {}) => {
@@ -46,8 +50,10 @@ const bundle = await build({
           </KeyboardLayer>
         </React.StrictMode>));
       };
-      window.reparent = (status) => window.renderRail({
+      const sectionOf = { running: 'working', awaiting: 'working', idle: 'idle', dormant: 'idle', settled: 'filed-away', ended: 'filed-away' };
+      window.reparent = (status, follow = true) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? { ...s, status } : s),
+        ...(follow ? { openSection: sectionOf[status] } : {}),
       });
       window.attention = (group) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? {
@@ -198,15 +204,29 @@ describe("Agent Session rail DOM focus and material", () => {
     }
   });
 
-  it("hides only ordinary Band headings without losing list names or attention", async () => {
-    assert.equal(await page.locator('.agent-session-band > [data-sidebar="group-label"]').isVisible(), false);
+  it("collapses ordinary sections and hides their rows", async () => {
+    await page.evaluate(() => window.renderRail({ openSection: undefined }));
+    assert.match(await page.locator('summary').first().textContent(), /Idle · 2/);
+    assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), false);
+    await page.evaluate(() => window.reparent('settled', false));
+    assert.equal(await page.locator('details').last().evaluate(node => node.open), false);
+  });
+
+  it("opens one section at a time", async () => {
+    await page.locator('summary').last().click();
+    await page.getByRole('list', { name: 'Idle Agent Sessions' }).waitFor({ state: 'hidden' });
+    assert.equal(await page.getByRole('list', { name: 'Settled Agent Sessions' }).isVisible(), true);
+    assert.equal(await page.locator('details[open]').count(), 1);
+  });
+
+  it("labels sections without losing list names or attention", async () => {
     assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).count(), 1);
-    assert.match(await page.locator('summary').textContent(), /Settled/);
+    assert.match(await page.locator('summary').last().textContent(), /Settled/);
     for (const group of ['needs-input', 'unread']) {
       await page.evaluate(group => window.attention(group), group);
       const label = group === 'needs-input' ? 'Needs input' : 'Unread';
       assert.equal(await page.getByRole('list', { name: `${label} Agent Sessions` }).count(), 1);
-      assert.equal(await page.locator('[data-sidebar="group-label"]').filter({ hasText: label }).isVisible(), true);
+      assert.equal(await page.locator('[data-sidebar="group-label"]').filter({ hasText: label }).count(), 0);
       assert.match(await cursor().textContent(), /Needs review/);
     }
     const header = page.locator('[data-sidebar="header"]');
@@ -217,7 +237,7 @@ describe("Agent Session rail DOM focus and material", () => {
   });
 
   it("preserves native disclosure Enter and Space alongside the global pane shortcut", async () => {
-    const summary = page.locator('summary');
+    const summary = page.locator('summary').first();
     await summary.focus();
     await summary.press('Space');
     await page.waitForFunction(() => document.querySelector('details').open);
@@ -233,7 +253,7 @@ describe("Agent Session rail DOM focus and material", () => {
 
   it("names Ended rows without describing them as Settled", async () => {
     await page.evaluate(() => window.reparent('ended'));
-    assert.match(await page.locator('summary').textContent(), /Settled \/ Ended/);
+    assert.match(await page.locator('summary').last().textContent(), /Settled \/ Ended/);
     assert.equal(await page.getByRole('list', { name: 'Settled and Ended Agent Sessions' }).count(), 1);
   });
 
@@ -327,7 +347,7 @@ describe("Agent Session rail DOM focus and material", () => {
 
   it("does not treat the disclosure or a deliberately blurred row as rail ownership", async () => {
     await cursor().focus();
-    const disclosure = page.locator('summary');
+    const disclosure = page.locator('summary').first();
     await disclosure.focus();
     await page.evaluate(() => window.renderRail({ cursorId: 'b' }));
     await focusedIs(disclosure);
