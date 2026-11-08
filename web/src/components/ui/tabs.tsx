@@ -15,7 +15,7 @@ function TabsList({
       data-slot="tabs-list"
       activateOnFocus={activateOnFocus}
       className={cn(
-        "relative isolate inline-flex max-w-full items-center rounded-xl bg-muted p-1 text-muted-foreground",
+        "relative isolate inline-flex max-w-full items-center gap-1 rounded-xl bg-muted p-1 text-muted-foreground",
         className,
       )}
       {...props}
