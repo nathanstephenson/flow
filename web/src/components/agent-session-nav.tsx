@@ -427,7 +427,7 @@ function AgentSessionRow({
             )}
             <span className="sr-only">{pinned ? "Unpin" : "Pin"}</span>
           </TooltipTrigger>
-          <TooltipContent>{pinned ? "Unpin" : "Pin"}</TooltipContent>
+          <TooltipContent side="right">{pinned ? "Unpin" : "Pin"}</TooltipContent>
         </Tooltip>
       ) : null}
 
@@ -447,7 +447,7 @@ function AgentSessionRow({
             <CircleCheck aria-hidden />
             <span className="sr-only">Settle</span>
           </TooltipTrigger>
-          <TooltipContent>Settle</TooltipContent>
+          <TooltipContent side="right">Settle</TooltipContent>
         </Tooltip>
       ) : null}
     </SidebarMenuItem>
