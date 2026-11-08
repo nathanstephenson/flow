@@ -57,17 +57,47 @@ import { cn } from "@/lib/utils.ts";
  */
 export type AgentSessionPaneHeaderProps = {
   sessionId: string;
+  /** The Project name, shown before the title. */
+  project: string | undefined;
+  /** Absent when the Scope is not a listed Project, so the name is plain text. */
+  onOpenProject: (() => void) | undefined;
   title: string;
   chrome: Chrome;
   /** Absent where the host cannot open a Shell, which is how the controls disappear rather than break. */
   docks?: Docks;
 };
 
-export function AgentSessionPaneHeader({ sessionId, title, chrome, docks }: AgentSessionPaneHeaderProps) {
+export function AgentSessionPaneHeader({
+  sessionId,
+  project,
+  onOpenProject,
+  title,
+  chrome,
+  docks,
+}: AgentSessionPaneHeaderProps) {
   return (
-    <div className="bg-card text-card-foreground">
+    <div className="bg-background text-foreground">
       <div className="flex min-h-9 items-center gap-2 border-b px-3 py-2 max-lg:min-h-12 max-lg:pl-12">
-        <span className="truncate text-sm font-medium">{title}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
+          {project === undefined ? null : (
+            <>
+              {onOpenProject ? (
+                <button
+                  type="button"
+                  className="shrink-0 rounded-sm text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
+                  title={`New Agent Session in ${project}`}
+                  onClick={onOpenProject}
+                >
+                  {project}
+                </button>
+              ) : (
+                <span className="shrink-0 text-muted-foreground">{project}</span>
+              )}
+              <span aria-hidden className="text-muted-foreground">/</span>
+            </>
+          )}
+          <span className="truncate font-medium">{title}</span>
+        </span>
 
         <div className="ml-auto flex items-center gap-1.5">
           {docks ? (
