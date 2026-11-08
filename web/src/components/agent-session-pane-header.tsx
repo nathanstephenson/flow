@@ -77,7 +77,7 @@ export function AgentSessionPaneHeader({
 }: AgentSessionPaneHeaderProps) {
   return (
     <div className="bg-background text-foreground">
-      <div className="flex min-h-9 items-center gap-2 px-3 pt-3.5 pb-0.5 max-lg:min-h-12 max-lg:pl-12">
+      <div className="flex min-h-9 items-center gap-2 px-3 pt-3 pb-0 max-lg:min-h-12 max-lg:pl-12">
         <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
           {project === undefined ? null : (
             <>
