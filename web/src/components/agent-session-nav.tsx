@@ -74,8 +74,8 @@ export type AgentSessionNavProps = {
   focusedStatus: SessionStatus | undefined;
   /** Where the keyboard is in the rail, which is not the same thing as what is in the pane. */
   cursorId: string | undefined;
-  /** At most one collapsible section is open. The others hide their rows from the pointer and the keyboard cursor. */
-  openSection: CollapsibleRailSection | undefined;
+  /** Closed sections hide their rows from the pointer and the keyboard cursor. */
+  openSections: ReadonlySet<CollapsibleRailSection>;
   onSectionOpenChange: (section: CollapsibleRailSection, open: boolean) => void;
   link: LinkState | undefined;
   onFocus: (sessionId: string) => void;
@@ -181,7 +181,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
                 key={section}
                 label={sectionLabel(section, sessions)}
                 count={sessions.length}
-                open={props.openSection === section}
+                open={props.openSections.has(section)}
                 onOpenChange={(open) => props.onSectionOpenChange(section, open)}
               >
                 {menu(section, sessions)}
@@ -461,7 +461,7 @@ function sectionLabel(section: RailSection, sessions: SessionSummary[]): string 
  * cost does not grow with the list, and it is not an Agent Session, so it has no place in the row
  * cursor. Because a flex `<summary>` loses its native marker, the chevron is drawn.
  *
- * The rows sit outside `<details>`, so the open group is a flex child that scrolls when it would
+ * The rows sit outside `<details>`, so each open group is a flex child that scrolls when it would
  * otherwise make the rail too tall. They stay mounted but `inert` while closed, so they can animate
  * both ways. The height is measured rather than a `0fr`/`1fr` grid row: in a flex column, Chrome sizes
  * that grid at its full height at once, so the header jumped and the rows were revealed after it.

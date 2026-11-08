@@ -33,9 +33,11 @@ const bundle = await build({
       let props = {
         sessions: [summary('a'), summary('b'), summary('filed', 'settled')],
         cursorId: 'a', focusedId: 'a',
-        openSection: 'idle',
+        openSections: new Set(['idle']),
         onSectionOpenChange(section, open) {
-          window.renderRail({ openSection: open ? section : props.openSection === section ? undefined : props.openSection });
+          const next = new Set(props.openSections);
+          if (open) next.add(section); else next.delete(section);
+          window.renderRail({ openSections: next });
         },
         onFocus() {}, onSettle() {}, onNew() {}, onOpenSettings() {},
       };
@@ -53,7 +55,7 @@ const bundle = await build({
       const sectionOf = { running: 'working', awaiting: 'working', idle: 'idle', dormant: 'idle', settled: 'filed-away', ended: 'filed-away' };
       window.reparent = (status, follow = true) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? { ...s, status } : s),
-        ...(follow ? { openSection: sectionOf[status] } : {}),
+        ...(follow ? { openSections: new Set([...props.openSections, sectionOf[status]]) } : {}),
       });
       window.attention = (group) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? {
@@ -205,18 +207,18 @@ describe("Agent Session rail DOM focus and material", () => {
   });
 
   it("collapses ordinary sections and hides their rows", async () => {
-    await page.evaluate(() => window.renderRail({ openSection: undefined }));
+    await page.evaluate(() => window.renderRail({ openSections: new Set() }));
     assert.match(await page.locator('summary').first().textContent(), /Idle · 2/);
     assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), false);
     await page.evaluate(() => window.reparent('settled', false));
     assert.equal(await page.locator('details').last().evaluate(node => node.open), false);
   });
 
-  it("opens one section at a time", async () => {
+  it("opens several sections at once", async () => {
     await page.locator('summary').last().click();
-    await page.getByRole('list', { name: 'Idle Agent Sessions' }).waitFor({ state: 'hidden' });
-    assert.equal(await page.getByRole('list', { name: 'Settled Agent Sessions' }).isVisible(), true);
-    assert.equal(await page.locator('details[open]').count(), 1);
+    await page.getByRole('list', { name: 'Settled Agent Sessions' }).waitFor();
+    assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), true);
+    assert.equal(await page.locator('details[open]').count(), 2);
   });
 
   it("labels sections without losing list names or attention", async () => {

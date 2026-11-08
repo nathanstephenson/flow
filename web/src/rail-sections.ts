@@ -1,21 +1,24 @@
 import { useCallback, useState } from "react";
 
-import { parseOpenSection, type CollapsibleRailSection } from "@/presentation/rail-sections.ts";
+import { parseOpenSections, type CollapsibleRailSection } from "@/presentation/rail-sections.ts";
 
-const KEY = "flow.rail-open-section";
+const KEY = "flow.rail-open-sections";
 
 export type RailSections = {
-  open: CollapsibleRailSection | undefined;
+  open: ReadonlySet<CollapsibleRailSection>;
   setOpen: (section: CollapsibleRailSection, open: boolean) => void;
 };
 
 export function useRailSections(): RailSections {
-  const [open, setOpenSection] = useState(() => parseOpenSection(read()));
+  const [open, setOpenSections] = useState(() => parseOpenSections(read()));
 
   const setOpen = useCallback((section: CollapsibleRailSection, isOpen: boolean) => {
-    setOpenSection((current) => {
-      const next = isOpen ? section : current === section ? undefined : current;
-      if (next !== current) write(next);
+    setOpenSections((current) => {
+      if (current.has(section) === isOpen) return current;
+      const next = new Set(current);
+      if (isOpen) next.add(section);
+      else next.delete(section);
+      write(next);
       return next;
     });
   }, []);
@@ -31,11 +34,10 @@ function read(): string | null {
   }
 }
 
-function write(open: CollapsibleRailSection | undefined): void {
+function write(open: ReadonlySet<CollapsibleRailSection>): void {
   try {
-    if (open) window.localStorage.setItem(KEY, open);
-    else window.localStorage.removeItem(KEY);
+    window.localStorage.setItem(KEY, JSON.stringify([...open]));
   } catch {
-    // The open section still applies for this page's lifetime.
+    // The sections still apply for this page's lifetime.
   }
 }

@@ -293,7 +293,7 @@ export function AppShell() {
             focusedId={focusedId}
             focusedStatus={chrome?.status}
             cursorId={cursorId}
-            openSection={railSections.open}
+            openSections={railSections.open}
             onSectionOpenChange={railSections.setOpen}
             link={chrome?.link}
             onFocus={focus}

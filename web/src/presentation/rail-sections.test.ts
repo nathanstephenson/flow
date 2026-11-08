@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SessionSummary } from "../../../src/protocol/commands.ts";
-import { parseOpenSection, railSection, visibleSessions } from "./rail-sections.ts";
+import { parseOpenSections, railSection, visibleSessions } from "./rail-sections.ts";
 
 function session(id: string, status: SessionSummary["status"], attention?: SessionSummary["attention"]): SessionSummary {
   return {
@@ -34,17 +34,20 @@ describe("the Agent Session rail sections", () => {
   });
 
   it("shows only attention rows while every section is collapsed", () => {
-    assert.deepEqual(visibleSessions(all, undefined).map(({ id }) => id), ["unread"]);
+    assert.deepEqual(visibleSessions(all, new Set()).map(({ id }) => id), ["unread"]);
   });
 
   it("shows the rows of open sections", () => {
-    assert.deepEqual(visibleSessions(all, "idle").map(({ id }) => id), ["unread", "idle", "dormant"]);
+    assert.deepEqual(visibleSessions(all, new Set(["idle"])).map(({ id }) => id), ["unread", "idle", "dormant"]);
+    assert.deepEqual(
+      visibleSessions(all, new Set(["working", "idle", "filed-away"])).map(({ id }) => id),
+      ["unread", "running", "idle", "dormant", "settled"],
+    );
   });
 
-  it("reads only a known collapsible section from storage", () => {
-    assert.equal(parseOpenSection("working"), "working");
-    assert.equal(parseOpenSection("unread"), undefined);
-    assert.equal(parseOpenSection("bogus"), undefined);
-    assert.equal(parseOpenSection(null), undefined);
+  it("reads only known collapsible sections from storage", () => {
+    assert.deepEqual([...parseOpenSections('["working","unread","bogus","idle"]')], ["working", "idle"]);
+    assert.deepEqual([...parseOpenSections("not json")], []);
+    assert.deepEqual([...parseOpenSections(null)], []);
   });
 });

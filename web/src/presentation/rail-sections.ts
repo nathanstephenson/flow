@@ -17,14 +17,20 @@ export function collapsible(section: RailSection): section is CollapsibleRailSec
 
 export function visibleSessions(
   sessions: readonly SessionSummary[],
-  open: CollapsibleRailSection | undefined,
+  open: ReadonlySet<CollapsibleRailSection>,
 ): SessionSummary[] {
   return sessions.filter((session) => {
     const section = railSection(session);
-    return !collapsible(section) || section === open;
+    return !collapsible(section) || open.has(section);
   });
 }
 
-export function parseOpenSection(raw: string | null): CollapsibleRailSection | undefined {
-  return raw !== null && collapsible(raw as RailSection) ? (raw as CollapsibleRailSection) : undefined;
+export function parseOpenSections(raw: string | null): Set<CollapsibleRailSection> {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? "[]");
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((section): section is CollapsibleRailSection => collapsible(section)));
+  } catch {
+    return new Set();
+  }
 }
