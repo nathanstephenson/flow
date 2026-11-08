@@ -21,10 +21,10 @@
   background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
-/* The selected row is coated in a thick fluid, like honey or slime, in its status colour. A coat
- * covers the row; blobs in four layers flow right at different speeds and rise and fall, so the
- * edges and the front bulge, merge and tear. The filter blurs, then cuts the alpha sharp so touching
- * blobs fuse, then lights the result for a wet shine. The mask thins it out towards the right. */
+/* The selected row fills with clear, coloured honey in its status colour: a tint, a soft light
+ * streak, and small rim-lit bubbles. Five bubble layers drift right at their own speeds, so the
+ * bubbles slide past each other. The card's own edges are the honey's edges; the mask thins it out
+ * towards the right. */
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
@@ -32,31 +32,28 @@
   border-radius: inherit;
   z-index: -1;
   pointer-events: none;
-  opacity: var(--agent-session-fluid-opacity, 0.45);
-  --fluid: radial-gradient(closest-side, var(--agent-session-status) 70%, transparent);
+  --rim: color-mix(in srgb, var(--agent-session-status), white 55%);
+  --core: color-mix(in srgb, var(--agent-session-status) 15%, transparent);
   background:
-    linear-gradient(var(--agent-session-status), var(--agent-session-status)) 0 50% / 45% 70% no-repeat,
-    var(--fluid) 0 50% / 120px 64px repeat-x,
-    var(--fluid) 0 15% / 84px 34px repeat-x,
-    var(--fluid) 0 85% / 100px 38px repeat-x,
-    var(--fluid) 0 100% / 46px 26px repeat-x;
-  filter: url(#agent-session-fluid);
-  mask-image: linear-gradient(90deg, black 35%, transparent 95%);
-  animation: agent-session-fluid 6s linear infinite;
+    radial-gradient(circle 1.5px at 30% 40%, var(--core) 0 45%, var(--rim) 80%, transparent) 0 0 / 29px 17px,
+    radial-gradient(circle 2.5px at 70% 30%, var(--core) 0 50%, var(--rim) 80%, transparent) 0 0 / 37px 23px,
+    radial-gradient(circle 3.5px at 20% 70%, var(--core) 0 55%, var(--rim) 82%, transparent) 0 0 / 53px 31px,
+    radial-gradient(circle 2px at 60% 80%, var(--core) 0 45%, var(--rim) 80%, transparent) 0 0 / 61px 19px,
+    radial-gradient(circle 5px at 45% 50%, var(--core) 0 60%, var(--rim) 84%, transparent) 0 0 / 71px 41px,
+    linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.18) 45%, transparent 70%) 0 0 / 200px 100% repeat-x,
+    color-mix(in srgb, var(--agent-session-status) var(--agent-session-honey, 22%), transparent);
+  mask-image: linear-gradient(90deg, black 30%, transparent 95%);
+  animation: agent-session-honey 8s linear infinite;
 }
 
 .dark .agent-session-row[data-status-accent] {
-  --agent-session-fluid-opacity: 0.6;
+  --agent-session-honey: 32%;
 }
 
-/* Each layer moves whole tiles, so the loop is seamless, at its own speed; the heights swing
- * against each other so the layers collide. */
-@keyframes agent-session-fluid {
-  0% { background-position: 0 50%, 0 50%, 0 15%, 0 85%, 0 100%; }
-  25% { background-position: 0 50%, 30px 35%, 63px 0%, 50px 100%, 23px 70%; }
-  50% { background-position: 0 50%, 60px 60%, 126px 25%, 100px 75%, 46px 100%; }
-  75% { background-position: 0 50%, 90px 45%, 189px 5%, 150px 95%, 69px 80%; }
-  100% { background-position: 0 50%, 120px 50%, 252px 15%, 200px 85%, 92px 100%; }
+/* Each layer moves whole tiles, so the loop is seamless, and each at its own speed. */
+@keyframes agent-session-honey {
+  from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0; }
+  to { background-position: 174px 0, 148px 0, 106px 0, 122px 0, 71px 0, 200px 0; }
 }
 
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {
