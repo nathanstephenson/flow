@@ -73,4 +73,21 @@ describe("a run of adjacent tool calls", () => {
       entries("thinking:a", "thinking:b", "thinking:c"),
     );
   });
+
+  it("needs two tool calls, whatever the minimum", () => {
+    assert.deepEqual(toolChains(["tool:1", "thinking:a", "thinking:b"]), entries("tool:1", "thinking:a", "thinking:b"));
+    assert.deepEqual(toolChains(["tool:1", "thinking:a"], 2), entries("tool:1", "thinking:a"));
+    assert.deepEqual(toolChains(["tool:1", "tool:2"], 2), [{ kind: "chain", keys: ["tool:1", "tool:2"] }]);
+  });
+
+  it("counts rows a caller says ride along as calls, but never chains on them alone", () => {
+    const rides = (key: string) => key.startsWith("background_call:");
+    assert.deepEqual(toolChains(["tool:1", "background_call:a", "tool:2", "assistant:3"], 2, rides), [
+      { kind: "chain", keys: ["tool:1", "background_call:a", "tool:2"] },
+      { kind: "entry", key: "assistant:3" },
+    ]);
+    assert.deepEqual(toolChains(["tool:1", "background_call:a"], 2, rides), [{ kind: "chain", keys: ["tool:1", "background_call:a"] }]);
+    assert.deepEqual(toolChains(["background_call:a", "background_call:b"], 2, rides), entries("background_call:a", "background_call:b"));
+    assert.deepEqual(toolChains(["tool:1", "background_call:a", "tool:2"], 2), entries("tool:1", "background_call:a", "tool:2"));
+  });
 });

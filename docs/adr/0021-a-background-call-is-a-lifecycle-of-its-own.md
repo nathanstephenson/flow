@@ -137,3 +137,13 @@ comes and goes costs the transcript height, and two strips would spend that argu
 combined label, rendered inert when only Background Calls are running. Reopen this if a Background
 Call ever gains attributed rows: the Entry kind and the count such a pane would be built on already
 exist by then.
+
+## Amendment: the web client draws one row
+
+Two rows for one call read as two calls. The Entries and `ownKeys` are unchanged, and the TUI still
+draws both rows, but the web transcript folds a Background Call into the tool row that launched it
+whenever that row is shown (`web/src/presentation/background-rows.ts`). The tool row keeps the
+command and the launch receipt, and takes the card's status and clock at its far end: a spinner and
+its age while the Call runs, then when it finished, in red if it failed. A Tool Chain that holds a
+running Background Call says so in its header, so "not finished" stays on screen when the chain is
+closed. A Background Call whose tool row is outside the loaded tail keeps its own row.

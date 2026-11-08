@@ -1,4 +1,5 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { Bot, LoaderCircle } from "lucide-react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
@@ -14,6 +15,8 @@ import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
 import { ToolName } from "@/components/tool-name.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
+import { ToolIcon } from "@/components/tool-icon.tsx";
+import { toolOutcome } from "@/presentation/tool-display.ts";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -29,9 +32,15 @@ import { ExpandableImage } from "@/components/expandable-image.tsx";
  * spent only where alignment is the point: a code span, a fenced block, and the tool payloads and
  * diffs below, which are not prose and never pass through the markdown renderer.
  */
-export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
+export type TranscriptEntryProps = {
+  entry: Entry;
+  query: string;
+  sessionId: string;
+  /** The Background Call a tool call launched, drawn on the tool row. A store Entry, so `memo` holds. */
+  background?: Of<"background_call"> | undefined;
+};
 
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId, background }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -40,7 +49,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
     case "thinking":
       return <ThinkingEntryView entry={entry} query={query} />;
     case "tool":
-      return <ToolCallEntryView entry={entry} query={query} />;
+      return <ToolCallEntryView entry={entry} query={query} background={background} />;
     case "subagent":
       return <SubagentEntryView entry={entry} query={query} />;
     case "background_call":
@@ -143,28 +152,39 @@ function StreamingCaret() {
  */
 function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const body = useRef<HTMLDivElement>(null);
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   const clamped = entry.final && !expanded;
-  // Redacted or empty reasoning has nothing to show but its gutter dot.
-  if (entry.text.trim() === "") return null;
+  const empty = entry.text.trim() === "";
+
+  // Observed rather than measured once: a row inside a closed Tool Chain has no size until it opens.
+  useLayoutEffect(() => {
+    const element = body.current;
+    if (!element || !clamped) return;
+    const observer = new ResizeObserver(() => setOverflows(element.scrollHeight > element.clientHeight + 1));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [clamped, empty]);
+
+  // Redacted or empty reasoning has nothing to show.
+  if (empty) return null;
 
   return (
-    <Row gutter="·" gutterClassName="text-muted-foreground">
-      <div>
-        {/* A height clamp, not `line-clamp`: that needs `display: -webkit-box`, which holds one block. */}
-        <div className={cn("text-muted-foreground italic", clamped && "max-h-[4.5rem] overflow-hidden")}>
-          <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
-        </div>
-        {entry.final ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            className="mt-0.5 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {expanded ? "less" : "more"}
-          </button>
-        ) : null}
+    <Row>
+      {/* A height clamp, not `line-clamp`: that needs `display: -webkit-box`, which holds one block. */}
+      <div ref={body} className={cn("text-muted-foreground italic", clamped && "max-h-[4.5rem] overflow-hidden")}>
+        <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
       </div>
+      {entry.final && (expanded || overflows) ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-0.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {expanded ? "less" : "more"}
+        </button>
+      ) : null}
     </Row>
   );
 }
@@ -176,7 +196,15 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
  *
  * An error opens itself. A failure the reader has to click to see is a failure they will not see.
  */
-function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string }) {
+function ToolCallEntryView({
+  entry,
+  query,
+  background,
+}: {
+  entry: Of<"tool">;
+  query: string;
+  background: Of<"background_call"> | undefined;
+}) {
   const [toggled, setToggled] = useState<boolean | undefined>(undefined);
   // Explicit intent wins; otherwise the status decides, and it decides again if the call fails
   // *after* it was rendered — which is the usual order of events.
@@ -186,19 +214,27 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
   // Standing Authorisation — and a badge on every row would imply a judgement nobody made.
   const authorised = authorisationLabel(entry.authorisation);
 
+  const outcome = toolOutcome(entry);
+
   return (
-    <div className="py-0.5">
-      <details
-        open={open}
-        onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-lg border text-foreground"
-      >
-        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <ToolStatusDot status={entry.status} />
-          <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
-          {precis === undefined ? null : (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
-          )}
+    <details
+      open={open}
+      onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
+      className="group/tool text-foreground"
+    >
+      {/*
+        * One quiet line rather than a card: an icon for the kind of tool, its name and précis, and
+        * at the far end whatever is worth knowing without opening it. Only the details get a box.
+        */}
+      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+        <ToolIcon
+          name={entry.name}
+          className={entry.status === "error" || background?.status === "error" ? "text-destructive" : "text-muted-foreground"}
+        />
+        <span className="min-w-0 shrink-0 text-sm text-muted-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
+        {precis === undefined ? null : (
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{precis}</span>
+        )}
           {/*
             * `ml-auto` here rather than on the running label, so the two cannot both claim the right
             * edge — a call awaiting authorisation is running, and would otherwise print both.
@@ -212,30 +248,35 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
             *
             * An ordinary authorised call is a footnote and is styled as one.
             */}
-          {authorised ? (
-            <span
-              className={cn(
-                "ml-auto shrink-0 text-xs",
-                entry.authorisation === "denied"
-                  ? "text-destructive"
-                  : entry.authorisation === "asked"
-                    ? "text-status-awaiting"
-                    : "text-muted-foreground",
-              )}
-            >
-              {authorised}
-            </span>
-          ) : entry.status === "running" ? (
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
-          ) : null}
-        </summary>
+        {authorised ? (
+          <span
+            className={cn(
+              "ml-auto shrink-0 text-xs",
+              entry.authorisation === "denied"
+                ? "text-destructive"
+                : entry.authorisation === "asked"
+                  ? "text-status-awaiting"
+                  : "text-muted-foreground",
+            )}
+          >
+            {authorised}
+          </span>
+        ) : entry.status === "running" ? (
+          <LoaderCircle aria-label="running" className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        ) : background ? (
+          <BackgroundStatus entry={background} />
+        ) : outcome ? (
+          <span className={cn("ml-auto shrink-0 font-mono text-xs", entry.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+            {outcome}
+          </span>
+        ) : null}
+      </summary>
 
-        <div className="border-t p-3">
-          <EditDiffView input={entry.input} query={query} />
-          <ToolPayloadView entry={entry} query={query} />
-        </div>
-      </details>
-    </div>
+      <div className="my-1 ml-6 rounded-lg border p-3">
+        <EditDiffView input={entry.input} query={query} />
+        <ToolPayloadView entry={entry} query={query} />
+      </div>
+    </details>
   );
 }
 
@@ -306,31 +347,29 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
 
   const body = (
     <>
-      <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
-      <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-      <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere] max-sm:col-start-3 max-sm:row-start-1 max-sm:truncate">{entry.name}</span>
+      <Bot aria-hidden className={cn("size-3.5 shrink-0", subagentDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground")} />
+      <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere] max-sm:col-start-2 max-sm:row-start-1 max-sm:truncate">{entry.name}</span>
       {entry.description === undefined ? null : (
-        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground max-sm:col-start-3 max-sm:col-end-5 max-sm:row-start-2">
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80 max-sm:col-start-2 max-sm:col-end-4 max-sm:row-start-2">
           <Highlighted text={entry.description} query={query} />
         </span>
       )}
-      <span className="ml-auto shrink-0 text-xs text-muted-foreground max-sm:col-start-4 max-sm:row-start-1">{live ? `${status}…` : status}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground max-sm:col-start-3 max-sm:row-start-1">
+        {live ? <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" /> : null}
+        {status}
+      </span>
     </>
   );
 
-  const shell = "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground max-sm:grid max-sm:grid-cols-[8px_12px_minmax(0,1fr)_auto] max-sm:gap-y-1";
+  const shell = "-mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
 
-  return (
-    <div className="py-0.5">
-      {open === undefined ? (
-        // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
-        <div className={shell}>{body}</div>
-      ) : (
-        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-accent")}>
-          {body}
-        </button>
-      )}
-    </div>
+  return open === undefined ? (
+    // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
+    <div className={shell}>{body}</div>
+  ) : (
+    <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-muted/50")}>
+      {body}
+    </button>
   );
 }
 
@@ -365,16 +404,39 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
   const when = backgroundTiming(entry, now);
 
   return (
-    <div className="py-0.5">
-      <div className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground">
-        <ToolStatusDot status={backgroundDot(entry.status)} />
-        <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
-        <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {when.label} {when.at}
-        </span>
-      </div>
+    <div className="-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
+      <ToolIcon name={entry.tool} className={backgroundDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground"} />
+      <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
+      <span className="shrink-0 text-xs text-muted-foreground/70">in background</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {entry.status === "running" ? <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" /> : null}
+        {when.label} {when.at}
+      </span>
     </div>
+  );
+}
+
+/**
+ * A Background Call's status at the end of the tool row that launched it: a spinner and its age
+ * while it runs, then how long ago it finished. Its own component, because `useNow` re-renders
+ * every second and only this needs to.
+ */
+function BackgroundStatus({ entry }: { entry: Of<"background_call"> }) {
+  const now = useNow();
+  const when = backgroundTiming(entry, now);
+  return (
+    <span
+      className={cn(
+        "ml-auto flex shrink-0 items-center gap-1.5 text-xs",
+        entry.status === "error" ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      {entry.status === "running" ? (
+        <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+      ) : null}
+      <span className="sr-only">in background,</span>
+      {when.label} {when.at}
+    </span>
   );
 }
 
@@ -396,7 +458,7 @@ const TOOL_TONE: Record<Of<"tool">["status"], string> = {
   error: "text-destructive",
 };
 
-export function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
+function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
   return (
     <span
       aria-hidden

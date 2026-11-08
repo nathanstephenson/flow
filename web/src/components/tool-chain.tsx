@@ -1,14 +1,15 @@
-import { Layers } from "lucide-react";
+import { Layers, LoaderCircle } from "lucide-react";
 import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 import { isToolKey } from "@client/tool-chains.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useEntry } from "@/agent-session-view.tsx";
-import { ToolStatusDot } from "@/components/transcript-entry.tsx";
+import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { AgentSessionView } from "@/store/contract.ts";
+import { backgroundKeyOf } from "@/presentation/background-rows.ts";
 
 /**
- * A Tool Chain: three or more adjacent tool calls, as one line.
+ * A Tool Chain: two or more adjacent tool calls, as one line.
  *
  * Twelve greps in a row are twelve cards between the reader and the prose that follows, and eleven
  * of them say the same thing. So the run collapses to the two facts worth carrying — how many ran,
@@ -37,38 +38,43 @@ export function ToolChain({
   // A chain carries the thinking between its calls, but the header speaks about tools: it counts
   // them and names the last one, so a trailing thought does not leave the line anonymous.
   const toolKeys = useMemo(() => keys.filter(isToolKey), [keys]);
+  const calls = keys.filter((key) => isToolKey(key) || key.startsWith("background_call:")).length;
   // One hook, not one per member: a chain grows as tools land, and a hook per key would change the
   // hook count between renders.
   const latest = useEntry(view, toolKeys[toolKeys.length - 1] ?? "");
   const failed = useChainFailures(view, keys);
+  const inBackground = useChainBackgroundRunning(view, toolKeys);
   const precis = latest?.kind === "tool" ? toolSummary(latest.input) : undefined;
 
   return (
-    <div className="py-0.5">
-      <details className="rounded-lg border text-foreground">
-        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>
-          {latest?.kind === "tool" ? (
-            <>
-              <span className="shrink-0 text-muted-foreground" aria-hidden>
-                ·
-              </span>
-              <ToolStatusDot status={latest.status} />
-              <span className="shrink-0 font-mono text-sm text-foreground">{latest.name}</span>
-              {precis === undefined ? null : (
-                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
-              )}
-            </>
-          ) : null}
-          {failed === 0 ? null : (
-            <span className="ml-auto shrink-0 text-xs text-destructive">{failed} failed</span>
-          )}
-        </summary>
+    <details className="text-foreground">
+      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+        <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="shrink-0 text-sm text-muted-foreground">{calls} tools</span>
+        {latest?.kind === "tool" ? (
+          <>
+            <span className="shrink-0 text-muted-foreground/60" aria-hidden>
+              ·
+            </span>
+            <ToolIcon name={latest.name} className="text-muted-foreground" />
+            <span className="shrink-0 text-sm text-muted-foreground">{latest.name}</span>
+            {precis === undefined ? null : (
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{precis}</span>
+            )}
+          </>
+        ) : null}
+        {failed > 0 ? (
+          <span className="ml-auto shrink-0 text-xs text-destructive">{failed} failed</span>
+        ) : (latest?.kind === "tool" && latest.status === "running") || inBackground > 0 ? (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+            {inBackground > 0 ? `${inBackground} in background` : <span className="sr-only">running</span>}
+          </span>
+        ) : null}
+      </summary>
 
-        <div className="border-t px-3 py-1">{children}</div>
-      </details>
-    </div>
+      <div className="mt-0.5 ml-3 border-l pl-2">{children}</div>
+    </details>
   );
 }
 
@@ -90,5 +96,23 @@ function useChainFailures(view: AgentSessionView, keys: readonly string[]): numb
     }
     return failed;
   }, [view, keys]);
+  return useSyncExternalStore(subscribe, snapshot);
+}
+
+/**
+ * How many of a chain's tool calls are still running in the background. Their rows are inside the
+ * closed chain, and this is what keeps "not finished" on screen (ADR 0021). A number, for the reason
+ * `useChainFailures` gives.
+ */
+function useChainBackgroundRunning(view: AgentSessionView, toolKeys: readonly string[]): number {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => {
+    let running = 0;
+    for (const key of toolKeys) {
+      const entry = view.getEntry(backgroundKeyOf(key));
+      if (entry?.kind === "background_call" && entry.status === "running") running += 1;
+    }
+    return running;
+  }, [view, toolKeys]);
   return useSyncExternalStore(subscribe, snapshot);
 }
