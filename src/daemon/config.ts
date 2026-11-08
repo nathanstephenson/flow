@@ -18,6 +18,7 @@ import {
   type Settings,
   type SettingsPatch,
 } from "../protocol/settings.ts";
+import type { UpdateChannel } from "../protocol/update.ts";
 
 /**
  * The Session Host's configuration file: `<stateRoot>/config.json`, beside daemon.json and
@@ -51,6 +52,7 @@ export type Config = {
   /** Omitted means automatic; resolved runtime defaults are never written here. */
   filesystemIsolation?: FilesystemIsolationMode;
   sandboxSharing?: SandboxSharing;
+  updateChannel?: UpdateChannel;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: Retention;
@@ -164,6 +166,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const providers = parseProviders(parsed, warnings);
   const filesystemIsolation = readFilesystemIsolation(parsed, warnings);
   const sandboxSharing = readSandboxSharing(parsed, warnings);
+  const updateChannel = readUpdateChannel(parsed, warnings);
 
   return {
     config: {
@@ -171,6 +174,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
       fonts,
       ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
       ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
+      ...(updateChannel === undefined ? {} : { updateChannel }),
       mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
       ...(projects === undefined ? {} : { projects }),
@@ -256,6 +260,21 @@ function patchSandboxSharing(current: SandboxSharing | undefined, value: unknown
   if (value === undefined) return current;
   if (!sharingModes.includes(value)) throw new ConfigError('sandboxSharing must be "session" or "shared"');
   return value as SandboxSharing;
+}
+
+const updateChannels: readonly unknown[] = ["stable", "beta"] satisfies UpdateChannel[];
+
+function readUpdateChannel(parsed: unknown, warnings: string[]): UpdateChannel | undefined {
+  const value = (parsed as { updateChannel?: unknown } | null)?.updateChannel;
+  if (value === undefined || updateChannels.includes(value)) return value as UpdateChannel | undefined;
+  warnings.push('updateChannel must be "stable" or "beta"; using "stable"');
+  return undefined;
+}
+
+function patchUpdateChannel(current: UpdateChannel | undefined, value: unknown): UpdateChannel | undefined {
+  if (value === undefined) return current;
+  if (!updateChannels.includes(value)) throw new ConfigError('updateChannel must be "stable" or "beta"');
+  return value as UpdateChannel;
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
@@ -541,15 +560,17 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing", "updateChannel"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   const filesystemIsolation = patchFilesystemIsolation(current.filesystemIsolation, body.filesystemIsolation);
   const sandboxSharing = patchSandboxSharing(current.sandboxSharing, body.sandboxSharing);
+  const updateChannel = patchUpdateChannel(current.updateChannel, body.updateChannel);
   return {
     ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
     ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
+    ...(updateChannel === undefined ? {} : { updateChannel }),
     mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },

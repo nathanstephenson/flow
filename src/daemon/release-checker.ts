@@ -1,6 +1,9 @@
+import type { UpdateChannel } from '../protocol/update.ts';
+
 const packageName = '@nathanstephenson/flow';
 
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const BETA = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function parsed(version: string): { core: [number, number, number]; prerelease: string[] } | undefined {
@@ -41,9 +44,9 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
-/** `latest` must itself be stable, and must advance rather than select a channel or downgrade. */
-export function newerStableVersion(installed: string, latest: string): boolean {
-  return STABLE.test(latest) && compareVersions(latest, installed) > 0;
+/** A release must be stable or `X.Y.Z-beta.N`, and must advance rather than downgrade. */
+export function newerReleaseVersion(installed: string, candidate: string): boolean {
+  return (STABLE.test(candidate) || BETA.test(candidate)) && compareVersions(candidate, installed) > 0;
 }
 
 export type ReleaseCheck =
@@ -59,52 +62,61 @@ type ReleaseCheckerOptions = {
 };
 
 export class ReleaseChecker {
-  private cached: { at: number; result: ReleaseCheck } | undefined;
-  private inFlight: Promise<ReleaseCheck> | undefined;
+  private readonly cached = new Map<UpdateChannel, { at: number; result: ReleaseCheck }>();
+  private readonly inFlight = new Map<UpdateChannel, Promise<ReleaseCheck>>();
   private readonly options: ReleaseCheckerOptions;
 
   constructor(options: ReleaseCheckerOptions = {}) { this.options = options; }
 
-  check(refresh = false): Promise<ReleaseCheck> {
+  check(refresh = false, channel: UpdateChannel = 'stable'): Promise<ReleaseCheck> {
     const now = (this.options.now ?? Date.now)();
     const cacheMs = this.options.cacheMs ?? 15 * 60 * 1000;
-    if (!refresh && this.cached && now - this.cached.at < cacheMs) return Promise.resolve(this.cached.result);
-    if (this.inFlight) return this.inFlight;
-    this.inFlight = this.fetchLatest().then(result => {
-      this.cached = { at: (this.options.now ?? Date.now)(), result };
+    const cached = this.cached.get(channel);
+    if (!refresh && cached && now - cached.at < cacheMs) return Promise.resolve(cached.result);
+    const running = this.inFlight.get(channel);
+    if (running) return running;
+    const pending = this.fetchChannel(channel).then(result => {
+      this.cached.set(channel, { at: (this.options.now ?? Date.now)(), result });
       return result;
-    }).finally(() => { this.inFlight = undefined; });
-    return this.inFlight;
+    }).finally(() => { this.inFlight.delete(channel); });
+    this.inFlight.set(channel, pending);
+    return pending;
   }
 
-  private async fetchLatest(): Promise<ReleaseCheck> {
+  private async fetchChannel(channel: UpdateChannel): Promise<ReleaseCheck> {
     const checkedAt = new Date((this.options.now ?? Date.now)()).toISOString();
     try {
-      const response = await (this.options.fetch ?? fetch)(
-        this.options.registryUrl ?? `https://registry.npmjs.org/${packageName.replace('/', '%2F')}/latest`,
-        {
-          headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(this.options.timeoutMs ?? 5000),
-        },
-      );
-      if (!response.ok) throw new Error(`npm registry answered ${response.status}`);
-      const length = Number(response.headers.get('content-length'));
-      if (Number.isFinite(length) && length > 64 * 1024) throw new Error('npm registry response was too large');
-      const text = await response.text();
-      if (Buffer.byteLength(text) > 64 * 1024) throw new Error('npm registry response was too large');
-      const body: unknown = JSON.parse(text);
-      const latestVersion = body && typeof body === 'object' && 'version' in body
-        ? (body as { version?: unknown }).version
-        : undefined;
-      if (typeof latestVersion !== 'string' || !STABLE.test(latestVersion)) {
-        throw new Error('npm latest tag is not a stable semantic version');
-      }
-      return { checkedAt, latestVersion };
+      const latest = await this.fetchTag('latest') ?? '';
+      if (!STABLE.test(latest)) throw new Error('npm latest tag is not a stable semantic version');
+      if (channel === 'stable') return { checkedAt, latestVersion: latest };
+      const beta = await this.fetchTag('beta');
+      if (beta === undefined) return { checkedAt, latestVersion: latest };
+      if (!BETA.test(beta)) throw new Error('npm beta tag is not an X.Y.Z-beta.N version');
+      return { checkedAt, latestVersion: compareVersions(beta, latest) > 0 ? beta : latest };
     } catch (error) {
       const message = error instanceof Error && error.name === 'TimeoutError'
         ? 'The npm registry check timed out. Try again.'
         : `Could not check the npm registry: ${error instanceof Error ? error.message : String(error)}`;
       return { checkedAt, error: message };
     }
+  }
+
+  private async fetchTag(tag: 'latest' | 'beta'): Promise<string | undefined> {
+    const response = await (this.options.fetch ?? fetch)(
+      `${this.options.registryUrl ?? `https://registry.npmjs.org/${packageName.replace('/', '%2F')}`}/${tag}`,
+      {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 5000),
+      },
+    );
+    if (tag === 'beta' && response.status === 404) return undefined;
+    if (!response.ok) throw new Error(`npm registry answered ${response.status}`);
+    const length = Number(response.headers.get('content-length'));
+    if (Number.isFinite(length) && length > 64 * 1024) throw new Error('npm registry response was too large');
+    const text = await response.text();
+    if (Buffer.byteLength(text) > 64 * 1024) throw new Error('npm registry response was too large');
+    const body: unknown = JSON.parse(text);
+    const version = body && typeof body === 'object' && 'version' in body ? (body as { version?: unknown }).version : undefined;
+    return typeof version === 'string' ? version : '';
   }
 }

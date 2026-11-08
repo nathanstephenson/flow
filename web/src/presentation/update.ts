@@ -55,7 +55,7 @@ export function updateDetail(
 ): string {
   const historical = historicalOutcome(status);
   switch (presentation) {
-    case "checking": return "Checking the npm registry for the latest stable release…";
+    case "checking": return "Checking the npm registry for the latest release…";
     case "up-to-date": return `Flow ${status?.installedVersion ?? ""} is up to date.`;
     case "available": return `Flow ${status?.latestVersion} is available and this installation can update safely.`;
     case "unsupported": return appendHistorical(

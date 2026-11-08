@@ -17,6 +17,7 @@ import {
   type FilesystemIsolationSupportDetector,
 } from '../isolation/support.ts';
 import { detectSandboxSupport, type SandboxSupport, type SandboxSupportDetector } from '../isolation/sandbox.ts';
+import type { UpdateChannel } from '../protocol/update.ts';
 import { expandHome } from "./projects.ts";
 import { defaultStateRoot } from "./store.ts";
 
@@ -88,6 +89,8 @@ export class ConfigStore {
 
   /** Read when a sandbox-mode Backend Session starts. */
   readonly sandboxSharing = (): SandboxSharing => this.config.sandboxSharing ?? "session";
+
+  readonly updateChannel = (): UpdateChannel => this.config.updateChannel ?? "stable";
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */
   current(): Config {
@@ -254,6 +257,7 @@ function settingsOf(config: Config): Settings {
     workflowRuntime: { ...DEFAULT_WORKFLOW_RUNTIME, ...config.workflowRuntime },
     ...(config.filesystemIsolation === undefined ? {} : { filesystemIsolation: config.filesystemIsolation }),
     ...(config.sandboxSharing === undefined ? {} : { sandboxSharing: config.sandboxSharing }),
+    ...(config.updateChannel === undefined ? {} : { updateChannel: config.updateChannel }),
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),

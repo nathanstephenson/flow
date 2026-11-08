@@ -13,6 +13,7 @@ import {
 
 const base: WebUpdateStatus = {
   installedVersion: "1.0.0",
+  channel: "stable",
   latestVersion: "2.0.0",
   updateAvailable: true,
   eligibility: { state: "eligible" },
@@ -40,7 +41,7 @@ test("update presentation distinguishes every discovery, eligibility, lifecycle,
   assert.equal(updatePresentation({ ...base, operation: { id: "1", state: "failed", previousVersion: "1.0.0", startedAt: "then" } }, "ready"), "failure");
   assert.equal(updatePresentation({ ...base, operation: { id: "1", state: "unverified", previousVersion: "1.0.0", startedAt: "then" } }, "ready"), "recovery-needed");
   assert.equal(updatePresentation(base, "recovery-needed"), "recovery-needed");
-  assert.equal(updatePresentation({ installedVersion: "1.0.0", updateAvailable: false, eligibility: { state: "eligible" }, checkError: "registry down" }, "ready"), "error");
+  assert.equal(updatePresentation({ installedVersion: "1.0.0", channel: "stable", updateAvailable: false, eligibility: { state: "eligible" }, checkError: "registry down" }, "ready"), "error");
 });
 
 const priorSuccess = {
@@ -49,6 +50,7 @@ const priorSuccess = {
   previousVersion: "1.0.0",
   targetVersion: "2.0.0",
   installedVersion: "2.0.0",
+  channel: "stable",
   startedAt: "then",
   finishedAt: "later",
 };
@@ -56,6 +58,7 @@ const priorSuccess = {
 function successive(eligibility: WebUpdateStatus["eligibility"]): WebUpdateStatus {
   return {
     installedVersion: "2.0.0",
+    channel: "stable",
     latestVersion: "3.0.0",
     updateAvailable: true,
     eligibility,
@@ -73,6 +76,7 @@ test("a newer eligible release supersedes a persisted successful outcome after r
 test("a post-restart registry failure preserves verified success and remains visible and retryable", () => {
   const status: WebUpdateStatus = {
     installedVersion: "2.0.0",
+    channel: "stable",
     updateAvailable: false,
     eligibility: { state: "eligible" },
     checkError: "registry down",
@@ -89,6 +93,7 @@ test("a post-restart registry failure preserves verified success and remains vis
 test("a post-rollback registry failure preserves the failed update and remains visible and retryable", () => {
   const status: WebUpdateStatus = {
     installedVersion: "1.0.0",
+    channel: "stable",
     updateAvailable: false,
     eligibility: { state: "eligible" },
     checkError: "registry down",

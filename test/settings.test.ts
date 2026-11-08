@@ -912,3 +912,25 @@ describe("sandbox sharing", () => {
     assert.throws(() => store.update({ sandboxSharing: "all" } as never), /sandboxSharing/);
   });
 });
+
+describe("update channel", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "flow-update-channel-")); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("defaults to stable and saves beta", () => {
+    const store = new ConfigStore(root);
+    assert.equal(store.updateChannel(), "stable");
+    store.update({ updateChannel: "beta" });
+    assert.equal(new ConfigStore(root).updateChannel(), "beta");
+    assert.equal(new ConfigStore(root).view().updateChannel, "beta");
+  });
+
+  it("warns and ignores an invalid disk value, and refuses an invalid patch", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ updateChannel: "nightly" }));
+    const store = new ConfigStore(root);
+    assert.match(store.warning ?? "", /updateChannel must be "stable" or "beta"/);
+    assert.equal(store.updateChannel(), "stable");
+    assert.throws(() => store.update({ updateChannel: "nightly" } as never), /updateChannel/);
+  });
+});

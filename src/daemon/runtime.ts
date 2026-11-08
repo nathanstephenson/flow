@@ -110,6 +110,7 @@ export async function startRuntime(options: {
       installedVersion: options.version,
       mode: options.mode,
       hasActiveWork,
+      channel: config.updateChannel,
       ...(options.updateInstallation === undefined ? {} : options.updateInstallation),
       ...(options.updateUnsupportedReason === undefined ? {} : { unsupportedReason: options.updateUnsupportedReason }),
     });

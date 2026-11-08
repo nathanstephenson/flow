@@ -454,7 +454,7 @@ if (process.argv[2] === 'serve') {
     `HOME=${home}`, `PATH=${path}`, `FLOW_STATE_DIR=${state}`, `npm_config_prefix=${prefix}`,
     `npm_config_userconfig=${home}/.npmrc`, `npm_config_cache=${home}/npm-cache`,
     'npm_config_audit=false', 'npm_config_fund=false', 'npm_config_fetch_retries=0',
-    'npm_config_fetch_timeout=60000', `FLOW_UPDATE_REGISTRY_URL=${registryUrl}/${metadata.name}/latest`,
+    'npm_config_fetch_timeout=60000', `FLOW_UPDATE_REGISTRY_URL=${registryUrl}/${metadata.name}`,
   ].map(value => `Environment=${value}\n`).join('');
   for (const unit of units) {
     const worker = unit === updater;
