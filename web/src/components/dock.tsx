@@ -1,5 +1,5 @@
 import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, PanelBottomClose, PanelRightClose, Plus, SquareTerminal, X } from "lucide-react";
+import { Bot, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide, type DockTab } from "@/presentation/docks.ts";
 import type { MobileDetail } from "@/presentation/mobile-navigation.ts";
@@ -9,7 +9,6 @@ import { GitPane } from "@/components/git-pane.tsx";
 import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 
 const WorkflowsPane = lazy(() => import("./workflows-pane.tsx"));
@@ -153,23 +152,6 @@ export function Dock({
             >
               <Plus aria-hidden />
             </Button>
-
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="size-8 shrink-0 rounded-lg"
-                    onClick={() => dispatch({ type: "toggle", side })}
-                    aria-label={`Minimise the ${label}`}
-                  />
-                }
-              >
-                {side === "bottom" ? <PanelBottomClose aria-hidden /> : <PanelRightClose aria-hidden />}
-              </TooltipTrigger>
-              <TooltipContent>Minimise — Shells keep running</TooltipContent>
-            </Tooltip>
           </div>
         </>
       )}
