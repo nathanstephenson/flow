@@ -400,7 +400,7 @@ function AgentSessionRow({
        * `visibility` this used to hand-roll. Two gains beyond the shorter class list: nothing can
        * reflow, because the action is positioned over the row rather than in it; and an element at
        * `opacity: 0` stays focusable, where a `visibility: hidden` one does not, so ArrowRight can
-       * reach Settle without hovering the row first.
+       * reach Pin and Settle without hovering the row first.
        *
        * No placeholder when the row cannot be Settled: the button reserves its `pr-8` regardless, so
        * there is nothing left for an absent action to move.
@@ -410,28 +410,7 @@ function AgentSessionRow({
           <TooltipTrigger
             render={
               <SidebarMenuAction
-                className="agent-session-settle cursor-gloss-transparent"
-                showOnHover
-                // No `top-*` here: upstream ships `peer-data-[size=lg]/menu-button:top-2.5` for
-                // exactly this row height, and a plain utility loses to it on specificity anyway.
-                tabIndex={tabIndex}
-                onClick={() => onSettle(summary.id)}
-              />
-            }
-          >
-            <CircleCheck aria-hidden />
-            <span className="sr-only">Settle</span>
-          </TooltipTrigger>
-          <TooltipContent>Settle</TooltipContent>
-        </Tooltip>
-      ) : null}
-
-      {canSettle(status) ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <SidebarMenuAction
-                className="group/pin agent-session-pin cursor-gloss-transparent top-auto! bottom-2.5"
+                className="group/pin agent-session-pin cursor-gloss-transparent"
                 showOnHover={!pinned}
                 aria-pressed={pinned}
                 tabIndex={tabIndex}
@@ -450,6 +429,26 @@ function AgentSessionRow({
             <span className="sr-only">{pinned ? "Unpin" : "Pin"}</span>
           </TooltipTrigger>
           <TooltipContent>{pinned ? "Unpin" : "Pin"}</TooltipContent>
+        </Tooltip>
+      ) : null}
+
+      {canSettle(status) ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <SidebarMenuAction
+                className="agent-session-settle cursor-gloss-transparent top-auto! bottom-2.5"
+                showOnHover
+                // `top-auto!` beats upstream's `peer-data-[size=lg]/menu-button:top-2.5` on specificity.
+                tabIndex={tabIndex}
+                onClick={() => onSettle(summary.id)}
+              />
+            }
+          >
+            <CircleCheck aria-hidden />
+            <span className="sr-only">Settle</span>
+          </TooltipTrigger>
+          <TooltipContent>Settle</TooltipContent>
         </Tooltip>
       ) : null}
     </SidebarMenuItem>
