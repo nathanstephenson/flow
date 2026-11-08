@@ -149,7 +149,13 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
       <svg aria-hidden className="absolute size-0">
         <filter id="agent-session-fluid">
           <feGaussianBlur stdDeviation="5" />
-          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -9" />
+          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -9" result="goo" />
+          <feGaussianBlur in="goo" stdDeviation="2.5" result="depth" />
+          <feSpecularLighting in="depth" surfaceScale="5" specularConstant="1" specularExponent="40" lightingColor="#fff" result="shine">
+            <feDistantLight azimuth="235" elevation="30" />
+          </feSpecularLighting>
+          <feComposite in="shine" in2="goo" operator="in" result="gloss" />
+          <feComposite in="gloss" in2="goo" operator="arithmetic" k2="0.7" k3="1" />
         </filter>
       </svg>
       {/*
