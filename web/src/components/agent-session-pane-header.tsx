@@ -102,7 +102,7 @@ export function AgentSessionPaneHeader({
         ))}
         <div className="absolute inset-0 bg-background [mask-image:linear-gradient(to_bottom,black_50%,transparent)]" />
       </div>
-      <div className="flex min-h-9 items-center gap-2 px-3 py-1 max-lg:min-h-12 max-lg:pl-12">
+      <div className="flex min-h-9 items-center gap-2 px-3 py-1.5 max-lg:min-h-12 max-lg:pl-12">
         <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
           {project === undefined ? null : (
             <>
