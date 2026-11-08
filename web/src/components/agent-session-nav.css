@@ -21,11 +21,8 @@
   background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
-/* The selected row fills with clear, coloured honey in its status colour: a tint, a soft light
- * streak, three wide sheets with lit rims, and small rim-lit bubbles. The sheets flow over each
- * other at their own speeds, so the colour deepens where they cross; five bubble layers drift on
- * top, each at its own speed. The card's own edges are the honey's edges; the mask thins it out
- * towards the right. */
+/* The selected row holds a quiet tint in its status colour: a glow from the left edge, and soft
+ * swells that drift slowly right. The mask fades both out before the right edge. */
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
@@ -33,33 +30,21 @@
   border-radius: inherit;
   z-index: -1;
   pointer-events: none;
-  --rim: color-mix(in srgb, var(--agent-session-status), white 55%);
-  --core: color-mix(in srgb, var(--agent-session-status) 15%, transparent);
-  --sheet: color-mix(in srgb, var(--agent-session-status) 16%, transparent);
-  --sheet-rim: color-mix(in srgb, color-mix(in srgb, var(--agent-session-status), white 50%) 45%, transparent);
+  --tint: color-mix(in srgb, var(--agent-session-status) var(--agent-session-tint, 14%), transparent);
   background:
-    radial-gradient(circle 1.5px at 30% 40%, var(--core) 0 45%, var(--rim) 80%, transparent) 0 0 / 29px 17px,
-    radial-gradient(circle 2.5px at 70% 30%, var(--core) 0 50%, var(--rim) 80%, transparent) 0 0 / 37px 23px,
-    radial-gradient(circle 3.5px at 20% 70%, var(--core) 0 55%, var(--rim) 82%, transparent) 0 0 / 53px 31px,
-    radial-gradient(circle 2px at 60% 80%, var(--core) 0 45%, var(--rim) 80%, transparent) 0 0 / 61px 19px,
-    radial-gradient(circle 5px at 45% 50%, var(--core) 0 60%, var(--rim) 84%, transparent) 0 0 / 71px 41px,
-    radial-gradient(closest-side, var(--sheet) 0 86%, var(--sheet-rim) 93%, transparent) 0 -14px / 230px 54px repeat-x,
-    radial-gradient(closest-side, var(--sheet) 0 86%, var(--sheet-rim) 93%, transparent) 0 26px / 170px 48px repeat-x,
-    radial-gradient(closest-side, var(--sheet) 0 86%, var(--sheet-rim) 93%, transparent) 0 6px / 310px 64px repeat-x,
-    linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.18) 45%, transparent 70%) 0 0 / 200px 100% repeat-x,
-    color-mix(in srgb, var(--agent-session-status) var(--agent-session-honey, 14%), transparent);
-  mask-image: linear-gradient(90deg, black 30%, transparent 95%);
-  animation: agent-session-honey 8s linear infinite;
+    radial-gradient(closest-side, var(--tint), transparent) 0 50% / 160px 140% repeat-x,
+    linear-gradient(90deg, var(--tint), transparent 60%);
+  mask-image: linear-gradient(90deg, black 20%, transparent 90%);
+  animation: agent-session-tint 10s linear infinite;
 }
 
 .dark .agent-session-row[data-status-accent] {
-  --agent-session-honey: 22%;
+  --agent-session-tint: 22%;
 }
 
-/* Each layer moves whole tiles, so the loop is seamless, and each at its own speed. */
-@keyframes agent-session-honey {
-  from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 -14px, 0 26px, 0 6px, 0 0; }
-  to { background-position: 174px 0, 148px 0, 106px 0, 122px 0, 71px 0, 230px -14px, 340px 26px, 310px 6px, 200px 0; }
+@keyframes agent-session-tint {
+  from { background-position: 0 50%, 0 0; }
+  to { background-position: 160px 50%, 0 0; }
 }
 
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {
