@@ -1,14 +1,14 @@
-import { Layers } from "lucide-react";
+import { Layers, LoaderCircle } from "lucide-react";
 import { useCallback, useMemo, useSyncExternalStore, type ReactNode } from "react";
 
 import { isToolKey } from "@client/tool-chains.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useEntry } from "@/agent-session-view.tsx";
-import { ToolStatusDot } from "@/components/transcript-entry.tsx";
+import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { AgentSessionView } from "@/store/contract.ts";
 
 /**
- * A Tool Chain: three or more adjacent tool calls, as one line.
+ * A Tool Chain: two or more adjacent tool calls, as one line.
  *
  * Twelve greps in a row are twelve cards between the reader and the prose that follows, and eleven
  * of them say the same thing. So the run collapses to the two facts worth carrying — how many ran,
@@ -44,31 +44,31 @@ export function ToolChain({
   const precis = latest?.kind === "tool" ? toolSummary(latest.input) : undefined;
 
   return (
-    <div className="py-0.5">
-      <details className="rounded-lg border text-foreground">
-        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>
-          {latest?.kind === "tool" ? (
-            <>
-              <span className="shrink-0 text-muted-foreground" aria-hidden>
-                ·
-              </span>
-              <ToolStatusDot status={latest.status} />
-              <span className="shrink-0 font-mono text-sm text-foreground">{latest.name}</span>
-              {precis === undefined ? null : (
-                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
-              )}
-            </>
-          ) : null}
-          {failed === 0 ? null : (
-            <span className="ml-auto shrink-0 text-xs text-destructive">{failed} failed</span>
-          )}
-        </summary>
+    <details className="text-foreground">
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+        <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>
+        {latest?.kind === "tool" ? (
+          <>
+            <span className="shrink-0 text-muted-foreground/60" aria-hidden>
+              ·
+            </span>
+            <ToolIcon name={latest.name} className="text-muted-foreground" />
+            <span className="shrink-0 text-sm text-muted-foreground">{latest.name}</span>
+            {precis === undefined ? null : (
+              <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{precis}</span>
+            )}
+          </>
+        ) : null}
+        {failed > 0 ? (
+          <span className="ml-auto shrink-0 text-xs text-destructive">{failed} failed</span>
+        ) : latest?.kind === "tool" && latest.status === "running" ? (
+          <LoaderCircle aria-label="running" className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        ) : null}
+      </summary>
 
-        <div className="border-t px-3 py-1">{children}</div>
-      </details>
-    </div>
+      <div className="mt-0.5 ml-3 border-l pl-2">{children}</div>
+    </details>
   );
 }
 

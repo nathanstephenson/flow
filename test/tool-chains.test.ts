@@ -73,4 +73,10 @@ describe("a run of adjacent tool calls", () => {
       entries("thinking:a", "thinking:b", "thinking:c"),
     );
   });
+
+  it("needs two tool calls, whatever the minimum", () => {
+    assert.deepEqual(toolChains(["tool:1", "thinking:a", "thinking:b"]), entries("tool:1", "thinking:a", "thinking:b"));
+    assert.deepEqual(toolChains(["tool:1", "thinking:a"], 2), entries("tool:1", "thinking:a"));
+    assert.deepEqual(toolChains(["tool:1", "tool:2"], 2), [{ kind: "chain", keys: ["tool:1", "tool:2"] }]);
+  });
 });

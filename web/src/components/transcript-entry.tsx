@@ -1,3 +1,4 @@
+import { Bot, LoaderCircle } from "lucide-react";
 import { memo, useMemo, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
@@ -14,6 +15,8 @@ import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
 import { ToolName } from "@/components/tool-name.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
+import { ToolIcon } from "@/components/tool-icon.tsx";
+import { toolOutcome } from "@/presentation/tool-display.ts";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -186,19 +189,24 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
   // Standing Authorisation — and a badge on every row would imply a judgement nobody made.
   const authorised = authorisationLabel(entry.authorisation);
 
+  const outcome = toolOutcome(entry);
+
   return (
-    <div className="py-0.5">
-      <details
-        open={open}
-        onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-lg border text-foreground"
-      >
-        <summary className="flex cursor-default items-center gap-2 px-3 py-2 select-none">
-          <ToolStatusDot status={entry.status} />
-          <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
-          {precis === undefined ? null : (
-            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{precis}</span>
-          )}
+    <details
+      open={open}
+      onToggle={(event) => setToggled((event.currentTarget as HTMLDetailsElement).open)}
+      className="group/tool text-foreground"
+    >
+      {/*
+        * One quiet line rather than a card: an icon for the kind of tool, its name and précis, and
+        * at the far end whatever is worth knowing without opening it. Only the details get a box.
+        */}
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+        <ToolIcon name={entry.name} className={entry.status === "error" ? "text-destructive" : "text-muted-foreground"} />
+        <span className="min-w-0 shrink-0 text-sm text-muted-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
+        {precis === undefined ? null : (
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{precis}</span>
+        )}
           {/*
             * `ml-auto` here rather than on the running label, so the two cannot both claim the right
             * edge — a call awaiting authorisation is running, and would otherwise print both.
@@ -212,30 +220,33 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
             *
             * An ordinary authorised call is a footnote and is styled as one.
             */}
-          {authorised ? (
-            <span
-              className={cn(
-                "ml-auto shrink-0 text-xs",
-                entry.authorisation === "denied"
-                  ? "text-destructive"
-                  : entry.authorisation === "asked"
-                    ? "text-status-awaiting"
-                    : "text-muted-foreground",
-              )}
-            >
-              {authorised}
-            </span>
-          ) : entry.status === "running" ? (
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">running…</span>
-          ) : null}
-        </summary>
+        {authorised ? (
+          <span
+            className={cn(
+              "ml-auto shrink-0 text-xs",
+              entry.authorisation === "denied"
+                ? "text-destructive"
+                : entry.authorisation === "asked"
+                  ? "text-status-awaiting"
+                  : "text-muted-foreground",
+            )}
+          >
+            {authorised}
+          </span>
+        ) : entry.status === "running" ? (
+          <LoaderCircle aria-label="running" className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        ) : outcome ? (
+          <span className={cn("ml-auto shrink-0 font-mono text-xs", entry.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+            {outcome}
+          </span>
+        ) : null}
+      </summary>
 
-        <div className="border-t p-3">
-          <EditDiffView input={entry.input} query={query} />
-          <ToolPayloadView entry={entry} query={query} />
-        </div>
-      </details>
-    </div>
+      <div className="my-1 ml-6 rounded-lg border p-3">
+        <EditDiffView input={entry.input} query={query} />
+        <ToolPayloadView entry={entry} query={query} />
+      </div>
+    </details>
   );
 }
 
@@ -306,31 +317,29 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
 
   const body = (
     <>
-      <ToolStatusDot status={entry.status === "waiting" ? "running" : subagentDot(entry.status)} />
-      <span className="shrink-0 text-xs text-muted-foreground">⤷</span>
-      <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere] max-sm:col-start-3 max-sm:row-start-1 max-sm:truncate">{entry.name}</span>
+      <Bot aria-hidden className={cn("size-3.5 shrink-0", subagentDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground")} />
+      <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere] max-sm:col-start-2 max-sm:row-start-1 max-sm:truncate">{entry.name}</span>
       {entry.description === undefined ? null : (
-        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground max-sm:col-start-3 max-sm:col-end-5 max-sm:row-start-2">
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80 max-sm:col-start-2 max-sm:col-end-4 max-sm:row-start-2">
           <Highlighted text={entry.description} query={query} />
         </span>
       )}
-      <span className="ml-auto shrink-0 text-xs text-muted-foreground max-sm:col-start-4 max-sm:row-start-1">{live ? `${status}…` : status}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground max-sm:col-start-3 max-sm:row-start-1">
+        {live ? <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" /> : null}
+        {status}
+      </span>
     </>
   );
 
-  const shell = "flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground max-sm:grid max-sm:grid-cols-[8px_12px_minmax(0,1fr)_auto] max-sm:gap-y-1";
+  const shell = "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
 
-  return (
-    <div className="py-0.5">
-      {open === undefined ? (
-        // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
-        <div className={shell}>{body}</div>
-      ) : (
-        <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-accent")}>
-          {body}
-        </button>
-      )}
-    </div>
+  return open === undefined ? (
+    // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
+    <div className={shell}>{body}</div>
+  ) : (
+    <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-muted/50")}>
+      {body}
+    </button>
   );
 }
 
@@ -365,15 +374,14 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
   const when = backgroundTiming(entry, now);
 
   return (
-    <div className="py-0.5">
-      <div className="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-foreground">
-        <ToolStatusDot status={backgroundDot(entry.status)} />
-        <span className="shrink-0 text-xs text-muted-foreground">⟳</span>
-        <span className="min-w-0 font-mono text-sm text-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {when.label} {when.at}
-        </span>
-      </div>
+    <div className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
+      <ToolIcon name={entry.tool} className={backgroundDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground"} />
+      <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
+      <span className="shrink-0 text-xs text-muted-foreground/70">in background</span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {entry.status === "running" ? <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" /> : null}
+        {when.label} {when.at}
+      </span>
     </div>
   );
 }
@@ -396,7 +404,7 @@ const TOOL_TONE: Record<Of<"tool">["status"], string> = {
   error: "text-destructive",
 };
 
-export function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
+function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
   return (
     <span
       aria-hidden

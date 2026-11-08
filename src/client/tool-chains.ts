@@ -22,7 +22,10 @@ export type Segment = { kind: "entry"; key: string } | { kind: "chain"; keys: st
 const TOOL_PREFIX = "tool:";
 const THINKING_PREFIX = "thinking:";
 
-/** Below this many adjacent tool calls a run is just some rows, and hiding them helps nobody. */
+/**
+ * Below this many adjacent rows a run is just some rows, and hiding them helps nobody. A chain also
+ * needs two tool calls: one call beside some thinking is not a run of tools.
+ */
 const MIN_CHAIN = 3;
 
 export const isToolKey = (key: string): boolean => key.startsWith(TOOL_PREFIX);
@@ -40,7 +43,7 @@ export function toolChains(keys: readonly string[], min: number = MIN_CHAIN): Se
   let run: string[] = [];
 
   const flush = (): void => {
-    if (run.length >= min && run.some(isToolKey)) segments.push({ kind: "chain", keys: run });
+    if (run.length >= min && run.filter(isToolKey).length >= 2) segments.push({ kind: "chain", keys: run });
     else for (const key of run) segments.push({ kind: "entry", key });
     run = [];
   };

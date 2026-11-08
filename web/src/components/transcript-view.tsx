@@ -57,7 +57,7 @@ export function TranscriptView({
 
   // After the loaded tail and the filter: a Tool Chain says "these rows are adjacent",
   // and the only list it can say that about honestly is the one the reader is looking at.
-  const segments = useMemo(() => toolChains(shown), [shown]);
+  const segments = useMemo(() => toolChains(shown, 2), [shown]);
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
