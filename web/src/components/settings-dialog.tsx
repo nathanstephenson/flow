@@ -59,7 +59,8 @@ export function SettingsDialog({
                 aria-current={current ? "page" : undefined}
                 onClick={() => onSelect(name)}
                 className={cn(
-                  "h-auto justify-start gap-2 rounded-lg px-3 py-1.5 font-normal sm:w-full",
+                  "cursor-tilt h-auto justify-start gap-2 rounded-lg px-3 py-1.5 font-normal after:hidden sm:w-full",
+                  !current && "hover:bg-muted/50",
                   // A straight strip clipped by the rounded corners, as on the session rows.
                   current &&
                     "bg-muted bg-[image:linear-gradient(var(--primary),var(--primary))] bg-[length:100%_2px] bg-bottom bg-no-repeat text-foreground sm:bg-[length:2px_100%] sm:bg-left",
