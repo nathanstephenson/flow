@@ -17,7 +17,8 @@
   box-shadow: none;
 }
 
-.agent-session-row[data-sidebar="menu-button"]:hover {
+/* The item, not the button: Pin and Settle sit on the row, and hovering them is hovering the row. */
+[data-sidebar="menu-item"]:hover > .agent-session-row[data-sidebar="menu-button"] {
   background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
