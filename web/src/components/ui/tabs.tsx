@@ -15,7 +15,7 @@ function TabsList({
       data-slot="tabs-list"
       activateOnFocus={activateOnFocus}
       className={cn(
-        "relative isolate inline-flex max-w-full items-center rounded-2xl bg-muted p-1 text-muted-foreground",
+        "relative isolate inline-flex max-w-full items-center rounded-xl bg-muted p-1 text-muted-foreground",
         className,
       )}
       {...props}
@@ -23,7 +23,7 @@ function TabsList({
       {children}
       <TabsPrimitive.Indicator
         data-slot="tabs-indicator"
-        className="absolute top-(--active-tab-top) left-(--active-tab-left) -z-10 h-(--active-tab-height) w-(--active-tab-width) rounded-xl bg-background shadow-sm ring-1 ring-border/60 transition-[left,top,width,height] duration-200 ease-out motion-reduce:transition-none"
+        className="absolute top-(--active-tab-top) left-(--active-tab-left) -z-10 h-(--active-tab-height) w-(--active-tab-width) rounded-lg bg-background shadow-sm ring-1 ring-border/60 transition-[left,top,width,height] duration-200 ease-out motion-reduce:transition-none"
       />
     </TabsPrimitive.List>
   );
@@ -34,7 +34,7 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
     <TabsPrimitive.Tab
       data-slot="tabs-trigger"
       className={cn(
-        "cursor-gloss inline-flex h-7 shrink-0 items-center justify-center rounded-xl px-3 text-sm font-medium whitespace-nowrap outline-none select-none transition-[color,background-color] hover:bg-background/60 hover:text-foreground focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/30 data-active:text-foreground data-active:hover:bg-transparent disabled:pointer-events-none disabled:opacity-50",
+        "cursor-gloss inline-flex h-7 shrink-0 items-center justify-center rounded-lg px-3 text-sm font-medium whitespace-nowrap outline-none select-none transition-[color,background-color] hover:bg-background/60 hover:text-foreground focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/30 data-active:text-foreground data-active:hover:bg-transparent disabled:pointer-events-none disabled:opacity-50",
         className,
       )}
       {...props}
