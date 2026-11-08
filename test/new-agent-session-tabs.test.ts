@@ -37,7 +37,7 @@ function find(element: any, type: unknown, matches: (candidate: Element) => bool
 }
 
 describe("the reusable Tabs", () => {
-  const primitives = { Root: "TabsRoot", List: "TabsList", Tab: "TabsTab", Panel: "TabsPanel" };
+  const primitives = { Root: "TabsRoot", List: "TabsList", Tab: "TabsTab", Panel: "TabsPanel", Indicator: "TabsIndicator" };
   const tabs = compile(
     new URL("../web/src/components/ui/tabs.tsx", import.meta.url),
     (name) => {
@@ -58,12 +58,18 @@ describe("the reusable Tabs", () => {
   });
 
   it("keeps selection, hover, and keyboard focus visually distinct", () => {
+    // Selection is the sliding indicator the list draws, not a background on the active tab.
+    const indicator = find(tabs.TabsList({ children: "tabs" }), primitives.Indicator);
+    assert.match(indicator.props.className, /bg-background/);
+    assert.match(indicator.props.className, /ring-1/);
+    assert.match(indicator.props.className, /transition-\[left,top,width,height\]/);
+
     const trigger = tabs.TabsTrigger({ value: "chat", children: "Chat" });
     assert.equal(trigger.type, primitives.Tab);
-    assert.match(trigger.props.className, /data-active:bg-background/);
-    assert.match(trigger.props.className, /data-active:ring-1/);
+    assert.doesNotMatch(trigger.props.className, /data-active:bg-background/);
+    assert.match(trigger.props.className, /data-active:text-foreground/);
     assert.match(trigger.props.className, /hover:bg-background\/60/);
-    assert.match(trigger.props.className, /data-active:hover:bg-background/);
+    assert.match(trigger.props.className, /data-active:hover:bg-transparent/);
     assert.match(trigger.props.className, /focus-visible:ring-3/);
 
     const panel = tabs.TabsContent({ value: "chat", children: "Content" });
