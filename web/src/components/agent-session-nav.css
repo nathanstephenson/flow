@@ -62,13 +62,13 @@
 .agent-session-item {
   scale: 1;
   transform: perspective(40rem) rotateX(0deg) rotateY(0deg);
-  transition: scale 150ms ease-out, transform 200ms ease-out;
+  transition: scale 150ms ease-out, transform 60ms linear;
 }
 
 .agent-session-item[data-tilt-active] {
   z-index: 1;
   scale: 1.02;
-  transform: perspective(40rem) rotateX(calc(var(--tilt-y, 0) * -10deg)) rotateY(calc(var(--tilt-x, 0) * 6deg));
+  transform: perspective(40rem) rotateX(calc(var(--tilt-y, 0) * -20deg)) rotateY(calc(var(--tilt-x, 0) * 12deg));
 }
 
 .agent-session-item[data-tilt-active] > .agent-session-row[data-sidebar="menu-button"] {
