@@ -21,9 +21,10 @@
   background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
-/* The selected row fills with a slow fluid in its status colour. Blobs in three layers drift right
- * at different speeds, so they meet and part; the filter blurs them, then cuts the alpha sharp
- * again, so blobs that touch merge like a thick liquid. The mask fades it out before the right. */
+/* The selected row fills with a fluid in its status colour. Blobs in four layers flow right at
+ * different speeds and rise and fall, so they meet, merge and tear apart; the filter blurs them,
+ * then cuts the alpha sharp again, so touching blobs fuse like a thick liquid. The mask fades the
+ * fluid out before the right edge. */
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
@@ -31,26 +32,31 @@
   border-radius: inherit;
   z-index: -1;
   pointer-events: none;
-  opacity: var(--agent-session-fluid-opacity, 0.22);
-  --fluid: radial-gradient(closest-side, var(--agent-session-status) 60%, transparent);
+  opacity: var(--agent-session-fluid-opacity, 0.35);
+  --fluid: radial-gradient(closest-side, var(--agent-session-status) 65%, transparent);
   background:
-    linear-gradient(90deg, var(--agent-session-status) 0 8%, transparent 22%),
-    var(--fluid) 0 20% / 64px 28px repeat-x,
-    var(--fluid) 0 75% / 96px 34px repeat-x,
-    var(--fluid) 0 50% / 140px 24px repeat-x;
+    linear-gradient(90deg, var(--agent-session-status) 0 12%, transparent 28%),
+    var(--fluid) 0 10% / 72px 36px repeat-x,
+    var(--fluid) 0 90% / 104px 40px repeat-x,
+    var(--fluid) 0 50% / 150px 30px repeat-x,
+    var(--fluid) 0 30% / 52px 22px repeat-x;
   filter: url(#agent-session-fluid);
-  mask-image: linear-gradient(90deg, black 15%, transparent 85%);
-  animation: agent-session-fluid 9s linear infinite;
+  mask-image: linear-gradient(90deg, black 20%, transparent 90%);
+  animation: agent-session-fluid 5s linear infinite;
 }
 
 .dark .agent-session-row[data-status-accent] {
-  --agent-session-fluid-opacity: 0.32;
+  --agent-session-fluid-opacity: 0.5;
 }
 
-/* Each layer moves whole tiles, so the loop is seamless; each moves at its own speed. */
+/* Each layer moves whole tiles, so the loop is seamless, at its own speed; the heights swing
+ * against each other so the layers collide. */
 @keyframes agent-session-fluid {
-  from { background-position: 0 0, 0 20%, 0 75%, 0 50%; }
-  to { background-position: 0 0, 256px 20%, 192px 75%, 140px 50%; }
+  0% { background-position: 0 0, 0 10%, 0 90%, 0 50%, 0 30%; }
+  25% { background-position: 0 0, 72px 70%, 52px 30%, 37.5px 10%, 52px 90%; }
+  50% { background-position: 0 0, 144px 90%, 104px 10%, 75px 60%, 104px 50%; }
+  75% { background-position: 0 0, 216px 30%, 156px 60%, 112.5px 90%, 156px 10%; }
+  100% { background-position: 0 0, 288px 10%, 208px 90%, 150px 50%, 208px 30%; }
 }
 
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {

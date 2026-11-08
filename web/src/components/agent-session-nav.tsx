@@ -148,8 +148,8 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     <>
       <svg aria-hidden className="absolute size-0">
         <filter id="agent-session-fluid">
-          <feGaussianBlur stdDeviation="4" />
-          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8" />
+          <feGaussianBlur stdDeviation="5" />
+          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -9" />
         </filter>
       </svg>
       {/*
