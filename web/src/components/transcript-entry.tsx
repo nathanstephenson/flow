@@ -139,8 +139,8 @@ function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: s
 
 /**
  * When a message was sent, or when the agent's turn ended. In the transcript's margin beside the
- * message when the margin has room — the user's on the right, the agent's on the left — and under
- * the message, on its own side, when it does not.
+ * message's last line when the margin has room — the user's on the right, the agent's on the left —
+ * and under the message, on its own side, when it does not.
  */
 function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
   return (
@@ -149,9 +149,10 @@ function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
       title={new Date(at).toLocaleString()}
       className={cn(
         "mt-1 block text-xs whitespace-nowrap text-muted-foreground/70",
-        "@min-[68rem]/transcript:absolute @min-[68rem]/transcript:mt-0",
+        // The message's own line height in the margin, so the time's baseline meets the text's.
+        "@min-[68rem]/transcript:absolute @min-[68rem]/transcript:mt-0 @min-[68rem]/transcript:leading-[1.375rem]",
         side === "right"
-          ? "text-right @min-[68rem]/transcript:bottom-3 @min-[68rem]/transcript:left-full @min-[68rem]/transcript:ml-4"
+          ? "text-right @min-[68rem]/transcript:bottom-6 @min-[68rem]/transcript:left-full @min-[68rem]/transcript:ml-4"
           : "@min-[68rem]/transcript:right-full @min-[68rem]/transcript:bottom-1 @min-[68rem]/transcript:mr-4",
       )}
     >
@@ -254,7 +255,7 @@ function ToolCallEntryView({
         * One quiet line rather than a card: an icon for the kind of tool, its name and précis, and
         * at the far end whatever is worth knowing without opening it. Only the details get a box.
         */}
-      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
         <ToolIcon
           name={entry.name}
           className={entry.status === "error" || background?.status === "error" ? "text-destructive" : "text-muted-foreground"}
@@ -389,7 +390,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     </>
   );
 
-  const shell = "-mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
+  const shell = "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
 
   return open === undefined ? (
     // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
@@ -432,7 +433,7 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
   const when = backgroundTiming(entry, now);
 
   return (
-    <div className="-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
+    <div className="flex items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
       <ToolIcon name={entry.tool} className={backgroundDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground"} />
       <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
       <span className="shrink-0 text-xs text-muted-foreground/70">in background</span>

@@ -281,25 +281,15 @@ export function TranscriptView({
           ) : null}
           {history.error ? <p role="alert" className="px-1 py-2 text-xs text-destructive">Could not load transcript entries: {history.error}</p> : null}
           {query && history.earlier > 0 ? <p role="status" className="px-1 py-2 text-xs text-muted-foreground">{history.error ? "Search covers loaded entries only; earlier entries could not be loaded." : "Searching earlier transcript entries…"}</p> : null}
-          {/*
-            * Everything but the user's own messages keeps clear of the right edge, mirroring the user
-            * bubbles' cap on the left: the agent writes from the left, the user from the right.
-            */}
           {segments.map((segment) =>
-            segment.kind === "entry" && segment.key.startsWith("user:") ? (
+            segment.kind === "entry" ? (
               <TranscriptRow key={segment.key} view={view} entryKey={segment.key} query={query} />
             ) : (
-              <div key={segment.kind === "entry" ? segment.key : segment.keys[0]} className="max-w-[95%]">
-                {segment.kind === "entry" ? (
-                  <TranscriptRow view={view} entryKey={segment.key} query={query} />
-                ) : (
-                  <ToolChain view={view} keys={segment.keys}>
-                    {segment.keys.map((key) => (
-                      <TranscriptRow key={key} view={view} entryKey={key} query={query} />
-                    ))}
-                  </ToolChain>
-                )}
-              </div>
+              <ToolChain key={segment.keys[0]} view={view} keys={segment.keys}>
+                {segment.keys.map((key) => (
+                  <TranscriptRow key={key} view={view} entryKey={key} query={query} />
+                ))}
+              </ToolChain>
             ),
           )}
 
