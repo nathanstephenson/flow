@@ -112,6 +112,31 @@ describe("reduce", () => {
     assert.equal(state.status, "idle");
   });
 
+  it("times a user message, and the parent's last message of a turn when the turn ends", () => {
+    const at = (seq: number) => `2026-01-01T00:00:0${seq}.000Z`;
+    const raw: AgentEvent[] = [
+      { type: "user_message", id: "u1", text: "go" },
+      { type: "turn_started", turnId: "t" },
+      { type: "message", id: "a1", text: "working", final: true },
+      { type: "message", id: "a2", text: "done", final: true },
+      { type: "message", id: "c1", text: "child", final: true, producer: { subagentId: "s" } },
+      { type: "turn_ended", turnId: "t", reason: "complete" },
+      { type: "user_message", id: "u2", text: "again" },
+      { type: "turn_ended", turnId: "t2", reason: "error" },
+    ];
+    const events: LoggedEvent[] = raw.map((event, index) => ({ seq: index + 1, sessionId: "s1", at: at(index), event }));
+    const byId = new Map(reduceAll(events).entries.map((entry) => [entry.id, entry]));
+    const user = byId.get("u1");
+    assert.equal(user?.kind === "user" ? user.at : undefined, at(0));
+    const ended = (id: string) => {
+      const entry = byId.get(id);
+      return entry?.kind === "assistant" ? entry.endedAt : "not assistant";
+    };
+    assert.equal(ended("a1"), undefined);
+    assert.equal(ended("a2"), at(5));
+    assert.equal(ended("c1"), undefined);
+  });
+
   it("carries a user message's attachment ids onto its Entry", () => {
     const state = reduceAll(
       transcript({ type: "user_message", id: "u1", text: "what is this?", attachments: ["a.png", "b.jpg"] }).since(0),
