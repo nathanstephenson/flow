@@ -226,7 +226,7 @@ function ToolCallEntryView({
         * One quiet line rather than a card: an icon for the kind of tool, its name and précis, and
         * at the far end whatever is worth knowing without opening it. Only the details get a box.
         */}
-      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
         <ToolIcon
           name={entry.name}
           className={entry.status === "error" || background?.status === "error" ? "text-destructive" : "text-muted-foreground"}
@@ -361,7 +361,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     </>
   );
 
-  const shell = "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
+  const shell = "-mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-2 rounded-md px-1.5 py-1 text-foreground max-sm:grid max-sm:grid-cols-[14px_minmax(0,1fr)_auto] max-sm:gap-y-1";
 
   return open === undefined ? (
     // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
@@ -404,7 +404,7 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
   const when = backgroundTiming(entry, now);
 
   return (
-    <div className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
+    <div className="-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1 text-foreground">
       <ToolIcon name={entry.tool} className={backgroundDot(entry.status) === "error" ? "text-destructive" : "text-muted-foreground"} />
       <span className="min-w-0 text-sm text-muted-foreground [overflow-wrap:anywhere]">{entry.tool}</span>
       <span className="shrink-0 text-xs text-muted-foreground/70">in background</span>

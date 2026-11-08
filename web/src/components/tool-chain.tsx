@@ -48,7 +48,7 @@ export function ToolChain({
 
   return (
     <details className="text-foreground">
-      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
         <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="shrink-0 text-sm text-muted-foreground">{calls} tools</span>
         {latest?.kind === "tool" ? (
