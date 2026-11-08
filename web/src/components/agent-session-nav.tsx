@@ -146,7 +146,6 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
 
   return (
     <>
-
       {/*
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
        * they are the only keys this component handles — everything vertical is resolved centrally

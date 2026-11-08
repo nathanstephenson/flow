@@ -21,6 +21,8 @@
   background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
+/* The selected row holds a quiet tint in its status colour: a glow from the left edge, and soft
+ * swells that drift slowly right. The mask fades both out before the right edge. */
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
@@ -28,38 +30,21 @@
   border-radius: inherit;
   z-index: -1;
   pointer-events: none;
-  background-image: linear-gradient(
-    90deg,
-    transparent 0% 10%,
-    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-peak, 16%), transparent) 22%,
-    transparent 46%,
-    color-mix(in srgb, var(--agent-session-status) var(--agent-session-flow-low, 8%), transparent) 72%,
-    transparent 90% 100%
-  );
-  background-size: 200% 100%;
-  background-repeat: repeat-x;
-  animation: agent-session-rail-flow 7s linear infinite;
+  --tint: color-mix(in srgb, var(--agent-session-status) var(--agent-session-tint, 14%), transparent);
+  background:
+    radial-gradient(closest-side, var(--tint), transparent) 0 50% / 160px 140% repeat-x,
+    linear-gradient(90deg, var(--tint), transparent 60%);
+  mask-image: linear-gradient(90deg, black 20%, transparent 90%);
+  animation: agent-session-tint 10s linear infinite;
 }
 
-/* Lower-lightness dark accents need more pigment in the selected surface, not
- * brighter edges. Neutral Lifecycles keep their quieter existing tint/contrast.
- * Light mode keeps the lighter tint so small muted labels do not lose contrast.
- */
 .dark .agent-session-row[data-status-accent] {
-  --agent-session-flow-peak: 24%;
-  --agent-session-flow-low: 12%;
+  --agent-session-tint: 22%;
 }
 
-/* With an image twice the face's width, decreasing percentage positioning moves
- * the image RIGHT. One cycle travels a complete image width for a seamless loop.
- */
-@keyframes agent-session-rail-flow {
-  from { background-position: 0% 50%; }
-  to { background-position: -200% 50%; }
-}
-
-.agent-session-row.cursor-gloss::after {
-  display: none;
+@keyframes agent-session-tint {
+  from { background-position: 0 50%, 0 0; }
+  to { background-position: 160px 50%, 0 0; }
 }
 
 .agent-session-row[data-sidebar="menu-button"]:focus-visible {
@@ -77,7 +62,6 @@
 @media (prefers-reduced-motion: reduce) {
   .agent-session-row[data-sidebar="menu-button"][data-active]::before {
     animation: none;
-    background-position: 50% 50%;
   }
 }
 
