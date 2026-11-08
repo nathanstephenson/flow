@@ -5,15 +5,20 @@
 .agent-session-row[data-sidebar="menu-button"] {
   position: relative;
   isolation: isolate;
-  border-left: 2px solid var(--agent-session-status);
-  background: var(--sidebar);
+  /* A background strip rather than a border, so the rounded corners cut it off instead of bending it. */
+  padding-left: calc(0.5rem + 2px);
+  background-color: var(--sidebar);
+  background-image: linear-gradient(var(--agent-session-status), var(--agent-session-status));
+  background-position: left;
+  background-size: 2px 100%;
+  background-repeat: no-repeat;
   color: var(--sidebar-foreground);
   font-weight: inherit;
   box-shadow: none;
 }
 
 .agent-session-row[data-sidebar="menu-button"]:hover {
-  background: var(--sidebar-accent);
+  background-color: var(--sidebar-accent);
 }
 
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
@@ -89,7 +94,7 @@
     clip: auto;
     white-space: normal;
   }
-  .agent-session-row[data-sidebar="menu-button"] { border-left-color: CanvasText; }
+  .agent-session-row[data-sidebar="menu-button"] { padding-left: 0.5rem; border-left: 2px solid CanvasText; }
   .agent-session-row[data-sidebar="menu-button"][data-active]::before { display: none; }
   .agent-session-row[data-sidebar="menu-button"][data-active] { border-left-color: Highlight; }
 }

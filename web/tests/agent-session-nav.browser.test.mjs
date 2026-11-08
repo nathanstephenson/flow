@@ -308,7 +308,12 @@ describe("Agent Session rail DOM focus and material", () => {
         const flow = getComputedStyle(node, '::before');
         const probe = document.createElement('span');
         const peak = style.getPropertyValue('--agent-session-flow-peak').trim() || '16%';
-        probe.style.color = `color-mix(in srgb, ${style.borderLeftColor} ${peak}, transparent)`;
+        const edgeProbe = document.createElement('span');
+        edgeProbe.style.color = style.getPropertyValue('--agent-session-status');
+        document.body.append(edgeProbe);
+        const edge = getComputedStyle(edgeProbe).color;
+        edgeProbe.remove();
+        probe.style.color = `color-mix(in srgb, ${edge} ${peak}, transparent)`;
         document.body.append(probe);
         const tint = getComputedStyle(probe).color;
         probe.remove();
@@ -316,7 +321,7 @@ describe("Agent Session rail DOM focus and material", () => {
           tint, peak,
           base: style.backgroundColor, ink: style.color, weight: style.fontWeight,
           muted: getComputedStyle(node.querySelector('.text-muted-foreground')).color,
-          edge: style.borderLeftColor, width: style.borderLeftWidth,
+          edge, width: style.backgroundSize, strip: style.backgroundImage,
           flow: flow.backgroundImage, animation: flow.animationName,
           outlineOffset: style.outlineOffset, shadow: style.boxShadow,
         };
@@ -327,7 +332,8 @@ describe("Agent Session rail DOM focus and material", () => {
         const selected = await face();
         assert.notEqual(selected.flow, 'none');
         assert.match(selected.animation, /agent-session-rail-flow/);
-        assert.equal(selected.width, '2px');
+        assert.equal(selected.width, '2px 100%');
+        assert.match(selected.strip, /linear-gradient/);
         assert.equal(selected.peak, mode === 'dark' && ['running', 'awaiting'].includes(status) ? '24%' : '16%');
         assert.ok(selected.flow.includes(selected.tint), `Selection uses its status edge hue: ${status}`);
         await cursor().hover();
