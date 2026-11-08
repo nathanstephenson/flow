@@ -77,7 +77,7 @@ export function Dock({
           ? "col-start-1 row-start-1 grid-rows-[minmax(0,1fr)]"
           : side === "bottom"
             ? "col-start-1 row-start-2 grid-rows-[auto_minmax(0,1fr)] border-t"
-            : "col-start-2 row-span-2 row-start-1 grid-rows-[auto_minmax(0,1fr)] border-l",
+            : "col-start-2 row-span-2 row-start-1 grid-rows-[auto_minmax(0,1fr)] border-l pt-[var(--header-overlap,0px)]",
       )}
     >
       {mobile ? null : (

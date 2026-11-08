@@ -698,6 +698,9 @@ export function Composer({
      * background instead of colliding with the panel's edge. `pointer-events-none` on the wrapper so
      * the faded strip is not a dead zone over a scrollable document — the panel turns them back on.
      *
+     * The fade stops short of the scrollbar. Overlay scrollbars measure 0px, so it keeps at least the
+     * transcript's own 0.75rem side padding clear.
+     *
      * Both are dropped where this is not floating: there is nothing behind it to fade, and a wrapper
      * that swallowed pointer events would need the panel to hand them back for no reason.
      */
@@ -705,7 +708,7 @@ export function Composer({
       className={cn(
         floating
           ? [
-              "safe-composer-bottom pointer-events-none absolute right-[var(--scrollbar-width,0px)] bottom-0 left-0 px-3 pt-8 pb-3",
+              "safe-composer-bottom pointer-events-none absolute right-[max(var(--scrollbar-width,0px),0.75rem)] bottom-0 left-0 px-3 pt-8 pb-3",
               "bg-gradient-to-t from-background via-background to-transparent",
             ]
           : "relative",

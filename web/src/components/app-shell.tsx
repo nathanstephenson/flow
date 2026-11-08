@@ -183,6 +183,14 @@ export function AppShell() {
     setSearchOpen(false);
   }, [focusedId]);
 
+  const openProject = useCallback(
+    (path: string) => {
+      drafts.setScope(path);
+      openNewAgentSession();
+    },
+    [drafts, openNewAgentSession],
+  );
+
   const settle = useCallback(
     (sessionId: string) => {
       setPinned(sessionId, false);
@@ -345,6 +353,7 @@ export function AppShell() {
               docks={docks}
               drafts={drafts}
               shells={config.shell === true}
+              onOpenProject={openProject}
             />
           )}
         </SidebarInset>

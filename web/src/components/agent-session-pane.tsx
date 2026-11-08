@@ -1,11 +1,13 @@
 import { MessageSquare, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { projectName } from "@client/project-name.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
 import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useSessionActions } from "@/composer-actions.ts";
+import { useHost } from "@/host.tsx";
 import type { Docks } from "@/docks.ts";
 import { useIsMobile } from "@/lib/use-mobile.ts";
 import {
@@ -18,6 +20,7 @@ import {
   type MobileView,
 } from "@/presentation/mobile-navigation.ts";
 import { tabLabel, type DockSide } from "@/presentation/docks.ts";
+import { sessionProject } from "@/presentation/session-project.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
@@ -63,9 +66,19 @@ export type AgentSessionPaneProps = {
    * the Docks are: this pane remounts whenever the focus moves, and a Draft must not.
    */
   drafts: DraftStash;
+  /** Open the New Agent Session view with this Project chosen. */
+  onOpenProject: (path: string) => void;
 };
 
-export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onCloseSearch, drafts }: AgentSessionPaneProps) {
+export function AgentSessionPane({
+  sessionId,
+  docks,
+  shells,
+  searchOpen,
+  onCloseSearch,
+  drafts,
+  onOpenProject,
+}: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
   // One frame at most: the acquire happens in a layout effect, so this does not reach the screen.
@@ -80,6 +93,7 @@ export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onClose
       docks={docks}
       shells={shells}
       drafts={drafts}
+      onOpenProject={onOpenProject}
     />
   );
 }
@@ -107,6 +121,7 @@ function AttachedPane({
   searchOpen,
   onCloseSearch,
   drafts,
+  onOpenProject,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const { sessions } = useAgentSessions();
@@ -225,6 +240,8 @@ function AttachedPane({
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
+  const { config } = useHost();
+  const project = summary ? sessionProject(summary, config.projectList ?? []) : undefined;
   const acknowledged = useRef(0);
   const observe = useCallback((throughSeq: number) => {
     const attention = summary?.attention;
@@ -333,8 +350,19 @@ function AttachedPane({
   const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
   return (
-    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
-      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
+    <div
+      className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}
+      // How far the header's blurred lower half reaches over the transcript and the right Dock.
+      style={{ "--header-overlap": mobile ? "0px" : "1.375rem" } as CSSProperties}
+    >
+      <AgentSessionPaneHeader
+        sessionId={sessionId}
+        project={summary ? projectName(summary.scope, summary.worktree) : undefined}
+        onOpenProject={project ? () => onOpenProject(project.path) : undefined}
+        title={title}
+        chrome={chrome}
+        docks={mobile ? undefined : docks}
+      />
 
       {mobile ? (
         <MobileViewSelector
