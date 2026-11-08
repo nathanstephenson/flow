@@ -37,6 +37,7 @@ export function ToolChain({
   // A chain carries the thinking between its calls, but the header speaks about tools: it counts
   // them and names the last one, so a trailing thought does not leave the line anonymous.
   const toolKeys = useMemo(() => keys.filter(isToolKey), [keys]);
+  const calls = keys.filter((key) => isToolKey(key) || key.startsWith("background_call:")).length;
   // One hook, not one per member: a chain grows as tools land, and a hook per key would change the
   // hook count between renders.
   const latest = useEntry(view, toolKeys[toolKeys.length - 1] ?? "");
@@ -47,7 +48,7 @@ export function ToolChain({
     <details className="text-foreground">
       <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
         <Layers className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="shrink-0 text-sm text-muted-foreground">{toolKeys.length} tools</span>
+        <span className="shrink-0 text-sm text-muted-foreground">{calls} tools</span>
         {latest?.kind === "tool" ? (
           <>
             <span className="shrink-0 text-muted-foreground/60" aria-hidden>

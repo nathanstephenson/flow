@@ -24,7 +24,7 @@ const THINKING_PREFIX = "thinking:";
 
 /**
  * Below this many adjacent rows a run is just some rows, and hiding them helps nobody. A chain also
- * needs two tool calls: one call beside some thinking is not a run of tools.
+ * needs two calls, one of them a tool call: one call beside some thinking is not a run of tools.
  */
 const MIN_CHAIN = 3;
 
@@ -39,8 +39,8 @@ export const isToolKey = (key: string): boolean => key.startsWith(TOOL_PREFIX);
 const isChainable = (key: string): boolean => isToolKey(key) || key.startsWith(THINKING_PREFIX);
 
 /**
- * `ridesAlong` lets a caller fold in more rows the way thinking is folded — the web client passes
- * finished Background Calls, which it can tell apart only by reading their Entries.
+ * `ridesAlong` lets a caller fold in more calls — the web client passes finished Background Calls,
+ * which it can tell apart only by reading their Entries. They count as calls, but never chain alone.
  */
 export function toolChains(
   keys: readonly string[],
@@ -51,7 +51,8 @@ export function toolChains(
   let run: string[] = [];
 
   const flush = (): void => {
-    if (run.length >= min && run.filter(isToolKey).length >= 2) segments.push({ kind: "chain", keys: run });
+    const calls = run.filter((key) => isToolKey(key) || ridesAlong(key)).length;
+    if (run.length >= min && calls >= 2 && run.some(isToolKey)) segments.push({ kind: "chain", keys: run });
     else for (const key of run) segments.push({ kind: "entry", key });
     run = [];
   };
