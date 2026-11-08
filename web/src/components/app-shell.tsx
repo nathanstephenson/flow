@@ -10,7 +10,7 @@ import { useRailWidth } from "@/rail-width.ts";
 import { useRailSections } from "@/rail-sections.ts";
 import { useMobileViewport } from "@/lib/use-mobile-viewport.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
-import { visibleSessions } from "@/presentation/rail-sections.ts";
+import { nextHeldAttention, visibleSessions, withHeldAttention, type HeldAttention } from "@/presentation/rail-sections.ts";
 import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
@@ -76,7 +76,12 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const rail = useRailWidth();
   const railSections = useRailSections();
-  const visible = useMemo(() => visibleSessions(sessions, railSections.open), [sessions, railSections.open]);
+  const [heldAttention, setHeldAttention] = useState<HeldAttention>();
+  useEffect(() => {
+    setHeldAttention((current) => nextHeldAttention(current, sessions, focusedId));
+  }, [sessions, focusedId]);
+  const railSessions = useMemo(() => withHeldAttention(sessions, heldAttention), [sessions, heldAttention]);
+  const visible = useMemo(() => visibleSessions(railSessions, railSections.open), [railSessions, railSections.open]);
 
   /*
    * The focused Agent Session's Docks.
@@ -289,7 +294,7 @@ export function AppShell() {
           <RailResizeHandle width={rail.width} onResize={rail.set} onNudge={rail.nudge} />
 
           <AgentSessionNav
-            sessions={sessions}
+            sessions={railSessions}
             focusedId={focusedId}
             focusedStatus={chrome?.status}
             cursorId={cursorId}

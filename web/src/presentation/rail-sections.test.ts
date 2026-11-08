@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SessionSummary } from "../../../src/protocol/commands.ts";
-import { parseOpenSections, railSection, visibleSessions } from "./rail-sections.ts";
+import { nextHeldAttention, parseOpenSections, railSection, visibleSessions, withHeldAttention } from "./rail-sections.ts";
 
 function session(id: string, status: SessionSummary["status"], attention?: SessionSummary["attention"]): SessionSummary {
   return {
@@ -49,5 +49,20 @@ describe("the Agent Session rail sections", () => {
     assert.deepEqual([...parseOpenSections('["working","unread","bogus","idle"]')], ["working", "idle"]);
     assert.deepEqual([...parseOpenSections("not json")], []);
     assert.deepEqual([...parseOpenSections(null)], []);
+  });
+
+  it("keeps an open session Unread after it is read, until the user opens another", () => {
+    const read = session("unread", "idle");
+    const held = nextHeldAttention(undefined, all, "unread");
+    assert.equal(nextHeldAttention(held, [read, running], "unread"), held);
+    assert.equal(railSection(withHeldAttention([read, running], held)[0]!), "unread");
+    assert.equal(nextHeldAttention(held, [read, running], "running"), undefined);
+  });
+
+  it("does not hold a session that was not Unread, or replace newer attention", () => {
+    assert.equal(nextHeldAttention(undefined, all, "idle"), undefined);
+    const held = nextHeldAttention(undefined, all, "unread");
+    const asking = session("unread", "awaiting", { group: "needs-input", reason: "Input needed", at: "2026-01-01T00:00:00Z", version: 2, observedSeq: 0 });
+    assert.equal(railSection(withHeldAttention([asking], held)[0]!), "needs-input");
   });
 });

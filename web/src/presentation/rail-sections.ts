@@ -34,3 +34,25 @@ export function parseOpenSections(raw: string | null): Set<CollapsibleRailSectio
     return new Set();
   }
 }
+
+export type HeldAttention = { id: string; attention: NonNullable<SessionSummary["attention"]> };
+
+export function nextHeldAttention(
+  current: HeldAttention | undefined,
+  sessions: readonly SessionSummary[],
+  focusedId: string | undefined,
+): HeldAttention | undefined {
+  const attention = sessions.find((session) => session.id === focusedId)?.attention;
+  if (focusedId !== undefined && attention?.group === "unread") return { id: focusedId, attention };
+  return current?.id === focusedId ? current : undefined;
+}
+
+export function withHeldAttention(
+  sessions: SessionSummary[],
+  held: HeldAttention | undefined,
+): SessionSummary[] {
+  if (!held) return sessions;
+  return sessions.map((session) =>
+    session.id === held.id && !session.attention ? { ...session, attention: held.attention } : session,
+  );
+}
