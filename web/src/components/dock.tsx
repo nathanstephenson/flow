@@ -98,7 +98,7 @@ export function Dock({
             }}
           />
 
-          <div className="flex h-9 min-w-0 items-center gap-1 border-b px-1">
+          <div className="flex h-10 min-w-0 items-center gap-1 border-b px-1">
             <div
               ref={tablist}
               role="tablist"
@@ -112,7 +112,7 @@ export function Dock({
                   <div
                     key={tab.id}
                     className={cn(
-                      "cursor-gloss flex h-7 max-w-48 shrink-0 items-center gap-0.5 rounded-lg pr-0.5 pl-2.5 text-xs",
+                      "cursor-gloss flex h-8 max-w-56 shrink-0 items-center gap-0.5 rounded-lg pr-1 pl-3 text-sm",
                       tab.id === dock.activeId ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50",
                     )}
                   >
@@ -146,7 +146,7 @@ export function Dock({
             <Button
               variant="ghost"
               size="icon-xs"
-              className="size-7 shrink-0 rounded-lg"
+              className="size-8 shrink-0 rounded-lg"
               onClick={() => dispatch({ type: "add-tab", side })}
               title="New tab"
               aria-label={`New tab in the ${label}`}
@@ -160,7 +160,7 @@ export function Dock({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    className="size-7 shrink-0 rounded-lg"
+                    className="size-8 shrink-0 rounded-lg"
                     onClick={() => dispatch({ type: "toggle", side })}
                     aria-label={`Minimise the ${label}`}
                   />
