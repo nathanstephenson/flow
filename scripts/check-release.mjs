@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const tag = process.env.GITHUB_REF_NAME ?? '';
-if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) {
-  throw new Error('Release tags must be stable versions: vX.Y.Z');
+if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-beta\.(0|[1-9]\d*))?$/.test(tag)) {
+  throw new Error('Release tags must be vX.Y.Z or vX.Y.Z-beta.N');
 }
 execFileSync('git', ['merge-base', '--is-ancestor', 'HEAD', 'origin/main']);
 const metadata = JSON.parse(readFileSync('package.json', 'utf8'));

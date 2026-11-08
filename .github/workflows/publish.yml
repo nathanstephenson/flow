@@ -71,4 +71,4 @@ jobs:
         with:
           name: npm-package
           path: release
-      - run: npm publish ./release/package.tgz --access public --provenance --ignore-scripts
+      - run: npm publish ./release/package.tgz --access public --provenance --ignore-scripts --tag ${{ contains(github.ref_name, '-') && 'beta' || 'latest' }}
