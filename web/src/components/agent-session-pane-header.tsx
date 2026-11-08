@@ -76,8 +76,13 @@ export function AgentSessionPaneHeader({
   docks,
 }: AgentSessionPaneHeaderProps) {
   return (
-    <div className="bg-background text-foreground">
-      <div className="flex min-h-9 items-center gap-2 px-3 pt-2 pb-0 max-lg:min-h-12 max-lg:pl-12">
+    <div className="relative z-10 mb-[calc(var(--header-overlap,0px)*-1)] text-foreground">
+      {/* Solid in the top half, then the blur and background fade out over whatever scrolls beneath. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 -z-10 bg-background/90 backdrop-blur-md [mask-image:linear-gradient(to_bottom,black_50%,transparent)]"
+      />
+      <div className="flex min-h-9 items-center gap-2 px-3 py-1 max-lg:min-h-12 max-lg:pl-12">
         <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
           {project === undefined ? null : (
             <>

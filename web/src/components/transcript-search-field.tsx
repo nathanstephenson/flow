@@ -46,7 +46,7 @@ export function TranscriptSearchField({
   }, [text, onQueryChange]);
 
   return (
-    <div className="flex items-center gap-2 border-b bg-card px-3 py-1">
+    <div className="mt-[var(--header-overlap,0px)] flex items-center gap-2 border-b bg-card px-3 py-1">
       <Search className="size-4 shrink-0 opacity-50" aria-hidden />
       <Input
         ref={input}

@@ -254,7 +254,7 @@ export function TranscriptView({
         // The Composer floats over this, so the last line of the last message would sit behind it. The
         // inset is the Composer's measured height; `stick-to-bottom.ts` needs no change, because padding
         // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
-        className="transcript-scroller h-full px-3 pt-2 pb-[calc(var(--composer-inset,0px)+1.5rem)]"
+        className="transcript-scroller h-full px-3 pt-[calc(var(--header-overlap,0px)+0.5rem)] pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
         <div ref={content} className="pane-measure">
           {history.earlier > 0 ? (
@@ -293,11 +293,6 @@ export function TranscriptView({
         </div>
       </div>
 
-      {/* Rows fade out under the pane header rather than meeting a border. Clear of the scrollbar, as the Composer's fade is. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute top-0 right-[max(var(--scrollbar-width,0px),0.75rem)] left-0 h-6 bg-gradient-to-b from-background to-transparent"
-      />
       {atBottom ? null : <NewEntriesPill onClick={toBottom} />}
     </div>
   );

@@ -350,7 +350,11 @@ function AttachedPane({
   const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
   return (
-    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
+    <div
+      className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}
+      // How far the header's blurred lower half reaches over the transcript and the right Dock.
+      style={{ "--header-overlap": mobile ? "0px" : "1.25rem" } as CSSProperties}
+    >
       <AgentSessionPaneHeader
         sessionId={sessionId}
         project={summary ? projectName(summary.scope, summary.worktree) : undefined}
