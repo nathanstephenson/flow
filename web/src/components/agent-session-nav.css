@@ -1,5 +1,5 @@
-/* The Agent Session rail is one flat surface. Status owns the edge and the
- * selected flow; neither selection nor hover changes the base or label ink.
+/* Status owns the edge and the selected flow. Hover lifts the base to the
+ * accent, as on the Agents tab rows; selection never changes the base or ink.
  * Scoped, unlayered rules intentionally beat SidebarMenuButton's state utilities.
  */
 .agent-session-row[data-sidebar="menu-button"] {
@@ -12,10 +12,15 @@
   box-shadow: none;
 }
 
+.agent-session-row[data-sidebar="menu-button"]:hover {
+  background: var(--sidebar-accent);
+}
+
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
   content: "";
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   z-index: -1;
   pointer-events: none;
   background-image: linear-gradient(

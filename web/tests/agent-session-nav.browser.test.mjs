@@ -301,7 +301,7 @@ describe("Agent Session rail DOM focus and material", () => {
   });
 
   for (const mode of ['light', 'dark']) {
-    it(`${mode}: status-hued selection preserves base/ink, transparent Settle and inset focus`, async () => {
+    it(`${mode}: status-hued selection preserves ink, hover lifts the base, transparent actions and inset focus`, async () => {
       await page.evaluate(mode => document.documentElement.classList.toggle('dark', mode === 'dark'), mode);
       const face = () => cursor().evaluate(node => {
         const style = getComputedStyle(node);
@@ -334,10 +334,9 @@ describe("Agent Session rail DOM focus and material", () => {
         const hovered = await face();
         await page.evaluate(() => window.renderRail({ focusedId: 'other' }));
         const deselected = await face();
-        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) {
-          assert.equal(hovered[key], selected[key]);
-          assert.equal(deselected[key], selected[key]);
-        }
+        for (const key of ['ink', 'weight', 'muted', 'edge']) assert.equal(hovered[key], selected[key]);
+        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) assert.equal(deselected[key], hovered[key]);
+        assert.notEqual(hovered.base, selected.base, `Hover lifts the base: ${status}`);
         assert.equal(deselected.flow, 'none');
         await page.evaluate(() => window.renderRail({ focusedId: 'a' }));
       }

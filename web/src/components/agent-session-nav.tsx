@@ -262,9 +262,8 @@ type MenuProps = AgentSessionNavProps & { sessions: SessionSummary[]; now: numbe
 
 function AgentSessionMenu({ sessions, now, label, ...props }: MenuProps) {
   return (
-    /* Full-bleed rows with no gap, as before: a gap between rows that carry a left-edge selection
-       marker reads as stripes rather than as a list. */
-    <SidebarMenu className="gap-0" aria-label={label}>
+    /* Inset rounded rows with a small gap, the same shape as the Agents tab rows. */
+    <SidebarMenu className="gap-1 px-2 py-0.5" aria-label={label}>
       {sessions.map((session) => (
         <AgentSessionRow
           key={session.id}
@@ -332,7 +331,7 @@ function AgentSessionRow({
         tabIndex={tabIndex}
         onClick={() => onFocus(summary.id)}
         className={cn(
-          // Full-bleed and full-width, so the highlight reaches both edges of the rail. `pr-8` is
+          // `pr-8` is
           // upstream's reservation for an overlaid action — applied unconditionally rather than
           // through its `group-has-[…menu-action]` guard, because whether a row can be Settled
           // changes with its status and the title must not reflow when it does.
@@ -342,7 +341,7 @@ function AgentSessionRow({
           // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
           // The keyboard-only focus outline lives inside the face, clear of the status edge.
           // The retained cursor controls tab order, not decoration outside the rail.
-          "agent-session-row cursor-gloss h-auto rounded-none py-1.5 pr-8",
+          "agent-session-row cursor-gloss h-auto rounded-lg py-1.5 pr-8",
         )}
       >
         <span className="min-w-0 flex-1">
