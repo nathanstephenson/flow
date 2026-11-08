@@ -255,7 +255,7 @@ function ToolCallEntryView({
         * One quiet line rather than a card: an icon for the kind of tool, its name and précis, and
         * at the far end whatever is worth knowing without opening it. Only the details get a box.
         */}
-      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50 cursor-tilt relative [--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]">
         <ToolIcon
           name={entry.name}
           className={entry.status === "error" || background?.status === "error" ? "text-destructive" : "text-muted-foreground"}
@@ -396,7 +396,7 @@ function SubagentEntryView({ entry, query }: { entry: Of<"subagent">; query: str
     // Inert where there is nowhere to send a reader, rather than a click that goes nowhere.
     <div className={shell}>{body}</div>
   ) : (
-    <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "cursor-gloss text-left hover:bg-muted/50")}>
+    <button type="button" onClick={() => open(entryKey(entry))} className={cn(shell, "text-left hover:bg-muted/50 cursor-tilt relative [--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]")}>
       {body}
     </button>
   );
