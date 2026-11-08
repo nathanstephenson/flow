@@ -84,7 +84,7 @@ export function AgentSessionPaneHeader({
               {onOpenProject ? (
                 <button
                   type="button"
-                  className="shrink-0 rounded-sm text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
+                  className="shrink-0 cursor-pointer rounded-sm text-muted-foreground outline-none transition-[color,text-shadow] duration-150 hover:text-foreground hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
                   title={`New Agent Session in ${project}`}
                   onClick={onOpenProject}
                 >
