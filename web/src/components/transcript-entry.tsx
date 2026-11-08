@@ -32,9 +32,15 @@ import { toolOutcome } from "@/presentation/tool-display.ts";
  * spent only where alignment is the point: a code span, a fenced block, and the tool payloads and
  * diffs below, which are not prose and never pass through the markdown renderer.
  */
-export type TranscriptEntryProps = { entry: Entry; query: string; sessionId: string };
+export type TranscriptEntryProps = {
+  entry: Entry;
+  query: string;
+  sessionId: string;
+  /** The Background Call a tool call launched, drawn on the tool row. A store Entry, so `memo` holds. */
+  background?: Of<"background_call"> | undefined;
+};
 
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId }: TranscriptEntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId, background }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -43,7 +49,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
     case "thinking":
       return <ThinkingEntryView entry={entry} query={query} />;
     case "tool":
-      return <ToolCallEntryView entry={entry} query={query} />;
+      return <ToolCallEntryView entry={entry} query={query} background={background} />;
     case "subagent":
       return <SubagentEntryView entry={entry} query={query} />;
     case "background_call":
@@ -190,7 +196,15 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
  *
  * An error opens itself. A failure the reader has to click to see is a failure they will not see.
  */
-function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string }) {
+function ToolCallEntryView({
+  entry,
+  query,
+  background,
+}: {
+  entry: Of<"tool">;
+  query: string;
+  background: Of<"background_call"> | undefined;
+}) {
   const [toggled, setToggled] = useState<boolean | undefined>(undefined);
   // Explicit intent wins; otherwise the status decides, and it decides again if the call fails
   // *after* it was rendered — which is the usual order of events.
@@ -213,7 +227,10 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
         * at the far end whatever is worth knowing without opening it. Only the details get a box.
         */}
       <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
-        <ToolIcon name={entry.name} className={entry.status === "error" ? "text-destructive" : "text-muted-foreground"} />
+        <ToolIcon
+          name={entry.name}
+          className={entry.status === "error" || background?.status === "error" ? "text-destructive" : "text-muted-foreground"}
+        />
         <span className="min-w-0 shrink-0 text-sm text-muted-foreground [overflow-wrap:anywhere]"><ToolName name={entry.name} /></span>
         {precis === undefined ? null : (
           <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/80">{precis}</span>
@@ -246,6 +263,8 @@ function ToolCallEntryView({ entry, query }: { entry: Of<"tool">; query: string 
           </span>
         ) : entry.status === "running" ? (
           <LoaderCircle aria-label="running" className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        ) : background ? (
+          <BackgroundStatus entry={background} />
         ) : outcome ? (
           <span className={cn("ml-auto shrink-0 font-mono text-xs", entry.status === "error" ? "text-destructive" : "text-muted-foreground")}>
             {outcome}
@@ -394,6 +413,30 @@ function BackgroundCallEntryView({ entry }: { entry: Of<"background_call"> }) {
         {when.label} {when.at}
       </span>
     </div>
+  );
+}
+
+/**
+ * A Background Call's status at the end of the tool row that launched it: a spinner and its age
+ * while it runs, then how long ago it finished. Its own component, because `useNow` re-renders
+ * every second and only this needs to.
+ */
+function BackgroundStatus({ entry }: { entry: Of<"background_call"> }) {
+  const now = useNow();
+  const when = backgroundTiming(entry, now);
+  return (
+    <span
+      className={cn(
+        "ml-auto flex shrink-0 items-center gap-1.5 text-xs",
+        entry.status === "error" ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      {entry.status === "running" ? (
+        <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+      ) : null}
+      <span className="sr-only">in background,</span>
+      {when.label} {when.at}
+    </span>
   );
 }
 

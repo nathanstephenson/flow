@@ -10,6 +10,7 @@ import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { ToolChain } from "@/components/tool-chain.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { ownKeys } from "@/presentation/subagent-rows.ts";
+import { backgroundKeyOf, foldBackgroundCalls } from "@/presentation/background-rows.ts";
 
 /**
  * The Presentation Transcript, as a document.
@@ -59,10 +60,13 @@ export function TranscriptView({
   // and the only list it can say that about honestly is the one the reader is looking at.
   // A Background Call that finished among the calls around it rolls into their chain. One still
   // running stays its own row: it is what says the work has not finished (ADR 0021).
-  const running = useRunningBackgroundCalls(view, shown);
+  // A Background Call is drawn on the tool row that launched it. Observation still uses `shown`:
+  // the folded row's status is on screen, on that tool row.
+  const rows = useMemo(() => foldBackgroundCalls(shown), [shown]);
+  const running = useRunningBackgroundCalls(view, rows);
   const segments = useMemo(
-    () => toolChains(shown, 2, (key) => key.startsWith("background_call:") && !running.has(key)),
-    [shown, running],
+    () => toolChains(rows, 2, (key) => key.startsWith("background_call:") && !running.has(key)),
+    [rows, running],
   );
 
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -289,7 +293,7 @@ export function TranscriptView({
             ),
           )}
 
-          {shown.length === 0 ? (
+          {rows.length === 0 ? (
             <p className="px-1 py-4 text-sm text-muted-foreground">
               {history.loading ? "Loading latest transcript entries…" : history.error && keys.length === 0 ? "Transcript unavailable." : history.earlier > 0 ? "No matching entries in the loaded tail." : keys.length === 0 ? "Nothing here yet." : "No Entry matches."}
             </p>
@@ -314,10 +318,18 @@ export function TranscriptView({
  */
 function TranscriptRow({ view, entryKey, query }: { view: AgentSessionView; entryKey: string; query: string }) {
   const entry = useEntry(view, entryKey);
+  const background = useEntry(view, backgroundKeyOf(entryKey));
   // A key with no Entry cannot happen while the transcript is append-only, but rendering nothing is
   // the right answer if it ever does.
   if (!entry) return null;
-  return <TranscriptEntry entry={entry} query={query} sessionId={view.sessionId} />;
+  return (
+    <TranscriptEntry
+      entry={entry}
+      query={query}
+      sessionId={view.sessionId}
+      background={background?.kind === "background_call" ? background : undefined}
+    />
+  );
 }
 
 /**

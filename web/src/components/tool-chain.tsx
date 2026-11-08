@@ -6,6 +6,7 @@ import { toolSummary } from "@client/tool-summary.ts";
 import { useEntry } from "@/agent-session-view.tsx";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { AgentSessionView } from "@/store/contract.ts";
+import { backgroundKeyOf } from "@/presentation/background-rows.ts";
 
 /**
  * A Tool Chain: two or more adjacent tool calls, as one line.
@@ -42,6 +43,7 @@ export function ToolChain({
   // hook count between renders.
   const latest = useEntry(view, toolKeys[toolKeys.length - 1] ?? "");
   const failed = useChainFailures(view, keys);
+  const inBackground = useChainBackgroundRunning(view, toolKeys);
   const precis = latest?.kind === "tool" ? toolSummary(latest.input) : undefined;
 
   return (
@@ -63,8 +65,11 @@ export function ToolChain({
         ) : null}
         {failed > 0 ? (
           <span className="ml-auto shrink-0 text-xs text-destructive">{failed} failed</span>
-        ) : latest?.kind === "tool" && latest.status === "running" ? (
-          <LoaderCircle aria-label="running" className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        ) : (latest?.kind === "tool" && latest.status === "running") || inBackground > 0 ? (
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <LoaderCircle aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />
+            {inBackground > 0 ? `${inBackground} in background` : <span className="sr-only">running</span>}
+          </span>
         ) : null}
       </summary>
 
@@ -91,5 +96,23 @@ function useChainFailures(view: AgentSessionView, keys: readonly string[]): numb
     }
     return failed;
   }, [view, keys]);
+  return useSyncExternalStore(subscribe, snapshot);
+}
+
+/**
+ * How many of a chain's tool calls are still running in the background. Their rows are inside the
+ * closed chain, and this is what keeps "not finished" on screen (ADR 0021). A number, for the reason
+ * `useChainFailures` gives.
+ */
+function useChainBackgroundRunning(view: AgentSessionView, toolKeys: readonly string[]): number {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => {
+    let running = 0;
+    for (const key of toolKeys) {
+      const entry = view.getEntry(backgroundKeyOf(key));
+      if (entry?.kind === "background_call" && entry.status === "running") running += 1;
+    }
+    return running;
+  }, [view, toolKeys]);
   return useSyncExternalStore(subscribe, snapshot);
 }
