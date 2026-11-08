@@ -1,5 +1,5 @@
 import { Bot, LoaderCircle } from "lucide-react";
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
@@ -146,28 +146,39 @@ function StreamingCaret() {
  */
 function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const body = useRef<HTMLDivElement>(null);
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   const clamped = entry.final && !expanded;
-  // Redacted or empty reasoning has nothing to show but its gutter dot.
-  if (entry.text.trim() === "") return null;
+  const empty = entry.text.trim() === "";
+
+  // Observed rather than measured once: a row inside a closed Tool Chain has no size until it opens.
+  useLayoutEffect(() => {
+    const element = body.current;
+    if (!element || !clamped) return;
+    const observer = new ResizeObserver(() => setOverflows(element.scrollHeight > element.clientHeight + 1));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [clamped, empty]);
+
+  // Redacted or empty reasoning has nothing to show.
+  if (empty) return null;
 
   return (
-    <Row gutter="·" gutterClassName="text-muted-foreground">
-      <div>
-        {/* A height clamp, not `line-clamp`: that needs `display: -webkit-box`, which holds one block. */}
-        <div className={cn("text-muted-foreground italic", clamped && "max-h-[4.5rem] overflow-hidden")}>
-          <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
-        </div>
-        {entry.final ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            className="mt-0.5 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {expanded ? "less" : "more"}
-          </button>
-        ) : null}
+    <Row>
+      {/* A height clamp, not `line-clamp`: that needs `display: -webkit-box`, which holds one block. */}
+      <div ref={body} className={cn("text-muted-foreground italic", clamped && "max-h-[4.5rem] overflow-hidden")}>
+        <Markdown blocks={blocks} query={query} trailing={entry.final ? undefined : <StreamingCaret />} />
       </div>
+      {entry.final && (expanded || overflows) ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-0.5 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {expanded ? "less" : "more"}
+        </button>
+      ) : null}
     </Row>
   );
 }
