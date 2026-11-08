@@ -1,5 +1,5 @@
 import { ArrowDown, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createHaystackCache } from "@client/search.ts";
 import { toolChains } from "@client/tool-chains.ts";
@@ -57,7 +57,13 @@ export function TranscriptView({
 
   // After the loaded tail and the filter: a Tool Chain says "these rows are adjacent",
   // and the only list it can say that about honestly is the one the reader is looking at.
-  const segments = useMemo(() => toolChains(shown, 2), [shown]);
+  // A Background Call that finished among the calls around it rolls into their chain. One still
+  // running stays its own row: it is what says the work has not finished (ADR 0021).
+  const running = useRunningBackgroundCalls(view, shown);
+  const segments = useMemo(
+    () => toolChains(shown, 2, (key) => key.startsWith("background_call:") && !running.has(key)),
+    [shown, running],
+  );
 
   const scroller = useRef<HTMLDivElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
@@ -410,4 +416,25 @@ function useFilteredKeys(view: AgentSessionView, keys: readonly string[], query:
     });
     return filtered.length === next.length && filtered.every((key, index) => key === next[index]) ? filtered : next;
   }, [view, keys, query, cache, filtered]);
+}
+
+/**
+ * The Background Calls among `keys` that are still running, as a set that changes identity only when
+ * its members do. The snapshot is a joined string, because `useSyncExternalStore` compares by identity.
+ */
+function useRunningBackgroundCalls(view: AgentSessionView, keys: readonly string[]): ReadonlySet<string> {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(
+    () =>
+      keys
+        .filter((key) => {
+          if (!key.startsWith("background_call:")) return false;
+          const entry = view.getEntry(key);
+          return entry?.kind === "background_call" && entry.status === "running";
+        })
+        .join("\n"),
+    [view, keys],
+  );
+  const joined = useSyncExternalStore(subscribe, snapshot);
+  return useMemo(() => new Set(joined === "" ? [] : joined.split("\n")), [joined]);
 }

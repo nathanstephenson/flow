@@ -38,7 +38,15 @@ export const isToolKey = (key: string): boolean => key.startsWith(TOOL_PREFIX);
  */
 const isChainable = (key: string): boolean => isToolKey(key) || key.startsWith(THINKING_PREFIX);
 
-export function toolChains(keys: readonly string[], min: number = MIN_CHAIN): Segment[] {
+/**
+ * `ridesAlong` lets a caller fold in more rows the way thinking is folded — the web client passes
+ * finished Background Calls, which it can tell apart only by reading their Entries.
+ */
+export function toolChains(
+  keys: readonly string[],
+  min: number = MIN_CHAIN,
+  ridesAlong: (key: string) => boolean = () => false,
+): Segment[] {
   const segments: Segment[] = [];
   let run: string[] = [];
 
@@ -49,7 +57,7 @@ export function toolChains(keys: readonly string[], min: number = MIN_CHAIN): Se
   };
 
   for (const key of keys) {
-    if (isChainable(key)) {
+    if (isChainable(key) || ridesAlong(key)) {
       run.push(key);
       continue;
     }
