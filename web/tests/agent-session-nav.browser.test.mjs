@@ -245,11 +245,10 @@ describe("Agent Session rail DOM focus and material", () => {
       assert.equal(await page.locator('[data-sidebar="group-label"]').filter({ hasText: label }).count(), 0);
       assert.match(await cursor().textContent(), /Needs review/);
     }
-    const header = page.locator('[data-sidebar="header"]');
-    const action = header.getByRole('button', { name: 'New Agent Session' });
-    assert.equal((await action.boundingBox()).height, 42);
-    assert.equal((await action.boundingBox()).width, (await header.boundingBox()).width);
-    assert.equal(await action.evaluate(node => getComputedStyle(node).borderRadius), '0px');
+    assert.equal(await page.locator('[data-sidebar="header"]').count(), 0);
+    const footer = page.locator('[data-sidebar="footer"]');
+    assert.equal(await footer.getByRole('button', { name: 'New Agent Session' }).count(), 1);
+    assert.equal(await footer.getByRole('button', { name: 'Settings' }).count(), 1);
   });
 
   it("preserves native disclosure Enter and Space alongside the global pane shortcut", async () => {

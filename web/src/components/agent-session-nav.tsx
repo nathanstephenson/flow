@@ -24,7 +24,6 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -147,7 +146,6 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
 
   return (
     <>
-      <RailHeader onNew={navigationProps.onNew} />
 
       {/*
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
@@ -196,7 +194,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter onOpenSettings={navigationProps.onOpenSettings} />
+      <RailFooter onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }
@@ -226,34 +224,6 @@ function moveWithinRow(event: KeyboardEvent<HTMLElement>): void {
 
   event.preventDefault();
   next.focus();
-}
-
-function RailHeader({ onNew }: { onNew: () => void }) {
-  return (
-    <SidebarHeader className="agent-session-rail-header h-10.5 gap-0 border-b border-sidebar-border p-0">
-      {/*
-       * One full-width labelled button, which is what removing the Project Root path made possible.
-       *
-       * The path used to take whatever width was left here, and the note this replaces recorded the
-       * consequence: a 16rem rail cannot fit a filesystem path *and* a labelled button, so the
-       * button was an icon with an `sr-only` label and a tooltip to explain it. The path is now a
-       * field on the New Agent Session view, where it is editable rather than merely printed — which
-       * is the better place for it, since reading the launch directory told nobody anything they
-       * could act on.
-       *
-       * No tooltip either: the button says what it does.
-       */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-10.5 min-h-10.5 w-full justify-start gap-2 rounded-none px-3"
-        onClick={onNew}
-      >
-        <Plus aria-hidden className="size-4 shrink-0" />
-        New Agent Session
-      </Button>
-    </SidebarHeader>
-  );
 }
 
 type MenuProps = AgentSessionNavProps & { sessions: SessionSummary[]; now: number; label: string };
@@ -555,17 +525,14 @@ function CollapsibleGroup({
 }
 
 /**
- * The footer, and the way into the Settings.
- *
- * The gear leads the row rather than trailing it: the Settings are the one thing here that is not
- * about the Agent Sessions above, and the bottom-left of the rail is where every app a reader has
- * met puts them.
+ * The footer: the Settings at the bottom-left, where every app a reader has met puts them, and a
+ * new Agent Session at the far end.
  *
  * No keyboard hints. They advertised two keys out of the whole table, one of which (`/`) no longer
  * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
  * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
-function RailFooter({ onOpenSettings }: { onOpenSettings: () => void }) {
+function RailFooter({ onNew, onOpenSettings }: { onNew: () => void; onOpenSettings: () => void }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
       <Tooltip>
@@ -584,6 +551,18 @@ function RailFooter({ onOpenSettings }: { onOpenSettings: () => void }) {
           <span className="sr-only">Settings</span>
         </TooltipTrigger>
         <TooltipContent>Settings</TooltipContent>
+      </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button size="icon" variant="ghost" className="-mr-1 ml-auto size-6 shrink-0" onClick={() => onNew()} />
+          }
+        >
+          <Plus aria-hidden />
+          <span className="sr-only">New Agent Session</span>
+        </TooltipTrigger>
+        <TooltipContent>New Agent Session</TooltipContent>
       </Tooltip>
     </SidebarFooter>
   );
