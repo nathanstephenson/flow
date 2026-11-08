@@ -39,6 +39,12 @@ const bundle = await build({
           if (open) next.add(section); else next.delete(section);
           window.renderRail({ openSections: next });
         },
+        pinned: new Set(),
+        onPinnedChange(id, pin) {
+          const next = new Set(props.pinned);
+          if (pin) next.add(id); else next.delete(id);
+          window.renderRail({ pinned: next });
+        },
         onFocus() {}, onSettle() {}, onNew() {}, onOpenSettings() {},
       };
       window.renderRail = (patch = {}) => {
@@ -164,7 +170,7 @@ describe("Agent Session rail DOM focus and material", () => {
     await cursor().focus();
     await page.keyboard.press('ArrowRight');
     const action = page.locator('[data-sidebar="menu-item"]').filter({ has: cursor() })
-      .locator('[data-sidebar="menu-action"]');
+      .locator('[data-sidebar="menu-action"]').first();
     await focusedIs(action);
     await page.evaluate(() => window.renderRail({ focusedId: 'b' }));
     await focusedIs(action);
@@ -219,6 +225,14 @@ describe("Agent Session rail DOM focus and material", () => {
     await page.getByRole('list', { name: 'Settled Agent Sessions' }).waitFor();
     assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), true);
     assert.equal(await page.locator('details[open]').count(), 2);
+  });
+
+  it("pins a row below Unread and unpins it from the same strip as Settle", async () => {
+    const row = page.locator('[data-sidebar="menu-item"]').filter({ has: cursor() });
+    await row.getByRole('button', { name: 'Pin' }).click();
+    assert.equal(await page.getByRole('list', { name: 'Pinned Agent Sessions' }).count(), 1);
+    await row.getByRole('button', { name: 'Unpin' }).click();
+    assert.equal(await page.getByRole('list', { name: 'Pinned Agent Sessions' }).count(), 0);
   });
 
   it("labels sections without losing list names or attention", async () => {
@@ -330,7 +344,7 @@ describe("Agent Session rail DOM focus and material", () => {
       await page.evaluate(() => window.reparent('idle'));
       await cursor().focus();
       await page.keyboard.press('ArrowRight');
-      const action = cursor().locator('..').locator('[data-sidebar="menu-action"]');
+      const action = cursor().locator('..').locator('[data-sidebar="menu-action"]').first();
       await action.hover();
       await page.waitForFunction(() => document.querySelector('[data-cursor="true"]').hasAttribute('data-gloss-active'));
       assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');

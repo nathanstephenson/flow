@@ -54,7 +54,8 @@
 }
 
 /* The delegated pointer helper lights the parent row, not an isolated Settle tile. */
-.agent-session-settle[data-sidebar="menu-action"] {
+.agent-session-settle[data-sidebar="menu-action"],
+.agent-session-pin[data-sidebar="menu-action"] {
   background: transparent;
   color: var(--sidebar-foreground);
 }
@@ -86,4 +87,13 @@
   .agent-session-row[data-sidebar="menu-button"] { border-left-color: CanvasText; }
   .agent-session-row[data-sidebar="menu-button"][data-active]::before { display: none; }
   .agent-session-row[data-sidebar="menu-button"][data-active] { border-left-color: Highlight; }
+}
+
+/* Upstream's showOnHover also reveals on focus-within, so a mouse click left the actions showing
+ * after the pointer moved away. Keyboard focus still reveals them. Pinned rows keep the pin. */
+@media (min-width: 64rem) {
+  [data-sidebar="menu-item"]:not(:hover):not(:has(:focus-visible)) .agent-session-settle[data-sidebar="menu-action"],
+  [data-sidebar="menu-item"]:not(:hover):not(:has(:focus-visible)) .agent-session-pin[data-sidebar="menu-action"]:not([aria-pressed="true"]) {
+    opacity: 0;
+  }
 }
