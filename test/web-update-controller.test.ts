@@ -10,7 +10,7 @@ import { explainUnsupportedUpdate, installation, updateUnsupportedReason } from 
 import { finishWebUpdate, UpdateRefusal, WEB_UPDATE_LAUNCH_WINDOW_MS, WebUpdateController } from '../src/cli/web-update.ts';
 import { ReleaseChecker } from '../src/daemon/release-checker.ts';
 
-function fixture(active = false, checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) })) {
+function fixture(active = false, checker = new ReleaseChecker({ fetch: async () => new Response(JSON.stringify({ version: '2.0.0' })) }), channel: () => 'stable' | 'beta' = () => 'stable') {
   const temp = mkdtempSync(join(tmpdir(), 'flow-web-update-'));
   const prefix = join(temp, 'prefix');
   const slot = join(prefix, 'lib/node_modules/@nathanstephenson/flow');
@@ -31,7 +31,7 @@ function fixture(active = false, checker = new ReleaseChecker({ fetch: async () 
   process.env.PATH = `${bin}:${oldPath}`;
   process.env.WEB_TEST_PREFIX = prefix;
   const install = installation(slot);
-  const controller = new WebUpdateController({ root, installedVersion: '1.0.0', mode: 'background', installation: install, bootstrapEntry: bootstrap, hasActiveWork: () => active, checker });
+  const controller = new WebUpdateController({ root, installedVersion: '1.0.0', mode: 'background', installation: install, bootstrapEntry: bootstrap, hasActiveWork: () => active, checker, channel });
   return {
     temp, prefix, slot, root, controller,
     close() {
@@ -296,5 +296,24 @@ test('an ownerless launch becomes recovery-needed after host restart or the boun
     const stale = new Date(Date.now() - WEB_UPDATE_LAUNCH_WINDOW_MS).toISOString();
     writeFileSync(operationPath, JSON.stringify(operation('legacy-stale-launch', stale)));
     assert.equal((await f.controller.status()).operation?.state, 'unverified', 'legacy ownerless records are bounded by age');
+  } finally { f.close(); }
+});
+
+test('the beta channel offers and installs a newer beta, and stable does not', async () => {
+  let channel: 'stable' | 'beta' = 'stable';
+  const checker = new ReleaseChecker({ fetch: async input => new Response(JSON.stringify({ version: String(input).endsWith('/beta') ? '2.0.0-beta.1' : '1.0.0' })) });
+  const f = fixture(false, checker, () => channel);
+  try {
+    const stable = await f.controller.status();
+    assert.equal(stable.channel, 'stable');
+    assert.equal(stable.updateAvailable, false);
+    await assert.rejects(f.controller.start('2.0.0-beta.1'), /already up to date/);
+    channel = 'beta';
+    const beta = await f.controller.status();
+    assert.equal(beta.channel, 'beta');
+    assert.equal(beta.latestVersion, '2.0.0-beta.1');
+    assert.equal(beta.updateAvailable, true);
+    await f.controller.start('2.0.0-beta.1');
+    assert.equal(JSON.parse(readFileSync(join(f.temp, 'helper-args'), 'utf8')).version, '2.0.0-beta.1');
   } finally { f.close(); }
 });

@@ -8,6 +8,7 @@ import { UpdateRefusal } from '../src/daemon/update-api.ts';
 
 const status: WebUpdateStatus = {
   installedVersion: '1.0.0',
+  channel: 'stable',
   latestVersion: '2.0.0',
   updateAvailable: true,
   checkedAt: new Date(0).toISOString(),

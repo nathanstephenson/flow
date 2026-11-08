@@ -15,6 +15,7 @@ import { UpdateController, type UpdateControllerOptions } from "./update-control
 
 const available: WebUpdateStatus = {
   installedVersion: "1.0.0",
+  channel: "stable",
   latestVersion: "2.0.0",
   updateAvailable: true,
   eligibility: { state: "eligible" },
@@ -34,6 +35,7 @@ const updating: WebUpdateStatus = {
 
 const succeeded: WebUpdateStatus = {
   installedVersion: "2.0.0",
+  channel: "stable",
   latestVersion: "2.0.0",
   updateAvailable: false,
   eligibility: { state: "eligible" },
@@ -50,6 +52,7 @@ const succeeded: WebUpdateStatus = {
 
 const ownerlessLaunch: WebUpdateStatus = {
   installedVersion: "1.0.0",
+  channel: "stable",
   latestVersion: "2.0.0",
   updateAvailable: true,
   eligibility: { state: "eligible" },

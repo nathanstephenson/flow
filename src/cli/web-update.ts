@@ -6,8 +6,8 @@ import {
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-import type { WebUpdateStatus, UpdateOperation, UpdateEligibility } from '../protocol/update.ts';
-import { newerStableVersion, ReleaseChecker } from '../daemon/release-checker.ts';
+import type { WebUpdateStatus, UpdateOperation, UpdateEligibility, UpdateChannel } from '../protocol/update.ts';
+import { newerReleaseVersion, ReleaseChecker } from '../daemon/release-checker.ts';
 import { UpdateRefusal } from '../daemon/update-api.ts';
 export { UpdateRefusal } from '../daemon/update-api.ts';
 import { processAlive } from './host-control.ts';
@@ -146,6 +146,7 @@ type WebUpdateControllerOptions = {
   unsupportedReason?: string;
   hasActiveWork(): boolean;
   checker?: ReleaseChecker;
+  channel?: () => UpdateChannel;
   now?: () => number;
 };
 
@@ -160,13 +161,17 @@ export class WebUpdateController {
     this.checker = options.checker ?? new ReleaseChecker(registryUrl ? { registryUrl } : {});
   }
 
+  private channel(): UpdateChannel { return this.options.channel?.() ?? 'stable'; }
+
   async status(refresh = false): Promise<WebUpdateStatus> {
     const installedVersion = this.installedVersion();
-    const check = await this.checker.check(refresh);
+    const channel = this.channel();
+    const check = await this.checker.check(refresh, channel);
     const operation = this.operation(installedVersion);
     return {
       installedVersion,
-      updateAvailable: 'latestVersion' in check && newerStableVersion(installedVersion, check.latestVersion),
+      channel,
+      updateAvailable: 'latestVersion' in check && newerReleaseVersion(installedVersion, check.latestVersion),
       ...('latestVersion' in check ? { latestVersion: check.latestVersion } : { checkError: check.error }),
       checkedAt: check.checkedAt,
       eligibility: this.eligibility(),
@@ -186,10 +191,10 @@ export class WebUpdateController {
       if (eligibility.state !== 'eligible') throw new UpdateRefusal(eligibility.reason);
       const installedVersion = this.installedVersion();
       // Mutation never trusts the up-to-fifteen-minute discovery cache. The confirmed version must
-      // still be npm's stable latest tag, and the detached helper installs that exact version.
-      const release = await this.checker.check(true);
+      // still be npm's release for the active channel, and the detached helper installs that exact version.
+      const release = await this.checker.check(true, this.channel());
       if ('error' in release) throw new UpdateRefusal(`${release.error} Check again before updating.`);
-      if (!newerStableVersion(installedVersion, release.latestVersion)) {
+      if (!newerReleaseVersion(installedVersion, release.latestVersion)) {
         throw new UpdateRefusal(`Flow ${installedVersion} is already up to date.`);
       }
       if (release.latestVersion !== confirmedVersion) {

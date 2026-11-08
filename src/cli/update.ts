@@ -6,7 +6,7 @@ import { readHost, type HostIdentity } from '../daemon/ownership.ts';
 import { backgroundHostArgs, getHostStatus, HostRefusal, launchBackground, processAlive, requestHostStop, requireRestartable, waitUntil } from './host-control.ts';
 import { InstallationProcessUncertain, replacePackage } from './install-process.ts';
 import { assertSystemdOwner, restoreSystemd, resumeSystemdAdmission, systemctl, SystemdCommandFailed, type SystemdUpdate } from './systemd-update.ts';
-import { newerStableVersion } from '../daemon/release-checker.ts';
+import { newerReleaseVersion } from '../daemon/release-checker.ts';
 
 export function npmExecutable(): string {
   for (const directory of (process.env.PATH ?? '').split(delimiter)) {
@@ -79,8 +79,8 @@ export async function update(
   const npm = inspected.npm;
   const prefix = install.prefix;
   const previous = inspected.version;
-  if (options.expectedVersion !== undefined && !newerStableVersion(previous, options.expectedVersion)) {
-    throw new Error(`The confirmed web update target ${options.expectedVersion} is not a newer stable release`);
+  if (options.expectedVersion !== undefined && !newerReleaseVersion(previous, options.expectedVersion)) {
+    throw new Error(`The confirmed web update target ${options.expectedVersion} is not a newer stable or beta release`);
   }
   const target = options.expectedVersion ?? 'latest';
   const preserveConcretePort = options.preserveConcreteHostPort === true;

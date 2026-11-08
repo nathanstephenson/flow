@@ -43,6 +43,8 @@ export type Settings = {
   filesystemIsolation?: FilesystemIsolationMode;
   /** Omitted means "session". */
   sandboxSharing?: SandboxSharing;
+  /** Omitted means "stable". */
+  updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
   retention: {
@@ -148,6 +150,7 @@ export type SettingsPatch = {
   /** null restores automatic selection; a restricted mode never permits an unrestricted launch fallback. */
   filesystemIsolation?: FilesystemIsolationMode | null;
   sandboxSharing?: SandboxSharing;
+  updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
   retention?: { settled?: string };

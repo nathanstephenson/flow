@@ -3,9 +3,11 @@ import { AlertCircle, CheckCircle2, Download, LoaderCircle, RotateCw } from "luc
 
 import { useUpdates } from "@/updates.tsx";
 import { canStartUpdate, updateDetail, updatePresentation } from "@/presentation/update.ts";
-import { SettingsFact, SettingsGroup } from "@/components/settings-parts.tsx";
+import type { UpdateChannel } from "../../../src/protocol/update.ts";
+import { SettingsFact, SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,8 +19,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
 
+const CHANNELS: Record<UpdateChannel, string> = { stable: "Stable", beta: "Beta" };
+
 export function UpdateSettings() {
   const { status, view, transportError, check, begin } = useUpdates();
+  const { save, saving } = useSaveSettings();
   const [confirmingVersion, setConfirmingVersion] = useState<string>();
   const [actionError, setActionError] = useState<string>();
   const presentation = updatePresentation(status, view, transportError ?? actionError);
@@ -30,6 +35,10 @@ export function UpdateSettings() {
   const working = ["checking", "updating", "reconnecting"].includes(presentation);
   const canUpdate = canStartUpdate(status, presentation);
   const updateVersion = canUpdate ? status?.latestVersion : undefined;
+  const changeChannel = async (channel: UpdateChannel) => {
+    setActionError(undefined);
+    if (await save({ updateChannel: channel }, `${CHANNELS[channel]} channel saved.`)) await check(false);
+  };
   const confirm = async (version: string) => {
     setConfirmingVersion(undefined);
     setActionError(undefined);
@@ -41,8 +50,22 @@ export function UpdateSettings() {
     <>
       <SettingsGroup
         title="Flow update"
-        description="Discover and install the latest stable npm release. Updates are never automatic."
+        description="Discover and install the latest npm release for the selected channel. Updates are never automatic."
       >
+        <Select
+          value={status?.channel ?? "stable"}
+          disabled={saving || working || !status}
+          onValueChange={(next) => { if (next === "stable" || next === "beta") void changeChannel(next); }}
+        >
+          <SelectTrigger className="w-full sm:max-w-sm" aria-label="Release channel">
+            <SelectValue>{CHANNELS[status?.channel ?? "stable"]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="stable">{CHANNELS.stable}</SelectItem>
+            <SelectItem value="beta">{CHANNELS.beta}</SelectItem>
+          </SelectContent>
+        </Select>
+
         <div className="flex flex-col">
           <SettingsFact label="Installed">{status?.installedVersion ?? "checking…"}</SettingsFact>
           <SettingsFact label="Latest">{status?.latestVersion ?? (status?.checkError ? "check failed" : "checking…")}</SettingsFact>
@@ -84,7 +107,7 @@ export function UpdateSettings() {
           ) : null}
         </div>
         <p className="text-xs text-muted-foreground">
-          Only the fixed <code className="font-mono">@nathanstephenson/flow@latest</code> update is allowed. Prereleases, downgrades, custom paths, and force updates are not offered.
+          Stable offers <code className="font-mono">@nathanstephenson/flow@latest</code>. Beta offers the higher of the <code className="font-mono">latest</code> and <code className="font-mono">beta</code> tags. Downgrades are not offered, so after you switch back to Stable, Flow waits for a newer stable release. Custom paths and force updates are not offered.
         </p>
       </SettingsGroup>
 
