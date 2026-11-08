@@ -146,7 +146,12 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
 
   return (
     <>
-
+      <svg aria-hidden className="absolute size-0">
+        <filter id="agent-session-fluid">
+          <feGaussianBlur stdDeviation="4" />
+          <feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8" />
+        </filter>
+      </svg>
       {/*
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
        * they are the only keys this component handles — everything vertical is resolved centrally
