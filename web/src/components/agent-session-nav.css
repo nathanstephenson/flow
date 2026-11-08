@@ -18,7 +18,7 @@
 }
 
 .agent-session-row[data-sidebar="menu-button"]:hover {
-  background-color: var(--sidebar-accent);
+  background-color: color-mix(in oklab, var(--sidebar-accent) 50%, var(--sidebar));
 }
 
 .agent-session-row[data-sidebar="menu-button"][data-active]::before {
