@@ -22,7 +22,10 @@ export type Segment = { kind: "entry"; key: string } | { kind: "chain"; keys: st
 const TOOL_PREFIX = "tool:";
 const THINKING_PREFIX = "thinking:";
 
-/** Below this many adjacent tool calls a run is just some rows, and hiding them helps nobody. */
+/**
+ * Below this many adjacent rows a run is just some rows, and hiding them helps nobody. A chain also
+ * needs two calls, one of them a tool call: one call beside some thinking is not a run of tools.
+ */
 const MIN_CHAIN = 3;
 
 export const isToolKey = (key: string): boolean => key.startsWith(TOOL_PREFIX);
@@ -35,18 +38,27 @@ export const isToolKey = (key: string): boolean => key.startsWith(TOOL_PREFIX);
  */
 const isChainable = (key: string): boolean => isToolKey(key) || key.startsWith(THINKING_PREFIX);
 
-export function toolChains(keys: readonly string[], min: number = MIN_CHAIN): Segment[] {
+/**
+ * `ridesAlong` lets a caller fold in more calls — the web client passes finished Background Calls,
+ * which it can tell apart only by reading their Entries. They count as calls, but never chain alone.
+ */
+export function toolChains(
+  keys: readonly string[],
+  min: number = MIN_CHAIN,
+  ridesAlong: (key: string) => boolean = () => false,
+): Segment[] {
   const segments: Segment[] = [];
   let run: string[] = [];
 
   const flush = (): void => {
-    if (run.length >= min && run.some(isToolKey)) segments.push({ kind: "chain", keys: run });
+    const calls = run.filter((key) => isToolKey(key) || ridesAlong(key)).length;
+    if (run.length >= min && calls >= 2 && run.some(isToolKey)) segments.push({ kind: "chain", keys: run });
     else for (const key of run) segments.push({ kind: "entry", key });
     run = [];
   };
 
   for (const key of keys) {
-    if (isChainable(key)) {
+    if (isChainable(key) || ridesAlong(key)) {
       run.push(key);
       continue;
     }

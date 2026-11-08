@@ -114,13 +114,13 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       }}
       className="min-h-0 min-w-0 space-y-4 overflow-auto px-4 pb-4 text-sm"
     >
-      <div className="-mx-4 border-b">
-        <TabsList aria-label="Git views" className="flex w-full min-w-0 gap-0 rounded-none bg-transparent p-0">
+      <div className="pt-2">
+        <TabsList aria-label="Git views" className="flex w-full min-w-0">
           {tabs.map(value => (
             <TabsTrigger
               key={value}
               value={value}
-              className="h-9 min-w-0 flex-1 shrink rounded-none px-2 hover:bg-muted/50 data-active:bg-muted data-active:shadow-none data-active:ring-0 data-active:hover:bg-muted"
+              className="min-w-0 flex-1 shrink px-2"
               disabled={busy || review !== undefined}
             >
               {value}

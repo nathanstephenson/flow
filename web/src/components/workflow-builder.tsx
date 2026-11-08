@@ -184,7 +184,7 @@ export function WorkflowBuilder({ definition, onApply, onClose }: {
         unavailable={unavailable} controls={{ branches: false, permissions: false, disabled: busy || loading || !!view }}
         attachmentsEnabled={false} skillsEnabled={false} abortDisabled={busy || !!view?.stopping}
         abortLabel={view?.stopping ? "Stopping builder…" : "Stop builder"}
-        authorisingSummary={undefined} onShowSubagents={() => {}} />
+        authorisingSummary={undefined} />
     </div>
   </section>;
 }

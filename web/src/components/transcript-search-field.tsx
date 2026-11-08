@@ -46,7 +46,7 @@ export function TranscriptSearchField({
   }, [text, onQueryChange]);
 
   return (
-    <div className="flex items-center gap-2 border-b bg-card px-3 py-1">
+    <div className="mt-[var(--header-overlap,0px)] flex items-center gap-2 border-b bg-card px-3 py-1">
       <Search className="size-4 shrink-0 opacity-50" aria-hidden />
       <Input
         ref={input}
@@ -64,7 +64,7 @@ export function TranscriptSearchField({
         type="button"
         onClick={onClose}
         aria-label="Close search"
-        className="cursor-gloss shrink-0 text-muted-foreground hover:text-foreground"
+        className="relative shrink-0 text-muted-foreground hover:text-foreground"
       >
         <X className="size-4" aria-hidden />
       </button>

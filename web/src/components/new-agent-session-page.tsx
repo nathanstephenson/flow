@@ -333,9 +333,9 @@ export function NewAgentSessionPage({
           }}
           className="contents"
         >
-          <TabsList aria-label="New Agent Session mode" className="flex w-full gap-0 rounded-none bg-transparent p-0">
+          <TabsList aria-label="New Agent Session mode" className="flex w-full">
             {(["chat", "workflow"] as const).map((mode) => (
-              <TabsTrigger key={mode} value={mode} className="h-9 min-w-0 flex-1 rounded-none bg-transparent hover:bg-transparent data-active:bg-muted data-active:hover:bg-muted">
+              <TabsTrigger key={mode} value={mode} className="h-8 min-w-0 flex-1">
                 {mode === "chat" ? "Chat" : "Workflow"}
               </TabsTrigger>
             ))}
@@ -403,7 +403,6 @@ export function NewAgentSessionPage({
                   placeholder="What should it work on? Enter starts the Agent Session."
                   drafts={drafts}
                   authorisingSummary={undefined}
-                  onShowSubagents={() => {}}
                 />
               </TabsContent>
               <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">

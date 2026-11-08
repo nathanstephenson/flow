@@ -1,7 +1,8 @@
-/** One delegated listener covers native controls, including popup/mobile portals.
- * No React state, DOM discovery, canvases or text/colour overrides on pointer frames.
+/** One delegated listener tilts every `.cursor-tilt` element towards the pointer, including popup
+ * and mobile portals. No React state: it writes `--tilt-x`/`--tilt-y` (-0.5 to 0.5 across the
+ * element) and `data-tilt-active` once per frame.
  */
-export function installCursorGloss(document: Document): () => void {
+export function installCursorTilt(document: Document): () => void {
   const window = document.defaultView;
   if (!window) return () => {};
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -14,29 +15,24 @@ export function installCursorGloss(document: Document): () => void {
   const clear = () => {
     if (frame !== undefined) window.cancelAnimationFrame(frame);
     frame = undefined;
-    active?.removeAttribute("data-gloss-active");
+    active?.removeAttribute("data-tilt-active");
     active = pending = null;
   };
   const paint = () => {
     frame = undefined;
-    if (active !== pending || !pending?.isConnected) active?.removeAttribute("data-gloss-active");
-    active = pending?.isConnected ? pending : null;
+    const next = pending?.isConnected ? pending : null;
+    if (active !== next) active?.removeAttribute("data-tilt-active");
+    active = next;
     if (!active) return;
-    const rect = active.getBoundingClientRect();
-    const point = glossPoint(rect, x, y, reduced.matches);
-    active.style.setProperty("--gloss-x", `${point.x}px`);
-    active.style.setProperty("--gloss-y", `${point.y}px`);
-    active.setAttribute("data-gloss-active", "");
+    const point = tiltPoint(active.getBoundingClientRect(), x, y, reduced.matches);
+    active.style.setProperty("--tilt-x", `${point.x}`);
+    active.style.setProperty("--tilt-y", `${point.y}`);
+    active.setAttribute("data-tilt-active", "");
   };
   const move = (event: PointerEvent) => {
     if (event.pointerType === "touch") { clear(); return; }
     const hit = event.target instanceof window.Element ? event.target : null;
-    // Settle is an overlay on a row: its gloss belongs to the entire row.
-    const action = hit?.closest('[data-sidebar="menu-action"]');
-    const target = action
-      ? action.closest('[data-sidebar="menu-item"]')?.querySelector<HTMLElement>(".cursor-gloss")
-      : hit?.closest<HTMLElement>(".cursor-gloss");
-    pending = target && !target.matches(':disabled, [aria-disabled="true"], [data-disabled], summary, [data-slot="accordion-trigger"], h3 > button[aria-expanded]:not([aria-haspopup])') ? target : null;
+    pending = hit?.closest<HTMLElement>(".cursor-tilt") ?? null;
     x = event.clientX;
     y = event.clientY;
     if (frame === undefined) frame = window.requestAnimationFrame(paint);
@@ -63,13 +59,14 @@ export function installCursorGloss(document: Document): () => void {
   };
 }
 
-export function glossPoint(
+/** Where the pointer is across the element, from -0.5 to 0.5 on each axis; the centre with reduced motion. */
+export function tiltPoint(
   rect: { left: number; top: number; width: number; height: number },
   x: number,
   y: number,
   reduced: boolean,
 ): { x: number; y: number } {
-  return reduced
-    ? { x: rect.width / 2, y: rect.height / 2 }
-    : { x: Math.max(0, Math.min(rect.width, x - rect.left)), y: Math.max(0, Math.min(rect.height, y - rect.top)) };
+  if (reduced) return { x: 0, y: 0 };
+  const clamp = (value: number) => Math.max(-0.5, Math.min(0.5, value));
+  return { x: clamp((x - rect.left) / rect.width - 0.5), y: clamp((y - rect.top) / rect.height - 0.5) };
 }

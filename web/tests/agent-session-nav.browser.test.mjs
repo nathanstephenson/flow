@@ -20,10 +20,10 @@ const bundle = await build({
       import { KeyboardLayer } from './web/src/components/keyboard-layer.tsx';
       import { SidebarProvider } from './web/src/components/ui/sidebar.tsx';
       import { statusIndicatorColor } from './web/src/components/status-indicator.tsx';
-      import { installCursorGloss } from './web/src/lib/cursor-gloss.ts';
+      import { installCursorTilt } from './web/src/lib/cursor-tilt.ts';
       window.statusColor = statusIndicatorColor;
       window.paneFocuses = 0;
-      installCursorGloss(document);
+      installCursorTilt(document);
       const root = createRoot(document.getElementById('root'));
       const summary = (id, status = 'idle') => ({
         id, title: id, status, backend: 'pi', scope: '/tmp/project',
@@ -33,6 +33,18 @@ const bundle = await build({
       let props = {
         sessions: [summary('a'), summary('b'), summary('filed', 'settled')],
         cursorId: 'a', focusedId: 'a',
+        openSections: new Set(['idle']),
+        onSectionOpenChange(section, open) {
+          const next = new Set(props.openSections);
+          if (open) next.add(section); else next.delete(section);
+          window.renderRail({ openSections: next });
+        },
+        pinned: new Set(),
+        onPinnedChange(id, pin) {
+          const next = new Set(props.pinned);
+          if (pin) next.add(id); else next.delete(id);
+          window.renderRail({ pinned: next });
+        },
         onFocus() {}, onSettle() {}, onNew() {}, onOpenSettings() {},
       };
       window.renderRail = (patch = {}) => {
@@ -46,8 +58,10 @@ const bundle = await build({
           </KeyboardLayer>
         </React.StrictMode>));
       };
-      window.reparent = (status) => window.renderRail({
+      const sectionOf = { running: 'working', awaiting: 'working', idle: 'idle', dormant: 'idle', settled: 'filed-away', ended: 'filed-away' };
+      window.reparent = (status, follow = true) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? { ...s, status } : s),
+        ...(follow ? { openSections: new Set([...props.openSections, sectionOf[status]]) } : {}),
       });
       window.attention = (group) => window.renderRail({
         sessions: props.sessions.map(s => s.id === props.cursorId ? {
@@ -156,7 +170,7 @@ describe("Agent Session rail DOM focus and material", () => {
     await cursor().focus();
     await page.keyboard.press('ArrowRight');
     const action = page.locator('[data-sidebar="menu-item"]').filter({ has: cursor() })
-      .locator('[data-sidebar="menu-action"]');
+      .locator('[data-sidebar="menu-action"]').first();
     await focusedIs(action);
     await page.evaluate(() => window.renderRail({ focusedId: 'b' }));
     await focusedIs(action);
@@ -198,26 +212,47 @@ describe("Agent Session rail DOM focus and material", () => {
     }
   });
 
-  it("hides only ordinary Band headings without losing list names or attention", async () => {
-    assert.equal(await page.locator('.agent-session-band > [data-sidebar="group-label"]').isVisible(), false);
+  it("collapses ordinary sections and hides their rows", async () => {
+    await page.evaluate(() => window.renderRail({ openSections: new Set() }));
+    assert.match(await page.locator('summary').first().textContent(), /Idle · 2/);
+    assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), false);
+    await page.evaluate(() => window.reparent('settled', false));
+    assert.equal(await page.locator('details').last().evaluate(node => node.open), false);
+  });
+
+  it("opens several sections at once", async () => {
+    await page.locator('summary').last().click();
+    await page.getByRole('list', { name: 'Settled Agent Sessions' }).waitFor();
+    assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).isVisible(), true);
+    assert.equal(await page.locator('details[open]').count(), 2);
+  });
+
+  it("pins a row below Unread and unpins it from the same strip as Settle", async () => {
+    const row = page.locator('[data-sidebar="menu-item"]').filter({ has: cursor() });
+    await row.getByRole('button', { name: 'Pin' }).click();
+    assert.equal(await page.getByRole('list', { name: 'Pinned Agent Sessions' }).count(), 1);
+    await row.getByRole('button', { name: 'Unpin' }).click();
+    assert.equal(await page.getByRole('list', { name: 'Pinned Agent Sessions' }).count(), 0);
+  });
+
+  it("labels sections without losing list names or attention", async () => {
     assert.equal(await page.getByRole('list', { name: 'Idle Agent Sessions' }).count(), 1);
-    assert.match(await page.locator('summary').textContent(), /Settled/);
+    assert.match(await page.locator('summary').last().textContent(), /Settled/);
     for (const group of ['needs-input', 'unread']) {
       await page.evaluate(group => window.attention(group), group);
       const label = group === 'needs-input' ? 'Needs input' : 'Unread';
       assert.equal(await page.getByRole('list', { name: `${label} Agent Sessions` }).count(), 1);
-      assert.equal(await page.locator('[data-sidebar="group-label"]').filter({ hasText: label }).isVisible(), true);
+      assert.equal(await page.locator('[data-sidebar="group-label"]').filter({ hasText: label }).count(), 0);
       assert.match(await cursor().textContent(), /Needs review/);
     }
-    const header = page.locator('[data-sidebar="header"]');
-    const action = header.getByRole('button', { name: 'New Agent Session' });
-    assert.equal((await action.boundingBox()).height, 42);
-    assert.equal((await action.boundingBox()).width, (await header.boundingBox()).width);
-    assert.equal(await action.evaluate(node => getComputedStyle(node).borderRadius), '0px');
+    assert.equal(await page.locator('[data-sidebar="header"]').count(), 0);
+    const footer = page.locator('[data-sidebar="footer"]');
+    assert.equal(await footer.getByRole('button', { name: 'New Agent Session' }).count(), 1);
+    assert.equal(await footer.getByRole('button', { name: 'Settings' }).count(), 1);
   });
 
   it("preserves native disclosure Enter and Space alongside the global pane shortcut", async () => {
-    const summary = page.locator('summary');
+    const summary = page.locator('summary').first();
     await summary.focus();
     await summary.press('Space');
     await page.waitForFunction(() => document.querySelector('details').open);
@@ -233,7 +268,7 @@ describe("Agent Session rail DOM focus and material", () => {
 
   it("names Ended rows without describing them as Settled", async () => {
     await page.evaluate(() => window.reparent('ended'));
-    assert.match(await page.locator('summary').textContent(), /Settled \/ Ended/);
+    assert.match(await page.locator('summary').last().textContent(), /Settled \/ Ended/);
     assert.equal(await page.getByRole('list', { name: 'Settled and Ended Agent Sessions' }).count(), 1);
   });
 
@@ -265,14 +300,19 @@ describe("Agent Session rail DOM focus and material", () => {
   });
 
   for (const mode of ['light', 'dark']) {
-    it(`${mode}: status-hued selection preserves base/ink, transparent Settle and inset focus`, async () => {
+    it(`${mode}: status-hued selection preserves ink, hover lifts the base, transparent actions and inset focus`, async () => {
       await page.evaluate(mode => document.documentElement.classList.toggle('dark', mode === 'dark'), mode);
       const face = () => cursor().evaluate(node => {
         const style = getComputedStyle(node);
         const flow = getComputedStyle(node, '::before');
         const probe = document.createElement('span');
         const peak = style.getPropertyValue('--agent-session-flow-peak').trim() || '16%';
-        probe.style.color = `color-mix(in srgb, ${style.borderLeftColor} ${peak}, transparent)`;
+        const edgeProbe = document.createElement('span');
+        edgeProbe.style.color = style.getPropertyValue('--agent-session-status');
+        document.body.append(edgeProbe);
+        const edge = getComputedStyle(edgeProbe).color;
+        edgeProbe.remove();
+        probe.style.color = `color-mix(in srgb, ${edge} ${peak}, transparent)`;
         document.body.append(probe);
         const tint = getComputedStyle(probe).color;
         probe.remove();
@@ -280,7 +320,7 @@ describe("Agent Session rail DOM focus and material", () => {
           tint, peak,
           base: style.backgroundColor, ink: style.color, weight: style.fontWeight,
           muted: getComputedStyle(node.querySelector('.text-muted-foreground')).color,
-          edge: style.borderLeftColor, width: style.borderLeftWidth,
+          edge, width: style.backgroundSize, strip: style.backgroundImage,
           flow: flow.backgroundImage, animation: flow.animationName,
           outlineOffset: style.outlineOffset, shadow: style.boxShadow,
         };
@@ -291,29 +331,27 @@ describe("Agent Session rail DOM focus and material", () => {
         const selected = await face();
         assert.notEqual(selected.flow, 'none');
         assert.match(selected.animation, /agent-session-rail-flow/);
-        assert.equal(selected.width, '2px');
+        assert.equal(selected.width, '2px 100%');
+        assert.match(selected.strip, /linear-gradient/);
         assert.equal(selected.peak, mode === 'dark' && ['running', 'awaiting'].includes(status) ? '24%' : '16%');
         assert.ok(selected.flow.includes(selected.tint), `Selection uses its status edge hue: ${status}`);
         await cursor().hover();
         const hovered = await face();
         await page.evaluate(() => window.renderRail({ focusedId: 'other' }));
         const deselected = await face();
-        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) {
-          assert.equal(hovered[key], selected[key]);
-          assert.equal(deselected[key], selected[key]);
-        }
+        for (const key of ['ink', 'weight', 'muted', 'edge']) assert.equal(hovered[key], selected[key]);
+        for (const key of ['base', 'ink', 'weight', 'muted', 'edge']) assert.equal(deselected[key], hovered[key]);
+        assert.notEqual(hovered.base, selected.base, `Hover lifts the base: ${status}`);
         assert.equal(deselected.flow, 'none');
         await page.evaluate(() => window.renderRail({ focusedId: 'a' }));
       }
       await page.evaluate(() => window.reparent('idle'));
       await cursor().focus();
       await page.keyboard.press('ArrowRight');
-      const action = cursor().locator('..').locator('[data-sidebar="menu-action"]');
+      const action = cursor().locator('..').locator('[data-sidebar="menu-action"]').first();
       await action.hover();
-      await page.waitForFunction(() => document.querySelector('[data-cursor="true"]').hasAttribute('data-gloss-active'));
+      await page.waitForFunction(() => document.querySelector('[data-cursor="true"]').parentElement.hasAttribute('data-tilt-active'));
       assert.equal(await action.evaluate(node => getComputedStyle(node).backgroundColor), 'rgba(0, 0, 0, 0)');
-      assert.equal(await action.getAttribute('data-gloss-active'), null);
-      assert.equal(await action.getAttribute('class').then(value => value.includes('cursor-gloss-transparent')), true);
       await page.keyboard.press('ArrowLeft');
       await focusedIs(cursor());
       assert.equal((await face()).outlineOffset, '-4px');
@@ -327,7 +365,7 @@ describe("Agent Session rail DOM focus and material", () => {
 
   it("does not treat the disclosure or a deliberately blurred row as rail ownership", async () => {
     await cursor().focus();
-    const disclosure = page.locator('summary');
+    const disclosure = page.locator('summary').first();
     await disclosure.focus();
     await page.evaluate(() => window.renderRail({ cursorId: 'b' }));
     await focusedIs(disclosure);

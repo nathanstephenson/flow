@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { installCursorGloss } from "@/lib/cursor-gloss.ts";
-import "@/components/ui/cursor-gloss.css";
+import { installCursorTilt } from "@/lib/cursor-tilt.ts";
+import "@/components/ui/cursor-tilt.css";
 
 import { AgentSessionViewProvider } from "@/agent-session-view.tsx";
 import { SessionsProvider } from "@/agent-sessions.tsx";
@@ -23,7 +23,7 @@ import { UpdatesProvider } from "@/updates.tsx";
  * through a registry and subscribed to leaf by leaf instead.
  */
 export function App() {
-  useEffect(() => installCursorGloss(document), []);
+  useEffect(() => installCursorTilt(document), []);
   return (
     <HostProvider>
       <UpdatesProvider>

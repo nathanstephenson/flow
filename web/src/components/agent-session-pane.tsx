@@ -1,11 +1,14 @@
 import { MessageSquare, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 
+import { projectName } from "@client/project-name.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
-import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
+import { useAgentSession, useChrome, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useSessionActions } from "@/composer-actions.ts";
+import { useHost } from "@/host.tsx";
+import { runningWork, type RunningWork } from "@/presentation/running-work.ts";
 import type { Docks } from "@/docks.ts";
 import { useIsMobile } from "@/lib/use-mobile.ts";
 import {
@@ -18,6 +21,7 @@ import {
   type MobileView,
 } from "@/presentation/mobile-navigation.ts";
 import { tabLabel, type DockSide } from "@/presentation/docks.ts";
+import { sessionProject } from "@/presentation/session-project.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
@@ -63,9 +67,19 @@ export type AgentSessionPaneProps = {
    * the Docks are: this pane remounts whenever the focus moves, and a Draft must not.
    */
   drafts: DraftStash;
+  /** Open the New Agent Session view with this Project chosen. */
+  onOpenProject: (path: string) => void;
 };
 
-export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onCloseSearch, drafts }: AgentSessionPaneProps) {
+export function AgentSessionPane({
+  sessionId,
+  docks,
+  shells,
+  searchOpen,
+  onCloseSearch,
+  drafts,
+  onOpenProject,
+}: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
   // One frame at most: the acquire happens in a layout effect, so this does not reach the screen.
@@ -80,6 +94,7 @@ export function AgentSessionPane({ sessionId, docks, shells, searchOpen, onClose
       docks={docks}
       shells={shells}
       drafts={drafts}
+      onOpenProject={onOpenProject}
     />
   );
 }
@@ -107,8 +122,10 @@ function AttachedPane({
   searchOpen,
   onCloseSearch,
   drafts,
+  onOpenProject,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
+  const running = useRunningWork(view);
   const { sessions } = useAgentSessions();
   const run = useCommand();
   // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
@@ -225,6 +242,8 @@ function AttachedPane({
 
   const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
+  const { config } = useHost();
+  const project = summary ? sessionProject(summary, config.projectList ?? []) : undefined;
   const acknowledged = useRef(0);
   const observe = useCallback((throughSeq: number) => {
     const attention = summary?.attention;
@@ -318,10 +337,16 @@ function AttachedPane({
          * transcript before the prompt is raised.
          */
         authorisingSummary={authorisingSummary(view, chrome)}
-        // No side named: whichever Dock already shows the Subagents wins, so a reader who keeps
-        // them in the bottom Dock is not handed a second copy on the right. Opened rather than
-        // toggled, or a click on "2 agents running" would close the thing it asked to see.
-        onShowSubagents={() => docks.dispatch({ type: "open-subagents" })}
+        work={running}
+        // An agent opens in whichever Dock already shows the Subagents, so a reader who keeps them
+        // in the bottom Dock is not handed a second copy on the right. Opened rather than toggled,
+        // or a click would close the thing it asked to see. A Background Call has no pane of its
+        // own, so it goes to the tool row that launched it.
+        onOpenWork={(work) =>
+          work.kind === "agent"
+            ? docks.dispatch({ type: "open-subagents", subagentId: work.key })
+            : revealEntry(work.key)
+        }
       />
     </section>
   );
@@ -333,8 +358,19 @@ function AttachedPane({
   const selectedDock = shownMobileView.kind === "dock" ? shownMobileView : undefined;
 
   return (
-    <div className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}>
-      <AgentSessionPaneHeader sessionId={sessionId} title={title} chrome={chrome} docks={mobile ? undefined : docks} />
+    <div
+      className={cn("grid min-h-0 min-w-0", mobile ? "grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)]" : "grid-rows-[auto_minmax(0,1fr)]")}
+      // How far the header's blurred lower half reaches over the transcript and the right Dock.
+      style={{ "--header-overlap": mobile ? "0px" : "1.375rem" } as CSSProperties}
+    >
+      <AgentSessionPaneHeader
+        sessionId={sessionId}
+        project={summary ? projectName(summary.scope, summary.worktree) : undefined}
+        onOpenProject={project ? () => onOpenProject(project.path) : undefined}
+        title={title}
+        chrome={chrome}
+        docks={mobile ? undefined : docks}
+      />
 
       {mobile ? (
         <MobileViewSelector
@@ -437,7 +473,7 @@ function MobileViewSelector({
           aria-selected={selected.kind === "transcript"}
           onClick={onTranscript}
           className={cn(
-            "cursor-gloss flex min-h-10 min-w-20 flex-1 items-center justify-center gap-1.5 px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            "relative flex min-h-10 min-w-20 flex-1 items-center justify-center gap-1.5 px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             selected.kind === "transcript" ? "bg-muted text-foreground" : "text-muted-foreground",
           )}
         >
@@ -452,7 +488,7 @@ function MobileViewSelector({
               <div
                 key={`${side}:${tab.id}`}
                 className={cn(
-                  "cursor-gloss flex min-h-10 min-w-20 flex-1 items-stretch gap-0.5 px-2.5 text-xs",
+                  "relative flex min-h-10 min-w-20 flex-1 items-stretch gap-0.5 px-2.5 text-xs",
                   active ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}
               >
@@ -493,4 +529,32 @@ function MobileViewSelector({
       </Button>
     </div>
   );
+}
+
+/**
+ * The work running beside the turn, for the Composer's cards. Re-read on every transcript change,
+ * but compared as a string, so the Composer re-renders only when the list itself changes.
+ */
+function useRunningWork(view: AgentSessionView): RunningWork[] {
+  const keys = useTranscriptKeys(view);
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => JSON.stringify(runningWork(keys, (key) => view.getEntry(key))), [view, keys]);
+  const json = useSyncExternalStore(subscribe, snapshot);
+  return useMemo(() => JSON.parse(json) as RunningWork[], [json]);
+}
+
+/**
+ * Scroll the transcript to an Entry's row and flash it. A row folded into a closed Tool Chain is
+ * revealed by opening the chain; a row outside the loaded tail cannot be reached, and nothing happens.
+ */
+function revealEntry(key: string): void {
+  const row = document.querySelector<HTMLElement>(`[data-pane] [data-entry-key="${CSS.escape(key)}"]`);
+  if (!row) return;
+  for (let chain = row.parentElement?.closest("details"); chain; chain = chain.parentElement?.closest("details")) {
+    chain.open = true;
+  }
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.remove("entry-flash");
+  void row.offsetWidth;
+  row.classList.add("entry-flash");
 }

@@ -67,8 +67,10 @@ export type OpenPermission = { callId: string; tool: string; context?: string; a
 
 export type Entry =
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
-  | { kind: "user"; id: string; text: string; attachments?: string[] }
-  | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer }
+  /** `at`: when the message was logged. */
+  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string }
+  /** `endedAt`: when the turn ended, on the parent's last message of that turn only. */
+  | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer; endedAt?: string }
   | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
   | {
       kind: "tool";
@@ -349,6 +351,21 @@ export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = init
   return state;
 }
 
+/** The parent's last message since the last user message gets the turn's end time. */
+function stampTurnEnd(entries: Entry[], at: string): Entry[] {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.kind === "user") return entries;
+    if (entry.kind === "assistant" && entry.producer === undefined) {
+      if (entry.endedAt === at) return entries;
+      const next = entries.slice();
+      next[index] = { ...entry, endedAt: at };
+      return next;
+    }
+  }
+  return entries;
+}
+
 export function reduce(state: ViewState, entry: LoggedEvent): ViewState {
   /*
    * The cast is deliberate. `applyEvent`'s switch is exhaustive over `AgentEvent` and has no
@@ -409,6 +426,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           id: event.id,
           text: event.text,
           ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
+          at,
         }),
       };
 
@@ -599,6 +617,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "turn_ended":
       return {
         ...state,
+        entries: stampTurnEnd(state.entries, at),
         turnInFlight: false,
         asking: state.asking?.producer === undefined ? undefined : state.asking,
         authorising: state.authorising?.producer === undefined ? undefined : state.authorising,
