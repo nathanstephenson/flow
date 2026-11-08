@@ -289,7 +289,7 @@ export function TranscriptView({
             segment.kind === "entry" && segment.key.startsWith("user:") ? (
               <TranscriptRow key={segment.key} view={view} entryKey={segment.key} query={query} />
             ) : (
-              <div key={segment.kind === "entry" ? segment.key : segment.keys[0]} className="max-w-[90%]">
+              <div key={segment.kind === "entry" ? segment.key : segment.keys[0]} className="max-w-[95%]">
                 {segment.kind === "entry" ? (
                   <TranscriptRow view={view} entryKey={segment.key} query={query} />
                 ) : (
