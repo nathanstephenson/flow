@@ -264,7 +264,7 @@ export function TranscriptView({
         // The Composer floats over this, so the last line of the last message would sit behind it. The
         // inset is the Composer's measured height; `stick-to-bottom.ts` needs no change, because padding
         // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
-        className="transcript-scroller h-full px-3 pt-[calc(var(--header-overlap,0px)+0.5rem)] pb-[calc(var(--composer-inset,0px)+1.5rem)]"
+        className="transcript-scroller @container/transcript h-full px-3 pt-[calc(var(--header-overlap,0px)+0.5rem)] pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
         <div ref={content} className="pane-measure">
           {history.earlier > 0 ? (

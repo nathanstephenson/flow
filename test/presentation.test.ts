@@ -122,7 +122,7 @@ describe("reduced Presentation Transcript", () => {
     assert.equal(log.since(0).length, 452, "raw replay remains unchanged");
   });
 
-  it("patches proof on the last parent row even when a turn ending changes no Entry identity", () => {
+  it("patches proof on the last parent row, which the turn ending stamps with its end time", () => {
     const log = new SessionLog("s1");
     log.append({ type: "turn_started", turnId: "parent" }, AT);
     log.append({ type: "message", id: "parent", text: "answer", final: true }, AT);
@@ -133,7 +133,7 @@ describe("reduced Presentation Transcript", () => {
     const outcome = log.append({ type: "turn_ended", turnId: "parent", reason: "complete" }, AT);
     const patch = updates.at(-1)!;
     assert.equal(patch.entries.length, 1);
-    assert.strictEqual(patch.entries[0]?.entry, before.entries[0]?.entry);
+    assert.deepEqual(patch.entries[0]?.entry, { ...before.entries[0]?.entry, endedAt: AT });
     assert.equal(patch.entries[0]?.index, 0);
     assert.equal(patch.entries[0]?.outcomeSeq, outcome.seq);
     assert.equal(log.presentationPage().entries[0]?.outcomeSeq, outcome.seq);
