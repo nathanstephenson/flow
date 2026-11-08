@@ -8,6 +8,7 @@ import { useDraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { useRailWidth } from "@/rail-width.ts";
 import { useRailSections } from "@/rail-sections.ts";
+import { usePinnedSessions } from "@/pinned-sessions.ts";
 import { useMobileViewport } from "@/lib/use-mobile-viewport.ts";
 import { railWidthValue } from "@/presentation/rail-width.ts";
 import { nextHeldAttention, visibleSessions, withHeldAttention, type HeldAttention } from "@/presentation/rail-sections.ts";
@@ -76,12 +77,16 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const rail = useRailWidth();
   const railSections = useRailSections();
+  const { pinned, setPinned } = usePinnedSessions();
   const [heldAttention, setHeldAttention] = useState<HeldAttention>();
   useEffect(() => {
     setHeldAttention((current) => nextHeldAttention(current, sessions, focusedId));
   }, [sessions, focusedId]);
   const railSessions = useMemo(() => withHeldAttention(sessions, heldAttention), [sessions, heldAttention]);
-  const visible = useMemo(() => visibleSessions(railSessions, railSections.open), [railSessions, railSections.open]);
+  const visible = useMemo(
+    () => visibleSessions(railSessions, railSections.open, pinned),
+    [railSessions, railSections.open, pinned],
+  );
 
   /*
    * The focused Agent Session's Docks.
@@ -180,6 +185,7 @@ export function AppShell() {
 
   const settle = useCallback(
     (sessionId: string) => {
+      setPinned(sessionId, false);
       setCursorId((current) =>
         current === sessionId
           ? retainSessionCursor(visible, visible.filter((session) => session.id !== sessionId), current)
@@ -191,7 +197,7 @@ export function AppShell() {
         toast.info("Settled — the next message Revives it.");
       });
     },
-    [run, visible],
+    [run, setPinned, visible],
   );
 
   /**
@@ -300,6 +306,8 @@ export function AppShell() {
             cursorId={cursorId}
             openSections={railSections.open}
             onSectionOpenChange={railSections.setOpen}
+            pinned={pinned}
+            onPinnedChange={setPinned}
             link={chrome?.link}
             onFocus={focus}
             onSettle={settle}

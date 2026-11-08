@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Plus, Settings } from "lucide-react";
+import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -77,6 +77,9 @@ export type AgentSessionNavProps = {
   /** Closed sections hide their rows from the pointer and the keyboard cursor. */
   openSections: ReadonlySet<CollapsibleRailSection>;
   onSectionOpenChange: (section: CollapsibleRailSection, open: boolean) => void;
+  /** Pinned sessions show below Unread, whatever their activity, until they are Settled. */
+  pinned: ReadonlySet<string>;
+  onPinnedChange: (sessionId: string, pinned: boolean) => void;
   link: LinkState | undefined;
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
@@ -106,7 +109,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     },
   };
   const grouped = new Map(RAIL_SECTIONS.map((section) => [section, [] as SessionSummary[]]));
-  for (const session of props.sessions) grouped.get(railSection(session))?.push(session);
+  for (const session of props.sessions) grouped.get(railSection(session, props.pinned))?.push(session);
   const sections = RAIL_SECTIONS.map((section) => ({ section, sessions: grouped.get(section)! }))
     .filter(({ sessions }) => sessions.length > 0);
   const attentionSections = sections.filter(({ section }) => !collapsible(section));
@@ -122,7 +125,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
     />
   );
   const cursorSession = props.sessions.find((session) => session.id === props.cursorId);
-  const cursorSectionId = cursorSession ? railSection(cursorSession) : undefined;
+  const cursorSectionId = cursorSession ? railSection(cursorSession, props.pinned) : undefined;
 
   const list = useRef<HTMLDivElement>(null);
   const rowHasFocus = useRef(false);
@@ -272,6 +275,8 @@ function AgentSessionMenu({ sessions, now, label, ...props }: MenuProps) {
           cursored={session.id === props.cursorId}
           onFocus={props.onFocus}
           onSettle={props.onSettle}
+          pinned={props.pinned.has(session.id)}
+          onPinnedChange={props.onPinnedChange}
         />
       ))}
     </SidebarMenu>
@@ -286,9 +291,21 @@ type RowProps = {
   cursored: boolean;
   onFocus: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
+  pinned: boolean;
+  onPinnedChange: (sessionId: string, pinned: boolean) => void;
 };
 
-function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, onSettle }: RowProps) {
+function AgentSessionRow({
+  summary,
+  now,
+  status,
+  selected,
+  cursored,
+  onFocus,
+  onSettle,
+  pinned,
+  onPinnedChange,
+}: RowProps) {
   /**
    * The roving tabindex, in one expression. Only the cursor row is reachable by `Tab`; its action
    * comes with it, so the whole rail is a constant number of tab stops no matter how many Agent
@@ -408,6 +425,26 @@ function AgentSessionRow({ summary, now, status, selected, cursored, onFocus, on
           <TooltipContent>Settle</TooltipContent>
         </Tooltip>
       ) : null}
+
+      {canSettle(status) ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <SidebarMenuAction
+                className="agent-session-pin cursor-gloss-transparent top-auto! bottom-2.5"
+                showOnHover={!pinned}
+                aria-pressed={pinned}
+                tabIndex={tabIndex}
+                onClick={() => onPinnedChange(summary.id, !pinned)}
+              />
+            }
+          >
+            {pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
+            <span className="sr-only">{pinned ? "Unpin" : "Pin"}</span>
+          </TooltipTrigger>
+          <TooltipContent>{pinned ? "Unpin" : "Pin"}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -451,6 +488,7 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
  * Ended ones are not, so name both Lifecycles when this section contains Ended rows.
  */
 function sectionLabel(section: RailSection, sessions: SessionSummary[]): string {
+  if (section === "pinned") return "Pinned";
   if (section !== "filed-away") return railGroupLabel(section);
   return sessions.some((summary) => summary.status === "ended") ? "Settled / Ended" : "Settled";
 }

@@ -54,7 +54,8 @@
 }
 
 /* The delegated pointer helper lights the parent row, not an isolated Settle tile. */
-.agent-session-settle[data-sidebar="menu-action"] {
+.agent-session-settle[data-sidebar="menu-action"],
+.agent-session-pin[data-sidebar="menu-action"] {
   background: transparent;
   color: var(--sidebar-foreground);
 }
