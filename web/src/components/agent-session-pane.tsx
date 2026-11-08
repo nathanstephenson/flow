@@ -473,7 +473,7 @@ function MobileViewSelector({
           aria-selected={selected.kind === "transcript"}
           onClick={onTranscript}
           className={cn(
-            "cursor-gloss flex min-h-10 min-w-20 flex-1 items-center justify-center gap-1.5 px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            "relative flex min-h-10 min-w-20 flex-1 items-center justify-center gap-1.5 px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
             selected.kind === "transcript" ? "bg-muted text-foreground" : "text-muted-foreground",
           )}
         >
@@ -488,7 +488,7 @@ function MobileViewSelector({
               <div
                 key={`${side}:${tab.id}`}
                 className={cn(
-                  "cursor-gloss flex min-h-10 min-w-20 flex-1 items-stretch gap-0.5 px-2.5 text-xs",
+                  "relative flex min-h-10 min-w-20 flex-1 items-stretch gap-0.5 px-2.5 text-xs",
                   active ? "bg-muted text-foreground" : "text-muted-foreground",
                 )}
               >

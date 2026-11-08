@@ -52,7 +52,7 @@
   outline-offset: -4px;
 }
 
-/* The delegated pointer helper lights the parent row, not an isolated Settle tile. */
+/* The actions sit on the row: they have no surface of their own. */
 .agent-session-settle[data-sidebar="menu-action"],
 .agent-session-pin[data-sidebar="menu-action"] {
   background: transparent;
