@@ -145,6 +145,8 @@ function ThinkingEntryView({ entry, query }: { entry: Of<"thinking">; query: str
   const [expanded, setExpanded] = useState(false);
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   const clamped = entry.final && !expanded;
+  // Redacted or empty reasoning has nothing to show but its gutter dot.
+  if (entry.text.trim() === "") return null;
 
   return (
     <Row gutter="·" gutterClassName="text-muted-foreground">
