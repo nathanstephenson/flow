@@ -395,3 +395,19 @@
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   }
 }
+
+/* A row the reader was sent to from elsewhere, such as a Composer card, glows once. */
+.entry-flash {
+  border-radius: var(--radius-md);
+  animation: entry-flash 1.5s ease-in-out;
+}
+
+/* The row's own hover surface, held for 1s with a short fade at each end. */
+@keyframes entry-flash {
+  0%, 100% { background-color: transparent; }
+  15%, 85% { background-color: color-mix(in oklab, var(--muted) 50%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry-flash { animation: none; }
+}

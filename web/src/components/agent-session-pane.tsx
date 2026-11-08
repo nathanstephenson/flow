@@ -1,13 +1,14 @@
 import { MessageSquare, Plus, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 
 import { projectName } from "@client/project-name.ts";
 import { sessionLabel } from "@client/session-label.ts";
 import { toolSummary } from "@client/tool-summary.ts";
-import { useAgentSession, useChrome } from "@/agent-session-view.tsx";
+import { useAgentSession, useChrome, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 import { useSessionActions } from "@/composer-actions.ts";
 import { useHost } from "@/host.tsx";
+import { runningWork, type RunningWork } from "@/presentation/running-work.ts";
 import type { Docks } from "@/docks.ts";
 import { useIsMobile } from "@/lib/use-mobile.ts";
 import {
@@ -124,6 +125,7 @@ function AttachedPane({
   onOpenProject,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
+  const running = useRunningWork(view);
   const { sessions } = useAgentSessions();
   const run = useCommand();
   // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
@@ -335,10 +337,16 @@ function AttachedPane({
          * transcript before the prompt is raised.
          */
         authorisingSummary={authorisingSummary(view, chrome)}
-        // No side named: whichever Dock already shows the Subagents wins, so a reader who keeps
-        // them in the bottom Dock is not handed a second copy on the right. Opened rather than
-        // toggled, or a click on "2 agents running" would close the thing it asked to see.
-        onShowSubagents={() => docks.dispatch({ type: "open-subagents" })}
+        work={running}
+        // An agent opens in whichever Dock already shows the Subagents, so a reader who keeps them
+        // in the bottom Dock is not handed a second copy on the right. Opened rather than toggled,
+        // or a click would close the thing it asked to see. A Background Call has no pane of its
+        // own, so it goes to the tool row that launched it.
+        onOpenWork={(work) =>
+          work.kind === "agent"
+            ? docks.dispatch({ type: "open-subagents", subagentId: work.key })
+            : revealEntry(work.key)
+        }
       />
     </section>
   );
@@ -521,4 +529,32 @@ function MobileViewSelector({
       </Button>
     </div>
   );
+}
+
+/**
+ * The work running beside the turn, for the Composer's cards. Re-read on every transcript change,
+ * but compared as a string, so the Composer re-renders only when the list itself changes.
+ */
+function useRunningWork(view: AgentSessionView): RunningWork[] {
+  const keys = useTranscriptKeys(view);
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => JSON.stringify(runningWork(keys, (key) => view.getEntry(key))), [view, keys]);
+  const json = useSyncExternalStore(subscribe, snapshot);
+  return useMemo(() => JSON.parse(json) as RunningWork[], [json]);
+}
+
+/**
+ * Scroll the transcript to an Entry's row and flash it. A row folded into a closed Tool Chain is
+ * revealed by opening the chain; a row outside the loaded tail cannot be reached, and nothing happens.
+ */
+function revealEntry(key: string): void {
+  const row = document.querySelector<HTMLElement>(`[data-pane] [data-entry-key="${CSS.escape(key)}"]`);
+  if (!row) return;
+  for (let chain = row.parentElement?.closest("details"); chain; chain = chain.parentElement?.closest("details")) {
+    chain.open = true;
+  }
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.remove("entry-flash");
+  void row.offsetWidth;
+  row.classList.add("entry-flash");
 }

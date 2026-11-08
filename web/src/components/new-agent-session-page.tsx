@@ -403,7 +403,6 @@ export function NewAgentSessionPage({
                   placeholder="What should it work on? Enter starts the Agent Session."
                   drafts={drafts}
                   authorisingSummary={undefined}
-                  onShowSubagents={() => {}}
                 />
               </TabsContent>
               <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">

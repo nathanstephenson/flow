@@ -1,4 +1,4 @@
-import { ArrowUp, ChevronRight, Loader2, Square, X } from "lucide-react";
+import { ArrowUp, Bot, Loader2, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { attachPasted } from "@/attachments.ts";
@@ -6,7 +6,8 @@ import type { ComposerActions } from "@/composer-actions.ts";
 import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
 import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
-import { activityLabel, stripOpensSubagents } from "@/presentation/activity.ts";
+import type { RunningWork } from "@/presentation/running-work.ts";
+import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { AttachmentTray } from "@/components/attachment-tray.tsx";
 import { ComposerInput, type ComposerInputHandle } from "@/components/composer-input.tsx";
@@ -75,7 +76,8 @@ export function Composer({
   placeholder,
   drafts,
   authorisingSummary,
-  onShowSubagents,
+  work = NO_WORK,
+  onOpenWork,
   controls,
   inputLabel,
   attachmentsEnabled = true,
@@ -137,9 +139,11 @@ export function Composer({
    * same id, which the pane above can read and this cannot.
    */
   authorisingSummary: string | undefined;
-  /** Open the Subagents, from the strip. A callback rather than the Docks handle, so the Composer
-   * stays ignorant that Docks exist — it knows there is somewhere to go, not where. */
-  onShowSubagents: () => void;
+  /** Subagents and Background Calls running beside the turn, drawn as cards behind the panel. */
+  work?: readonly RunningWork[];
+  /** Where a card goes. A callback rather than the Docks or the transcript, so the Composer stays
+   * ignorant of both — it knows there is somewhere to go, not where. */
+  onOpenWork?: (work: RunningWork) => void;
   /** Hide readings which do not describe this conversation; defaults preserve Agent Session chrome. */
   controls?: TurnStripControls;
   inputLabel?: string;
@@ -721,10 +725,12 @@ export function Composer({
           className="absolute inset-y-0 left-0 right-[max(0px,calc(0.75rem-var(--scrollbar-width,0px)))] -z-10 bg-gradient-to-t from-background via-background to-transparent"
         />
       ) : null}
+      {/* Measured as one: the cards stand above the panel, and the transcript has to clear both. */}
+      <div ref={panel} className="pane-measure">
+      <WorkStack running={work} onOpen={onOpenWork} />
       <div
-        ref={panel}
         className={cn(
-          "relative pane-measure rounded-xl border shadow-lg",
+          "relative z-10 rounded-xl border shadow-lg",
           floating ? "pointer-events-auto bg-card/85 backdrop-blur-sm" : "bg-card",
         )}
       >
@@ -809,7 +815,6 @@ export function Composer({
             ))}
           </div>
         ) : null}
-        <ActivityStrip chrome={chrome} onShow={onShowSubagents} />
 
         {/*
           * Above the Attachments and the input both, so the panel grows upward into the transcript
@@ -927,49 +932,101 @@ export function Composer({
           </TurnSummary>
         ) : <TurnStrip chrome={chrome} actions={actions} {...controls} />}
       </div>
+      </div>
     </div>
   );
 }
 
+/** Cards beyond this collapse into one "+N more" card at the back, so the stack stays short. */
+const MAX_CARDS = 4;
+/** How long a card takes to slide in or out. Matches `duration-200` below, plus a frame to spare. */
+const CARD_EXIT_MS = 220;
+const NO_WORK: readonly RunningWork[] = [];
+
+type Card = RunningWork | { kind: "more"; key: "more"; count: number };
+
+function cardsFor(running: readonly RunningWork[]): Card[] {
+  if (running.length <= MAX_CARDS) return [...running];
+  const more = running.length - (MAX_CARDS - 1);
+  return [{ kind: "more", key: "more", count: more }, ...running.slice(-(MAX_CARDS - 1))];
+}
+
 /**
- * What the session's Subagents are doing, when any of them are doing anything.
- *
- * Above the input because everything *below* it describes the next turn — which model, how hard,
- * how much room is left — while this is a fact about the turn already running. Same reason the
- * Attachments sit up here.
- *
- * Absent entirely when nothing is working, rather than present and empty: this is the only thing in
- * the panel that comes and goes, and a reserved empty row would make the Composer taller for no
- * reason for the whole of a session that never delegates.
+ * The cards on screen: the current ones, plus any that just finished, kept for long enough to slide
+ * back out. A finished card keeps its place, so the others do not jump while it leaves.
  */
-function ActivityStrip({ chrome, onShow }: { chrome: Chrome; onShow: () => void }) {
-  const label = activityLabel(chrome);
-  if (label === undefined) return null;
+function useCardTransitions(running: readonly RunningWork[]): { card: Card; leaving: boolean }[] {
+  const [shown, setShown] = useState(() => cardsFor(running).map((card) => ({ card, leaving: false })));
 
-  const shell = cn("flex w-full items-center gap-2 border-b border-border/40 px-3 py-1.5 text-xs", !chrome.queuedMessages?.length && "rounded-t-xl");
-  const dot = <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden />;
+  useEffect(() => {
+    const next = cardsFor(running);
+    const byKey = new Map(next.map((card) => [card.key, card]));
+    setShown((current) => {
+      const merged = current.map(({ card }) => {
+        const kept = byKey.get(card.key);
+        if (kept) return { card: kept, leaving: false };
+        return { card, leaving: true };
+      });
+      const known = new Set(current.map(({ card }) => card.key));
+      for (const card of next) if (!known.has(card.key)) merged.push({ card, leaving: false });
+      return merged;
+    });
+    const timer = setTimeout(() => setShown((current) => current.filter(({ leaving }) => !leaving)), CARD_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [running]);
 
-  // Inert where there is nowhere to send a reader — a Background Call has no pane of its own — the
-  // same reading `SubagentEntryView` makes of the same problem.
-  if (!stripOpensSubagents(chrome)) {
-    return (
-      <div className={cn(shell, "text-muted-foreground")}>
-        {dot}
-        {label}
-      </div>
-    );
-  }
+  return shown;
+}
+
+/**
+ * The Subagents and Background Calls running beside the turn, as cards stacked behind the panel's
+ * top edge: each one shows a single line, and each further back is a little narrower, so the stack
+ * reads as depth rather than as a list. The newest is nearest the panel.
+ *
+ * A card slides up from behind the one in front as it appears, and back behind it as it finishes:
+ * its height grows from the part that is always tucked away, so everything above it moves with it
+ * rather than jumping.
+ */
+function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpen: ((work: RunningWork) => void) | undefined }) {
+  const cards = useCardTransitions(running);
+  if (cards.length === 0) return null;
+  const depthOf = (index: number) => cards.slice(index).filter(({ leaving }) => !leaving).length;
 
   return (
-    <button
-      type="button"
-      onClick={onShow}
-      className={cn(shell, "cursor-gloss text-muted-foreground hover:bg-accent hover:text-foreground")}
-    >
-      {dot}
-      {label}
-      <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0" />
-    </button>
+    <ul aria-label="Running beside this turn" className="flex flex-col">
+      {cards.map(({ card, leaving }, index) => (
+        <li
+          key={card.key}
+          aria-hidden={leaving || undefined}
+          // Tucked 0.75rem behind the card in front, with 1.75rem showing; narrower with depth.
+          className={cn(
+            "relative -mb-3 overflow-hidden rounded-t-xl border border-b-0 bg-card shadow-sm",
+            "transition-[height,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+            leaving ? "pointer-events-none h-3 opacity-0" : "pointer-events-auto h-10 opacity-100 starting:h-3 starting:opacity-0",
+          )}
+          style={{ marginInline: `${Math.max(1, depthOf(index)) * 0.5}rem`, zIndex: index }}
+        >
+          {card.kind === "more" ? (
+            <p className="flex h-7 items-center px-3 text-xs text-muted-foreground">+{card.count} more running</p>
+          ) : (
+            <button
+              type="button"
+              tabIndex={leaving ? -1 : undefined}
+              onClick={() => onOpen?.(card)}
+              aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
+              className="cursor-gloss flex h-7 w-full items-center gap-2 rounded-t-xl px-3 text-left text-xs text-muted-foreground hover:text-foreground"
+            >
+              {card.kind === "agent" ? <Bot aria-hidden className="size-3.5 shrink-0" /> : <ToolIcon name={card.tool} />}
+              <span className="shrink-0 text-foreground/80">{card.kind === "agent" ? card.name : card.tool}</span>
+              {card.detail ? (
+                <span className={cn("min-w-0 truncate", card.kind === "call" && "font-mono")}>{card.detail}</span>
+              ) : null}
+              <Loader2 aria-hidden className="ml-auto size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
