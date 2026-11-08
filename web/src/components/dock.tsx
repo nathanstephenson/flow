@@ -112,7 +112,7 @@ export function Dock({
                   <div
                     key={tab.id}
                     className={cn(
-                      "cursor-gloss flex h-8 max-w-56 shrink-0 items-center gap-0.5 rounded-lg pr-1 pl-3 text-sm",
+                      "cursor-gloss flex h-8 max-w-56 shrink-0 items-center gap-0.5 rounded-lg pr-1 pl-3 text-base",
                       tab.id === dock.activeId ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50",
                     )}
                   >
