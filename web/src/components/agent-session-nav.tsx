@@ -431,7 +431,7 @@ function AgentSessionRow({
           <TooltipTrigger
             render={
               <SidebarMenuAction
-                className="agent-session-pin cursor-gloss-transparent top-auto! bottom-2.5"
+                className="group/pin agent-session-pin cursor-gloss-transparent top-auto! bottom-2.5"
                 showOnHover={!pinned}
                 aria-pressed={pinned}
                 tabIndex={tabIndex}
@@ -439,7 +439,14 @@ function AgentSessionRow({
               />
             }
           >
-            {pinned ? <PinOff aria-hidden /> : <Pin aria-hidden />}
+            {pinned ? (
+              <>
+                <Pin aria-hidden className="fill-current group-hover/pin:hidden" />
+                <PinOff aria-hidden className="hidden group-hover/pin:block" />
+              </>
+            ) : (
+              <Pin aria-hidden />
+            )}
             <span className="sr-only">{pinned ? "Unpin" : "Pin"}</span>
           </TooltipTrigger>
           <TooltipContent>{pinned ? "Unpin" : "Pin"}</TooltipContent>
