@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { activityLabel, activityStatusText, backgroundTiming, stripOpensSubagents } from "./activity.ts";
+import { activityLabel, activityStatusText, backgroundTiming } from "./activity.ts";
 
 /**
- * The one sentence the Composer's strip and the rail's accessible text both use. Worth its own tests
+ * The one sentence the rail's accessible text uses. Worth its own tests
  * because two surfaces read it: a wording change here moves both, which is the point.
  */
 describe("what is working in an Agent Session", () => {
@@ -53,19 +53,6 @@ describe("what is working in an Agent Session", () => {
     assert.equal(activityLabel({ activeSubagents: -1, activeBackgroundCalls: 2 }), "2 background calls running");
     assert.equal(activityLabel({ activeSubagents: 2, activeBackgroundCalls: -1 }), "2 agents running");
     assert.equal(activityLabel({ activeSubagents: -1, activeBackgroundCalls: 0 }), undefined);
-  });
-});
-
-describe("whether the strip is a link or a readout", () => {
-  it("is a link while a Subagent is working, which is what the pane shows", () => {
-    assert.equal(stripOpensSubagents({ activeSubagents: 1, activeBackgroundCalls: 0 }), true);
-    assert.equal(stripOpensSubagents({ activeSubagents: 1, activeBackgroundCalls: 4 }), true);
-  });
-
-  it("is a readout when only Background Calls are running", () => {
-    // There is no pane to send a reader to: the Subagents Pane drills into a nested transcript, and
-    // a Background Call has none. A button that went nowhere would be worse than a plain row.
-    assert.equal(stripOpensSubagents({ activeSubagents: 0, activeBackgroundCalls: 2 }), false);
   });
 });
 

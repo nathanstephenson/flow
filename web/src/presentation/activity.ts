@@ -21,13 +21,12 @@ export type Activity = {
 };
 
 /**
- * The one sentence for both surfaces, or undefined when nothing is working.
+ * The one sentence for what is working, or undefined when nothing is.
  *
- * Undefined rather than an empty string, so a caller's question is "is there a strip" rather than
- * "is the strip's text empty" — the shape `contextUsageDetail` uses for "nothing honest to say".
+ * Undefined rather than an empty string, so a caller's question is "is anything working" rather than
+ * "is the text empty" — the shape `contextUsageDetail` uses for "nothing honest to say".
  *
- * Subagents lead because theirs is the half with a destination, and the strip is read left-to-right
- * into its own chevron. Each count is floored at zero **independently**: they are maintained by
+ * Subagents lead. Each count is floored at zero **independently**: they are maintained by
  * transitions, so one that underflows must not be able to erase another clause.
  */
 export function activityLabel(of: Activity): string | undefined {
@@ -48,23 +47,10 @@ export function activityLabel(of: Activity): string | undefined {
 }
 
 /**
- * Whether the strip is a link or a readout.
- *
- * A Background Call has no pane to open — the Subagents Pane exists to drill into one Subagent's
- * nested transcript, and a Background Call attributes nothing, so a row for it would link nowhere.
- * A strip reporting only Background Calls is therefore rendered inert, because a readout with no
- * destination should not pretend to be a button.
- */
-export function stripOpensSubagents(of: Activity): boolean {
-  return of.activeSubagents > 0;
-}
-
-/**
  * The status word plus what is working, for a reader not looking at colour or shape.
  *
- * Reuses `activityLabel` rather than phrasing it again: the rail's dot and the composer's strip are
- * two renderings of one fact, and two surfaces inventing two wordings is what drifts. The status
- * leads, because that is what the dot's own shape encodes.
+ * Reuses `activityLabel` rather than phrasing it again, so the wording lives in one place. The
+ * status leads, because that is what the rail dot's own shape encodes.
  */
 export function activityStatusText(of: Activity & { status: string }): string {
   const label = activityLabel(of);

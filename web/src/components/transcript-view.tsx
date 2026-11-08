@@ -323,12 +323,15 @@ function TranscriptRow({ view, entryKey, query }: { view: AgentSessionView; entr
   // the right answer if it ever does.
   if (!entry) return null;
   return (
-    <TranscriptEntry
-      entry={entry}
-      query={query}
-      sessionId={view.sessionId}
-      background={background?.kind === "background_call" ? background : undefined}
-    />
+    // Found by key when something elsewhere sends the reader to this row (the Composer's cards).
+    <div data-entry-key={entryKey}>
+      <TranscriptEntry
+        entry={entry}
+        query={query}
+        sessionId={view.sessionId}
+        background={background?.kind === "background_call" ? background : undefined}
+      />
+    </div>
   );
 }
 
