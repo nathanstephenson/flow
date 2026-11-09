@@ -1,10 +1,14 @@
+// Runs Chromium, Firefox, and touch/mobile-emulated WebKit by default.
+// PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node --test web/tests/composer-activity.browser.test.mjs
+// Set PLAYWRIGHT_BROWSER=chromium|firefox|webkit to select one engine.
 import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { build as buildWeb } from "vite";
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+const playwright = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+const browsers = process.env.PLAYWRIGHT_BROWSER ? [process.env.PLAYWRIGHT_BROWSER] : ["chromium", "firefox", "webkit"];
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const output = await buildWeb({
   configFile: `${root}/web/vite.config.ts`,
@@ -75,7 +79,7 @@ const bundle = await build({
   define: { "process.env.NODE_ENV": '"development"' },
 });
 
-describe("Composer activity border", () => {
+for (const browserName of browsers) describe(`${browserName}: Composer activity border`, () => {
   let browser;
   let page;
   let errors;
@@ -88,7 +92,7 @@ describe("Composer activity border", () => {
   const offset = () => style(rect(), 'strokeDashoffset');
   const render = (status, floating = true) => page.evaluate(([status, floating]) => window.renderStatus(status, floating), [status, floating]);
   before(async () => {
-    browser = await chromium.launch({
+    browser = await playwright[browserName].launch({
       headless: true,
       ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}),
     });
@@ -96,12 +100,15 @@ describe("Composer activity border", () => {
   after(async () => { await browser?.close(); });
   beforeEach(async () => {
     errors = [];
-    page = await browser.newPage({ reducedMotion: 'no-preference' });
+    page = await browser.newPage({
+      reducedMotion: 'no-preference',
+      ...(browserName === 'webkit' ? { isMobile: true, hasTouch: true } : {}),
+    });
     page.on('pageerror', error => errors.push(error.message));
     await page.route('http://flow.test/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/') {
-        await route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' });
+        await route.fulfill({ contentType: 'text/html', body: '<meta name="viewport" content="width=device-width, initial-scale=1"><div id="root"></div>' });
       } else if (path === '/api/config' || path === '/api/sessions') {
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify(
           path === '/api/config' ? { scope: '/tmp/project', backends: ['pi'] } : [],
@@ -170,20 +177,32 @@ describe("Composer activity border", () => {
     const ids = [];
     for (const svg of [fixture('running'), fixture('awaiting'), activity()]) {
       const mask = svg.locator('defs > mask');
+      const filter = svg.locator('defs > filter');
+      const filterId = await filter.getAttribute('id');
+      assert.ok(filterId);
+      ids.push(filterId);
+      assert.equal(await filter.getAttribute('color-interpolation-filters'), 'sRGB');
+      assert.equal(await filter.getAttribute('filterUnits'), 'userSpaceOnUse');
+      for (const [attribute, value] of [['x', '-50%'], ['y', '-50%'], ['width', '200%'], ['height', '200%']]) {
+        assert.equal(await filter.getAttribute(attribute), value);
+      }
+      assert.equal(await filter.locator('feGaussianBlur').getAttribute('stdDeviation'), '4');
+      assert.equal(await svg.locator('.composer-activity-glow').getAttribute('filter'), `url(#${filterId})`);
       const id = await mask.getAttribute('id');
       assert.ok(id);
       ids.push(id);
-      assert.equal(await svg.locator(':scope > g').getAttribute('mask'), `url(#${id})`);
-      assert.equal(await svg.locator(':scope > g > .composer-activity-glow').count(), 1);
+      assert.equal(await svg.locator(':scope > .composer-activity-glow').getAttribute('mask'), `url(#${id})`);
+      assert.equal(await svg.locator(':scope > .composer-activity-glow').count(), 1);
       const cutout = mask.locator('.composer-activity-cutout');
       const exterior = mask.locator('rect:not(.composer-activity-cutout)');
       assert.equal(await style(exterior, 'fill'), 'rgb(255, 255, 255)');
       assert.equal(await style(cutout, 'fill'), 'rgb(0, 0, 0)');
       const geometry = await svg.evaluate(element => {
         const cutout = element.querySelector('.composer-activity-cutout');
-        const { x, y, width, height } = cutout.getBBox();
+        // Firefox may return an empty getBBox() for a definition that is not directly painted.
         return {
-          x, y, width, height,
+          x: cutout.x.baseVal.value, y: cutout.y.baseVal.value,
+          width: cutout.width.baseVal.value, height: cutout.height.baseVal.value,
           svgWidth: element.clientWidth, svgHeight: element.clientHeight,
           radius: getComputedStyle(cutout).rx,
           outlineRadius: getComputedStyle(element.querySelector('.composer-activity-outline')).rx,
@@ -197,7 +216,7 @@ describe("Composer activity border", () => {
       const glow = svg.locator('.composer-activity-glow');
       const outline = svg.locator(':scope > .composer-activity-outline');
       assert.equal(await style(glow, 'strokeWidth'), '6px');
-      assert.equal(await style(glow, 'filter'), 'blur(4px)');
+      assert.ok((await style(glow, 'filter')).includes(`#${filterId}`));
       assert.equal(await style(glow, 'opacity'), '0.45');
       assert.equal(await style(outline, 'strokeWidth'), '0.8px');
       assert.equal(await style(outline, 'filter'), 'none');
@@ -207,60 +226,62 @@ describe("Composer activity border", () => {
     assert.equal(new Set(ids).size, ids.length);
   });
 
-  it("renders glow pixels outside the border but masks interior pixels", async () => {
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
-      const pixels = await fixture('awaiting').evaluate(async element => {
-        const width = Math.ceil(element.clientWidth);
-        const height = Math.ceil(element.clientHeight);
-        const padding = 20;
-        const clone = element.cloneNode(true);
-        const properties = ['width', 'height', 'rx', 'fill', 'stroke', 'stroke-width',
-          'stroke-linecap', 'stroke-dasharray', 'stroke-dashoffset', 'filter', 'opacity'];
-        const originals = [element, ...element.querySelectorAll('*')];
-        const copies = [clone, ...clone.querySelectorAll('*')];
-        originals.forEach((original, index) => {
-          const computed = getComputedStyle(original);
-          for (const property of properties) copies[index].style.setProperty(property, computed.getPropertyValue(property));
-        });
-        clone.querySelector('.composer-activity-outline').remove();
-        clone.setAttribute('x', padding);
-        clone.setAttribute('y', padding);
-        clone.setAttribute('width', width);
-        clone.setAttribute('height', height);
-        clone.style.width = `${width}px`;
-        clone.style.height = `${height}px`;
-        clone.style.overflow = 'visible';
-        const wrapper = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        wrapper.setAttribute('width', width + padding * 2);
-        wrapper.setAttribute('height', height + padding * 2);
-        wrapper.append(clone);
-        const canvas = document.createElement('canvas');
-        canvas.width = width + padding * 2;
-        canvas.height = height + padding * 2;
-        const context = canvas.getContext('2d');
-        async function sample() {
-          const image = new Image();
-          image.src = `data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(wrapper))}`;
-          await image.decode();
-          context.clearRect(0, 0, canvas.width, canvas.height);
-          context.drawImage(image, 0, 0);
-          const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
-          const alpha = (x, y) => data[((y + padding) * canvas.width + x + padding) * 4 + 3];
-          let interior = 0;
-          for (let y = 1; y < height - 1; y++) {
-            for (let x = Math.ceil(width / 3); x < width * 2 / 3; x++) interior = Math.max(interior, alpha(x, y));
+  it("paints a soft exterior glow and moving dashes on desktop and phone widths", async () => {
+    // Inspect actual page pixels, not just computed CSS or a re-serialized SVG: WebKit reports
+    // CSS blur() on an SVG rect even when it paints an unblurred stroke.
+    await page.addStyleTag({ content: `
+      [data-fixture], [data-pane] { display: none !important; }
+      [data-fixture].paint-target { display: block !important; margin: 40px; width: calc(100% - 80px); }
+      .paint-target .composer-activity-outline { visibility: hidden; }
+    ` });
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 400 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
+        for (const status of ['awaiting', 'running']) {
+          await page.locator('[data-fixture]').evaluateAll((elements, status) => {
+            elements.forEach(element => element.classList.toggle('paint-target', element.dataset.fixture === status));
+          }, status);
+          const profiles = [];
+          for (const time of [0, 1250]) {
+            await fixture(status).evaluate((element, time) => {
+              element.getAnimations({ subtree: true }).forEach(animation => { animation.pause(); animation.currentTime = time; });
+            }, time);
+            const bounds = await fixture(status).boundingBox();
+            const png = await page.screenshot();
+            const pixels = await page.evaluate(async ({ image, bounds }) => {
+              const img = new Image();
+              img.src = image;
+              await img.decode();
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width; canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const chroma = (x, y) => {
+                const i = (Math.round(y) * canvas.width + Math.round(x)) * 4;
+                return Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]);
+              };
+              const { x, y, width, height } = bounds;
+              const exterior = [];
+              let interior = 0;
+              for (let dx = 20; dx < width - 20; dx++) {
+                exterior.push(chroma(x + dx, y - 6), chroma(x + dx, y + height + 5));
+                interior = Math.max(interior, chroma(x + dx, y + 8), chroma(x + dx, y + height - 8));
+              }
+              for (let dy = 20; dy < height - 20; dy++) {
+                exterior.push(chroma(x - 6, y + dy), chroma(x + width + 5, y + dy));
+              }
+              return { exterior, interior };
+            }, { image: `data:image/png;base64,${png.toString('base64')}`, bounds });
+            assert.ok(Math.max(...pixels.exterior) > 2, `${width}/${theme}/${status}: soft glow missing six pixels outside the border`);
+            assert.equal(pixels.interior, 0, `${width}/${theme}/${status}: glow leaked inside`);
+            profiles.push(pixels.exterior);
           }
-          return { interior, exterior: alpha(Math.floor(width / 2), -3) };
+          if (status === 'running') assert.notDeepEqual(profiles[0], profiles[1], 'the painted dash must move');
+          else assert.deepEqual(profiles[0], profiles[1], 'Awaiting must stay static');
         }
-        const masked = await sample();
-        clone.querySelector('g').removeAttribute('mask');
-        return { masked, unmasked: await sample() };
-      });
-      assert.equal(pixels.masked.interior, 0, `${theme}: glow entered the interior`);
-      assert.ok(pixels.masked.exterior > 0, `${theme}: exterior glow is missing`);
-      assert.ok(pixels.unmasked.interior > 0, `${theme}: mask did not remove visible glow`);
-      assert.equal(pixels.masked.exterior, pixels.unmasked.exterior);
+      }
     }
   });
 
@@ -327,7 +348,7 @@ describe("Composer activity border", () => {
       await page.setViewportSize({ width, height: 900 });
       for (const floating of [true, false]) {
         await render('running', floating);
-        const panel = pane().locator('.pane-measure');
+        const panel = activity().locator('..');
         const box = await panel.boundingBox();
         const svgBox = await activity().boundingBox();
         const shapeBoxes = await shapes().evaluateAll(elements => elements.map(element => {
@@ -354,8 +375,8 @@ describe("Composer activity border", () => {
           assert.equal(await style(shape, 'rx'), await style(panel, 'borderTopLeftRadius'));
         }
         const cutoutBox = await activity().locator('.composer-activity-cutout').evaluate(element => {
-          const { x, y, width, height } = element.getBBox();
-          return { x, y, width, height };
+          return { x: element.x.baseVal.value, y: element.y.baseVal.value,
+            width: element.width.baseVal.value, height: element.height.baseVal.value };
         });
         close(cutoutBox.x, 0);
         close(cutoutBox.y, 0);
