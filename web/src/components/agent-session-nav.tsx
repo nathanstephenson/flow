@@ -153,7 +153,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
        */}
       <SidebarContent
         ref={list}
-        className="gap-0 overflow-hidden"
+        className="gap-0 overflow-hidden pt-2"
         onKeyDown={moveWithinRow}
         onFocusCapture={(event) => {
           rowHasFocus.current = event.target.closest('[data-sidebar="menu-item"]') !== null;
@@ -229,8 +229,9 @@ type MenuProps = AgentSessionNavProps & { sessions: SessionSummary[]; now: numbe
 
 function AgentSessionMenu({ sessions, now, label, ...props }: MenuProps) {
   return (
-    /* Inset rounded rows with a small gap, the same shape as the Agents tab rows. */
-    <SidebarMenu className="gap-1 px-2 py-0.5" aria-label={label}>
+    /* Inset rounded rows with a small gap, the same shape as the Agents tab rows.
+       Clip the hover tilt here so it cannot enlarge the parent scroller's overflow area. */
+    <SidebarMenu className="gap-1 overflow-clip px-2 py-0.5" aria-label={label}>
       {sessions.map((session) => (
         <AgentSessionRow
           key={session.id}
@@ -286,7 +287,7 @@ function AgentSessionRow({
     /* Upstream's own shape, kept: a `relative` item with the action positioned over the row rather
        than beside it. A flex line here instead would shrink the button to less than the row, and the
        selection highlight would visibly stop short of the action. */
-    <SidebarMenuItem className="cursor-tilt rounded-lg">
+    <SidebarMenuItem className="cursor-tilt overflow-clip rounded-lg">
       <SidebarMenuButton
         size="lg"
         isActive={selected}
@@ -305,10 +306,10 @@ function AgentSessionRow({
           // `size="lg"` fixes the height at h-12, which fit the two lines this row had and clips the
           // third; `h-auto` hands the height back to the content, so a row is as tall as it has
           // something to say and a Scope that is not a repository stays two lines. p-2 would clip
-          // the lines against the button's own `overflow-hidden`, so the padding stays py-1.5.
+          // the lines against the button's own overflow clipping, so the padding stays py-1.5.
           // The keyboard-only focus outline lives inside the face, clear of the status edge.
           // The retained cursor controls tab order, not decoration outside the rail.
-          "agent-session-row h-auto rounded-lg py-1.5 pr-8",
+          "agent-session-row h-auto overflow-clip rounded-lg py-1.5 pr-8",
         )}
       >
         <span className="min-w-0 flex-1">
