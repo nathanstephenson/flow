@@ -150,10 +150,11 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
        * Left/Right are the rail's own: they reach the row's own action without leaving the row, and
        * they are the only keys this component handles — everything vertical is resolved centrally
        * so there is one cursor rather than two.
+       * The 4px top inset, menu inset and row padding align the first title with the pane header.
        */}
       <SidebarContent
         ref={list}
-        className="gap-0 overflow-hidden pt-2"
+        className="gap-0 overflow-hidden pt-1"
         onKeyDown={moveWithinRow}
         onFocusCapture={(event) => {
           rowHasFocus.current = event.target.closest('[data-sidebar="menu-item"]') !== null;
