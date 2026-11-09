@@ -373,7 +373,9 @@
   .mobile-safe-frame {
     padding-top: env(safe-area-inset-top);
     padding-right: env(safe-area-inset-right);
-    padding-bottom: env(safe-area-inset-bottom);
+    /* The frame owns cutouts once; the Composer only adds its ordinary panel spacing.
+       A keyboard-shrunken visual viewport ends above the home indicator. */
+    padding-bottom: var(--mobile-viewport-safe-bottom, env(safe-area-inset-bottom));
     padding-left: env(safe-area-inset-left);
   }
 
@@ -391,7 +393,12 @@
   }
 
   .safe-composer-bottom {
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-bottom: max(0.75rem, var(--mobile-viewport-safe-bottom, env(safe-area-inset-bottom)));
+  }
+
+  /* A Composer outside the app frame (such as the Workflow builder) still owns its cutout. */
+  .mobile-safe-frame .safe-composer-bottom {
+    padding-bottom: 0.75rem;
   }
 }
 
