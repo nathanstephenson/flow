@@ -17,6 +17,10 @@ const bundle = await build({
       import { createRoot } from 'react-dom/client';
       import { flushSync } from 'react-dom';
       import { AgentSessionNav } from './web/src/components/agent-session-nav.tsx';
+      import { AgentSessionPaneHeader } from './web/src/components/agent-session-pane-header.tsx';
+      import { HostProvider } from './web/src/host.tsx';
+      import { SessionsProvider } from './web/src/agent-sessions.tsx';
+      import { TooltipProvider } from './web/src/components/ui/tooltip.tsx';
       import { KeyboardLayer } from './web/src/components/keyboard-layer.tsx';
       import { SidebarProvider } from './web/src/components/ui/sidebar.tsx';
       import { statusIndicatorColor } from './web/src/components/status-indicator.tsx';
@@ -52,7 +56,11 @@ const bundle = await build({
         flushSync(() => root.render(<React.StrictMode>
           <KeyboardLayer view="session" handlers={{ 'focus-pane': () => window.paneFocuses++ }}>
             <SidebarProvider>
-              <AgentSessionNav {...props} />
+              {props.withTranscriptHeader ? (
+                <aside className="flex h-screen w-64 shrink-0 flex-col">
+                  <AgentSessionNav {...props} />
+                </aside>
+              ) : <AgentSessionNav {...props} />}
               <input aria-label="Composer" />
             </SidebarProvider>
           </KeyboardLayer>
@@ -77,6 +85,20 @@ const bundle = await build({
         }
       });
       window.renderRail();
+      window.mountTranscriptHeader = () => {
+        // The actual header, with only the Session Host boundary mocked.
+        window.fetch = async input => new Response(JSON.stringify(
+          String(input).includes('/api/config') ? { scope: '/tmp/project', backends: ['pi'] } : []
+        ), { headers: { 'Content-Type': 'application/json' } });
+        const container = document.createElement('div');
+        container.dataset.transcriptHeader = '';
+        container.className = 'w-96 shrink-0 self-start';
+        document.querySelector('[data-slot="sidebar-wrapper"]').append(container);
+        createRoot(container).render(<HostProvider><SessionsProvider><TooltipProvider>
+          <AgentSessionPaneHeader sessionId="a" project="project" title="Transcript title"
+            chrome={{ status: 'running', backend: 'pi' }} />
+        </TooltipProvider></SessionsProvider></HostProvider>);
+      };
     `,
     resolveDir: root,
     loader: "tsx",
@@ -140,6 +162,29 @@ describe("Agent Session rail DOM focus and material", () => {
       }
     });
   }
+
+  it("aligns the first session row title with the transcript header title", async () => {
+    await page.evaluate(() => {
+      window.renderRail({ withTranscriptHeader: true, pinned: new Set(['a']) });
+      window.reparent('running');
+      window.mountTranscriptHeader();
+    });
+    const headerTitle = page.locator('[data-transcript-header]').getByText('Transcript title', { exact: true });
+    await headerTitle.waitFor();
+    for (const width of [1024, 1280, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
+        for (const status of ['running', 'awaiting']) {
+          await page.evaluate(status => window.reparent(status), status);
+          const rowTitle = await cursor().locator('.text-sm').first().boundingBox();
+          const transcriptTitle = await headerTitle.boundingBox();
+          assert.ok(Math.abs(rowTitle.y - transcriptTitle.y) < 0.5,
+            `${width}/${theme}/${status}: row title ${rowTitle.y} vs transcript title ${transcriptTitle.y}`);
+        }
+      }
+    }
+  });
 
   it("moves DOM focus with repeated arrow cursor changes", async () => {
     await cursor().focus();
