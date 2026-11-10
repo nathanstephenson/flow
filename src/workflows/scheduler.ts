@@ -7,6 +7,7 @@ import type { WorkflowGraph } from './graph.ts';
 import { declaredOutputSchema, parseValue, valueAt } from './schema.ts';
 import { validateMcpOutput } from './mcp.ts';
 import { WorkflowStore } from './store.ts';
+import { savedDefinitionRevision, validateCompatibleDefinition } from './recovery.ts';
 
 export interface WorkflowSession {
   sessionId: string;
@@ -179,12 +180,21 @@ export class WorkflowScheduler {
     return structuredClone(active.record);
   }
 
-  recover(session: WorkflowSession, executionId: string, action: RecoverWorkflow): WorkflowExecution {
+  /** replacementDefinition is resolved from saved storage by the host, never from request JSON. */
+  recover(session: WorkflowSession, executionId: string, action: RecoverWorkflow, replacementDefinition?: WorkflowDefinition): WorkflowExecution {
     const active = this.require(session.sessionId, executionId);
     const record = active.record;
     if (record.status !== 'recovery-required' || active.running.size) throw new Error('Execution is not ready for recovery');
     if (record.definition.backend !== session.backend || record.scope !== session.scope) throw new Error('Recovery requires the original Scope and Backend Adapter');
-    this.check(active.graph.order.filter(step => (!record.testStepId || step.id === record.testStepId) && record.steps[step.id]!.status !== 'completed' && !(action.kind === 'supply' && step.id === action.stepId)), session);
+    let graph = active.graph;
+    if (action.kind === 'retry-updated') {
+      if (!replacementDefinition) throw new Error('Updated recovery requires a saved Workflow Definition');
+      if (savedDefinitionRevision(replacementDefinition) !== action.definitionRevision) throw new Error('Saved Workflow Definition revision changed');
+      graph = validateCompatibleDefinition(record.definition, replacementDefinition, action.stepId);
+    } else if (replacementDefinition !== undefined) throw new Error('Replacement definition requires retry-updated');
+    // Check the corrected configuration, not the obsolete one. No checkpoint/graph mutation
+    // happens until compatibility, authority, eligibility and all runtime checks pass.
+    this.check(graph.order.filter(step => (!record.testStepId || step.id === record.testStepId) && record.steps[step.id]!.status !== 'completed' && !(action.kind === 'supply' && step.id === action.stepId)), session);
     const limits = Object.entries(record.loops ?? {}).filter(([, loop]) => loop.phase === 'limit');
     if (action.kind === 'continue' && limits.length) throw new WorkflowLoopConflict('Loop limit requires an extra try or cancellation');
     if (action.kind === 'extend-loop') {
@@ -194,10 +204,10 @@ export class WorkflowScheduler {
       loop.grants.push({ activation: loop.activation, try: loop.try + 1, ...(action.guidance === undefined ? {} : { guidance: action.guidance }) });
       loop.phase = 'active';
     } else if (action.kind !== 'continue') {
-      const step = active.graph.order.find(step => step.id === action.stepId);
+      const step = graph.order.find(step => step.id === action.stepId);
       const state = record.steps[action.stepId];
       if (!step || !state || !['interrupted', 'failed', 'timed-out'].includes(state.status)) throw new Error('Step does not require recovery');
-      if (state.status !== 'interrupted' && !record.testStepId && !state.recovery && active.graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) throw new Error('Recover the failed handling step, not the handled failure');
+      if (state.status !== 'interrupted' && !record.testStepId && !state.recovery && graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) throw new Error('Recover the failed handling step, not the handled failure');
       if (action.kind === 'supply') {
         const output = this.validateOutput(active, step, action.output);
         const attempt: StepAttempt = { number: state.attempts.length + 1, action: 'supply', startedAt: Date.now(), finishedAt: Date.now(), input: state.attempts.at(-1)!.input, output, ...(state.attempts.at(-1)!.loops ? { loops: structuredClone(state.attempts.at(-1)!.loops) } : {}) };
@@ -207,6 +217,12 @@ export class WorkflowScheduler {
         state.outcome = step.kind === 'branch' ? output ? 'true' : 'false' : 'success';
       } else {
         this.check([step], session);
+        if (action.kind === 'retry-updated') {
+          const previousStep = record.definition.steps.find(previous => previous.id === step.id)!;
+          (record.definitionUpdates ??= []).push({ stepId: step.id, previousStep: structuredClone(previousStep), nextStep: structuredClone(step), appliedAt: Date.now(), attempt: state.attempts.length + 1 });
+          record.definition = graph.definition;
+          active.graph = graph;
+        }
         state.status = 'pending';
         delete state.outcome;
       }

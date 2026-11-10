@@ -174,7 +174,8 @@ Warn that interrupted operations might already have made changes.
 ## Definitions and history
 
 - Each execution keeps a fixed copy of its definition, inputs, model choices, and Effort settings.
-- Edits affect future executions only. Recovery uses the original copy.
+- Edits affect future executions only unless explicit `retry-updated` recovery adopts a saved correction to the failed step's executable configuration. This requires the current saved definition revision and fresh human confirmation for agent requests. Graph topology, schemas, input mappings, permission policy and all other steps must remain unchanged.
+- Corrected recovery retains the execution ID, original parameters, completed outputs, previous attempts, activity and loop context. The failed attempt's input is reused, and the old/new configuration is audited before a new attempt starts. It does not restore a terminated Workflow Subagent's private SDK conversation.
 - Deleting a definition does not delete history or prevent recovery from an execution's saved copy.
 - Execution history belongs to its Agent Session and is removed when that Agent Session is Reaped.
 - Settings manages definitions, not execution history.

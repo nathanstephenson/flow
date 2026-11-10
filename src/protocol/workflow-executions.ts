@@ -63,7 +63,7 @@ export interface WorkflowRuntimeStatus {
 
 export type StartWorkflow = { workflowId: string; input: Json; /** Durable identity making an ambiguous launch safe to retry. */ launchId?: string; /** Name an untouched Agent Session once the execution reveals its actual work. */ nameSession?: true };
 export type TestWorkflowStep = { definition: WorkflowDefinition; sessionId: string; stepId: string; input: Json };
-export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined };
+export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'retry-updated'; stepId: string; /** Hash of the saved Workflow Definition, not the execution recovery revision. */ definitionRevision: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined };
 export interface WorkflowActivityPage {
   /** Always ascending by sequence, including pages fetched from the tail. */
   activity: WorkflowActivity[];

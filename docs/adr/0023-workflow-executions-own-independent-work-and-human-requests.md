@@ -12,7 +12,9 @@ Queue. A Dormant eligible Agent Session is Revived on demand; an Ended Agent Ses
 or recover work.
 
 The execution retains its Workflow Definition, typed inputs and runtime Settings. Definition edits
-and deletion do not change it. Project restrictions compare directory identity, using the source
+and deletion do not change it implicitly. [ADR 0038](0038-saved-step-corrections-resume-retained-workflow-checkpoints.md)
+adds explicit, revision-pinned adoption of a saved correction to one failed Step while retaining its
+checkpoint and auditing the previous configuration. Project restrictions compare directory identity, using the source
 Project for a host-owned Worktree. Runtime readiness probes are asynchronous and cached. Settings
 changes refresh readiness for new work, not the executors already serving an execution.
 
