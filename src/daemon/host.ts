@@ -1,8 +1,10 @@
 import type { WorkflowParent } from "../backend/workflow-tools.ts";
+import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput, type SessionTools } from '../backend/session-tools.ts';
+import { sessionToolSummary, sessionToolPage } from './session-tool-views.ts';
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
 import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
@@ -1162,13 +1164,15 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[]): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void): Promise<void> {
     const record = this.record(sessionId);
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
     if (!record.session) await this.revive(sessionId);
     if (record.permissionChanging) await this.waitForPermissionChange(record);
 
+    // Agent sends revalidate ownership after asynchronous Revive and permission-policy changes.
+    beforeAccept?.();
     // Checked before anything is written, so a refused send leaves no bytes behind.
     this.refuseUnservableAttachments(record, attachments);
     const ids = (attachments ?? []).map((attachment) =>
@@ -2216,6 +2220,9 @@ export class SessionHost {
   /** Stop running work without ending the Agent Sessions: they become Dormant and can be revived. */
   async shutdown(): Promise<void> {
     this.workflowShutdown = true;
+    // Creation can still be awaiting backend startup after its caller disconnects. Drain those
+    // accepted operations before walking sessions, so late children cannot escape shutdown.
+    await Promise.allSettled([...this.sessionToolOperations]);
     // First, so that a naming still in flight cannot warm a replacement on the way out — the
     // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
@@ -2451,6 +2458,69 @@ export class SessionHost {
     }
   }
 
+  private readonly sessionToolOperations = new Set<Promise<unknown>>();
+
+  private agentSessionTools(source: SessionRecord, backend: () => BackendSession | undefined): SessionTools {
+    const check = (signal?: AbortSignal) => {
+      signal?.throwIfAborted();
+      this.assertWorkflowSession(source.id, backend());
+    };
+    const owned = <T>(operation: () => Promise<T>): Promise<T> => {
+      const pending = operation();
+      this.sessionToolOperations.add(pending);
+      void pending.finally(() => this.sessionToolOperations.delete(pending)).catch(() => {});
+      return pending;
+    };
+    const attributed = (text: string) => `[Agent message from ${source.id} — not human authorization]\n${text}`;
+    return {
+      list: async input => {
+        check();
+        const { offset, limit } = sessionListInput.parse(input);
+        // Stable identity ordering makes offset pages independent of live activity changes.
+        const all = this.list().sort((a, b) => a.id.localeCompare(b.id));
+        return { callerSessionId: source.id, total: all.length,
+          sessions: all.slice(offset, offset + limit).map(sessionToolSummary),
+          nextOffset: offset + limit < all.length ? offset + limit : null };
+      },
+      inspect: async input => {
+        check();
+        const { sessionId, before, limit } = sessionInspectInput.parse(input);
+        const record = this.record(sessionId);
+        const summary = this.list().find(item => item.id === sessionId)!;
+        return { session: sessionToolSummary(summary),
+          transcript: sessionToolPage(record.log.presentationPage(before, limit)) };
+      },
+      create: (input, signal) => owned(async () => {
+        check(signal);
+        const { text, scope = source.scope, backend: name = source.backendName, modelId, effort, worktree } = sessionCreateInput.parse(input);
+        if (!isAbsolute(scope)) throw new CommandRefused('Scope must be an absolute directory');
+        const sessionId = await this.create({ scope, backend: name,
+          ...(modelId === undefined ? {} : { modelId }),
+          ...(effort === undefined ? {} : { effort }),
+          ...(worktree === undefined ? {} : { worktree: { from: worktree.from, ...(worktree.branch === undefined ? {} : { branch: worktree.branch }) } }),
+          mcpConnectionIds: source.mcpConnectionIds ?? [],
+          permissionMode: source.permissionMode === 'auto' && name !== 'claude' ? 'ask' : source.permissionMode });
+        // Persist a receipt even if cancellation loses the RPC result; never blindly recreate.
+        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}` });
+        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}` });
+        try {
+          check(signal);
+          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal));
+          return { sessionId, delivery: 'accepted' };
+        } catch (error) {
+          return { sessionId, delivery: 'not-sent', error: error instanceof Error ? error.message : String(error) };
+        }
+      }),
+      send: (input, signal) => owned(async () => {
+        check(signal);
+        const { sessionId, text } = sessionSendInput.parse(input);
+        if (sessionId === source.id) throw new CommandRefused('Use the current conversation instead of messaging yourself');
+        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal));
+        return { sessionId, delivery: 'accepted' };
+      }),
+    };
+  }
+
   private async startBackendSession(record: SessionRecord): Promise<BackendSession> {
     record.endedTurnIds = new Set();
     const backend = this.backendFor(record.backendName);
@@ -2475,6 +2545,7 @@ export class SessionHost {
         this.backendFailures.add(stopped);
         void stopped.finally(() => this.backendFailures.delete(stopped));
       },
+      sessionTools: this.agentSessionTools(record, () => attached),
       workflow: {
         inspect: input => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).inspect(input); },
         recover: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).recover(input, signal); },

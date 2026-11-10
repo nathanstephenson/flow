@@ -105,6 +105,15 @@ Scope rules:
 When the Session Host restarts, sessions that were running load as **Dormant**. You can read their
 transcripts. Nothing runs and nothing is spent. The next message revives a Dormant session.
 
+### Agent-to-agent communication
+
+Parent agents can use `session_list` and `session_inspect` to discover Agent Sessions and read
+bounded Presentation Transcript pages across this host. `session_create` starts independent work;
+`session_send` sends an attributed message through the Steering Queue without interrupting a turn.
+Creation and messaging use the existing permission policy and can incur Spend. Agents cannot answer
+another Agent Session's human prompts. Use a fresh Worktree for concurrent edits, and inspect for
+results rather than assuming delivery means completion.
+
 ### TUI keys
 
 | Key | Action |

@@ -3,7 +3,7 @@ import type { McpTool } from "../mcp.ts";
 import type { Capabilities } from "../../protocol/events.ts";
 
 export type McpToolMetadata = Omit<McpTool, "call">;
-export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "onFailure" | "signal"> & {
+export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "sessionTools" | "onFailure" | "signal"> & {
   /** Only instructions cross the worker channel; the three callbacks remain in the host. */
   workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];
@@ -11,6 +11,8 @@ export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workfl
   /** Sandbox mode (ADR 0033): definitions for MCP clients that run in this worker. */
   mcpSandbox?: import("../../protocol/mcp.ts").McpConnection[];
   workflowEnabled: boolean;
+  /** Host callbacks stay in the Session Host; only their availability crosses IPC. */
+  sessionToolsEnabled: boolean;
   /** Trusted launcher configuration, never accepted from model RPC. */
   backendModule?: string;
   backend?: "pi" | "claude";

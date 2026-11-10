@@ -34,7 +34,7 @@ export class PiAgentPermissions {
     return { name: "flow-agent-permissions", hidden: true, factory: (pi) => {
       pi.on("tool_call", async (event, ctx) => {
         const tool = event.toolName;
-        if (tool === "read" || tool === "ask_question" || tool === "subagent" || tool === "bash_output" || tool === "kill_shell" || tool.startsWith("workflow_") ||
+        if (tool === "read" || tool === "session_list" || tool === "session_inspect" || tool === "ask_question" || tool === "subagent" || tool === "bash_output" || tool === "kill_shell" || tool.startsWith("workflow_") ||
             this.grants.has(tool) || this.mode === "always") return;
         const refusedKey = `${producer?.subagentId ?? "parent"}/${tool}`;
         if (this.refused.has(refusedKey)) return { block: true, reason: `${tool} is not authorised` };

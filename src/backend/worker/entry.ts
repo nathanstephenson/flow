@@ -2,6 +2,7 @@ import type { AgentBackend, BackendSession, WorkflowSubagentHandle, PromptAttach
 import { McpSession, type McpTool } from "../mcp.ts";
 import type { WorkflowParent } from "../workflow-tools.ts";
 import type { WorkflowBuilder } from "../workflow-builder.ts";
+import type { SessionTools } from "../session-tools.ts";
 import type { EffortLevel, PermissionDecision } from "../../protocol/events.ts";
 import { WorkerRpc, errorText } from "./rpc.ts";
 import { snapshot, type CreateMetadata, type McpToolMetadata, type WorkflowMetadata, type SessionSnapshot } from "./protocol.ts";
@@ -42,7 +43,7 @@ export function runWorker(): void {
       const ready = performance.now();
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, sessionToolsEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
         instructions: workflowBuilderInstructions,
         read: (path) => rpc.call("workflowBuilder.read", [path]),
@@ -63,6 +64,12 @@ export function runWorker(): void {
         relayEnquiry: (input, signal) => rpc.call("workflow.relayEnquiry", [input], signal),
         relayPermission: (input, signal) => rpc.call("workflow.relayPermission", [input], signal),
       };
+      const sessionTools: SessionTools = {
+        list: (input) => rpc.call("session.list", [input]),
+        inspect: (input) => rpc.call("session.inspect", [input]),
+        create: (input, signal) => rpc.call("session.create", [input], signal),
+        send: (input, signal) => rpc.call("session.send", [input], signal),
+      };
       let backend: AgentBackend;
       const importing = performance.now();
       try {
@@ -82,6 +89,7 @@ export function runWorker(): void {
           ...(localMcp ? { mcp: localMcp }
             : mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),
           ...(workflowEnabled ? { workflow } : {}),
+          ...(sessionToolsEnabled && options.tools !== "none" ? { sessionTools } : {}),
         }),
         emit: (event) => {
           // Models can be a large catalogue. Do not resend it for every text/tool delta, but do

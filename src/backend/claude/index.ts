@@ -1,4 +1,5 @@
 import { workflowParentServer } from "./workflow-parent.ts";
+import { sessionToolsServer, claudeSessionReadTools, SESSION_TOOL_PREFIX } from "./session-tools.ts";
 import { workflowBuilderServer, claudeWorkflowBuilderToolNames } from "./workflow-builder.ts";
 import { randomUUID } from "node:crypto";
 import { claudeAutoCompactionEnv } from "./auto-compaction.ts";
@@ -238,6 +239,7 @@ class ClaudeSession implements BackendSession {
   private disposed = false;
   private readonly workflowSubagents = new Set<WorkflowSubagentHandle>();
   private readonly parentWorkflow: ReturnType<typeof workflowParentServer> | ReturnType<typeof workflowBuilderServer>;
+  private readonly parentSessions: ReturnType<typeof sessionToolsServer>;
   private readonly workflowGrants: Set<string>;
   private disposal: Promise<void> | undefined;
   private modelId: string | undefined;
@@ -290,6 +292,7 @@ class ClaudeSession implements BackendSession {
     this.claudeState = claudeState;
     this.parentWorkflow = options.workflowBuilder ? workflowBuilderServer(options.workflowBuilder)
       : workflowParentServer(options.tools === "none" ? undefined : options.workflow);
+    this.parentSessions = sessionToolsServer(options.workflowBuilder || options.tools === "none" ? undefined : options.sessionTools);
     if (options.workflowBuilder) this.capabilities = { ...this.capabilities, subagents: false, enquiries: false, permissions: false };
     this.options = options;
     this.permissionMode = options.permissionMode ?? "ask";
@@ -308,6 +311,7 @@ class ClaudeSession implements BackendSession {
     const builder = options.workflowBuilder;
     const toolless = !builder && options.tools === "none";
     const preApproved = builder ? claudeWorkflowBuilderToolNames : toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover", "mcp__flow_workflow__workflow_relay_enquiry", "mcp__flow_workflow__workflow_relay_permission"] : [])];
+    if (!builder && !toolless && options.sessionTools) preApproved.push(...claudeSessionReadTools);
     this.allowed = new Set(toolless ? [] : [...preApproved, ...(options.standingAuthorisations ?? [])]);
     // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
     // pre-approved set. A Standing Authorisation is honoured in `canUseTool` instead, so that
@@ -318,7 +322,16 @@ class ClaudeSession implements BackendSession {
       cwd: options.scope,
       env,
       includePartialMessages: true,
-      mcpServers: builder ? this.parentWorkflow : toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow },
+      mcpServers: builder ? this.parentWorkflow : toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow, ...this.parentSessions },
+      // Pre-approval and native Auto can bypass canUseTool. Hooks run before either, so even
+      // read-only session tools remain parent-only when the SDK inherits MCP into Subagents.
+      ...(!builder && !toolless && options.sessionTools ? { hooks: { PreToolUse: [{
+        matcher: `${SESSION_TOOL_PREFIX}.*`,
+        hooks: [async (input) => input.hook_event_name === "PreToolUse" && input.agent_id
+          ? { hookSpecificOutput: { hookEventName: "PreToolUse" as const, permissionDecision: "deny" as const,
+              permissionDecisionReason: "Agent Session tools are available only to the parent Agent Session" } }
+          : {}],
+      }] } } : {}),
       strictMcpConfig: true,
       // NOT bypassPermissions: it auto-approves before canUseTool is consulted, and the SDK warns
       // as much. "default" runs the permission flow, allowedTools auto-approves the pre-approved
@@ -362,6 +375,8 @@ class ClaudeSession implements BackendSession {
         if (builder) return claudeWorkflowBuilderToolNames.includes(toolName)
           ? { behavior: "allow" as const, updatedInput: input }
           : { behavior: "deny" as const, message: "This workflow builder tool is not enabled" };
+        if (extra.agentID && toolName.startsWith(SESSION_TOOL_PREFIX)) return { behavior: "deny" as const,
+          message: "Agent Session tools are available only to the parent Agent Session" };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
         if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
         // The SDK calls this field agentID, but for an ordinary Agent it is the task id announced by
@@ -723,7 +738,7 @@ class ClaudeSession implements BackendSession {
 
   async refreshMcp(): Promise<void> {
     if (this.options.workflowBuilder) return;
-    await refreshClaudeMcp(this.stream, this.options.mcp, this.parentWorkflow);
+    await refreshClaudeMcp(this.stream, this.options.mcp, { ...this.parentWorkflow, ...this.parentSessions });
   }
 
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
