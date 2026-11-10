@@ -36,7 +36,7 @@ _Avoid_: driver, provider, runtime, plugin
 **Workflow Definition**: A saved graph of typed Workflow Steps, copied when a Workflow Execution starts.
 _Avoid_: script, pipeline
 
-**Workflow Execution**: Work owned by one Agent Session, with a fixed Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
+**Workflow Execution**: Work owned by one Agent Session, with a retained Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
 _Avoid_: parent turn, Background Call
 
 **Workflow Step**: One typed operation in a Workflow Definition. Each attempt owns its work until it stops.

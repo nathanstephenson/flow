@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
 import type { WorkflowExecution } from '../protocol/workflows.ts';
 import { validateDefinition, workflowDefinitionValidator } from './graph.ts';
+import { validateCompatibleDefinition } from './recovery.ts';
 
 const errorValidator = z.object({ message: z.string(), kind: z.enum(['failure', 'timeout', 'interrupted']) }).strict();
 const identityValidator = z.object({ headerId: z.string().min(1), activation: z.number().int().positive(), try: z.number().int().positive() }).strict();
@@ -19,6 +20,10 @@ const attemptValidator = z.object({
 
 export const workflowExecutionValidator = z.object({
   version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
+  definitionUpdates: z.array(z.object({
+    stepId: z.string().min(1), previousStep: workflowDefinitionValidator.shape.steps.element, nextStep: workflowDefinitionValidator.shape.steps.element,
+    appliedAt: z.number().nonnegative(), attempt: z.number().int().min(2),
+  }).strict()).optional(),
   input: z.json(), launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
   startedAt: z.number().nonnegative(), finishedAt: z.number().nonnegative().optional(), result: z.json().optional(),
   loops: z.record(z.string(), loopValidator).optional(),
@@ -32,6 +37,22 @@ export function parseExecution(value: unknown): WorkflowExecution {
   const record = workflowExecutionValidator.parse(value) as WorkflowExecution;
   const graph = validateDefinition(record.definition);
   if (graph.order.length !== Object.keys(record.steps).length || graph.order.some(step => !Object.hasOwn(record.steps, step.id))) throw new Error('Execution steps do not match the definition');
+  // Walk corrections backwards to validate both their contracts and the snapshot chain.
+  // The checkpoint before pump may name the next attempt before it has been appended.
+  let definition = record.definition;
+  const nextAttempts = new Map<string, number>();
+  for (const update of [...(record.definitionUpdates ?? [])].reverse()) {
+    const state = record.steps[update.stepId];
+    const next = definition.steps.find(step => step.id === update.stepId);
+    if (!state || update.previousStep.id !== update.stepId || !isDeepStrictEqual(next, update.nextStep)) throw new Error('Invalid definition update snapshot');
+    if (update.attempt > state.attempts.length + 1 || (nextAttempts.has(update.stepId) && update.attempt > nextAttempts.get(update.stepId)!)) throw new Error('Invalid definition update attempt');
+    const attempt = state.attempts[update.attempt - 1];
+    if ((attempt && attempt.action !== 'retry') || !state.attempts[update.attempt - 2]?.error) throw new Error('Definition update requires a failed retry attempt');
+    nextAttempts.set(update.stepId, update.attempt);
+    const previous = { ...definition, steps: definition.steps.map(step => step.id === update.stepId ? update.previousStep : step) };
+    validateCompatibleDefinition(previous, definition, update.stepId);
+    definition = previous;
+  }
   if (record.testStepId && !Object.hasOwn(record.steps, record.testStepId)) throw new Error('Unknown test step');
   if (record.testStepId && record.naming) throw new Error('Step tests cannot name Agent Sessions');
   const loops = record.testStepId ? [] : graph.loops;

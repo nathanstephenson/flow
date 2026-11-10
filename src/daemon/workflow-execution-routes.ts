@@ -57,6 +57,10 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
               if (body.guidance !== undefined && (typeof body.guidance !== 'string' || body.guidance.length > 100_000)) throw new Error();
             }
             else if (body.kind === 'retry') { keys('kind', 'stepId'); string('stepId'); }
+            else if (body.kind === 'retry-updated') {
+              keys('kind', 'stepId', 'definitionRevision'); string('stepId');
+              if (!/^[a-f0-9]{64}$/.test(string('definitionRevision'))) throw new Error();
+            }
             else if (body.kind === 'supply') { keys('kind', 'stepId', 'output'); string('stepId'); if (!Object.hasOwn(body, 'output')) throw new Error(); }
             else throw new Error();
             reply(200, await service.recover(sessionId, executionId, body as RecoverWorkflow)); break;

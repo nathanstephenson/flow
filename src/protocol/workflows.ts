@@ -114,6 +114,14 @@ export interface WorkflowStepRecord {
   output?: Json;
   outcome?: WorkflowOutcome;
 }
+/** An explicit correction, applied before the named retry attempt starts. */
+export interface WorkflowDefinitionUpdate {
+  stepId: string;
+  previousStep: WorkflowStep;
+  nextStep: WorkflowStep;
+  appliedAt: number;
+  attempt: number;
+}
 export type ExecutionStatus = 'running' | 'recovery-required' | 'completed' | 'completed-with-recovery' | 'cancelled';
 export interface WorkflowExecution {
   version: 1;
@@ -121,6 +129,8 @@ export interface WorkflowExecution {
   sessionId: string;
   scope: string;
   definition: WorkflowDefinition;
+  /** Prior executable configurations remain available after the snapshot is corrected. */
+  definitionUpdates?: WorkflowDefinitionUpdate[];
   input: Json;
   /** Durable identity for an idempotent full-execution launch request. */
   launchId?: string;
