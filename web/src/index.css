@@ -263,7 +263,6 @@
 
 .composer-activity-glow {
   stroke-width: 6px;
-  filter: blur(4px);
   opacity: 0.45;
 }
 

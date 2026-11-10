@@ -53,20 +53,27 @@ export function StatusDot({
 }
 
 export function ComposerActivity({ status }: { status: SessionStatus }) {
-  const maskId = useId();
+  const id = useId();
+  const maskId = `${id}-mask`;
+  const glowId = `${id}-glow`;
   if (status !== "running" && status !== "awaiting") return null;
 
   return (
     <svg className="composer-activity" data-status={status} aria-hidden>
       <defs>
+        {/* WebKit can skip CSS blur() on SVG. Use an SVG filter with room for the soft edge. */}
+        <filter id={glowId} filterUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+          <feGaussianBlur stdDeviation="4" />
+        </filter>
         <mask id={maskId} maskUnits="userSpaceOnUse" x="-50%" y="-50%" width="200%" height="200%">
           <rect x="-50%" y="-50%" width="200%" height="200%" fill="white" />
           <rect className="composer-activity-cutout" width="100%" height="100%" fill="black" />
         </mask>
       </defs>
-      <g mask={`url(#${maskId})`}>
-        <rect className="composer-activity-shape composer-activity-glow" x="1" y="1" pathLength="100" />
-      </g>
+      {/* Keep filter and mask on the same shape: an ancestor mask clips the blur's overflow in
+          WebKit. The mask still removes all glow from inside the Composer. */}
+      <rect className="composer-activity-shape composer-activity-glow" x="1" y="1" pathLength="100"
+        filter={`url(#${glowId})`} mask={`url(#${maskId})`} />
       <rect className="composer-activity-shape composer-activity-outline" x="1" y="1" pathLength="100" />
     </svg>
   );
