@@ -148,7 +148,7 @@ export function ShellPane({ sessionId, shellId, onOpened, onStatus }: ShellPaneP
   return (
     // Found by attribute: `keyboard-layer.tsx` asks whether focus is inside one of these, because a
     // keystroke typed at a Shell is text and must not also be a global shortcut.
-    <div data-shell-pane="" className="relative min-h-0 overflow-hidden bg-background" aria-label="Shell">
+    <div data-shell-pane="" className="relative min-h-0 flex-1 overflow-hidden bg-background" aria-label="Shell">
       <div ref={mount} className="size-full" />
       {/* The tabs row carries this too, and deliberately: a reader looking at a stopped screen
           should not have to look away from it to find out why it stopped. */}
