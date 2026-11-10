@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { getHostStatus, waitUntil } from './host-control.ts';
 import { readHost, type HostIdentity } from '../daemon/ownership.ts';
+import { isReleaseVersion } from '../daemon/release-checker.ts';
 import type { UpdateTransaction } from './install-guard.ts';
 
 const exec = promisify(execFile);
@@ -72,7 +73,7 @@ export async function launchSystemdUpdate(root: string, c: SystemdUpdate, reques
 export function readSystemdRequest(root: string): SystemdRequest {
   const r = JSON.parse(readFileSync(requestPath(root), 'utf8')) as SystemdRequest;
   if (!r || typeof r.force !== 'boolean' || (r.id !== undefined && !/^[a-f0-9-]{36}$/.test(r.id)) ||
-      (r.version !== undefined && (typeof r.version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(r.version))) || ((r.id === undefined) !== (r.version === undefined))) throw new Error('Invalid systemd update request');
+      (r.version !== undefined && (typeof r.version !== 'string' || !isReleaseVersion(r.version))) || ((r.id === undefined) !== (r.version === undefined))) throw new Error('Invalid systemd update request');
   return r;
 }
 export function clearSystemdRequest(root: string): void { unlinkSync(requestPath(root)); }

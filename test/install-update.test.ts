@@ -548,24 +548,25 @@ test('systemd configuration rejects arbitrary units, templates and background co
   }
 });
 
-test('systemd requests accept stable build metadata and reject incomplete or invalid confirmation', () => {
+test('systemd requests accept stable and beta releases and reject incomplete or invalid confirmation', () => {
   const root = mkdtempSync(join(tmpdir(), 'flow-systemd-request-'));
   const id = '00000000-0000-0000-0000-000000000001';
   try {
-    for (const version of ['2.0.0', '2.0.0+build.1']) {
+    for (const version of ['2.0.0', '2.0.0+build.1', '0.1.9-beta.1', '2.0.0-beta.0']) {
       const request = { id, version, force: false };
       writeFileSync(join(root, 'systemd-update-request.json'), JSON.stringify(request));
       assert.deepEqual(readSystemdRequest(root), request);
     }
-    for (const request of [{ id, force: false }, { version: '2.0.0', force: false }, { id, version: '2.0.0-rc.1', force: false }, { id, version: '02.0.0', force: false }, { id, version: 2, force: false }]) {
+    for (const request of [{ id, force: false }, { version: '2.0.0', force: false }, { id, version: '2.0.0-rc.1', force: false }, { id, version: '2.0.0-beta.01', force: false }, { id, version: '2.0.0-beta', force: false }, { id, version: '2.0.0-beta.1+build.1', force: false }, { id, version: '02.0.0', force: false }, { id, version: 2, force: false }]) {
       writeFileSync(join(root, 'systemd-update-request.json'), JSON.stringify(request));
       assert.throws(() => readSystemdRequest(root), /Invalid systemd update request/);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-for (const scenario of ['success', 'user', 'web', 'rollback', 'restore-failure', 'busy', 'wrong-owner', 'wrong-args', 'ephemeral-web', 'active-updater', 'stop-denied'] as const) test(`systemd updater: ${scenario}, foreground ownership retained`, async () => {
+for (const scenario of ['success', 'user', 'web', 'beta-web', 'rollback', 'restore-failure', 'busy', 'wrong-owner', 'wrong-args', 'ephemeral-web', 'active-updater', 'stop-denied'] as const) test(`systemd updater: ${scenario}, foreground ownership retained`, async () => {
   const f = fixture();
+  const targetVersion = scenario === 'beta-web' ? '2.1.0-beta.1' : '2.1.0';
   const ctl = join(f.temp, 'systemctl');
   const listener = (await import('node:net')).createServer();
   listener.listen(0, '127.0.0.1');
@@ -615,10 +616,10 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
     await until(() => existsSync(join(f.root, 'daemon.json')));
     writeFileSync(join(f.root, 'flow.service.pid'), scenario === 'wrong-owner' ? '1' : String(host.child.pid));
     const original = json<{ pid: number; url: string }>(join(f.root, 'daemon.json'))!;
-    if (scenario === 'web' || scenario === 'ephemeral-web') {
+    if (scenario === 'web' || scenario === 'beta-web' || scenario === 'ephemeral-web') {
       const id = '00000000-0000-0000-0000-000000000001';
-      writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({ id, state: 'updating', previousVersion: '1.2.3', targetVersion: '2.1.0', startedAt: new Date().toISOString() }));
-      writeFileSync(join(f.root, 'systemd-update-request.json'), JSON.stringify({ id, version: '2.1.0', force: false }));
+      writeFileSync(join(f.root, 'web-update.json'), JSON.stringify({ id, state: 'updating', previousVersion: '1.2.3', targetVersion, startedAt: new Date().toISOString() }));
+      writeFileSync(join(f.root, 'systemd-update-request.json'), JSON.stringify({ id, version: targetVersion, force: false }));
       const child = spawn(ctl, ['--system', '--no-ask-password', 'start', 'flow-update.service', '--no-block'], { env: f.env, cwd: f.temp });
       await once(child, 'close');
     } else {
@@ -652,12 +653,17 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch { return
       const restored = json<{ pid: number; mode: string; version: string; url: string }>(join(f.root, 'daemon.json'))!;
       assert.notEqual(restored.pid, original.pid);
       assert.equal(restored.mode, 'foreground');
-      assert.equal(restored.version, recovered ? '1.2.3' : scenario === 'web' ? '2.1.0' : '2.0.0');
+      assert.equal(restored.version, recovered ? '1.2.3' : scenario === 'web' || scenario === 'beta-web' ? targetVersion : '2.0.0');
       assert.equal(restored.url, original.url);
-      if (scenario === 'web') {
+      if (scenario === 'web' || scenario === 'beta-web') {
         const operation = json<{ state: string; installedVersion: string; pid: number }>(join(f.root, 'web-update.json'))!;
         assert.equal(operation.state, 'succeeded');
-        assert.equal(operation.installedVersion, '2.1.0');
+        assert.equal(operation.installedVersion, targetVersion);
+        if (scenario === 'beta-web') {
+          const npmArgs = readFileSync(join(f.prefix, 'npm-log'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+          assert.equal(npmArgs.length, 1, 'no rollback or fallback to latest');
+          assert.equal(npmArgs[0].at(-1), `@nathanstephenson/flow@${targetVersion}`);
+        }
         assert.equal(String(operation.pid), readFileSync(join(f.root, 'flow-update.service.pid'), 'utf8'));
       }
       assert.equal(String(restored.pid), readFileSync(join(f.root, 'flow.service.pid'), 'utf8'));
