@@ -1164,7 +1164,7 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string): Promise<void> {
     const record = this.record(sessionId);
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
@@ -1185,7 +1185,8 @@ export class SessionHost {
       this.touch(record);
       return;
     }
-    await this.dispatch(record, { text, attachments: ids });
+    // A title override applies only to the initial dispatch; a queued turn already has a title.
+    await this.dispatch(record, { text, attachments: ids }, titleText);
   }
 
   /**
@@ -2505,7 +2506,7 @@ export class SessionHost {
         this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}` });
         try {
           check(signal);
-          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal));
+          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
           return { sessionId, delivery: 'accepted' };
         } catch (error) {
           return { sessionId, delivery: 'not-sent', error: error instanceof Error ? error.message : String(error) };
@@ -2515,7 +2516,7 @@ export class SessionHost {
         check(signal);
         const { sessionId, text } = sessionSendInput.parse(input);
         if (sessionId === source.id) throw new CommandRefused('Use the current conversation instead of messaging yourself');
-        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal));
+        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
         return { sessionId, delivery: 'accepted' };
       }),
     };
@@ -2736,7 +2737,7 @@ export class SessionHost {
     record.openPermissionAttention.clear();
   }
 
-  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">): Promise<void> {
+  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">, titleText = message.text): Promise<void> {
     if (record.permissionChanging) await this.waitForPermissionChange(record);
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
@@ -2781,12 +2782,12 @@ export class SessionHost {
       text: sent,
       ...(attachments.length > 0 ? { attachments } : {}),
     });
-    // Titled from what its owner actually typed, never from `sent`. A switch made before the first
+    // Titled from the original instructions, never attribution or `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename
     // fires only while the title is still the placeholder. An Attachment never titles anything
     // either, so a wordless paste falls to firstLine's own "Untitled session" rather than a filename.
     if (record.titleSource === "scope") {
-      record.title = firstLine(text);
+      record.title = firstLine(titleText);
       record.titleSource = "first-line";
       /*
        * And then, seconds later, something better.
@@ -2797,7 +2798,7 @@ export class SessionHost {
        * flicker into and out of blank. It can only happen on a first dispatch, so no *established*
        * name ever changes under its reader.
        */
-      void this.nameAutomatically(record, text, "first-line");
+      void this.nameAutomatically(record, titleText, "first-line");
     }
     this.touch(record);
     const workflowContext = this.workflowOwner?.context(record.id);

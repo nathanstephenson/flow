@@ -75,6 +75,21 @@ test('Agent-created independent sessions retain permission policy and return an 
   await assert.rejects(f.tools.create({ text: 'x', permissionMode: 'always' } as never));
 });
 
+test('Agent-initiated session titles identify their task without dropping sender attribution', async t => {
+  const f = await fixture(t);
+  for (const text of ['Investigate failing tests', 'Review deployment configuration']) {
+    const { sessionId } = await f.tools.create({ text }) as { sessionId: string };
+    assert.equal(f.host.list().find(session => session.id === sessionId)?.title, text);
+    assert.match(f.backend.latest.prompts[0]!, new RegExp(`Agent message from ${f.id}`));
+    assert.match(f.backend.latest.prompts[0]!, /not human authorization/);
+    assert.ok(f.backend.latest.prompts[0]!.endsWith(text));
+  }
+  const empty = await f.host.create({ scope: tmpdir(), backend: 'fake' });
+  await f.tools.send({ sessionId: empty, text: 'Diagnose the empty session' });
+  assert.equal(f.host.list().find(session => session.id === empty)?.title, 'Diagnose the empty session');
+  assert.match(f.backend.latest.prompts[0]!, /not human authorization/);
+});
+
 test('Cancelled and stale Backend Sessions cannot invoke session tools', async t => {
   const f = await fixture(t);
   const controller = new AbortController();
