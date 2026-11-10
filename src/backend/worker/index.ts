@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { isSea } from "node:sea";
@@ -90,13 +90,22 @@ export class WorkerBackend implements AgentBackend {
         if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
       }
     } else {
-      const source = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
+      const source = this.options.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
       const agent = join(stateDir, "pi-agent");
       rmSync(agent, { recursive: true, force: true });
       mkdirSync(agent, { recursive: true, mode: 0o700 });
       cleanups.push(() => rmSync(agent, { recursive: true, force: true }));
       for (const name of ["auth.json", "models.json", "settings.json"]) {
         if (existsSync(join(source, name))) copyFileSync(join(source, name), join(agent, name));
+      }
+      // Keep user resources live and read-only, including Git-managed trees reached through
+      // symlinks. Link to the canonical target so the guest needs no host-side link ancestors.
+      if (!options.workflowBuilder) for (const name of ["AGENTS.md", "skills", "prompts"]) {
+        const from = join(source, name);
+        if (!existsSync(from)) continue;
+        const target = realpathSync(from);
+        symlinkSync(target, join(agent, name), statSync(target).isDirectory() ? "dir" : "file");
+        assets.push(target);
       }
       env.PI_CODING_AGENT_DIR = agent;
       env.PI_CODING_AGENT_SESSION_DIR = join(stateDir, "sessions");
