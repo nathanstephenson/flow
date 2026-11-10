@@ -138,6 +138,18 @@ Example, with a base environment from `harness plan --out <dir>`:
 }
 ```
 
+### Pi skills and prompts
+
+Flow makes the host's Pi `skills` and `prompts` directories available read-only in the Sandbox.
+It resolves symlink targets, so Git-managed configuration linked from `~/.pi/agent/skills` works
+without copying it into the sandbox template. `PI_CODING_AGENT_DIR` overrides the host Pi directory.
+Other user state, such as global transcripts, is not mounted with these resources. Workflow builders
+do not load these ambient resources.
+
+Existing Backend Sessions need to be Revived to pick up the mounts. Once mounted, changes within
+the resource directories are visible when the Skills menu reloads. Repointing a symlink requires a
+new Backend Session; a changed mount may also require releasing the Shared Sandbox's active holds.
+
 ### Sharing
 
 The `sandboxSharing` Setting selects how many VMs Flow uses:
