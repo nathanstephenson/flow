@@ -3,7 +3,7 @@ import type { AgentBackend } from "../../src/backend/types.ts";
 export default {
   name: "builder-fixture",
   async create(options) {
-    if (options.mcp || options.workflow) throw new Error("Builder inherited other host capabilities");
+    if (options.mcp || options.workflow || options.sessionTools) throw new Error("Builder inherited other host capabilities");
     const builder = options.workflowBuilder;
     if (!builder || typeof builder.instructions !== "string") throw new Error("Missing builder metadata");
     if (options.signal) throw new Error("Host startup signal leaked into worker metadata");

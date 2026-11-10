@@ -18,6 +18,7 @@ import { WorkerRpc } from "./rpc.ts";
 import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
+import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
 import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState } from "./claude-state.ts";
 import { relocatePiState } from "../pi/state.ts";
 import { recordTiming } from "../../daemon/timings.ts";
@@ -254,6 +255,10 @@ class WorkerSession implements BackendSession {
           if (timeout !== undefined && (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0)) throw new Error("Invalid MCP timeout");
           return tool.call(input as Record<string, unknown>, signal, timeout as number | undefined);
         }
+        case "session.list": return this.requireSessionTools().list(sessionListInput.parse(args[0]));
+        case "session.inspect": return this.requireSessionTools().inspect(sessionInspectInput.parse(args[0]));
+        case "session.create": return this.requireSessionTools().create(sessionCreateInput.parse(args[0]), signal);
+        case "session.send": return this.requireSessionTools().send(sessionSendInput.parse(args[0]), signal);
         case "workflow.inspect": return this.requireWorkflow().inspect(workflowInspectInput.parse(args[0]));
         case "workflow.recover": return this.requireWorkflow().recover(workflowRecoverInput.parse(args[0]), signal);
         case "workflow.relayEnquiry": return this.requireWorkflow().relayEnquiry(workflowRelayInput.parse(args[0]), signal);
@@ -278,8 +283,13 @@ class WorkerSession implements BackendSession {
     return this.options.workflow;
   }
 
+  private requireSessionTools() {
+    if (!this.options.sessionTools || this.options.tools === "none" || this.options.workflowBuilder) throw new Error("Session tools are not enabled");
+    return this.options.sessionTools;
+  }
+
   async open(signal?: AbortSignal): Promise<SessionSnapshot["startup"]> {
-    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, ...options } = this.options;
+    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, sessionTools, ...options } = this.options;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
     if (signal?.aborted) cancel();
@@ -288,6 +298,7 @@ class WorkerSession implements BackendSession {
     try {
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
         workflowEnabled: !workflowBuilder && !!workflow,
+        sessionToolsEnabled: !workflowBuilder && options.tools !== "none" && !!sessionTools,
         ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }
           : mcp instanceof SandboxMcpSession ? { mcpSandbox: mcp.definitions() }
           : mcp ? { mcpTools: mcpMetadata(mcp), mcpConnectionIds: (mcp.connections ?? []).map((connection) => connection.id) } : {}),

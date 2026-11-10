@@ -31,6 +31,8 @@ export type BackendCreateOptions = {
   /** Restricted host-mediated authoring. Overrides all other tool configuration, including tools:none. */
   workflowBuilder?: import("./workflow-builder.ts").WorkflowBuilder;
   workflow?: import("./workflow-tools.ts").WorkflowParent;
+  /** Host-mediated communication between independent Agent Sessions; parent tools only. */
+  sessionTools?: import("./session-tools.ts").SessionTools;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: AutoCompaction;

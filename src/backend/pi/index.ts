@@ -1,4 +1,5 @@
 import { workflowParentTools } from "./workflow-parent.ts";
+import { piSessionTools } from "./session-tools.ts";
 import { piWorkflowBuilderTools } from "./workflow-builder.ts";
 import { piMcpTools } from "./mcp.ts";
 import type { McpSession } from "../mcp.ts";
@@ -538,13 +539,15 @@ export class PiBackend implements AgentBackend {
     ])];
     const mcp = builder || options.tools === "none" ? undefined : options.mcp;
     const workflowTools = workflowParentTools(builder || options.tools === "none" ? undefined : options.workflow);
-    tools.push(...workflowTools.map(tool => tool.name));
+    const sessionTools = piSessionTools(builder || options.tools === "none" ? undefined : options.sessionTools);
+    tools.push(...workflowTools.map(tool => tool.name), ...sessionTools.map(tool => tool.name));
     const enabled = (name: string) => tools.includes(name);
     const enquiries = enabled(ASK_TOOL) ? new PiEnquiries(options.emit) : undefined;
     const work = new PiWork(options.emit, (completion) => piSession.completed(completion));
     const subagents = enabled(SUBAGENT_TOOL);
     const customTools = builder ? builderTools : [
       ...workflowTools,
+      ...sessionTools,
       ...backgroundTools(options.scope, settingsManager, work).filter((tool) => enabled(tool.name)),
       ...(enquiries ? [enquiries.tool] : []),
       ...(subagents ? [subagentTool(work, (id, input, signal) =>
@@ -615,7 +618,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
   if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
-  const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_"));
+  const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_") && !name.startsWith("session_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
   const producer = { subagentId: id };
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
