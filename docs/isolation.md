@@ -149,8 +149,10 @@ do not load these ambient resources. Pi loads global `AGENTS.md` alongside instr
 mounted project; Flow does not replace the project instructions.
 
 Existing Backend Sessions need to be Revived to pick up the mounts. Once mounted, changes within
-the resource directories are visible when the Skills menu reloads. Repointing a symlink requires a
-new Backend Session; a changed mount may also require releasing the Shared Sandbox's active holds.
+the resource directories are visible when the Skills menu reloads. This also refreshes Pi's loaded
+instructions and skill descriptions for the next model turn without changing its active tools.
+Repointing a symlink requires a new Backend Session; a changed mount may also require releasing the
+Shared Sandbox's active holds.
 
 ### Sharing
 

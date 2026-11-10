@@ -8,6 +8,7 @@ import type { BackendSession } from "../../src/backend/types.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
 import { SharedSandbox } from "../../src/isolation/shared-sandbox.ts";
 import { fakeProvider } from "./sandbox-fixture.ts";
+import { piFixture } from "./pi-fixture.ts";
 
 const backendModule = new URL("./pi-resources-worker-fixture.ts", import.meta.url).href;
 before(() => { execFileSync(process.execPath, ["scripts/build-worker.mjs"]); });
@@ -89,6 +90,42 @@ for (const sharing of ["session", "shared"] as const) for (const linked of [fals
     assert.equal(readFileSync(join(source, "transcript.jsonl"), "utf8"), "private user transcript");
   });
 }
+
+test("reloading mounted Pi instructions refreshes the actual model system prompt without changing tools", async t => {
+  let session: BackendSession | undefined;
+  t.after(async () => { await session?.dispose(); await session?.sandbox?.close(); });
+  const f = fakeProvider(t);
+  const model = await piFixture(t, () => ({ text: "ok" }));
+  const instructions = join(dirname(f.stateRoot), "global-instructions.md");
+  writeFileSync(instructions, "GLOBAL_INSTRUCTIONS_BEFORE_RELOAD");
+  const skillDir = join(model.scope, "skills", "runtime-review");
+  mkdirSync(skillDir, { recursive: true });
+  const skill = join(skillDir, "SKILL.md");
+  writeFileSync(skill, "---\nname: runtime-review\ndescription: SKILL_DESCRIPTION_BEFORE_RELOAD\n---\nReview instructions.");
+  symlinkSync(instructions, join(model.scope, "AGENTS.md"), "file");
+  writeFileSync(join(f.scope, "AGENTS.md"), "PROJECT_INSTRUCTIONS_REMAIN_PRESENT");
+  session = await new WorkerBackend({ stateRoot: f.stateRoot, isolationMode: () => "sandbox", sandbox: () => f.support,
+    env: { PI_CODING_AGENT_DIR: model.scope, PI_OFFLINE: "1" } }).create({
+    scope: f.scope, stateDir: f.state, modelId: "flow-test/parent", emit: () => {},
+  });
+  const systemText = () => JSON.stringify(model.requests.at(-1)?.messages.filter(message => message.role === "system" || message.role === "developer"));
+  await session.prompt("Before reloading instructions");
+  assert.match(systemText(), /GLOBAL_INSTRUCTIONS_BEFORE_RELOAD/);
+  assert.match(systemText(), /PROJECT_INSTRUCTIONS_REMAIN_PRESENT/);
+  assert.match(systemText(), /SKILL_DESCRIPTION_BEFORE_RELOAD/);
+  const tools = model.requests.at(-1)?.tools;
+  assert.ok(tools?.length);
+  writeFileSync(instructions, "GLOBAL_INSTRUCTIONS_AFTER_RELOAD");
+  writeFileSync(skill, "---\nname: runtime-review\ndescription: SKILL_DESCRIPTION_AFTER_RELOAD\n---\nReview instructions.");
+  await session.skills!();
+  await session.prompt("After reloading instructions");
+  assert.match(systemText(), /GLOBAL_INSTRUCTIONS_AFTER_RELOAD/);
+  assert.doesNotMatch(systemText(), /GLOBAL_INSTRUCTIONS_BEFORE_RELOAD/);
+  assert.match(systemText(), /SKILL_DESCRIPTION_AFTER_RELOAD/);
+  assert.doesNotMatch(systemText(), /SKILL_DESCRIPTION_BEFORE_RELOAD/);
+  assert.match(systemText(), /PROJECT_INSTRUCTIONS_REMAIN_PRESENT/);
+  assert.deepEqual(model.requests.at(-1)?.tools, tools);
+});
 
 test("a sandbox Workflow builder does not stage ambient Pi instructions, skills or prompts", async t => {
   let session: BackendSession | undefined;

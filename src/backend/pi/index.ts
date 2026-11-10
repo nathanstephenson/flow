@@ -253,6 +253,9 @@ export class PiSession implements BackendSession {
    */
   async skills(): Promise<Skill[]> {
     await this.session.resourceLoader.reload();
+    // Reloading the loader alone leaves Pi's cached model context stale. Reapply the
+    // existing tool selection to rebuild the prompt for the next turn without changing access.
+    this.session.setActiveToolsByName(this.session.getActiveToolNames());
     const { skills } = this.session.resourceLoader.getSkills();
     const { prompts } = this.session.resourceLoader.getPrompts();
     return [
