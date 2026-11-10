@@ -100,7 +100,7 @@ export class WorkerBackend implements AgentBackend {
       }
       // Keep user resources live and read-only, including Git-managed trees reached through
       // symlinks. Link to the canonical target so the guest needs no host-side link ancestors.
-      if (!options.workflowBuilder) for (const name of ["skills", "prompts"]) {
+      if (!options.workflowBuilder) for (const name of ["AGENTS.md", "skills", "prompts"]) {
         const from = join(source, name);
         if (!existsSync(from)) continue;
         const target = realpathSync(from);

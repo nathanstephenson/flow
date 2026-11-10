@@ -10,7 +10,10 @@ const backend: AgentBackend = {
     return {
       capabilities: { providers: [], models: [], compaction: false, fork: false, subagents: false, enquiries: false, permissions: false },
       resumeToken: () => undefined,
-      async prompt() {},
+      async prompt() {
+        await loader.reload();
+        options.emit({ type: "message", id: "context", text: JSON.stringify(loader.getAgentsFiles().agentsFiles), final: true });
+      },
       async abort() {},
       async setModel() {},
       async setEffort() {},
