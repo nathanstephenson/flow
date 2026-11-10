@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { compareVersions, newerReleaseVersion, ReleaseChecker } from '../src/daemon/release-checker.ts';
+import { compareVersions, isReleaseVersion, newerReleaseVersion, ReleaseChecker } from '../src/daemon/release-checker.ts';
+
+test('update targets are exact stable or beta releases, not tags or arbitrary prereleases', () => {
+  for (const version of ['0.0.0', '2.0.0', '2.0.0+build.1', '0.1.9-beta.1', '2.0.0-beta.0']) {
+    assert.equal(isReleaseVersion(version), true, version);
+  }
+  for (const version of ['', 'latest', 'beta', '^2.0.0', 'v2.0.0', '02.0.0', '2.0.0-rc.1', '2.0.0-beta', '2.0.0-beta.01', '2.0.0-beta.1+build.1']) {
+    assert.equal(isReleaseVersion(version), false, version);
+  }
+});
 
 test('stable semantic comparison offers only a newer stable latest tag', () => {
   assert.equal(compareVersions('2.0.0', '1.99.99'), 1);

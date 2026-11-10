@@ -44,9 +44,14 @@ export function compareVersions(left: string, right: string): number {
   return 0;
 }
 
+/** The same exact-version policy applies to discovery and persisted update requests. */
+export function isReleaseVersion(version: string): boolean {
+  return STABLE.test(version) || BETA.test(version);
+}
+
 /** A release must be stable or `X.Y.Z-beta.N`, and must advance rather than downgrade. */
 export function newerReleaseVersion(installed: string, candidate: string): boolean {
-  return (STABLE.test(candidate) || BETA.test(candidate)) && compareVersions(candidate, installed) > 0;
+  return isReleaseVersion(candidate) && compareVersions(candidate, installed) > 0;
 }
 
 export type ReleaseCheck =
