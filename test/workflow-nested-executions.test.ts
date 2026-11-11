@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { Json, WorkflowDefinition, WorkflowStep } from '../src/protocol/workflows.ts';
+import type { Json, WorkflowDefinition, WorkflowExecution, WorkflowStep } from '../src/protocol/workflows.ts';
 import { deriveResultSchema } from '../src/workflows/calls.ts';
 import { WorkflowScheduler, type ExecutorContext } from '../src/workflows/scheduler.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
@@ -167,6 +167,179 @@ test('recovery does not launch effects after an enclosing call deadline has expi
   restored.recover(session, started.id, { kind: 'retry', stepId: 'inner', invocationId });
   assert.equal((await restored.wait(session.sessionId, started.id)).result, 9);
   assert.equal(effects, 1);
+});
+
+test('completed nested checkpoints cannot resume effects past an enclosing deadline', async t => {
+  let effects = 0;
+  const captured: { record?: WorkflowExecution } = {};
+  class CaptureStore extends WorkflowStore {
+    override saveExecution(record: WorkflowExecution): void {
+      const middle = Object.values(record.invocations ?? {}).find(item => item.definitionId === 'middle');
+      const grand = Object.values(record.invocations ?? {}).find(item => item.definitionId === 'grand');
+      if (!captured.record && grand?.status === 'completed' && middle?.steps.nested?.status === 'running') captured.record = structuredClone(record);
+      super.saveExecution(record);
+    }
+  }
+  const f = fixture(t, async context => { if (context.step.id === 'failing') { effects++; throw new Error('stop'); } return 7; }, CaptureStore);
+  const grand = definition('grand', [leaf('grandLeaf')]);
+  const middle = definition('middle', [leaf('failing'), call('nested', grand)]);
+  f.store.saveDefinition(grand); f.store.saveDefinition(middle);
+  const started = f.scheduler.start(definition('parent', [{ ...call('outer', middle), timeoutMs: 1_000_000 }]), session, {});
+  await f.scheduler.wait(session.sessionId, started.id);
+  assert.ok(captured.record);
+  await f.scheduler.interrupt(session.sessionId, started.id);
+  f.store.saveExecution(captured.record);
+  const now = captured.record.steps.outer!.attempts[0]!.deadlineAt! + 1;
+  t.mock.method(Date, 'now', () => now);
+  const restored = new WorkflowScheduler(f.store, f.executors);
+  const invocationId = Object.values(captured.record.invocations!).find(item => item.definitionId === 'middle')!.id;
+  restored.recover(session, started.id, { kind: 'retry', stepId: 'failing', invocationId });
+  await new Promise(resolve => setImmediate(resolve));
+  const observed = effects;
+  await restored.cancel(session.sessionId, started.id);
+  assert.equal(observed, 1);
+});
+
+test('queued descendants do not start effects after the call deadline', async t => {
+  let now = Date.now(), effects = 0;
+  t.mock.method(Date, 'now', () => now);
+  class AdvanceStore extends WorkflowStore {
+    override saveExecution(record: WorkflowExecution): void {
+      const deadline = record.steps.call?.attempts.at(-1)?.deadlineAt;
+      if (deadline !== undefined && Object.values(record.invocations ?? {}).some(item => item.steps.inner?.status === 'running')) now = deadline + 1;
+      super.saveExecution(record);
+    }
+  }
+  const f = fixture(t, async () => { effects++; return 7; }, AdvanceStore);
+  const child = definition('child', [leaf('inner')]);
+  f.store.saveDefinition(child);
+  const started = f.scheduler.start(definition('parent', [{ ...call('call', child), timeoutMs: 1_000_000 }]), session, {});
+  await new Promise(resolve => setImmediate(resolve));
+  const observed = effects;
+  await f.scheduler.cancel(session.sessionId, started.id);
+  assert.equal(observed, 0);
+});
+
+test('input persistence cannot dispatch descendant effects after the call deadline', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 1_000, effects = 0, advanced = false;
+  t.mock.method(Date, 'now', () => now);
+  class AdvanceInputStore extends WorkflowStore {
+    override saveExecution(record: WorkflowExecution): void {
+      const deadline = record.steps.call?.attempts.at(-1)?.deadlineAt;
+      const input = Object.values(record.invocations ?? {})[0]?.steps.inner?.attempts.at(-1)?.input;
+      if (!advanced && deadline !== undefined && input && typeof input === 'object' && !Array.isArray(input) && input.ready === true) {
+        advanced = true;
+        now = deadline + 1;
+      }
+      super.saveExecution(record);
+    }
+  }
+  const f = fixture(t, async context => { if (context.step.id === 'handler') return 9; effects++; return 7; }, AdvanceInputStore);
+  const child = definition('child', [{ ...leaf('inner'), inputSchema: { type: 'object', fields: { ready: { schema: { type: 'boolean' }, default: true } } } }]);
+  f.store.saveDefinition(child);
+  const parent = definition('parent', [{ ...call('call', child), timeoutMs: 1_000 }, leaf('handler')], [{ id: 'timeout', from: 'call', to: 'handler', outcome: 'timeout' }]);
+  const started = f.scheduler.start(parent, session, {});
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(advanced, true);
+    assert.equal(effects, 0);
+    const attempt = f.scheduler.get(session.sessionId, started.id).steps.call!.attempts[0]!;
+    assert.equal(attempt.deadlineAt, attempt.startedAt + 1_000);
+    t.mock.timers.tick(1_000);
+    const done = await f.scheduler.wait(session.sessionId, started.id);
+    assert.equal(done.steps.call!.status, 'timed-out');
+    assert.equal(done.status, 'completed-with-recovery');
+    assert.equal(done.result, 9);
+    assert.equal(Object.values(done.invocations!)[0]!.status, 'cancelled');
+    assert.equal(f.scheduler.hasPendingDeadline(session.sessionId, started.id), false);
+    assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
+  } finally { await f.scheduler.cancel(session.sessionId, started.id); }
+});
+
+for (const kind of ['retry', 'supply'] as const) test(`interrupt then ${kind} after a timeout storage failure retains a readable checkpoint`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  let failOnce = true, effects = 0;
+  let entered!: () => void, retried!: () => void, finish!: (value: number) => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const retryReady = new Promise<void>(resolve => { retried = resolve; });
+  const output = new Promise<number>(resolve => { finish = resolve; });
+  class FailTimeoutStore extends WorkflowStore {
+    override saveExecution(record: WorkflowExecution): void {
+      if (failOnce && record.steps.call?.status === 'timed-out') { failOnce = false; throw new Error('disk full'); }
+      super.saveExecution(record);
+    }
+  }
+  const f = fixture(t, async context => {
+    if (++effects > 1) { retried(); return output; }
+    entered();
+    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => resolve(), { once: true }));
+    return 7;
+  }, FailTimeoutStore);
+  const child = definition('child', [leaf('inner')]);
+  f.store.saveDefinition(child);
+  const started = f.scheduler.start(definition('parent', [{ ...call('call', child), timeoutMs: 1_000 }]), session, {});
+  try {
+    await ready;
+    t.mock.timers.tick(1_000);
+    await assert.rejects(f.scheduler.wait(session.sessionId, started.id), /disk full/);
+    const cancelled = Object.values(f.scheduler.get(session.sessionId, started.id).invocations!)[0]!;
+    t.mock.timers.tick(100);
+    const interrupted = await f.scheduler.interrupt(session.sessionId, started.id);
+    assert.deepEqual(interrupted.invocations![cancelled.id], cancelled);
+    f.scheduler.recover(session, started.id, kind === 'retry' ? { kind, stepId: 'call' } : { kind, stepId: 'call', output: 7 });
+    assert.doesNotThrow(() => f.store.getExecution(session.sessionId, started.id));
+    if (kind === 'retry') {
+      await retryReady;
+      t.mock.timers.tick(0);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(f.scheduler.get(session.sessionId, started.id).steps.call!.status, 'running');
+      finish(7);
+    }
+    const done = await f.scheduler.wait(session.sessionId, started.id);
+    assert.equal(done.result, 7);
+    assert.equal(effects, kind === 'retry' ? 2 : 1);
+    assert.deepEqual(Object.values(done.invocations!).map(item => item.status), kind === 'retry' ? ['cancelled', 'completed'] : ['cancelled']);
+    assert.deepEqual(done.invocations![cancelled.id], cancelled);
+    assert.equal(f.scheduler.hasPendingDeadline(session.sessionId, started.id), false);
+    assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
+  } finally { finish(7); await f.scheduler.cancel(session.sessionId, started.id); }
+});
+
+test('interruption waits for a timed-out subtree already cancelling and preserves its history', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  let entered!: () => void, aborted!: () => void, finish!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const stopping = new Promise<void>(resolve => { aborted = resolve; });
+  const f = fixture(t, async context => {
+    entered();
+    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => { finish = resolve; aborted(); }, { once: true }));
+    return 7;
+  });
+  const child = definition('child', [leaf('inner')]);
+  f.store.saveDefinition(child);
+  const started = f.scheduler.start(definition('parent', [{ ...call('call', child), timeoutMs: 1_000 }]), session, {});
+  await ready;
+  t.mock.timers.tick(1_000);
+  await stopping;
+  let stopped = false;
+  const interrupted = f.scheduler.interrupt(session.sessionId, started.id).then(record => { stopped = true; return record; });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stopped, false);
+    assert.equal(f.scheduler.occupied(session.sessionId), true);
+  } finally { finish(); }
+  const snapshot = await interrupted;
+  const cancelled = Object.values(snapshot.invocations!)[0]!;
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(cancelled.finishedAt, 2_000);
+  assert.equal(cancelled.steps.inner!.attempts[0]!.finishedAt, 2_000);
+  t.mock.timers.tick(100);
+  const repeated = await f.scheduler.interrupt(session.sessionId, started.id);
+  assert.deepEqual(repeated.invocations![cancelled.id], cancelled);
+  const done = await f.scheduler.cancel(session.sessionId, started.id);
+  assert.deepEqual(done.invocations![cancelled.id], cancelled);
+  assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
 });
 
 test('successful inner recovery clears a previous root storage error', async t => {

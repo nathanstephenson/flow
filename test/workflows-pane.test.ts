@@ -134,10 +134,10 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   assert.equal(find(flow, 'Tabs').props.value, 'Flow');
   const rightGraph = find(flow, 'WorkflowGraph');
   assert.equal(rightGraph.props.orientation, 'vertical');
-  assert.equal(rightGraph.key, 'execution/right');
+  assert.equal(rightGraph.key, 'execution//right');
   const bottomGraph = find(p.render({ placement: 'bottom' }), 'WorkflowGraph');
   assert.equal(bottomGraph.props.orientation, 'horizontal');
-  assert.equal(bottomGraph.key, 'execution/bottom');
+  assert.equal(bottomGraph.key, 'execution//bottom');
   find(flow, 'WorkflowGraph').props.onSelect('join');
   const step = p.render();
   assert.equal(find(step, 'Tabs').props.value, 'Flow');
@@ -147,20 +147,28 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   assert.ok(find(p.render(), 'WorkflowGraph'));
 });
 
-it('keeps transcript and cancellation routes rooted while navigating an invocation', async () => {
+it('changes graph identity for an invocation and restores it at root while keeping routes rooted', async () => {
   const p = pane('idle');
-  const child = { id: 'inner', definition: structuredClone(definition), input: {}, startedAt: 1, finishedAt: 2, status: 'completed', steps: { join: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } }, result: {} };
+  const child = { id: 'execution', definition: structuredClone(definition), input: {}, startedAt: 1, finishedAt: 2, status: 'completed', steps: { join: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } }, result: {} };
   const call = { id: 'call', name: 'Call', kind: 'workflow', workflowId: definition.id, contract: { inputSchema: definition.inputSchema, outputSchema: definition.inputSchema } };
-  const root = { ...child, id: 'execution', finishedAt: undefined, status: 'running', definition: { ...definition, id: 'parent', name: 'Parent', steps: [call] }, retainedDefinitions: { sample: definition }, invocations: { inner: { ...child, definitionId: 'sample', callStepId: 'call', callAttempt: 1 } }, steps: { call: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } } };
+  const root = { ...child, id: 'execution', finishedAt: undefined, status: 'running', definition: { ...definition, id: 'parent', name: 'Parent', steps: [call] }, retainedDefinitions: { sample: definition }, invocations: { inner: { ...child, id: 'inner', definitionId: 'sample', callStepId: 'call', callAttempt: 1 } }, steps: { call: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } } };
   p.history.data.executions = [{ id: 'execution', name: 'Parent', status: 'running', startedAt: 1 }];
   p.detail.data = { execution: root, enquiries: [], permissions: [], stepSpend: {}, historyComplete: true };
   p.nestedDetail.data = { ...p.detail.data, execution: child };
   find(p.render(), 'Select', node => Array.isArray(node.props.items)).props.onValueChange('execution');
-  find(p.render(), 'WorkflowGraph').props.onSelect('call');
+  const rootGraph = find(p.render(), 'WorkflowGraph');
+  rootGraph.props.onSelect('call');
   find(p.render(), 'Button', node => JSON.stringify(node.props.children)?.includes('Open called workflow') === true).props.onClick();
-  find(p.render(), 'WorkflowGraph').props.onSelect('join');
+  const nested = p.render();
+  const nestedGraph = find(nested, 'WorkflowGraph');
+  assert.equal(nestedGraph.props.execution.id, rootGraph.props.execution.id);
+  assert.equal(nestedGraph.props.definition.id, 'sample');
+  assert.notEqual(nestedGraph.key, rootGraph.key);
+  assert.equal(find(nested, 'Tabs').props.value, 'Flow');
+  nestedGraph.props.onSelect('join');
   const transcript = find(p.render(), 'WorkflowTranscript');
   assert.equal(transcript.props.base, '/api/sessions/session/workflows/execution');
+  assert.equal(transcript.props.sessionId, 'session');
   assert.equal(transcript.props.invocationId, 'inner');
   const cancel = p.button('Cancel execution');
   assert.equal(cancel.props.disabled, false);
@@ -168,5 +176,10 @@ it('keeps transcript and cancellation routes rooted while navigating an invocati
   await Promise.resolve();
   assert.deepEqual(p.calls[0], ['/api/sessions/session/workflows/execution/cancel', 'POST', undefined]);
   p.button('Parent').props.onClick();
-  assert.equal(find(p.render(), 'WorkflowGraph').props.definition.id, 'parent');
+  const returned = p.render();
+  const returnedGraph = find(returned, 'WorkflowGraph');
+  assert.equal(returnedGraph.props.definition.id, 'parent');
+  assert.equal(returnedGraph.key, rootGraph.key);
+  assert.equal(returnedGraph.props.selectedStepId, '');
+  assert.equal(find(returned, 'Tabs').props.value, 'Flow');
 });

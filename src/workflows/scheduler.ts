@@ -7,7 +7,7 @@ import type { WorkflowGraph } from './graph.ts';
 import { declaredOutputSchema, parseValue, valueAt } from './schema.ts';
 import { validateMcpOutput } from './mcp.ts';
 import { WorkflowStore } from './store.ts';
-import { savedDefinitionRevision, validateCompatibleDefinition } from './recovery.ts';
+import { recoverySteps, savedDefinitionRevision, validateCompatibleDefinition } from './recovery.ts';
 import { resolveWorkflowCalls } from './calls.ts';
 import { invocationCheckpoint, invocationExecution } from './invocations.ts';
 
@@ -194,7 +194,7 @@ export class WorkflowScheduler {
     } else if (replacementDefinition !== undefined) throw new Error('Replacement definition requires retry-updated');
     // Check the corrected configuration, not the obsolete one. No checkpoint/graph mutation
     // happens until compatibility, authority, eligibility and all runtime checks pass.
-    this.check(graph.order.filter(step => (!record.testStepId || step.id === record.testStepId) && record.steps[step.id]!.status !== 'completed' && !(action.kind === 'supply' && step.id === action.stepId)), session, root.record.retainedDefinitions);
+    this.check(recoverySteps(root.record, action, replacementDefinition), session, root.record.retainedDefinitions);
     const limits = Object.entries(record.loops ?? {}).filter(([, loop]) => loop.phase === 'limit');
     if (action.kind === 'continue' && limits.length) throw new WorkflowLoopConflict('Loop limit requires an extra try or cancellation');
     if (action.kind === 'extend-loop') {
@@ -209,8 +209,9 @@ export class WorkflowScheduler {
       if (!step || !state || !['interrupted', 'failed', 'timed-out'].includes(state.status)) throw new Error('Step does not require recovery');
       if (state.status !== 'interrupted' && !record.testStepId && !state.recovery && graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) throw new Error('Recover the failed handling step, not the handled failure');
       if (action.kind === 'supply') {
-        if (active.calls.has(step.id)) throw new Error('Cancel the owned call subtree before replacing its output');
         const output = this.validateOutput(active, step, action.output);
+        this.releaseCancelledCall(active, step.id);
+        if (active.calls.has(step.id)) throw new Error('Cancel the owned call subtree before replacing its output');
         const attempt: StepAttempt = { number: state.attempts.length + 1, action: 'supply', startedAt: Date.now(), finishedAt: Date.now(), input: state.attempts.at(-1)!.input, output, ...(state.attempts.at(-1)!.loops ? { loops: structuredClone(state.attempts.at(-1)!.loops) } : {}) };
         state.attempts.push(attempt);
         state.output = output;
@@ -218,6 +219,7 @@ export class WorkflowScheduler {
         state.outcome = step.kind === 'branch' ? output ? 'true' : 'false' : 'success';
       } else {
         this.check([step], session, root.record.retainedDefinitions);
+        this.releaseCancelledCall(active, step.id);
         if (action.kind === 'retry-updated') {
           const previousStep = record.definition.steps.find(previous => previous.id === step.id)!;
           (record.definitionUpdates ??= []).push({ stepId: step.id, previousStep: structuredClone(previousStep), nextStep: structuredClone(step), appliedAt: Date.now(), attempt: state.attempts.length + 1 });
@@ -254,10 +256,6 @@ export class WorkflowScheduler {
     delete root.persistenceError;
     this.resumeCalls(active);
     for (let parent = active.parent; parent; parent = parent.parent) this.resumeCalls(parent);
-    for (let child = active; child.parent; child = child.parent) {
-      const deadline = child.parent.record.steps[child.callStepId!]!.attempts.at(-1)!.deadlineAt;
-      if (deadline !== undefined && deadline <= Date.now()) return structuredClone(root.record);
-    }
     this.pump(active);
     return structuredClone(root.record);
   }
@@ -341,9 +339,17 @@ export class WorkflowScheduler {
     active.stopped = true;
   }
 
+  private releaseCancelledCall(active: ActiveExecution, stepId: string): void {
+    const call = active.calls.get(stepId);
+    if (call?.child.record.status !== 'cancelled') return;
+    clearTimeout(call.timer);
+    this.syncInvocations(active);
+    active.calls.delete(stepId);
+  }
+
   private failStorage(active: ActiveExecution): void {
     active.stopped = true;
-    active.record.status = 'recovery-required';
+    if (!active.parent || occupied(active.record)) active.record.status = 'recovery-required';
     for (const call of active.calls.values()) {
       clearTimeout(call.timer);
       this.failStorage(call.child);
@@ -360,22 +366,24 @@ export class WorkflowScheduler {
 
   private async stopTree(active: ActiveExecution, reason: 'cancelled' | 'interrupted'): Promise<void> {
     active.stopped = true;
-    active.record.status = reason === 'cancelled' ? 'cancelled' : 'recovery-required';
-    for (const [id, state] of Object.entries(active.record.steps)) {
-      if (reason === 'cancelled' && ['pending', 'blocked', 'running', 'interrupted'].includes(state.status)) state.status = 'cancelled';
-      else if (reason === 'interrupted' && state.status === 'running' && !active.calls.has(id)) {
-        state.status = 'interrupted';
-        const attempt = state.attempts.at(-1)!;
-        attempt.error = { kind: 'interrupted', message: 'Execution was interrupted; effects may already have occurred' };
-        attempt.finishedAt ??= Date.now();
+    if (occupied(active.record)) {
+      active.record.status = reason === 'cancelled' ? 'cancelled' : 'recovery-required';
+      for (const [id, state] of Object.entries(active.record.steps)) {
+        if (reason === 'cancelled' && ['pending', 'blocked', 'running', 'interrupted'].includes(state.status)) state.status = 'cancelled';
+        else if (reason === 'interrupted' && state.status === 'running' && !active.calls.has(id)) {
+          state.status = 'interrupted';
+          const attempt = state.attempts.at(-1)!;
+          attempt.error = { kind: 'interrupted', message: 'Execution was interrupted; effects may already have occurred' };
+          attempt.finishedAt ??= Date.now();
+        }
       }
     }
     this.persist(active);
     const children = [...active.calls.values()].map(call => { clearTimeout(call.timer); return this.stopTree(call.child, reason); });
     for (const running of active.running.values()) running.controller.abort();
     await Promise.all([...children, ...[...active.running.values()].map(running => running.done)]);
-    if (reason === 'cancelled') {
-      active.record.finishedAt = Date.now();
+    if (reason === 'cancelled' && active.record.status === 'cancelled') {
+      active.record.finishedAt ??= Date.now();
       for (const state of Object.values(active.record.steps)) if (state.status === 'cancelled') {
         const attempt = state.attempts.at(-1);
         if (attempt) attempt.finishedAt ??= Date.now();
@@ -481,8 +489,17 @@ export class WorkflowScheduler {
     return handled || edge.outcome === 'failure' || edge.outcome === 'timeout' ? 'skipped' : 'blocked';
   }
 
+  private hasExpiredAncestor(active: ActiveExecution): boolean {
+    const now = Date.now();
+    for (let child = active; child.parent; child = child.parent) {
+      const deadline = child.parent.record.steps[child.callStepId!]!.attempts[child.callAttempt! - 1]!.deadlineAt;
+      if (deadline !== undefined && deadline <= now) return true;
+    }
+    return false;
+  }
+
   private pump(active: ActiveExecution): void {
-    if (active.stopped || active.record.status !== 'running') return;
+    if (active.stopped || active.record.status !== 'running' || this.hasExpiredAncestor(active)) return;
     this.transitionLoops(active);
     for (const step of active.graph.order) {
       const state = active.record.steps[step.id]!;
@@ -688,6 +705,7 @@ export class WorkflowScheduler {
       this.persist(active);
       return;
     }
+    if (this.hasExpiredAncestor(active)) return;
     const attempt = state.attempts.at(-1)!;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
@@ -700,6 +718,7 @@ export class WorkflowScheduler {
         return;
       }
       this.persist(active);
+      if (this.hasExpiredAncestor(active)) return;
       const timeout = step.timeoutMs ?? (step.kind === 'shell' || step.kind === 'typescript' || step.kind === 'mcp' ? 60_000 : undefined);
       if (timeout !== undefined) timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
       let value: Json;

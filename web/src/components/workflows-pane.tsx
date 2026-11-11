@@ -388,7 +388,7 @@ export default function WorkflowsPane({
             <TabsContent value="Flow" keepMounted className="grid min-w-0 gap-3">
               <div className={step ? "hidden" : "contents"} aria-hidden={step ? true : undefined}>
                 <WorkflowGraph
-                  key={`${execution.id}/${placement}`}
+                  key={`${execution.id}/${invocationId}/${placement}`}
                   definition={execution.definition}
                   execution={execution}
                   orientation={placement === "bottom" ? "horizontal" : "vertical"}

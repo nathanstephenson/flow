@@ -1,6 +1,6 @@
 import { resolveWorkflowCalls } from '../workflows/calls.ts';
 import { invocationExecution } from '../workflows/invocations.ts';
-import { recoveryRevision, safeAutomaticRecovery, successfulProgress, savedDefinitionRevision, validateCompatibleDefinition } from "../workflows/recovery.ts";
+import { recoveryRevision, recoverySteps, safeAutomaticRecovery, successfulProgress, savedDefinitionRevision, validateCompatibleDefinition } from "../workflows/recovery.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput, type WorkflowParent } from "../backend/workflow-tools.ts";
 import { redactCredentials } from './credential-redaction.ts';
 import { workflowAgentNameInput, workflowOutcomeNameInput } from './summariser.ts';
@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import type { WorkflowSubagentHandle } from '../backend/types.ts';
 import type { BackendEvent, ModelInfo, Spend } from '../protocol/events.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
-import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
+import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { createCodeExecutors } from '../workflows/executors.ts';
 import { parseValue } from '../workflows/schema.ts';
@@ -375,7 +375,7 @@ export class WorkflowExecutionService {
           let savedDefinition: { revision: string; definition: WorkflowDefinition } | null = null;
           try {
             const definition = this.store.getDefinition(selected.definition.id);
-            savedDefinition = redactCredentials({ revision: savedDefinitionRevision(definition), definition }, this.namingCredentials({ ...selected, definition }));
+            savedDefinition = redactCredentials({ revision: savedDefinitionRevision(definition), definition }, this.availableCredentials({ ...selected, definition }));
           } catch { /* Retained execution remains inspectable if the saved copy was deleted. */ }
           return { ...this.view(sessionId, record.id, input.invocationId), savedDefinition };
         }
@@ -393,7 +393,7 @@ export class WorkflowExecutionService {
           const selected = selectWorkflowInvocation(record, action.invocationId);
           const correction = updated && action.kind === 'retry-updated'
             ? `\nSaved step configuration to adopt: ${JSON.stringify(updated.steps.find(step => 'stepId' in action && step.id === action.stepId))}` : '';
-          const credentials = updated ? [...this.namingCredentials(record), ...this.referencedSecrets(updated, selected.testStepId)] : this.namingCredentials(record);
+          const credentials = uniqueCredentials([...this.availableCredentials(record, updated ? [updated] : []), ...this.recoveryCredentials(record, action, updated)]);
           authorized = await this.host.confirmWorkflow(sessionId, redactCredentials(`Recover ${selected.definition.name}: ${JSON.stringify(action)}.${correction} This authorizes only the current execution state and saved definition revision.`, credentials), signal);
           if (!authorized) throw new Error('Recovery was not authorized');
         }
@@ -558,8 +558,8 @@ export class WorkflowExecutionService {
       if (candidate.backend !== session.backend) throw new Error('Backend Adapter mismatch');
       if (candidate.projectId && !sameProject(candidate.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
     }
-    const values = uniqueCredentials(definitions.flatMap(candidate => this.referencedSecrets(candidate, candidate.id === saved.definition.id ? saved.testStepId : undefined)));
-    assertNoSecrets({ ...saved, definition: publicDefinition(saved.definition), action }, values);
+    const values = uniqueCredentials([...this.availableCredentials(saved, [definition]), ...this.recoveryCredentials(saved, action, updated)]);
+    assertNoSecrets({ ...publicExecutionData(saved), action }, values);
     if (updated) assertNoSecrets(publicDefinition(updated), values);
     if (action.kind === 'supply') assertNoSecrets(action.output, values, true);
     this.secretValues.set(executionId, values);
@@ -945,6 +945,19 @@ export class WorkflowExecutionService {
     }
   }
 
+  private recoveryCredentials(record: WorkflowExecution, action: RecoverWorkflow, updated?: WorkflowDefinition): string[] {
+    const steps = recoverySteps(record, action, updated);
+    const checked = new Set<string>();
+    for (const step of steps) {
+      if (step.kind !== 'workflow' || checked.has(step.workflowId)) continue;
+      checked.add(step.workflowId);
+      const target = record.retainedDefinitions?.[step.workflowId];
+      if (!target) throw new Error('Missing retained called Workflow Definition');
+      steps.push(...target.steps);
+    }
+    return [...new Set(steps.flatMap(step => Object.values(step.secrets ?? {})))].map(name => this.secrets.resolve(name));
+  }
+
   private referencedSecrets(definition: WorkflowDefinition, stepId?: string): string[] {
     return [...this.host.workflowMcpCredentials(), ...[...new Set(definition.steps.filter(step => !stepId || step.id === stepId).flatMap(step => Object.values(step.secrets ?? {})))].map(name => this.secrets.resolve(name))];
   }
@@ -970,7 +983,7 @@ export class WorkflowExecutionService {
           outcome: result.status,
           results,
           errors,
-        }, uniqueCredentials([...knownCredentials, ...this.namingCredentials(result)]));
+        }, uniqueCredentials([...knownCredentials, ...this.availableCredentials(result)]));
       });
     }
     if (!result.testStepId && result.status === 'recovery-required') this.host.workflowWake(result.sessionId, result.id, recoveryRevision(result));
@@ -992,11 +1005,12 @@ export class WorkflowExecutionService {
     void this.host.nameWorkflow(sessionId, input).catch(() => {});
   }
 
-  private namingCredentials(record: WorkflowExecution): string[] {
+  private availableCredentials(record: WorkflowExecution, additional: WorkflowDefinition[] = []): string[] {
     const values = [...this.host.workflowMcpCredentials()];
-    const definitions = [record.definition, ...Object.values(record.retainedDefinitions ?? {})];
-    for (const reference of new Set(definitions.flatMap(definition => definition.steps.flatMap(step => Object.values(step.secrets ?? {}))))) {
-      try { values.push(this.secrets.resolve(reference)); } catch { /* Missing secrets cannot make naming affect execution. */ }
+    const definitions = [record.definition, ...Object.values(record.retainedDefinitions ?? {}), ...additional];
+    const steps = [...definitions.flatMap(definition => definition.steps), ...[record, ...Object.values(record.invocations ?? {})].flatMap(checkpoint => (checkpoint.definitionUpdates ?? []).flatMap(update => [update.previousStep, update.nextStep]))];
+    for (const reference of new Set(steps.flatMap(step => Object.values(step.secrets ?? {})))) {
+      try { values.push(this.secrets.resolve(reference)); } catch {}
     }
     return uniqueCredentials(values);
   }
@@ -1080,8 +1094,21 @@ function withConfirmedNoControlOff(definition: WorkflowDefinition, models: reado
   return changed ? { ...definition, steps } : definition;
 }
 
+function publicStep({ secrets, ...step }: WorkflowStep) { return step; }
+
 function publicDefinition(definition: WorkflowDefinition) {
-  return { ...definition, steps: definition.steps.map(({ secrets, ...step }) => step) };
+  return { ...definition, steps: definition.steps.map(publicStep) };
+}
+
+function publicExecutionData(record: WorkflowExecution) {
+  const corrections = (updates: WorkflowExecution['definitionUpdates']) => updates?.map(update => ({ ...update, previousStep: publicStep(update.previousStep), nextStep: publicStep(update.nextStep) }));
+  return {
+    ...record,
+    definition: publicDefinition(record.definition),
+    definitionUpdates: corrections(record.definitionUpdates),
+    retainedDefinitions: record.retainedDefinitions && Object.fromEntries(Object.entries(record.retainedDefinitions).map(([id, definition]) => [id, publicDefinition(definition)])),
+    invocations: record.invocations && Object.fromEntries(Object.entries(record.invocations).map(([id, invocation]) => [id, { ...invocation, definitionUpdates: corrections(invocation.definitionUpdates) }])),
+  };
 }
 
 function assertNoSecrets(value: unknown, secrets: string[], checkKeys = false): void {

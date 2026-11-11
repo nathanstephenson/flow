@@ -48,6 +48,31 @@ export function validateCompatibleDefinition(previous: WorkflowDefinition, candi
   return graph;
 }
 
+export function recoverySteps(root: WorkflowExecution, action: RecoverWorkflow, replacement?: WorkflowDefinition): WorkflowStep[] {
+  const steps: WorkflowStep[] = [];
+  let invocationId = action.invocationId, selected = true;
+  for (;;) {
+    const current = invocationId === undefined ? root : invocationExecution(root, invocationId);
+    const graph = validateDefinition(selected && replacement ? replacement : current.definition);
+    const repeating = new Set(current.testStepId ? [] : graph.loops.filter(loop => ['active', 'repeating', 'limit'].includes(current.loops?.[loop.headerId]?.phase ?? 'inactive')).flatMap(loop => loop.memberIds));
+    const owned = new Set(Object.values(root.invocations ?? {}).filter(invocation => {
+      const call = current.steps[invocation.callStepId];
+      return invocation.parentInvocationId === invocationId && call?.status === 'running' && invocation.callAttempt === call.attempts.length;
+    }).map(invocation => invocation.callStepId));
+    for (const step of graph.order) {
+      if (current.testStepId && current.testStepId !== step.id) continue;
+      if (!repeating.has(step.id)) {
+        if (current.steps[step.id]!.status === 'completed' || owned.has(step.id)) continue;
+        if (selected && action.kind === 'supply' && action.stepId === step.id) continue;
+      }
+      steps.push(step);
+    }
+    if (invocationId === undefined) return steps;
+    invocationId = root.invocations![invocationId]!.parentInvocationId;
+    selected = false;
+  }
+}
+
 /** State identity, not wall-clock time: repeated notifications cannot mint new authority. */
 export function recoveryRevision(record: WorkflowExecution): string {
   return createHash('sha256').update(JSON.stringify({ id: record.id, status: record.status,

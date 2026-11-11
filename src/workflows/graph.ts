@@ -61,6 +61,14 @@ export interface WorkflowGraph {
 }
 
 export function validateDefinition(value: unknown): WorkflowGraph {
+  return buildGraph(value);
+}
+
+export function mappingSourceGraph(value: unknown): WorkflowGraph {
+  return buildGraph(value, true);
+}
+
+function buildGraph(value: unknown, mappingSources = false): WorkflowGraph {
   const definition = workflowDefinitionValidator.parse(value) as WorkflowDefinition;
   const skillStep = definition.steps.find(step => step.kind === 'agent' && leadingSkillInvocation(step.instructions));
   if (skillStep && !definition.projectId) {
@@ -188,7 +196,7 @@ export function validateDefinition(value: unknown): WorkflowGraph {
         return literal(node.value);
       };
       input = step.kind === 'workflow' ? infer(mapping.template) : { type: 'json' };
-      if (step.kind === 'workflow' && mapping.template.kind === 'literal') parseValue(step.contract.inputSchema, mapping.template.value);
+      if (step.kind === 'workflow' && !mappingSources && mapping.template.kind === 'literal') parseValue(step.contract.inputSchema, mapping.template.value);
     }
     else if (mapping?.kind === 'reference') {
       const field = referenceSchema(mapping.reference);
@@ -216,12 +224,12 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     }
     if (step.inputSchema) {
       validateSchema(step.inputSchema);
-      if (!schemaAssignable(input, step.inputSchema)) throw new Error('Input does not match the declared input schema');
+      if (!(mappingSources && step.kind === 'workflow') && !schemaAssignable(input, step.inputSchema)) throw new Error('Input does not match the declared input schema');
     }
     if (step.kind === 'workflow') {
       validateSchema(step.contract.inputSchema);
       validateSchema(step.contract.outputSchema);
-      if (!schemaAssignable(input, step.contract.inputSchema) || (step.inputSchema && !schemaAssignable(step.inputSchema, step.contract.inputSchema))) throw new Error('Input does not match the Workflow call input contract');
+      if (!mappingSources && (!schemaAssignable(input, step.contract.inputSchema) || (step.inputSchema && !schemaAssignable(step.inputSchema, step.contract.inputSchema)))) throw new Error('Input does not match the Workflow call input contract');
       return step.contract.inputSchema;
     }
     return step.inputSchema ?? input;
