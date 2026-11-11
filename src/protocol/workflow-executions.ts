@@ -2,6 +2,7 @@ import type { BackendEvent, Question, Spend } from './events.ts';
 import type { ExecutionStatus, Json, WorkflowDefinition, WorkflowExecution } from './workflows.ts';
 
 export interface WorkflowActivity {
+  invocationId?: string;
   sequence: number;
   attempt?: number;
   at: number;
@@ -11,6 +12,8 @@ export interface WorkflowActivity {
 }
 
 export interface WorkflowEnquiry {
+  invocationId?: string;
+  attempt?: number;
   stepId: string;
   subagentId: string;
   askId: string;
@@ -18,6 +21,8 @@ export interface WorkflowEnquiry {
 }
 
 export interface WorkflowPermissionPrompt {
+  invocationId?: string;
+  attempt?: number;
   direct?: boolean;
   stepId: string;
   subagentId: string;
@@ -30,6 +35,7 @@ export interface WorkflowPermissionPrompt {
 }
 
 export interface WorkflowExecutionView {
+  invocationId?: string;
   execution: WorkflowExecution;
   activity: WorkflowActivity[];
   /** False for legacy runs whose evicted history cannot be reconstructed. */
@@ -63,7 +69,7 @@ export interface WorkflowRuntimeStatus {
 
 export type StartWorkflow = { workflowId: string; input: Json; /** Durable identity making an ambiguous launch safe to retry. */ launchId?: string; /** Name an untouched Agent Session once the execution reveals its actual work. */ nameSession?: true };
 export type TestWorkflowStep = { definition: WorkflowDefinition; sessionId: string; stepId: string; input: Json };
-export type RecoverWorkflow = { kind: 'retry'; stepId: string } | { kind: 'retry-updated'; stepId: string; /** Hash of the saved Workflow Definition, not the execution recovery revision. */ definitionRevision: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined };
+export type RecoverWorkflow = ({ kind: 'retry'; stepId: string } | { kind: 'retry-updated'; stepId: string; /** Hash of the saved Workflow Definition, not the execution recovery revision. */ definitionRevision: string } | { kind: 'supply'; stepId: string; output: Json } | { kind: 'continue' } | { kind: 'extend-loop'; headerId: string; activation: number; try: number; guidance?: string | undefined }) & { invocationId?: string | undefined };
 export interface WorkflowActivityPage {
   /** Always ascending by sequence, including pages fetched from the tail. */
   activity: WorkflowActivity[];

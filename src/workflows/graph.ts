@@ -5,7 +5,7 @@ import { validSecretName } from '../protocol/secrets.ts';
 import { Decisions } from './decisions.ts';
 import { analyzeLoops, type WorkflowLoop } from './loops.ts';
 import type { ArgumentTemplate, InputReference, Json, VisualSchema, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
-import { dictionaryKey, dictionaryRecord, declaredOutputSchema, partialSchema, schemaAssignable, schemaAt, unionSchema, validateSchema, valueAt, visualSchemaValidator } from './schema.ts';
+import { dictionaryKey, dictionaryRecord, declaredOutputSchema, parseValue, partialSchema, schemaAssignable, schemaAt, unionSchema, validateSchema, valueAt, visualSchemaValidator } from './schema.ts';
 
 const reference = z.discriminatedUnion('source', [
   z.object({ source: z.literal('input'), path: z.array(z.string()) }).strict(),
@@ -39,6 +39,7 @@ export const workflowDefinitionValidator = z.object({
     z.object({ ...base, kind: z.literal('typescript'), code: z.string(), outputSchema: visualSchemaValidator }).strict(),
     z.object({ ...base, kind: z.literal('branch'), condition }).strict(),
     z.object({ ...base, kind: z.literal('join') }).strict(),
+    z.object({ ...base, kind: z.literal('workflow'), workflowId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/), contract: z.object({ inputSchema: visualSchemaValidator.refine(schema => schema.type === 'object'), outputSchema: visualSchemaValidator }).strict() }).strict(),
     z.object({ ...base, kind: z.literal('mcp'), tool: z.object({ connectionId: z.string().min(1), connectionName: z.string(), identity: z.string().regex(/^[a-f0-9]{64}$/), serverIdentity: z.string().regex(/^[a-f0-9]{64}$/), toolName: z.string().min(1), inputSchema: originalSchema, outputSchema: originalSchema.optional() }).strict() }).strict(),
   ])).min(1),
   loopSettings: dictionaryRecord(z.object({ maxTries: z.number().int().min(1).max(100) }).strict()).optional(),
@@ -50,6 +51,7 @@ export interface WorkflowGraph {
   order: WorkflowStep[];
   incoming: Map<string, WorkflowEdge[]>;
   outgoing: Map<string, WorkflowEdge[]>;
+  resultSchema: VisualSchema;
   outputSchemas: Map<string, VisualSchema>;
   inputSchemas: Map<string, VisualSchema>;
   firstInputSchemas: Map<string, VisualSchema>;
@@ -170,7 +172,23 @@ export function validateDefinition(value: unknown): WorkflowGraph {
         if (node.kind === 'object') Object.values(node.fields).forEach(inspect);
         if (node.kind === 'array') node.items.forEach(inspect);
       };
-      inspect(mapping.template); input = { type: 'json' };
+      inspect(mapping.template);
+      const infer = (node: ArgumentTemplate): VisualSchema => {
+        if (node.kind === 'reference') return referenceSchema(node.reference).schema;
+        if (node.kind === 'object') return { type: 'object', fields: Object.fromEntries(Object.entries(node.fields).map(([key, value]) => [key, { schema: infer(value), required: true }])) };
+        if (node.kind === 'array') return { type: 'array', items: node.items.length ? unionSchema(node.items.map(infer)) : { type: 'json' } };
+        const literal = (value: Json): VisualSchema => {
+          if (value === null) return { type: 'null' };
+          if (typeof value === 'string') return { type: 'enum', values: [value] };
+          if (typeof value === 'number') return { type: 'number', integer: Number.isInteger(value) };
+          if (typeof value === 'boolean') return { type: 'boolean' };
+          if (Array.isArray(value)) return { type: 'array', items: value.length ? unionSchema(value.map(literal)) : { type: 'json' } };
+          return { type: 'object', fields: Object.fromEntries(Object.entries(value).map(([key, value]) => [key, { schema: literal(value), required: true }])) };
+        };
+        return literal(node.value);
+      };
+      input = step.kind === 'workflow' ? infer(mapping.template) : { type: 'json' };
+      if (step.kind === 'workflow' && mapping.template.kind === 'literal') parseValue(step.contract.inputSchema, mapping.template.value);
     }
     else if (mapping?.kind === 'reference') {
       const field = referenceSchema(mapping.reference);
@@ -199,6 +217,12 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     if (step.inputSchema) {
       validateSchema(step.inputSchema);
       if (!schemaAssignable(input, step.inputSchema)) throw new Error('Input does not match the declared input schema');
+    }
+    if (step.kind === 'workflow') {
+      validateSchema(step.contract.inputSchema);
+      validateSchema(step.contract.outputSchema);
+      if (!schemaAssignable(input, step.contract.inputSchema) || (step.inputSchema && !schemaAssignable(step.inputSchema, step.contract.inputSchema))) throw new Error('Input does not match the Workflow call input contract');
+      return step.contract.inputSchema;
     }
     return step.inputSchema ?? input;
   };
@@ -230,7 +254,36 @@ export function validateDefinition(value: unknown): WorkflowGraph {
     }
     outputFor(step.id);
   }
-  return graph;
+  const terminalConditions = order.map(step => decisions.and(completed.get(step.id)!, decisions.not(any(outgoing.get(step.id)!.map(edge => selectedEdges.get(edge.id)!)))));
+  let finished = 1;
+  for (const step of order) {
+    const handled = any(outgoing.get(step.id)!.filter(edge => edge.outcome === 'failure' || edge.outcome === 'timeout').map(edge => selectedEdges.get(edge.id)!));
+    finished = decisions.and(finished, decisions.or(decisions.not(reaches.get(step.id)!), decisions.or(completed.get(step.id)!, handled)));
+    if (loops.length) finished = decisions.and(finished, decisions.not(any(outgoing.get(step.id)!.filter(edge => backIds.has(edge.id)).map(edge => selectedEdges.get(edge.id)!))));
+  }
+  const candidates = order.map((step, index) => ({ step, condition: terminalConditions[index]! })).filter(({ condition }) => decisions.and(finished, condition) !== 0);
+  const variants: VisualSchema[] = [];
+  let none = 1;
+  let one = 0;
+  let many = 0;
+  for (const { condition } of candidates) {
+    many = decisions.or(many, decisions.and(one, condition));
+    one = decisions.or(decisions.and(one, decisions.not(condition)), decisions.and(none, condition));
+    none = decisions.and(none, decisions.not(condition));
+  }
+  if (loops.length || definition.edges.some(edge => edge.outcome === 'failure' || edge.outcome === 'timeout')) {
+    const possible = order.filter(step => step.kind === 'branch'
+      ? ['true', 'false'].some(outcome => !outgoing.get(step.id)!.some(edge => edge.outcome === outcome))
+      : !outgoing.get(step.id)!.some(edge => edge.outcome === 'success'));
+    variants.push(...possible.map(step => outputFor(step.id)));
+    if (possible.length > 1) variants.push({ type: 'object', fields: Object.fromEntries(possible.map(step => [step.name, { schema: outputFor(step.id) }])) });
+  } else {
+    for (const { step, condition } of candidates) if (decisions.and(finished, decisions.and(one, condition)) !== 0) variants.push(outputFor(step.id));
+    const multiple = decisions.and(finished, many);
+    if (multiple !== 0) variants.push({ type: 'object', fields: Object.fromEntries(candidates.filter(({ condition }) => decisions.and(multiple, condition) !== 0).map(({ step, condition }) => [step.name, { schema: outputFor(step.id), required: decisions.implies(multiple, condition) }])) });
+    if (decisions.and(finished, none) !== 0) variants.push({ type: 'object', fields: {} });
+  }
+  return { ...graph, resultSchema: variants.length ? unionSchema(variants) : { type: 'json' } };
 }
 
 export function recoverySchema(input: VisualSchema, output: VisualSchema): VisualSchema {

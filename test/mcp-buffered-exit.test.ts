@@ -1,15 +1,47 @@
 import assert from 'node:assert/strict';
+import childProcess, { type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import { PassThrough } from 'node:stream';
+import test, { mock, type TestContext } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 import { SupervisedStdioTransport } from '../src/backend/mcp-stdio-supervisor.ts';
 
-// Synchronously flush a complete frame, then exit without waiting for the client's
-// reader. Unlike an async stdout callback fixture, this reliably exposes exit-vs-IO
-// scheduling races under concurrent actual MCP initialize/list/call traffic.
-test('stdio drains buffered final MCP replies before reporting leader exit', { timeout: 60000 }, async t => {
+test('stdio drains a buffered final reply when exit arrives before stdout data', async t => {
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), unref() {} });
+  const spawn = mock.method(childProcess, 'spawn', () => {
+    queueMicrotask(() => child.emit('spawn'));
+    return child as unknown as ChildProcess;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { spawn.mock.restore(); syncBuiltinESMExports(); });
+  const transport = new SupervisedStdioTransport({ command: 'fixture', args: [], cwd: tmpdir(), env: {} });
+  t.after(() => transport.close());
+  const events: unknown[] = [];
+  transport.onmessage = message => events.push(message);
+  transport.onclose = () => events.push('closed');
+  await transport.start();
+  const reply = { jsonrpc: '2.0' as const, id: 1, result: { content: [{ type: 'text', text: 'x'.repeat(200000) }] } };
+  child.stdout.pause();
+  child.stdout.end(serializeMessage(reply));
+  child.emit('exit', 0, null);
+  assert.deepEqual(events, []);
+  await transport.exited;
+  assert.deepEqual(events, [reply, 'closed']);
+});
+
+test('stdio drains final MCP replies through actual pipes', { timeout: 60000 }, t => finalReplies(t, 2, 1));
+
+test('stdio final-reply stress with 32 concurrent clients', {
+  skip: process.env.FLOW_MCP_STRESS !== '1' && 'Set FLOW_MCP_STRESS=1 to run the optional stress test',
+  timeout: 60000,
+}, t => finalReplies(t, 32, 4));
+
+async function finalReplies(t: TestContext, clients: number, rounds: number) {
   const root = mkdtempSync(join(tmpdir(), 'flow-mcp-buffered-exit-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const script = join(root, 'server.cjs');
@@ -35,8 +67,8 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   if (message.method === 'tools/call') process.exit(0);
 });
 `);
-  for (let round = 0; round < 4; round++) {
-    const results = await Promise.allSettled(Array.from({ length: 32 }, async () => {
+  for (let round = 0; round < rounds; round++) {
+    const results = await Promise.allSettled(Array.from({ length: clients }, async () => {
       const transport = new SupervisedStdioTransport({ command: process.execPath, args: [script], cwd: root, env: process.env });
       const client = new Client({ name: 'buffered-exit-test', version: '1' }, { capabilities: {} });
       try {
@@ -52,4 +84,4 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     }));
     assert.deepEqual(results.filter(result => result.status === 'rejected').map(result => String(result.reason)), []);
   }
-});
+}

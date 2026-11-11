@@ -50,6 +50,7 @@ export type WorkflowStep = StepBase & (
   | { kind: 'branch'; condition: BranchCondition }
   | { kind: 'join' }
   | { kind: 'mcp'; tool: McpToolSnapshot }
+  | { kind: 'workflow'; workflowId: string; contract: { inputSchema: Extract<VisualSchema, { type: 'object' }>; outputSchema: VisualSchema } }
 );
 
 export type BranchCondition =
@@ -101,6 +102,7 @@ export interface StepAttempt {
   number: number;
   action: 'execute' | 'retry' | 'supply';
   startedAt: number;
+  deadlineAt?: number;
   finishedAt?: number;
   input: Json;
   output?: Json;
@@ -123,12 +125,29 @@ export interface WorkflowDefinitionUpdate {
   attempt: number;
 }
 export type ExecutionStatus = 'running' | 'recovery-required' | 'completed' | 'completed-with-recovery' | 'cancelled';
+export interface WorkflowInvocation {
+  id: string;
+  parentInvocationId?: string;
+  callStepId: string;
+  callAttempt: number;
+  definitionId: string;
+  input: Json;
+  status: ExecutionStatus;
+  startedAt: number;
+  finishedAt?: number;
+  steps: Record<string, WorkflowStepRecord>;
+  loops?: Record<string, WorkflowLoopRecord>;
+  result?: Json;
+  definitionUpdates?: WorkflowDefinitionUpdate[];
+}
 export interface WorkflowExecution {
   version: 1;
   id: string;
   sessionId: string;
   scope: string;
   definition: WorkflowDefinition;
+  retainedDefinitions?: Record<string, WorkflowDefinition>;
+  invocations?: Record<string, WorkflowInvocation>;
   /** Prior executable configurations remain available after the snapshot is corrected. */
   definitionUpdates?: WorkflowDefinitionUpdate[];
   input: Json;

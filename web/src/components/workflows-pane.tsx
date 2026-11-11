@@ -33,6 +33,7 @@ import {
 import { attemptDuration } from "../presentation/workflow-execution.ts";
 import { clearRetainedWorkflowLaunch, retainedWorkflowLaunch } from "../workflow-launch.ts";
 import { WorkflowTranscript } from "./workflow-transcript.tsx";
+import { invocationTrail } from "../presentation/workflow-calls.ts";
 import "./workflows.css";
 export type WorkflowMobileNavigation = {
   stepId: string;
@@ -60,6 +61,7 @@ export default function WorkflowsPane({
   const [workflowId, setWorkflowId] = useState(retainedLaunch?.workflowId ?? "");
   const [input, setInput] = useState<Json>(retainedLaunch?.input ?? {});
   const [executionId, setExecutionId] = useState("");
+  const [invocationId, setInvocationId] = useState("");
   const [stepId, selectStep] = useState("");
   const shownStepId = mobileNavigation?.stepId ?? stepId;
   const showStep = (id: string) => {
@@ -84,8 +86,19 @@ export default function WorkflowsPane({
   const definition = definitions.data?.workflows.find(
     (d) => d.id === workflowId,
   );
-  const view = detail.data;
+  const nestedDetail = useWorkflowResource<WorkflowExecutionView>(
+    executionId && invocationId ? `${base}/${executionId}?invocationId=${encodeURIComponent(invocationId)}` : undefined,
+    1000,
+  );
+  const root = detail.data?.execution;
+  const view = invocationId ? nestedDetail.data : detail.data;
   const execution = view?.execution;
+  const openInvocation = (id: string) => {
+    setInvocationId(id);
+    showFlow();
+    setAttempt(undefined);
+    setTab("Flow");
+  };
   const step = execution?.definition.steps.find((s) => s.id === shownStepId);
   const record = execution?.steps[shownStepId];
   const executions = [...(history.data?.executions ?? [])].sort(
@@ -97,6 +110,7 @@ export default function WorkflowsPane({
     setWorkflowId(retained?.workflowId ?? "");
     setInput(retained?.input ?? {});
     setExecutionId("");
+    setInvocationId("");
     selectStep("");
     setMessage(retained?.error ?? "");
     setCreating(retained !== undefined);
@@ -111,6 +125,7 @@ export default function WorkflowsPane({
     );
     setExecutionId((active ?? executions[0]!).id);
   }, [executionId, history.data]);
+  useEffect(() => { setInvocationId(""); }, [executionId]);
   let invalid = "";
   try {
     if (definition) {
@@ -154,9 +169,9 @@ export default function WorkflowsPane({
       <p className="text-xs text-muted-foreground">
         Independent of parent chat. Steps share this Scope.
       </p>
-      {(definitions.error || history.error || detail.error || message) && (
+      {(definitions.error || history.error || detail.error || nestedDetail.error || message) && (
         <p className="text-xs text-muted-foreground" role="status">
-          {definitions.error || history.error || detail.error || message}
+          {message || definitions.error || history.error || detail.error || nestedDetail.error}
         </p>
       )}
       {retainedLaunch && (
@@ -277,6 +292,10 @@ export default function WorkflowsPane({
           </SelectContent>
         </Select>
       </label>
+      {root && <nav aria-label="Workflow invocation" className="flex flex-wrap items-center gap-1">
+        <Button size="sm" variant="ghost" disabled={!invocationId} onClick={() => openInvocation("")}>{root.definition.name}</Button>
+        {invocationTrail(root, invocationId).map(item => <span key={item.id} className="inline-flex items-center gap-1"><span aria-hidden>›</span><Button size="sm" variant="ghost" disabled={item.id === invocationId} onClick={() => openInvocation(item.id)}>{item.call} · {item.name} · Attempt {item.attempt}</Button></span>)}
+      </nav>}
       {execution && (
         <>
           <h3 className="font-semibold">
@@ -285,7 +304,7 @@ export default function WorkflowsPane({
               ? "awaiting input"
               : execution.status.replaceAll("-", " ")}
           </h3>
-          {["running", "recovery-required"].includes(execution.status) && (
+          {root && ["running", "recovery-required"].includes(root.status) && (
             <>
               <p className="text-xs text-muted-foreground">
                 Cancel stops work; it does not undo changes.
@@ -295,7 +314,7 @@ export default function WorkflowsPane({
                 variant="destructive"
                 className="justify-self-start"
                 disabled={busy}
-                onClick={() => void mutate(`${base}/${execution.id}/cancel`)}
+                onClick={() => void mutate(`${base}/${executionId}/cancel`)}
               >
                 Cancel execution
               </Button>
@@ -311,9 +330,9 @@ export default function WorkflowsPane({
               <p className="mt-1 text-xs text-muted-foreground">
                 The parent relays one request at a time using the normal composer controls. This pane stays on the execution so management actions remain available.
               </p>
-              {[...view.enquiries.map(item => ({ key: `${item.subagentId}/${item.askId}`, stepId: item.stepId, label: "Question" })), ...view.permissions.map(item => ({ key: `${item.subagentId}/${item.callId}`, stepId: item.stepId, label: `Permission · ${item.tool}` }))].map(item => (
+              {[...view.enquiries.map(item => ({ key: `${item.subagentId}/${item.askId}`, invocationId: item.invocationId, stepId: item.stepId, label: "Question" })), ...view.permissions.map(item => ({ key: `${item.subagentId}/${item.callId}`, invocationId: item.invocationId, stepId: item.stepId, label: `Permission · ${item.tool}` }))].map(item => (
                 <p key={item.key} className="mt-2 text-xs">
-                  <span className="font-medium">{execution.definition.steps.find(step => step.id === item.stepId)?.name ?? item.stepId}</span>
+                  {item.invocationId && item.invocationId !== invocationId ? <Button size="sm" variant="link" onClick={() => openInvocation(item.invocationId!)}>{invocationTrail(root!, item.invocationId).map(part => `${part.call} · ${part.name}`).join(" / ")}</Button> : <span className="font-medium">{execution.definition.steps.find(step => step.id === item.stepId)?.name ?? item.stepId}</span>}
                   <span className="text-muted-foreground"> · {item.label} · pending</span>
                 </p>
               ))}
@@ -373,7 +392,7 @@ export default function WorkflowsPane({
                   definition={execution.definition}
                   execution={execution}
                   orientation={placement === "bottom" ? "horizontal" : "vertical"}
-                  awaitingSteps={[...view.enquiries, ...view.permissions].map(item => item.stepId)}
+                  awaitingSteps={[...view.enquiries, ...view.permissions].filter(item => (item.invocationId ?? "") === invocationId).map(item => item.stepId)}
                   selectedStepId={shownStepId}
                   onSelect={id => { showStep(id); setAttempt(undefined); }}
                 />
@@ -389,6 +408,7 @@ export default function WorkflowsPane({
                   <h3 className="font-semibold">
                     {step.name} · {record.status}
                   </h3>
+                  {step.kind === "workflow" && Object.values(root?.invocations ?? {}).filter(item => (item.parentInvocationId ?? "") === invocationId && item.callStepId === step.id && item.callAttempt === (attempt ?? record.attempts.at(-1)?.number)).map(item => <Button key={item.id} size="sm" variant="outline" className="justify-self-start" onClick={() => openInvocation(item.id)}>Open called workflow · {item.status.replaceAll("-", " ")}</Button>)}
                   {step.kind === "agent" && (
                     <p>
                       Model: {step.model} · Effort: {step.effort}
@@ -427,7 +447,7 @@ export default function WorkflowsPane({
                       <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                         {JSON.stringify(a.output ?? a.partialOutput, null, 2)}
                       </pre>
-                      <WorkflowTranscript key={`${execution.id}/${step.id}/${a.number}`} base={`${base}/${execution.id}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} completed={a.finishedAt !== undefined} />
+                      <WorkflowTranscript key={`${execution.id}/${invocationId}/${step.id}/${a.number}`} base={`${base}/${executionId}`} sessionId={sessionId} stepId={step.id} attempt={a.number} legacy={!view.historyComplete} completed={a.finishedAt !== undefined} {...(invocationId ? { invocationId } : {})} />
                       {a.error && (
                         <p role="alert">
                           {a.error.kind}: {a.error.message}

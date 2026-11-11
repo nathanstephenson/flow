@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { transformSync } from 'esbuild';
 import { validateDefinition } from '../src/workflows/graph.ts';
 import { parseValue } from '../src/workflows/schema.ts';
+import { invocationTrail } from '../web/src/presentation/workflow-calls.ts';
 import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
 
 type Element = { type: string; key?: string | null; props: Record<string, any> };
@@ -16,6 +17,7 @@ function pane(status: string) {
   const history: { data: { occupied: boolean; executions: any[] } } = { data: { occupied: false, executions: [] } };
   const workflow = structuredClone(definition);
   const detail: { data?: any } = {};
+  const nestedDetail: { data?: any } = {};
   const calls: unknown[] = [];
   const states: any[] = [];
   let index = 0;
@@ -30,13 +32,14 @@ function pane(status: string) {
     if (name === 'react/jsx-runtime') return require(name);
     if (name === '../agent-sessions.tsx') return { useAgentSessions: () => ({ sessions: [session] }) };
     if (name === './workflow-api.ts') return {
-      useWorkflowResource: (path: string) => path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : path?.endsWith('/execution') ? detail : {},
+      useWorkflowResource: (path: string) => path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : path?.endsWith('/execution') ? detail : path?.includes('/execution?invocationId=') ? nestedDetail : {},
       workflowApi: async (...args: unknown[]) => { calls.push(args); return {}; },
     };
     if (name === '../../../src/workflows/graph.ts') return { validateDefinition };
     if (name === '../../../src/workflows/schema.ts') return { parseValue };
     if (name === '../presentation/workflows.ts') return { workflowIssue: (error: Error) => error.message };
     if (name === '../presentation/workflow-execution.ts') return { attemptDuration: () => '1s' };
+    if (name === '../presentation/workflow-calls.ts') return { invocationTrail };
     if (name === '../workflow-launch.ts') return {
       retainedWorkflowLaunch: () => undefined,
       clearRetainedWorkflowLaunch: () => {},
@@ -47,7 +50,7 @@ function pane(status: string) {
   const render = (props: Record<string, unknown> = {}) => { index = 0; return module.exports.default({ sessionId: 'session', ...props }); };
   const button = (label: string) => find(render(), 'Button', node => node.props.children === label);
   const select = () => find(render(), 'Select', node => !!node.props.onValueChange).props.onValueChange('sample');
-  return { session, history, workflow, detail, calls, render, button, select };
+  return { session, history, workflow, detail, nestedDetail, calls, render, button, select };
 }
 
 function find(element: any, type: string, matches: (element: Element) => boolean = () => true): Element {
@@ -142,4 +145,28 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   assert.ok(find(step, 'Select', node => node.props.value === 1));
   find(step, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
   assert.ok(find(p.render(), 'WorkflowGraph'));
+});
+
+it('keeps transcript and cancellation routes rooted while navigating an invocation', async () => {
+  const p = pane('idle');
+  const child = { id: 'inner', definition: structuredClone(definition), input: {}, startedAt: 1, finishedAt: 2, status: 'completed', steps: { join: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } }, result: {} };
+  const call = { id: 'call', name: 'Call', kind: 'workflow', workflowId: definition.id, contract: { inputSchema: definition.inputSchema, outputSchema: definition.inputSchema } };
+  const root = { ...child, id: 'execution', finishedAt: undefined, status: 'running', definition: { ...definition, id: 'parent', name: 'Parent', steps: [call] }, retainedDefinitions: { sample: definition }, invocations: { inner: { ...child, definitionId: 'sample', callStepId: 'call', callAttempt: 1 } }, steps: { call: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } } };
+  p.history.data.executions = [{ id: 'execution', name: 'Parent', status: 'running', startedAt: 1 }];
+  p.detail.data = { execution: root, enquiries: [], permissions: [], stepSpend: {}, historyComplete: true };
+  p.nestedDetail.data = { ...p.detail.data, execution: child };
+  find(p.render(), 'Select', node => Array.isArray(node.props.items)).props.onValueChange('execution');
+  find(p.render(), 'WorkflowGraph').props.onSelect('call');
+  find(p.render(), 'Button', node => JSON.stringify(node.props.children)?.includes('Open called workflow') === true).props.onClick();
+  find(p.render(), 'WorkflowGraph').props.onSelect('join');
+  const transcript = find(p.render(), 'WorkflowTranscript');
+  assert.equal(transcript.props.base, '/api/sessions/session/workflows/execution');
+  assert.equal(transcript.props.invocationId, 'inner');
+  const cancel = p.button('Cancel execution');
+  assert.equal(cancel.props.disabled, false);
+  cancel.props.onClick();
+  await Promise.resolve();
+  assert.deepEqual(p.calls[0], ['/api/sessions/session/workflows/execution/cancel', 'POST', undefined]);
+  p.button('Parent').props.onClick();
+  assert.equal(find(p.render(), 'WorkflowGraph').props.definition.id, 'parent');
 });

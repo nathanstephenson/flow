@@ -37,7 +37,8 @@ function fixture(parent = tmpdir()) {
   writeFileSync(join(claude, ".credentials.json"), '{"oauth":"credential"}');
   writeFileSync(join(claude, "transcript.jsonl"), "claude-transcript");
   writeFileSync(join(home, ".claude.json"), '{"auth":"config"}');
-  const env = { HOME: home, FLOW_STATE_DIR: flow, FLOW_BWRAP_PATH: bwrap };
+  const env = { HOME: home, FLOW_STATE_DIR: flow, FLOW_BWRAP_PATH: bwrap,
+    PI_CODING_AGENT_DIR: pi, CLAUDE_CONFIG_DIR: claude, CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined };
   const options = (extra: Partial<FilesystemIsolationOptions> = {}): FilesystemIsolationOptions => ({
     scope, command: process.execPath, args: [], env, ...extra,
   });

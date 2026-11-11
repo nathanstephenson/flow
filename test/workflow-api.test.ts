@@ -9,6 +9,8 @@ import { ConfigStore } from '../src/daemon/config-store.ts';
 import { SecretStore } from '../src/daemon/secret-store.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
 import { workflowRuntimeOptions } from '../src/workflows/runtime-settings.ts';
+import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
+import { workflowCatalogue } from '../src/daemon/workflow-routes.ts';
 
 it('discovers only executable Node files without discovering or executing Docker', () => {
   const root = mkdtempSync(join(tmpdir(), 'flow-node-path-'));
@@ -39,6 +41,32 @@ it('discovers only executable Node files without discovering or executing Docker
     if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it('serves host-derived call contracts and preserves saved contracts until explicit refresh', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-call-api-'));
+  const workflows = new WorkflowStore(root);
+  const running = await serve({ host: new SessionHost(), token: 'test-token', assets: {}, workflows });
+  const request = (path: string, method = 'GET', body?: unknown) => fetch(running.url + path, { method, headers: { authorization: 'Bearer test-token' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const child: WorkflowDefinition = { version: 1, id: 'catalogue', name: 'Child', backend: 'fake', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'inner', name: 'Inner', kind: 'typescript', code: 'return 1', outputSchema: { type: 'number' } }], edges: [] };
+  try {
+    workflows.saveDefinition(child);
+    assert.equal((await fetch(running.url + '/api/workflow-catalogue')).status, 401);
+    assert.equal((await request('/api/workflow-catalogue', 'POST')).status, 405);
+    const catalogue = await (await request('/api/workflow-catalogue')).json() as ReturnType<typeof workflowCatalogue>;
+    assert.equal(catalogue.workflows[0]!.id, child.id);
+    assert.deepEqual(catalogue.workflows[0]!.contract.outputSchema, { type: 'number' });
+    assert.equal((await (await request('/api/workflows/catalogue')).json() as { workflow: WorkflowDefinition }).workflow.id, child.id);
+    const call = { id: 'call', name: 'Call', kind: 'workflow' as const, workflowId: child.id, contract: catalogue.workflows[0]!.contract, mapping: { kind: 'object' as const, fields: {} } };
+    const parent = { ...child, id: 'parent', steps: [call] };
+    assert.equal((await request('/api/workflows/parent', 'PUT', { ...parent, steps: [{ ...call, contract: { ...call.contract, outputSchema: { type: 'string' } } }] })).status, 400);
+    assert.equal((await request('/api/workflows/parent', 'PUT', parent)).status, 200);
+    workflows.saveDefinition({ ...child, inputSchema: { type: 'object', fields: { optional: { schema: { type: 'string' } } } } });
+    assert.equal((await request('/api/workflows/parent', 'PUT', { ...parent, name: 'Renamed' })).status, 200);
+    const refreshed = (await (await request('/api/workflow-catalogue')).json() as ReturnType<typeof workflowCatalogue>).workflows.find(item => item.id === child.id)!;
+    assert.equal((await request('/api/workflows/parent', 'PUT', { ...parent, steps: [{ ...call, contract: refreshed.contract }] })).status, 200);
+    assert.deepEqual(workflows.getDefinition('parent').steps[0]!.mapping, call.mapping);
+  } finally { await running.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 it('serves private machine-wide workflow and secret CRUD through authenticated HTTP', async () => {

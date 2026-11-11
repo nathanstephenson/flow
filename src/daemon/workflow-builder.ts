@@ -14,6 +14,7 @@ import type { SessionHost } from './host.ts';
 import { workflowAuthoringScope } from './workflow-authoring-scope.ts';
 import { WorkflowBuilderFiles } from './workflow-builder-files.ts';
 import { workflowBuilderFolder } from '../isolation/shared-sandbox.ts';
+import type { workflowCatalogue } from './workflow-routes.ts';
 import { workflowBuilderInstructions } from './workflow-builder-guidance.ts';
 
 const MAX_DEFINITION = 256_000;
@@ -36,6 +37,8 @@ export interface WorkflowBuilderServiceOptions {
   mcpCatalogue?: (scope: string, projectId: string | undefined, scopeIdentity: string) => Promise<WorkflowMcpCatalogue>;
   /** One full host snapshot from the MCP discovery cache, for the per-tool virtual file and compact references. */
   mcpTool?: (scope: string, projectId: string | undefined, scopeIdentity: string, connectionId: string, toolName: string) => Promise<McpToolSnapshot>;
+  workflowCatalogue?: () => ReturnType<typeof workflowCatalogue>;
+  workflowDefinition?: (id: string) => WorkflowDefinition | undefined;
   /** Internal lifecycle tuning, primarily for tests. Not an HTTP option. */
   limits?: Partial<Limits>;
 }
@@ -60,6 +63,7 @@ type Entry = {
   effort?: EffortLevel;
   models: ModelInfo[];
   originalMcpTools: McpToolSnapshot[];
+  originalWorkflowSteps: Extract<WorkflowDefinition['steps'][number], { kind: 'workflow' }>[];
 };
 type McpToolLookup = (connectionId: string, toolName: string) => Promise<McpToolSnapshot>;
 
@@ -83,15 +87,12 @@ function bounded(value: unknown): void {
   if (Buffer.byteLength(JSON.stringify(value) ?? '') > MAX_DEFINITION) throw invalid();
 }
 const stepValidators = workflowDefinitionValidator.shape.steps.element.options;
-const mcpReferenceValidator = stepValidators[5].shape.tool.omit({ connectionName: true, inputSchema: true, outputSchema: true });
+const mcpStepValidator = stepValidators.find((step): step is Extract<(typeof stepValidators)[number], { shape: { kind: z.ZodLiteral<'mcp'> } }> => step.shape.kind.value === 'mcp')!;
+const mcpReferenceValidator = mcpStepValidator.shape.tool.omit({ connectionName: true, inputSchema: true, outputSchema: true });
 const mcpDiagnostic = (id: unknown) => `MCP step ${JSON.stringify(id)} must use unchanged existing snapshots or exact tools from mcp-tools/<connectionId>/<toolName>.json`;
 const mcpToolPath = /^mcp-tools\/([A-Za-z0-9_-]{1,40})\/(.+)\.json$/;
-const draftName = { name: stepValidators[0].shape.name.or(z.literal('')) };
-const draftStepValidator = z.discriminatedUnion('kind', [
-  stepValidators[0].extend({ ...draftName, model: z.string() }),
-  stepValidators[1].extend(draftName), stepValidators[2].extend(draftName),
-  stepValidators[3].extend(draftName), stepValidators[4].extend(draftName), stepValidators[5].extend(draftName),
-]);
+const draftSteps = stepValidators.map(step => step.extend({ name: step.shape.name.or(z.literal('')), ...(step.shape.kind.value === 'agent' ? { model: z.string() } : {}) }));
+const draftStepValidator = z.union(draftSteps);
 const draftValidator = workflowDefinitionValidator.extend({
   name: z.string(), steps: z.array(draftStepValidator).max(200), edges: workflowDefinitionValidator.shape.edges.max(500),
 });
@@ -102,7 +103,7 @@ function definition(value: unknown, draft = false): WorkflowDefinition {
   const parsed = draftValidator.parse(value) as WorkflowDefinition;
   return draft ? parsed : validateDefinition(parsed).definition;
 }
-async function builderDefinition(value: unknown, entry: Entry, lookup: McpToolLookup): Promise<WorkflowDefinition> {
+async function builderDefinition(value: unknown, entry: Entry, lookup: McpToolLookup, catalogue: ReturnType<typeof workflowCatalogue>): Promise<WorkflowDefinition> {
   bounded(value);
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const draft = value as Record<string, unknown>;
@@ -110,7 +111,16 @@ async function builderDefinition(value: unknown, entry: Entry, lookup: McpToolLo
     if (Array.isArray(draft.steps)) {
       if (draft.steps.length > 200) throw invalid();
       for (const step of draft.steps) {
-        if (!step || typeof step !== 'object' || step.kind !== 'mcp') continue;
+        if (!step || typeof step !== 'object') continue;
+        if (step.kind === 'workflow') {
+          const current = catalogue.workflows.find(item => item.id === step.workflowId && item.backend === entry.view.definition.backend && item.id !== entry.view.definition.id);
+          const retained = entry.originalWorkflowSteps.find(item => item.id === step.id && item.workflowId === step.workflowId && isDeepStrictEqual(item.contract, step.contract));
+          if (step.contract === undefined && current) step.contract = structuredClone(current.contract);
+          else if (!retained && (!current || !isDeepStrictEqual(current.contract, step.contract))) throw new Error(`Workflow step ${JSON.stringify(step.id)} must select a saved workflow from workflows.json; do not invent contracts`);
+          bounded(value);
+          continue;
+        }
+        if (step.kind !== 'mcp') continue;
         const reference = mcpReferenceValidator.safeParse(step.tool);
         if (!reference.success) continue;
         let reason = '';
@@ -163,10 +173,19 @@ export class WorkflowBuilderService {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['definition', 'modelId', 'effort'].includes(key))) throw invalid();
       if (input.modelId !== undefined && (typeof input.modelId !== 'string' || !input.modelId || input.modelId.length > 256)) throw invalid();
       draft = definition(input.definition, true);
+      const catalogue = this.options.workflowCatalogue?.().workflows ?? [];
+      const saved = this.options.workflowDefinition?.(draft.id);
+      for (const step of draft.steps) {
+        if (step.kind !== 'workflow' || step.workflowId === 'unselected') continue;
+        const original = saved?.backend === draft.backend ? saved.steps.find(candidate => candidate.id === step.id && candidate.kind === 'workflow') : undefined;
+        if (original?.kind === 'workflow' && original.workflowId === step.workflowId && isDeepStrictEqual(original.contract, step.contract)) continue;
+        const selected = catalogue.find(item => item.id === step.workflowId && item.backend === draft.backend && item.id !== draft.id);
+        if (!selected || !isDeepStrictEqual(selected.contract, step.contract)) throw invalid();
+      }
       this.options.validateDefinition?.(draft);
     } catch { throw invalid(); }
     const now = Date.now();
-    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [], originalMcpTools: draft.steps.flatMap(step => step.kind === 'mcp' && step.tool.connectionId !== 'unselected' ? [structuredClone(step.tool)] : []) };
+    const entry: Entry = { view: { id: randomUUID(), definition: draft, scope: '', status: 'idle', messages: [] }, createdAt: now, touchedAt: now, closed: false, ready: false, generation: 0, turn: 0, writing: false, models: [], originalMcpTools: draft.steps.flatMap(step => step.kind === 'mcp' && step.tool.connectionId !== 'unselected' ? [structuredClone(step.tool)] : []), originalWorkflowSteps: draft.steps.flatMap(step => step.kind === 'workflow' && step.workflowId !== 'unselected' ? [structuredClone(step)] : []) };
     this.entries.set(entry.view.id, entry);
     try {
       await within(this.trackStartup(entry, () => this.start(entry, input)), this.limits.startupMs);
@@ -258,6 +277,10 @@ export class WorkflowBuilderService {
         read: async path => {
           live();
           if (path === 'workflow.json') return JSON.stringify(entry.view.definition);
+          if (path === 'workflows.json') {
+            const catalogue = this.options.workflowCatalogue?.() ?? { workflows: [], errors: [] };
+            return JSON.stringify({ ...catalogue, workflows: catalogue.workflows.filter(item => item.id !== entry.view.definition.id && item.backend === entry.view.definition.backend) });
+          }
           if (path === 'mcp-tools.json') {
             await entry.files!.checkScope();
             live();
@@ -299,7 +322,7 @@ export class WorkflowBuilderService {
               return lookups.get(key)!;
             };
             let draft: WorkflowDefinition;
-            try { draft = await builderDefinition(JSON.parse(content), entry, lookup); }
+            try { draft = await builderDefinition(JSON.parse(content), entry, lookup, this.options.workflowCatalogue?.() ?? { workflows: [], errors: [] }); }
             catch (error) {
               diagnostic = error instanceof z.ZodError
                 ? error.issues.slice(0, 3).map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ').slice(0, 500)

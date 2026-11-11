@@ -1,8 +1,37 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isDeepStrictEqual } from 'node:util';
+import type { WorkflowDefinition, WorkflowStep } from '../protocol/workflows.ts';
+import { deriveResultSchema } from '../workflows/calls.ts';
 import { validSecretName } from '../protocol/secrets.ts';
 import { validateDefinition } from '../workflows/graph.ts';
 import type { WorkflowStore } from '../workflows/store.ts';
 import type { SecretStore } from './secret-store.ts';
+
+export function workflowCatalogue(workflows: Pick<WorkflowStore, 'listDefinitions'>) {
+  const entries = [];
+  const errors: Array<{ id: string; name: string; message: string }> = [];
+  for (const definition of workflows.listDefinitions()) {
+    try {
+      entries.push({ id: definition.id, name: definition.name, backend: definition.backend, projectId: definition.projectId, contract: { inputSchema: definition.inputSchema, outputSchema: deriveResultSchema(definition) } });
+    } catch {
+      errors.push({ id: definition.id, name: definition.name, message: 'Saved Workflow Definition is invalid' });
+    }
+  }
+  return { workflows: entries, errors };
+}
+
+function validateWorkflowContracts(definition: WorkflowDefinition, workflows: WorkflowStore): void {
+  let original: WorkflowDefinition | undefined;
+  try { original = workflows.getDefinition(definition.id); } catch {}
+  const catalogue = workflowCatalogue(workflows).workflows;
+  for (const step of definition.steps) {
+    if (step.kind !== 'workflow') continue;
+    const retained = original?.steps.find((candidate): candidate is Extract<WorkflowStep, { kind: 'workflow' }> => candidate.id === step.id && candidate.kind === 'workflow');
+    if (retained?.workflowId === step.workflowId && isDeepStrictEqual(retained.contract, step.contract)) continue;
+    const selected = catalogue.find(item => item.id === step.workflowId && item.backend === definition.backend);
+    if (!selected || !isDeepStrictEqual(selected.contract, step.contract)) throw new Error(`Workflow step ${step.name} requires a saved host-derived contract`);
+  }
+}
 
 export function workflowRequestError(error: unknown, redact: (message: string) => string = message => message): string {
   // Redact before truncation: a credential containing ':' must not leak its prefix.
@@ -10,6 +39,11 @@ export function workflowRequestError(error: unknown, redact: (message: string) =
 }
 
 export async function workflowRoutes(request: IncomingMessage, response: ServerResponse, pathname: string, workflows?: WorkflowStore, secrets?: SecretStore, executions?: import('./workflow-executions.ts').WorkflowExecutionService): Promise<boolean> {
+  if (pathname === '/api/workflow-catalogue') {
+    response.writeHead(!workflows ? 404 : request.method === 'GET' ? 200 : 405, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(!workflows ? { error: 'Not available' } : request.method === 'GET' ? workflowCatalogue(workflows) : { error: 'Method not allowed' }));
+    return true;
+  }
   const match = /^\/api\/(workflows|secrets)(?:\/(.*))?$/.exec(pathname);
   if (!match) return false;
   const reply = (status: number, value: unknown) => {
@@ -58,6 +92,7 @@ export async function workflowRoutes(request: IncomingMessage, response: ServerR
         let definition;
         try {
           definition = validateDefinition(body).definition;
+          validateWorkflowContracts(definition, workflows!);
           executions?.validateDefinitionCredentials(definition);
           if (definition.id !== id) throw new Error();
         } catch (error) { reply(400, { error: workflowRequestError(error, message => executions?.redactRequestError(message) ?? message) }); return true; }
