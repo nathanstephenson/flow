@@ -365,12 +365,15 @@ export class WorkflowScheduler {
   }
 
   private async stopTree(active: ActiveExecution, reason: 'cancelled' | 'interrupted'): Promise<void> {
-    active.stopped = true;
-    if (occupied(active.record)) {
-      active.record.status = reason === 'cancelled' ? 'cancelled' : 'recovery-required';
-      for (const [id, state] of Object.entries(active.record.steps)) {
+    const tree = [active];
+    for (const current of tree) tree.push(...[...current.calls.values()].map(call => call.child));
+    for (const current of tree) {
+      current.stopped = true;
+      if (!occupied(current.record)) continue;
+      current.record.status = reason === 'cancelled' ? 'cancelled' : 'recovery-required';
+      for (const [id, state] of Object.entries(current.record.steps)) {
         if (reason === 'cancelled' && ['pending', 'blocked', 'running', 'interrupted'].includes(state.status)) state.status = 'cancelled';
-        else if (reason === 'interrupted' && state.status === 'running' && !active.calls.has(id)) {
+        else if (reason === 'interrupted' && state.status === 'running' && !current.calls.has(id)) {
           state.status = 'interrupted';
           const attempt = state.attempts.at(-1)!;
           attempt.error = { kind: 'interrupted', message: 'Execution was interrupted; effects may already have occurred' };
@@ -378,18 +381,21 @@ export class WorkflowScheduler {
         }
       }
     }
-    this.persist(active);
-    const children = [...active.calls.values()].map(call => { clearTimeout(call.timer); return this.stopTree(call.child, reason); });
-    for (const running of active.running.values()) running.controller.abort();
-    await Promise.all([...children, ...[...active.running.values()].map(running => running.done)]);
-    if (reason === 'cancelled' && active.record.status === 'cancelled') {
-      active.record.finishedAt ??= Date.now();
-      for (const state of Object.values(active.record.steps)) if (state.status === 'cancelled') {
-        const attempt = state.attempts.at(-1);
-        if (attempt) attempt.finishedAt ??= Date.now();
+    const work = tree.flatMap(current => [...current.running.values()]);
+    try { this.persist(active); }
+    finally {
+      for (const current of tree) for (const call of current.calls.values()) clearTimeout(call.timer);
+      for (const running of work) running.controller.abort();
+      await Promise.all(work.map(running => running.done));
+      for (const current of tree) if (reason === 'cancelled' && current.record.status === 'cancelled') {
+        current.record.finishedAt ??= Date.now();
+        for (const state of Object.values(current.record.steps)) if (state.status === 'cancelled') {
+          const attempt = state.attempts.at(-1);
+          if (attempt) attempt.finishedAt ??= Date.now();
+        }
       }
+      this.persist(active);
     }
-    this.persist(active);
   }
 
   private startCall(active: ActiveExecution, step: Extract<WorkflowStep, { kind: 'workflow' }>, attempt: StepAttempt): void {

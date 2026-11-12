@@ -62,7 +62,9 @@ export function recoverySteps(root: WorkflowExecution, action: RecoverWorkflow, 
     for (const step of graph.order) {
       if (current.testStepId && current.testStepId !== step.id) continue;
       if (!repeating.has(step.id)) {
-        if (current.steps[step.id]!.status === 'completed' || owned.has(step.id)) continue;
+        const state = current.steps[step.id]!;
+        if (!current.testStepId && ['failed', 'timed-out'].includes(state.status) && !state.recovery && graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) continue;
+        if (state.status === 'completed' || owned.has(step.id)) continue;
         if (selected && action.kind === 'supply' && action.stepId === step.id) continue;
       }
       steps.push(step);

@@ -342,6 +342,55 @@ test('interruption waits for a timed-out subtree already cancelling and preserve
   assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
 });
 
+test('a failed cancellation save drains all descendants and remains readable after restart', async t => {
+  let failOnce = false, stopped = false, startedCount = 0, abortedCount = 0;
+  let entered!: () => void, aborted!: () => void;
+  const finishers: Array<() => void> = [];
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const stopping = new Promise<void>(resolve => { aborted = resolve; });
+  class FailCancelStore extends WorkflowStore {
+    override saveExecution(record: WorkflowExecution): void {
+      if (failOnce && record.status === 'cancelled') { failOnce = false; throw new Error('disk full'); }
+      super.saveExecution(record);
+    }
+  }
+  const f = fixture(t, async context => {
+    if (context.step.id === 'completed') return 7;
+    if (++startedCount === 2) entered();
+    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => { finishers.push(resolve); if (++abortedCount === 2) aborted(); }, { once: true }));
+    return 7;
+  }, FailCancelStore);
+  const grand = definition('grand', [leaf('completed'), leaf('running')], [{ id: 'next', from: 'completed', to: 'running', outcome: 'success' }]);
+  const middle = definition('middle', [call('inner', grand)]);
+  f.store.saveDefinition(grand); f.store.saveDefinition(middle);
+  const started = f.scheduler.start(definition('parent', [call('outer', middle), call('parallel', grand)]), session, {});
+  await ready;
+  const before = Object.fromEntries(Object.values(f.scheduler.get(session.sessionId, started.id).invocations!).filter(item => item.definitionId === 'grand').map(item => [item.id, item.steps.completed]));
+  failOnce = true;
+  const cancellation = f.scheduler.cancel(session.sessionId, started.id).then(() => { stopped = true; return undefined; }, error => { stopped = true; return error as unknown; });
+  try {
+    await stopping;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(stopped, false);
+    assert.equal(f.scheduler.occupied(session.sessionId), true);
+  } finally { for (const finish of finishers) finish(); }
+  const error = await cancellation;
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /disk full/);
+  const saved = f.store.getExecution(session.sessionId, started.id);
+  assert.equal(saved.status, 'recovery-required');
+  assert.equal(saved.steps.outer!.status, 'cancelled');
+  assert.equal(Object.keys(saved.invocations!).length, 3);
+  assert.ok(Object.values(saved.invocations!).every(item => item.status === 'cancelled' && item.finishedAt !== undefined));
+  for (const [id, completed] of Object.entries(before)) assert.deepEqual(saved.invocations![id]!.steps.completed, completed);
+  const restored = new WorkflowScheduler(f.store, f.executors);
+  restored.recover(session, started.id, { kind: 'continue' });
+  const done = await restored.wait(session.sessionId, started.id);
+  assert.equal(restored.occupied(session.sessionId), false);
+  assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
+  assert.ok(Object.values(done.invocations!).every(item => item.status === 'cancelled'));
+});
+
 test('successful inner recovery clears a previous root storage error', async t => {
   let broken = false;
   let effects = 0;
