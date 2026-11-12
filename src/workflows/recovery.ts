@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { WorkflowDefinition, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
 import { validateDefinition, type WorkflowGraph } from './graph.ts';
 import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
+import { invocationExecution } from './invocations.ts';
 
 // Object key order is not part of a saved definition's identity; array order is.
 function canonical(value: unknown): unknown {
@@ -47,17 +48,47 @@ export function validateCompatibleDefinition(previous: WorkflowDefinition, candi
   return graph;
 }
 
+export function recoverySteps(root: WorkflowExecution, action: RecoverWorkflow, replacement?: WorkflowDefinition): WorkflowStep[] {
+  const steps: WorkflowStep[] = [];
+  let invocationId = action.invocationId, selected = true;
+  for (;;) {
+    const current = invocationId === undefined ? root : invocationExecution(root, invocationId);
+    const graph = validateDefinition(selected && replacement ? replacement : current.definition);
+    const repeating = new Set(current.testStepId ? [] : graph.loops.filter(loop => ['active', 'repeating', 'limit'].includes(current.loops?.[loop.headerId]?.phase ?? 'inactive')).flatMap(loop => loop.memberIds));
+    const owned = new Set(Object.values(root.invocations ?? {}).filter(invocation => {
+      const call = current.steps[invocation.callStepId];
+      return invocation.parentInvocationId === invocationId && call?.status === 'running' && invocation.callAttempt === call.attempts.length;
+    }).map(invocation => invocation.callStepId));
+    for (const step of graph.order) {
+      if (current.testStepId && current.testStepId !== step.id) continue;
+      if (!repeating.has(step.id)) {
+        const state = current.steps[step.id]!;
+        if (!current.testStepId && ['failed', 'timed-out'].includes(state.status) && !state.recovery && graph.outgoing.get(step.id)!.some(edge => edge.outcome === state.outcome)) continue;
+        if (state.status === 'completed' || owned.has(step.id)) continue;
+        if (selected && action.kind === 'supply' && action.stepId === step.id) continue;
+      }
+      steps.push(step);
+    }
+    if (invocationId === undefined) return steps;
+    invocationId = root.invocations![invocationId]!.parentInvocationId;
+    selected = false;
+  }
+}
+
 /** State identity, not wall-clock time: repeated notifications cannot mint new authority. */
 export function recoveryRevision(record: WorkflowExecution): string {
   return createHash('sha256').update(JSON.stringify({ id: record.id, status: record.status,
     steps: Object.entries(record.steps).map(([id, step]) => [id, step.status, step.attempts.map(a => [a.number, a.action, a.finishedAt, a.error])]),
     loops: record.loops, definition: savedDefinitionRevision(record.definition), definitionUpdates: record.definitionUpdates,
+    invocations: record.invocations, retainedDefinitions: record.retainedDefinitions,
   })).digest('hex');
 }
 export function successfulProgress(record: WorkflowExecution): number {
-  return Object.values(record.steps).reduce((count, step) => count + step.attempts.filter(a => a.finishedAt !== undefined && a.output !== undefined && !a.error && a.action !== 'supply').length, 0);
+  const local = (execution: WorkflowExecution) => Object.entries(execution.steps).reduce((count, [id, step]) => count + (execution.definition.steps.find(step => step.id === id)?.kind === 'workflow' ? 0 : step.attempts.filter(a => a.finishedAt !== undefined && a.output !== undefined && !a.error && a.action !== 'supply').length), 0);
+  return local(record) + Object.keys(record.invocations ?? {}).reduce((count, id) => count + local(invocationExecution(record, id)), 0);
 }
 export function safeAutomaticRecovery(record: WorkflowExecution, action: RecoverWorkflow): boolean {
+  if (action.invocationId) record = invocationExecution(record, action.invocationId);
   if (record.status !== 'recovery-required' || Object.values(record.loops ?? {}).some(loop => loop.phase === 'limit')) return false;
   if (action.kind === 'retry') {
     // External tools, arbitrary code and agents cannot prove that replay is free of effects.

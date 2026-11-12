@@ -195,7 +195,7 @@ export function WorkflowGraph({
       })),
       steps: new Map(definition.steps.map(step => [step.id, step])),
     };
-  }, [topologyKey, orientation]);
+  }, [topologyKey, definition.id, orientation]);
   useEffect(() => {
     const awaiting = new Set(awaitingSteps);
     setNodes((previous) => {

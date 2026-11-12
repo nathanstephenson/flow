@@ -1,7 +1,9 @@
 import { boundedMcpValue, validateMcpOutput } from './mcp.ts';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';
-import type { WorkflowExecution } from '../protocol/workflows.ts';
+import type { WorkflowDefinition, WorkflowExecution, WorkflowInvocation } from '../protocol/workflows.ts';
+import { resolveWorkflowCalls } from './calls.ts';
+import { dictionaryRecord } from './schema.ts';
 import { validateDefinition, workflowDefinitionValidator } from './graph.ts';
 import { validateCompatibleDefinition } from './recovery.ts';
 
@@ -14,27 +16,34 @@ const loopValidator = z.object({
 }).strict();
 const attemptValidator = z.object({
   loops: z.array(identityValidator).optional(),
-  number: z.number().int().positive(), action: z.enum(['execute', 'retry', 'supply']), startedAt: z.number().nonnegative(), finishedAt: z.number().nonnegative().optional(),
+  number: z.number().int().positive(), action: z.enum(['execute', 'retry', 'supply']), startedAt: z.number().nonnegative(), deadlineAt: z.number().nonnegative().optional(), finishedAt: z.number().nonnegative().optional(),
   input: z.json(), output: z.json().optional(), partialOutput: z.json().optional(), error: errorValidator.optional(),
 }).strict();
 
-export const workflowExecutionValidator = z.object({
-  version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
+const checkpointFields = {
   definitionUpdates: z.array(z.object({
     stepId: z.string().min(1), previousStep: workflowDefinitionValidator.shape.steps.element, nextStep: workflowDefinitionValidator.shape.steps.element,
     appliedAt: z.number().nonnegative(), attempt: z.number().int().min(2),
   }).strict()).optional(),
-  input: z.json(), launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
+  input: z.json(), status: z.enum(['running', 'recovery-required', 'completed', 'completed-with-recovery', 'cancelled']),
   startedAt: z.number().nonnegative(), finishedAt: z.number().nonnegative().optional(), result: z.json().optional(),
-  loops: z.record(z.string(), loopValidator).optional(),
-  steps: z.record(z.string(), z.object({
+  loops: dictionaryRecord(loopValidator).optional(),
+  steps: dictionaryRecord(z.object({
     status: z.enum(['pending', 'running', 'completed', 'failed', 'timed-out', 'interrupted', 'skipped', 'blocked', 'cancelled']), recovery: z.boolean().optional(),
     attempts: z.array(attemptValidator), output: z.json().optional(), outcome: z.enum(['success', 'failure', 'timeout', 'true', 'false']).optional(),
   }).strict()),
+};
+const invocationValidator = z.object({
+  ...checkpointFields, id: z.string().min(1), parentInvocationId: z.string().min(1).optional(),
+  callStepId: z.string().min(1), callAttempt: z.number().int().positive(), definitionId: z.string().min(1),
+}).strict();
+export const workflowExecutionValidator = z.object({
+  ...checkpointFields, version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
+  retainedDefinitions: dictionaryRecord(workflowDefinitionValidator).optional(), invocations: dictionaryRecord(invocationValidator).optional(),
+  launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(),
 }).strict();
 
-export function parseExecution(value: unknown): WorkflowExecution {
-  const record = workflowExecutionValidator.parse(value) as WorkflowExecution;
+function validateCheckpoint(record: WorkflowExecution): WorkflowDefinition {
   const graph = validateDefinition(record.definition);
   if (graph.order.length !== Object.keys(record.steps).length || graph.order.some(step => !Object.hasOwn(record.steps, step.id))) throw new Error('Execution steps do not match the definition');
   // Walk corrections backwards to validate both their contracts and the snapshot chain.
@@ -53,6 +62,7 @@ export function parseExecution(value: unknown): WorkflowExecution {
     validateCompatibleDefinition(previous, definition, update.stepId);
     definition = previous;
   }
+  const original = definition;
   if (record.testStepId && !Object.hasOwn(record.steps, record.testStepId)) throw new Error('Unknown test step');
   if (record.testStepId && record.naming) throw new Error('Step tests cannot name Agent Sessions');
   const loops = record.testStepId ? [] : graph.loops;
@@ -85,6 +95,10 @@ export function parseExecution(value: unknown): WorkflowExecution {
     }
     const containing = loops.filter(loop => loop.memberIds.includes(id));
     for (const [index, attempt] of step.attempts.entries()) {
+      if (attempt.deadlineAt !== undefined) {
+        const configuration = stepConfiguration(record, original, id, attempt.number);
+        if (configuration?.kind !== 'workflow' || configuration.timeoutMs === undefined || attempt.deadlineAt !== attempt.startedAt + configuration.timeoutMs) throw new Error('Invalid call attempt deadline');
+      }
       if ((attempt.loops ?? []).length !== containing.length || containing.some(loop => !attempt.loops?.some(identity => identity.headerId === loop.headerId))) throw new Error('Invalid attempt loop identities');
       if (containing.length && index === 0 && attempt.action !== 'execute') throw new Error('Invalid initial loop attempt');
       const previous = step.attempts[index - 1];
@@ -108,5 +122,78 @@ export function parseExecution(value: unknown): WorkflowExecution {
     if (step.status === 'completed' && step.output === undefined) throw new Error('Missing completed output');
   }
   if (['completed', 'completed-with-recovery'].includes(record.status) && Object.values(record.steps).some(step => ['pending', 'running', 'interrupted', 'blocked'].includes(step.status))) throw new Error('Completed execution contains unfinished work');
+  return original;
+}
+
+function stepConfiguration(record: WorkflowExecution, original: WorkflowDefinition, stepId: string, attempt: number) {
+  let step = original.steps.find(step => step.id === stepId);
+  for (const update of record.definitionUpdates ?? []) if (update.stepId === stepId && update.attempt <= attempt) step = update.nextStep;
+  return step;
+}
+
+export function parseExecution(value: unknown): WorkflowExecution {
+  const record = workflowExecutionValidator.parse(value) as WorkflowExecution;
+  const original = validateCheckpoint(record);
+  const manifest = record.retainedDefinitions;
+  if (!manifest) {
+    if (record.invocations || record.definition.steps.some(step => step.kind === 'workflow')) throw new Error('Missing retained Workflow Definitions');
+    return record;
+  }
+  for (const [id, definition] of Object.entries(manifest)) if (id !== definition.id) throw new Error('Invalid retained definition identity');
+  if (!isDeepStrictEqual(manifest[original.id], original)) throw new Error('Retained root definition does not match the original checkpoint');
+  const resolved = resolveWorkflowCalls(original, id => {
+    if (!Object.hasOwn(manifest, id)) throw new Error('Missing retained definition');
+    return manifest[id]!;
+  }, record.testStepId);
+  if (!isDeepStrictEqual(resolved, manifest)) throw new Error('Retained definitions do not match the call manifest');
+  const locals = new Map<string, WorkflowExecution>();
+  const originals = new Map<string, WorkflowDefinition>();
+  for (const [id, invocation] of Object.entries(record.invocations ?? {})) {
+    if (id !== invocation.id || id === record.id) throw new Error('Invalid invocation identity');
+    const retained = manifest[invocation.definitionId];
+    if (!retained) throw new Error('Missing invocation definition');
+    const definition = structuredClone(retained);
+    for (const update of invocation.definitionUpdates ?? []) {
+      const index = definition.steps.findIndex(step => step.id === update.stepId);
+      if (index < 0) throw new Error('Unknown invocation correction step');
+      definition.steps[index] = structuredClone(update.nextStep);
+    }
+    const local: WorkflowExecution = { ...invocation, version: 1, sessionId: record.sessionId, scope: record.scope, definition };
+    if (!isDeepStrictEqual(validateCheckpoint(local), retained)) throw new Error('Invocation corrections do not match the retained definition');
+    locals.set(id, local);
+    originals.set(id, retained);
+  }
+  const checked = new Set<string>();
+  for (const id of locals.keys()) {
+    const path = new Set<string>();
+    let current: string | undefined = id;
+    while (current !== undefined && !checked.has(current)) {
+      if (path.has(current)) throw new Error('Invocation parent cycle');
+      path.add(current);
+      const invocation: WorkflowInvocation | undefined = record.invocations![current];
+      if (!invocation) throw new Error('Missing parent invocation');
+      current = invocation.parentInvocationId;
+    }
+    for (const ancestor of path) checked.add(ancestor);
+  }
+  const owners = new Set<string>();
+  for (const [id, invocation] of Object.entries(record.invocations ?? {})) {
+    const parentId = invocation.parentInvocationId;
+    const parent = parentId === undefined ? record : locals.get(parentId)!;
+    const parentOriginal = parentId === undefined ? original : originals.get(parentId)!;
+    const step = stepConfiguration(parent, parentOriginal, invocation.callStepId, invocation.callAttempt);
+    const state = parent.steps[invocation.callStepId];
+    const attempt = state?.attempts[invocation.callAttempt - 1];
+    if (step?.kind !== 'workflow' || step.workflowId !== invocation.definitionId || !attempt || attempt.action === 'supply' || (parent.testStepId !== undefined && parent.testStepId !== step.id)) throw new Error('Invalid invocation call ownership');
+    if (!isDeepStrictEqual(invocation.input, attempt.input)) throw new Error('Invocation input does not match the call attempt');
+    if (step.timeoutMs !== undefined && attempt.deadlineAt === undefined) throw new Error('Missing call attempt deadline');
+    if (invocation.callAttempt < state!.attempts.length && ['running', 'recovery-required'].includes(invocation.status)) throw new Error('Unfinished invocation belongs to an earlier call attempt');
+    const owner = JSON.stringify([parentId ?? null, invocation.callStepId, invocation.callAttempt]);
+    if (owners.has(owner)) throw new Error('Duplicate invocation call ownership');
+    owners.add(owner);
+    if (['completed', 'completed-with-recovery'].includes(invocation.status) && invocation.result === undefined) throw new Error('Missing completed invocation result');
+    if (['completed', 'completed-with-recovery'].includes(record.status) && ['running', 'recovery-required'].includes(invocation.status)) throw new Error('Completed execution contains unfinished invocations');
+    if (!locals.has(id)) throw new Error('Missing invocation checkpoint');
+  }
   return record;
 }

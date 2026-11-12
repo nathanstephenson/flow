@@ -16,6 +16,8 @@ import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
 import type { WorkflowExecutionView } from '../src/protocol/workflow-executions.ts';
 import { reduceAll } from '../src/client/reduce.ts';
 import { WorkflowStepError } from '../src/workflows/scheduler.ts';
+import { deriveResultSchema } from '../src/workflows/calls.ts';
+import { savedDefinitionRevision } from '../src/workflows/recovery.ts';
 
 const runtimeDirectory = mkdtempSync(join(tmpdir(), 'flow-execution-runtime-'));
 const runtimePath = join(runtimeDirectory, 'runtime.cjs');
@@ -23,6 +25,9 @@ before(() => execFileSync(process.execPath, ['scripts/build-workflow-runtime.mjs
 after(() => rmSync(runtimeDirectory, { recursive: true, force: true }));
 
 const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample', backend: 'fake', permission: 'ask', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'agent', name: 'Agent', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'Return JSON', outputSchema: { type: 'string' } }], edges: [] };
+function nestedCall(id: string, target: WorkflowDefinition): WorkflowDefinition['steps'][number] {
+  return { id, name: id, kind: 'workflow', workflowId: target.id, contract: { inputSchema: target.inputSchema, outputSchema: deriveResultSchema(target) } };
+}
 const pause = () => new Promise(resolve => setTimeout(resolve, 10));
 async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await pause(); } assert.fail('Timed out'); }
 
@@ -367,6 +372,370 @@ it('ignores unrelated secrets and unselected step references', async () => {
   } finally { await f.close(); }
 });
 
+for (const nested of [false, true]) it(`saved ${nested ? 'nested' : 'root'} corrections replace deleted secrets and reject missing replacements before effects`, async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    const child: WorkflowDefinition = { ...definition, id: 'child', steps: [{ ...definition.steps[0]!, secrets: { token: 'OLD' } }] };
+    f.workflows.saveDefinition(child);
+    const graph: WorkflowDefinition = nested ? { ...definition, id: 'parent', steps: [nestedCall('call', child)] } : child;
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.delete('OLD');
+    const updated: WorkflowDefinition = { ...child, steps: [{ ...child.steps[0]!, secrets: { token: 'NEW' } }] };
+    f.workflows.saveDefinition(updated);
+    const action = { kind: 'retry-updated' as const, stepId: 'agent', definitionRevision: savedDefinitionRevision(updated), ...(nested ? { invocationId: Object.keys(blocked.invocations!)[0]! } : {}) };
+    await assert.rejects(f.service.recover(f.id, started.execution.id, action), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 1);
+    f.secrets.set('NEW', 'new-private-credential');
+    await f.service.recover(f.id, started.execution.id, action);
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    const retried = f.backend.latest.workflowSubagents[1]!;
+    assert.match(retried.options.instructions, /new-private-credential/);
+    assert.doesNotMatch(retried.options.instructions, /old-private-credential/);
+    retried.complete('fixed');
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).result, 'fixed');
+  } finally { await f.close(); }
+});
+
+for (const outcome of ['failure', 'timeout'] as const) for (const kind of ['supply', 'retry'] as const) it(`handled failure recovery ${kind} after ${outcome} does not require credentials from a Step that cannot execute again`, async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    f.secrets.set('HANDLER', 'handler-private-credential');
+    f.secrets.set('FUTURE', 'future-private-credential');
+    const graph: WorkflowDefinition = { ...definition, steps: [
+      { ...definition.steps[0]!, id: 'first', name: 'First', secrets: { token: 'OLD' }, ...(outcome === 'timeout' ? { timeoutMs: 100 } : {}) },
+      { ...definition.steps[0]!, id: 'handler', name: 'Handler', secrets: { token: 'HANDLER' } },
+      { ...definition.steps[0]!, id: 'future', name: 'Future', secrets: { token: 'FUTURE' } },
+      { id: 'fallback', name: 'Fallback', kind: 'join' },
+    ], edges: [{ id: 'handled', from: 'first', to: 'handler', outcome }, { id: 'next', from: 'handler', to: 'future', outcome: 'success' }, { id: 'fallback', from: 'handler', to: 'fallback', outcome: 'failure' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    if (outcome === 'failure') f.backend.latest.workflowSubagents[0]!.fail();
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(blocked.status, 'recovery-required');
+    assert.equal(blocked.steps.first!.status, outcome === 'failure' ? 'failed' : 'timed-out');
+    assert.equal(blocked.steps.handler!.status, 'failed');
+    f.secrets.delete('OLD');
+    const action = kind === 'supply' ? { kind, stepId: 'handler', output: 'fixed' } : { kind, stepId: 'handler' };
+    f.secrets.delete('FUTURE');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, action), /Secret unavailable/);
+    assert.deepEqual(f.service.view(f.id, started.execution.id).execution, blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 2);
+    f.secrets.set('FUTURE', 'future-private-credential');
+    if (kind === 'retry') {
+      f.secrets.delete('HANDLER');
+      await assert.rejects(f.service.recover(f.id, started.execution.id, action), /Secret unavailable/);
+      assert.deepEqual(f.service.view(f.id, started.execution.id).execution, blocked);
+      assert.equal(f.backend.latest.workflowSubagents.length, 2);
+      f.secrets.set('HANDLER', 'handler-private-credential');
+    }
+    await f.service.recover(f.id, started.execution.id, action);
+    if (kind === 'retry') {
+      await until(() => f.backend.latest.workflowSubagents.length === 3);
+      assert.match(f.backend.latest.workflowSubagents[2]!.options.instructions, /handler-private-credential/);
+      f.backend.latest.workflowSubagents[2]!.complete('fixed');
+    }
+    await until(() => f.backend.latest.workflowSubagents.length === (kind === 'retry' ? 4 : 3));
+    f.backend.latest.workflowSubagents.at(-1)!.complete('finished');
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.status, 'completed-with-recovery');
+    assert.equal(done.result, 'finished');
+    assert.equal(done.steps.first!.attempts.length, 1);
+  } finally { await f.close(); }
+});
+
+it('handled failure recovery still requires credentials for a failed Step that can repeat', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    const mapping = { kind: 'reference' as const, reference: { source: 'input' as const, path: [] } };
+    const graph: WorkflowDefinition = { ...definition, steps: [
+      { id: 'entry', name: 'Entry', kind: 'join' },
+      { ...definition.steps[0]!, id: 'first', name: 'First', secrets: { token: 'OLD' }, mapping, repeatMapping: mapping },
+      { ...definition.steps[0]!, id: 'handler', name: 'Handler' },
+      { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'equals', path: [], value: 'finished' } },
+      { id: 'exit', name: 'Exit', kind: 'join' },
+    ], edges: [{ id: 'entry', from: 'entry', to: 'first', outcome: 'success' }, { id: 'handled', from: 'first', to: 'handler', outcome: 'failure' }, { id: 'check', from: 'handler', to: 'check', outcome: 'success' }, { id: 'repeat', from: 'check', to: 'first', outcome: 'false' }, { id: 'exit', from: 'check', to: 'exit', outcome: 'true' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(blocked.loops!.first!.phase, 'active');
+    assert.equal(blocked.steps.first!.status, 'failed');
+    f.secrets.delete('OLD');
+    const action = { kind: 'supply' as const, stepId: 'handler', output: 'finished' };
+    await assert.rejects(f.service.recover(f.id, started.execution.id, action), /Secret unavailable/);
+    assert.deepEqual(f.service.view(f.id, started.execution.id).execution, blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 2);
+    f.secrets.set('OLD', 'old-private-credential');
+    await f.service.recover(f.id, started.execution.id, action);
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'completed-with-recovery');
+  } finally { await f.close(); }
+});
+
+it('handled failure recovery in test-step mode still requires the selected Step credentials', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    const graph: WorkflowDefinition = { ...definition, steps: [
+      { ...definition.steps[0]!, secrets: { token: 'OLD' } },
+      { id: 'handler', name: 'Handler', kind: 'join' },
+    ], edges: [{ id: 'handled', from: 'agent', to: 'handler', outcome: 'failure' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {}, stepId: 'agent' });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.delete('OLD');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent' }), /Secret unavailable/);
+    assert.deepEqual(f.service.view(f.id, started.execution.id).execution, blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 1);
+    f.secrets.set('OLD', 'old-private-credential');
+    await f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent' });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.complete('fixed');
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.result, 'fixed');
+    assert.equal(done.steps.handler!.attempts.length, 0);
+  } finally { await f.close(); }
+});
+
+it('inner recovery preflights future ancestor credentials before effects', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'future-private-credential');
+    const child: WorkflowDefinition = { ...definition, id: 'child' };
+    f.workflows.saveDefinition(child);
+    const graph: WorkflowDefinition = { ...definition, id: 'parent', steps: [nestedCall('call', child), { ...definition.steps[0]!, id: 'future', name: 'Future', secrets: { token: 'KEY' } }], edges: [{ id: 'next', from: 'call', to: 'future', outcome: 'success' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.delete('KEY');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent', invocationId: Object.keys(blocked.invocations!)[0]! }), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 1);
+  } finally { await f.close(); }
+});
+
+it('inner recovery preflights credentials for completed ancestor Steps that can repeat', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'loop-private-credential');
+    const child: WorkflowDefinition = { ...definition, id: 'child' };
+    f.workflows.saveDefinition(child);
+    const mapping = { kind: 'reference' as const, reference: { source: 'input' as const, path: [] } };
+    const agent = definition.steps[0]!;
+    assert.ok(agent.kind === 'agent');
+    const graph: WorkflowDefinition = { ...definition, id: 'parent', steps: [
+      { id: 'entry', name: 'Entry', kind: 'join' },
+      { ...agent, id: 'prepare', name: 'Prepare', secrets: { token: 'KEY' }, outputSchema: definition.inputSchema, mapping, repeatMapping: mapping },
+      nestedCall('call', child),
+      { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'equals', path: [], value: 'repeat' } },
+      { id: 'exit', name: 'Exit', kind: 'join' },
+    ], edges: [{ id: 'entry', from: 'entry', to: 'prepare', outcome: 'success' }, { id: 'call', from: 'prepare', to: 'call', outcome: 'success' }, { id: 'check', from: 'call', to: 'check', outcome: 'success' }, { id: 'repeat', from: 'check', to: 'prepare', outcome: 'false' }, { id: 'exit', from: 'check', to: 'exit', outcome: 'true' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.complete({});
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(blocked.steps.prepare!.status, 'completed');
+    f.secrets.delete('KEY');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent', invocationId: Object.keys(blocked.invocations!)[0]! }), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 2);
+  } finally { await f.close(); }
+});
+
+it('repeat-only child recovery preflights the completed loop header credentials', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'loop-private-credential');
+    const child: WorkflowDefinition = { ...definition, id: 'child' };
+    f.workflows.saveDefinition(child);
+    const mapping = { kind: 'reference' as const, reference: { source: 'input' as const, path: [] } };
+    const graph: WorkflowDefinition = { ...definition, id: 'parent', steps: [
+      { id: 'entry', name: 'Entry', kind: 'join' },
+      { ...definition.steps[0]!, id: 'prepare', name: 'Prepare', secrets: { token: 'KEY' }, mapping, repeatMapping: mapping },
+      { id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'equals', path: [], value: 'finished' } },
+      { ...nestedCall('call', child), mapping },
+      { id: 'exit', name: 'Exit', kind: 'join' },
+    ], edges: [{ id: 'entry', from: 'entry', to: 'prepare', outcome: 'success' }, { id: 'check', from: 'prepare', to: 'check', outcome: 'success' }, { id: 'exit', from: 'check', to: 'exit', outcome: 'true' }, { id: 'call', from: 'check', to: 'call', outcome: 'false' }, { id: 'repeat', from: 'call', to: 'prepare', outcome: 'success' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.complete('repeat');
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(blocked.loops!.prepare!.phase, 'repeating');
+    f.secrets.delete('KEY');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'retry', stepId: 'agent', invocationId: Object.keys(blocked.invocations!)[0]! }), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 2);
+  } finally { await f.close(); }
+});
+
+it('local corrections still require original secret references for future calls before effects', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    f.secrets.set('NEW', 'new-private-credential');
+    const grand: WorkflowDefinition = { ...definition, id: 'grand', steps: [{ ...definition.steps[0]!, secrets: { token: 'OLD' } }] };
+    const child: WorkflowDefinition = { ...definition, id: 'child', steps: [{ ...definition.steps[0]!, secrets: { token: 'OLD' } }, { ...nestedCall('future', grand), mapping: { kind: 'reference', reference: { source: 'input', path: [] } } }], edges: [{ id: 'next', from: 'agent', to: 'future', outcome: 'success' }] };
+    f.workflows.saveDefinition(grand); f.workflows.saveDefinition(child);
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, id: 'parent', steps: [nestedCall('call', child)] }, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.delete('OLD');
+    const updated: WorkflowDefinition = { ...child, steps: [{ ...child.steps[0]!, secrets: { token: 'NEW' } }, child.steps[1]!] };
+    f.workflows.saveDefinition(updated);
+    const action = { kind: 'retry-updated' as const, stepId: 'agent', invocationId: Object.keys(blocked.invocations!)[0]!, definitionRevision: savedDefinitionRevision(updated) };
+    await assert.rejects(f.service.recover(f.id, started.execution.id, action), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, 1);
+    f.secrets.set('OLD', 'future-private-credential');
+    await f.service.recover(f.id, started.execution.id, action);
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.complete('continue');
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    const future = f.backend.latest.workflowSubagents[2]!;
+    assert.match(future.options.instructions, /future-private-credential/);
+    assert.doesNotMatch(future.options.instructions, /new-private-credential/);
+    future.complete('done');
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).result, 'done');
+  } finally { await f.close(); }
+});
+
+it('secret corrections remain local to one parallel invocation', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    f.secrets.set('NEW', 'new-private-credential');
+    const child: WorkflowDefinition = { ...definition, id: 'child', steps: [{ ...definition.steps[0]!, secrets: { token: 'OLD' } }] };
+    f.workflows.saveDefinition(child);
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, id: 'parent', steps: [nestedCall('first', child), nestedCall('second', child)] }, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    for (const handle of f.backend.latest.workflowSubagents) handle.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    const first = Object.values(blocked.invocations!).find(item => item.callStepId === 'first')!.id;
+    const second = Object.values(blocked.invocations!).find(item => item.callStepId === 'second')!.id;
+    f.secrets.delete('OLD');
+    const updated: WorkflowDefinition = { ...child, steps: [{ ...child.steps[0]!, secrets: { token: 'NEW' } }] };
+    f.workflows.saveDefinition(updated);
+    await f.service.recover(f.id, started.execution.id, { kind: 'retry-updated', stepId: 'agent', invocationId: first, definitionRevision: savedDefinitionRevision(updated) });
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    f.backend.latest.workflowSubagents[2]!.complete('fixed');
+    const result = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(result.invocations![first]!.status, 'completed-with-recovery');
+    assert.equal(result.invocations![first]!.definitionUpdates![0]!.nextStep.secrets?.token, 'NEW');
+    assert.equal(result.invocations![second]!.status, 'recovery-required');
+    assert.equal(result.invocations![second]!.definitionUpdates, undefined);
+    assert.equal(result.retainedDefinitions!.child!.steps[0]!.secrets?.token, 'OLD');
+    assert.equal(f.backend.latest.workflowSubagents.length, 3);
+  } finally { await f.close(); }
+});
+
+it('saved-correction confirmation does not require secrets from completed history', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('OLD', 'old-private-credential');
+    const agent = definition.steps[0]!;
+    assert.ok(agent.kind === 'agent');
+    const graph: WorkflowDefinition = { ...definition, steps: [{ ...agent, id: 'prepare', name: 'Prepare', secrets: { token: 'OLD' } }, agent], edges: [{ id: 'next', from: 'prepare', to: 'agent', outcome: 'success' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.complete('retained');
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents[1]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.delete('OLD');
+    const updated: WorkflowDefinition = { ...graph, steps: [graph.steps[0]!, { ...agent, instructions: 'Corrected configuration' }] };
+    f.workflows.saveDefinition(updated);
+    const parent = f.service.parent(f.id);
+    const summary = await parent.inspect({}) as { revision: string };
+    let rejection: unknown;
+    const pending = parent.recover({ executionId: started.execution.id, revision: summary.revision, action: { kind: 'retry-updated', stepId: 'agent', definitionRevision: savedDefinitionRevision(updated) }, confirm: true }).catch(error => { rejection = error; });
+    const asking = () => reduceAll(f.host.logFor(f.id).since(0)).asking;
+    await until(() => !!asking() || rejection !== undefined);
+    assert.equal(rejection, undefined);
+    await f.host.answerEnquiry(f.id, asking()!.askId, [['Recover']]);
+    await pending;
+    assert.equal(rejection, undefined);
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    f.backend.latest.workflowSubagents[2]!.complete('fixed');
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.result, 'fixed');
+    assert.deepEqual(done.steps.prepare, blocked.steps.prepare);
+  } finally { await f.close(); }
+});
+
+for (const nested of [false, true]) it(`${nested ? 'nested' : 'root'} recovery excludes only secret references from manifests and correction audits`, async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('FIRST_KEY', 'FIRST_KEY');
+    const child: WorkflowDefinition = { ...definition, id: 'child', steps: [{ ...definition.steps[0]!, secrets: { token: 'FIRST_KEY' } }] };
+    f.workflows.saveDefinition(child);
+    const graph: WorkflowDefinition = nested ? { ...definition, id: 'parent', steps: [nestedCall('call', child)] } : child;
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    const target = { stepId: 'agent', ...(nested ? { invocationId: Object.keys(blocked.invocations!)[0]! } : {}) };
+    for (const reference of ['SECOND_KEY', 'THIRD_KEY']) {
+      f.secrets.set(reference, reference);
+      const updated: WorkflowDefinition = { ...child, steps: [{ ...child.steps[0]!, secrets: { token: reference } }] };
+      f.workflows.saveDefinition(updated);
+      const count = f.backend.latest.workflowSubagents.length;
+      await f.service.recover(f.id, started.execution.id, { ...target, kind: 'retry-updated', definitionRevision: savedDefinitionRevision(updated) });
+      await until(() => f.backend.latest.workflowSubagents.length === count + 1);
+      f.backend.latest.workflowSubagents.at(-1)!.fail();
+      await f.service.scheduler.wait(f.id, started.execution.id);
+    }
+    for (const output of ['FIRST_KEY', 'SECOND_KEY', 'THIRD_KEY']) await assert.rejects(f.service.recover(f.id, started.execution.id, { ...target, kind: 'supply', output }), /secret values/);
+    await f.service.recover(f.id, started.execution.id, { ...target, kind: 'supply', output: 'safe' });
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.result, 'safe');
+    const audits = nested ? done.invocations![target.invocationId!]!.definitionUpdates! : done.definitionUpdates!;
+    assert.deepEqual(audits.map(update => [update.previousStep.secrets?.token, update.nextStep.secrets?.token]), [['FIRST_KEY', 'SECOND_KEY'], ['SECOND_KEY', 'THIRD_KEY']]);
+    if (nested) assert.equal(done.retainedDefinitions!.child!.steps[0]!.secrets?.token, 'FIRST_KEY');
+  } finally { await f.close(); }
+});
+
+for (const source of ['input', 'output']) it(`nested recovery still rejects literal credentials in retained ${source}`, async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'old-private-credential');
+    const agent = { ...definition.steps[0]!, secrets: { token: 'KEY' } };
+    const child: WorkflowDefinition = { ...definition, id: 'child', inputSchema: { type: 'object', fields: { request: { required: true, schema: { type: 'string' } } } },
+      steps: source === 'output' ? [{ ...definition.steps[0]!, id: 'prepare', name: 'Prepare' }, agent] : [agent],
+      edges: source === 'output' ? [{ id: 'next', from: 'prepare', to: 'agent', outcome: 'success' }] : [] };
+    f.workflows.saveDefinition(child);
+    const graph: WorkflowDefinition = { ...child, id: 'parent', steps: [nestedCall('call', child)], edges: [] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: { request: source === 'input' ? 'KEY' : 'safe' } });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    if (source === 'output') {
+      f.backend.latest.workflowSubagents[0]!.complete('KEY');
+      await until(() => f.backend.latest.workflowSubagents.length === 2);
+    }
+    f.backend.latest.workflowSubagents.at(-1)!.fail();
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    f.secrets.set('KEY', 'KEY');
+    await assert.rejects(f.service.recover(f.id, started.execution.id, { kind: 'supply', stepId: 'agent', invocationId: Object.keys(blocked.invocations!)[0]!, output: 'safe' }), /secret values/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal(f.backend.latest.workflowSubagents.length, source === 'input' ? 1 : 2);
+  } finally { await f.close(); }
+});
+
 it('rechecks changed named secret values on recovery and keeps references literal', async () => {
   const f = await fixture();
   try {
@@ -596,6 +965,18 @@ it('checks actual Project identity and accepts its owned Worktree, not a path pr
     try {
       const aliased = await f.service.start({ sessionId: f.id, definition: { ...restricted, projectId: alias }, input: {} });
       assert.equal((await f.service.scheduler.wait(f.id, aliased.execution.id)).status, 'completed');
+      const called: WorkflowDefinition = { ...definition, id: 'aliased-child', projectId: alias };
+      f.workflows.saveDefinition(called);
+      const nested = await f.service.start({ sessionId: f.id, definition: { ...definition, projectId: f.root, steps: [nestedCall('call', called)] }, input: {} });
+      const backend = f.backend.sessions.find(session => session.scope === f.root)!;
+      await until(() => backend.workflowSubagents.length === 1);
+      backend.workflowSubagents[0]!.fail();
+      const failed = await f.service.scheduler.wait(f.id, nested.execution.id);
+      const invocationId = Object.keys(failed.invocations!)[0]!;
+      await f.service.recover(f.id, failed.id, { kind: 'retry', invocationId, stepId: 'agent' });
+      await until(() => backend.workflowSubagents.length === 2);
+      backend.workflowSubagents[1]!.complete('recovered');
+      assert.equal((await f.service.scheduler.wait(f.id, failed.id)).result, 'recovered');
     } finally { rmSync(alias); }
   } finally { await f.close(); }
 });
@@ -930,6 +1311,32 @@ it('wakes an idle parent and requires an actual one-shot confirmation for replac
   } finally { await f.close(); }
 });
 
+it('missing recovery credentials do not consume automatic recovery authority', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('KEY', 'future-private-credential');
+    const graph: WorkflowDefinition = { ...definition, inputSchema: { type: 'object', fields: { ready: { schema: { type: 'json' }, required: true } } },
+      steps: [{ id: 'check', name: 'Check', kind: 'branch', condition: { operator: 'truthy', path: ['ready'] } }, { ...definition.steps[0]!, secrets: { token: 'KEY' } }],
+      edges: [{ id: 'next', from: 'check', to: 'agent', outcome: 'true' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: { ready: null } });
+    const blocked = await f.service.scheduler.wait(f.id, started.execution.id);
+    const parent = f.service.parent(f.id);
+    const before = await parent.inspect({}) as { revision: string; automaticRecoveryAvailable: boolean };
+    assert.equal(before.automaticRecoveryAvailable, true);
+    f.secrets.delete('KEY');
+    const input = { executionId: started.execution.id, revision: before.revision, action: { kind: 'retry' as const, stepId: 'check' } };
+    await assert.rejects(parent.recover(input), /Secret unavailable/);
+    assert.deepEqual(f.service.scheduler.get(f.id, started.execution.id), blocked);
+    assert.equal((await parent.inspect({}) as typeof before).automaticRecoveryAvailable, true);
+    f.secrets.set('KEY', 'future-private-credential');
+    await parent.recover(input);
+    const retried = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(retried.steps.check!.attempts.length, 2);
+    assert.equal((await parent.inspect({}) as typeof before).automaticRecoveryAvailable, false);
+    assert.equal(f.backend.latest.workflowSubagents.length, 0);
+  } finally { await f.close(); }
+});
+
 it('allows only one safe automatic recovery before progress, including after restart', async () => {
   const f = await fixture();
   try {
@@ -1130,5 +1537,181 @@ it('reports unavailable legacy history honestly while keeping retained events in
     const page = await restarted.activity(f.id, eid);
     assert.equal(page.historyComplete, false);
     assert.ok(JSON.stringify(page.activity).includes('retained legacy activity'));
+  } finally { await f.close(); }
+});
+
+it('keeps parallel nested activity, requests, cleanup and Spend under the root identity', async () => {
+  const f = await fixture();
+  try {
+    await f.host.send(f.id, 'Keep parent busy', 'now');
+    const child = { ...definition, id: 'child', name: 'Child', permission: 'auto-accept' as const, steps: [{ ...definition.steps[0]!, permission: 'auto-accept' as const }] };
+    f.workflows.saveDefinition(child);
+    const root = { ...definition, steps: [nestedCall('left', child), nestedCall('right', child), definition.steps[0]!] };
+    const started = await f.service.start({ sessionId: f.id, definition: root, input: {} });
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    const handles = f.backend.latest.workflowSubagents;
+    const questions = [{ header: 'Target', question: 'Which?', multiSelect: false, options: [{ label: 'A' }, { label: 'B' }] }];
+    for (const [index, handle] of handles.entries()) {
+      assert.equal(handle.options.permissionMode, 'ask');
+      handle.emit({ type: 'notice', level: 'info', text: `work-${index}` });
+      handle.ask(questions, 'same-private-ask');
+      handle.requestPermission('Bash', 'same-private-call');
+      handle.emit({ type: 'spend', spend: { tokens: 10 + index, cached: 0, costUSD: 0.01, models: [] } });
+    }
+    const full = f.service.view(f.id, eid);
+    assert.equal(full.spend?.tokens, 33);
+    assert.equal(Object.keys(full.stepSpend).length, 3);
+    assert.equal(reduceAll(f.host.logFor(f.id).since(0)).spend?.tokens, 33);
+    const ids = Object.keys(full.execution.invocations!);
+    assert.equal(ids.length, 2);
+    const rootActivity = await f.service.activity(f.id, eid, { stepId: 'agent', attempt: 1 });
+    assert.ok(rootActivity.activity.length > 0);
+    assert.ok(rootActivity.activity.every(item => item.invocationId === undefined));
+    for (const invocationId of ids) {
+      const path = `${f.base}/${eid}?invocationId=${invocationId}`;
+      const view = await (await f.request(path)).json() as WorkflowExecutionView;
+      assert.equal(view.execution.id, eid);
+      assert.equal(view.execution.definition.id, child.id);
+      assert.equal(view.enquiries.length, 1);
+      assert.equal(view.permissions.length, 1);
+      assert.equal(view.enquiries[0]!.invocationId, invocationId);
+      assert.equal(view.enquiries[0]!.attempt, 1);
+      assert.equal(view.permissions[0]!.attempt, 1);
+      assert.ok(view.activity.every(item => item.invocationId === invocationId && item.attempt === 1));
+      const page = await (await f.request(`${f.base}/${eid}/activity?invocationId=${invocationId}&stepId=agent&attempt=1`)).json() as { activity: WorkflowExecutionView['activity'] };
+      assert.deepEqual(page.activity, view.activity);
+      const summary = await f.service.parent(f.id).inspect({ executionId: eid, invocationId }) as { executionId: string; workflowId: string };
+      assert.equal(summary.executionId, eid);
+      assert.equal(summary.workflowId, child.id);
+      const inspected = await f.service.parent(f.id).inspect({ executionId: eid, invocationId, section: 'execution' }) as WorkflowExecutionView & { savedDefinition: { definition: WorkflowDefinition } };
+      assert.equal(inspected.savedDefinition.definition.id, child.id);
+      const enquiry = view.enquiries[0]!;
+      await f.service.answer(f.id, eid, { subagentId: enquiry.subagentId, askId: enquiry.askId, answers: [['A']] });
+      assert.equal(f.service.view(f.id, eid, invocationId).enquiries.length, 0);
+    }
+    assert.equal(f.service.view(f.id, eid).enquiries.length, 1);
+    const left = f.service.view(f.id, eid, ids[0]!);
+    const leftHandle = handles.find(handle => handle.options.id === left.permissions[0]!.subagentId)!;
+    leftHandle.complete('left');
+    await until(() => f.service.view(f.id, eid, ids[0]!).execution.status === 'completed');
+    assert.equal(f.service.view(f.id, eid).permissions.length, 2, 'finishing one invocation must not clear another with the same step ID');
+    await assert.rejects(f.service.answer(f.id, eid, { subagentId: leftHandle.options.id, callId: left.permissions[0]!.callId, decision: 'allow' }), /no longer available/);
+    assert.equal((await f.request(`${f.base}/${eid}?invocationId=missing`)).status, 400);
+    for (const handle of handles) handle.complete('done');
+    await f.service.scheduler.wait(f.id, eid);
+    assert.equal(f.service.list(f.id).executions.length, 1);
+    assert.equal(f.service.view(f.id, eid).spend?.tokens, 33);
+    const restarted = new WorkflowExecutionService(f.host, f.workflows, f.secrets, f.config, runtimePath);
+    assert.equal(restarted.view(f.id, eid, ids[1]!).spend?.tokens, f.service.view(f.id, eid, ids[1]!).spend?.tokens);
+  } finally { await f.close(); }
+});
+
+it('recovers an exact nested checkpoint through the API and parent tools after deletion', async () => {
+  const f = await fixture();
+  try {
+    await f.host.send(f.id, 'Keep parent busy', 'now');
+    const child = { ...definition, id: 'child', name: 'Child' };
+    f.workflows.saveDefinition(child);
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, steps: [nestedCall('left', child), nestedCall('right', child)] }, input: {} });
+    const eid = started.execution.id;
+    await until(() => f.backend.latest.workflowSubagents.length === 2);
+    f.backend.latest.workflowSubagents.forEach(handle => handle.fail());
+    await f.service.scheduler.wait(f.id, eid);
+    const ids = Object.keys(f.service.view(f.id, eid).execution.invocations!);
+    const summary = await f.service.parent(f.id).inspect({ executionId: eid, invocationId: ids[0]! }) as { revision: string };
+    await assert.rejects(f.service.parent(f.id).recover({ executionId: eid, revision: summary.revision, invocationId: ids[0]!, action: { kind: 'retry', stepId: 'agent', invocationId: ids[1]! } }), /Conflicting/);
+    await assert.rejects(f.service.parent(f.id).recover({ executionId: eid, revision: summary.revision, invocationId: ids[0]!, action: { kind: 'retry', stepId: 'agent' } }), /User direction required/);
+    const corrected = { ...child, steps: [{ ...child.steps[0]!, instructions: 'Corrected instructions' }] };
+    f.workflows.saveDefinition(corrected);
+    const response = await f.request(`${f.base}/${eid}/recover`, 'POST', { kind: 'retry-updated', stepId: 'agent', invocationId: ids[0], definitionRevision: savedDefinitionRevision(corrected) });
+    assert.equal(response.status, 200, await response.text());
+    await until(() => f.backend.latest.workflowSubagents.length === 3);
+    assert.match(f.backend.latest.workflowSubagents[2]!.options.instructions, /Corrected instructions/);
+    f.backend.latest.workflowSubagents[2]!.complete('corrected');
+    await f.service.scheduler.wait(f.id, eid);
+    assert.equal(f.service.view(f.id, eid, ids[0]!).execution.definitionUpdates?.length, 1);
+    assert.equal(f.service.view(f.id, eid, ids[1]!).execution.definitionUpdates, undefined);
+    f.workflows.deleteDefinition(child.id);
+    const recovered = await f.request(`${f.base}/${eid}/recover`, 'POST', { kind: 'supply', stepId: 'agent', invocationId: ids[1], output: 'supplied' });
+    assert.equal(recovered.status, 200);
+    const done = await f.service.scheduler.wait(f.id, eid);
+    assert.equal(done.status, 'completed-with-recovery');
+    assert.deepEqual(done.result, { left: 'corrected', right: 'supplied' });
+  } finally { await f.close(); }
+});
+
+for (const handler of ['shell', 'agent'] as const) it(`runs a ${handler} timeout handler after waiting for inner recovery`, async () => {
+  const f = await fixture();
+  let completions = 0;
+  f.host.workflowComplete = () => { completions++; };
+  try {
+    const called = { ...definition, id: 'child' };
+    f.workflows.saveDefinition(called);
+    const graph: WorkflowDefinition = { ...definition, steps: [{ ...nestedCall('call', called), timeoutMs: 500 }, handler === 'shell'
+      ? { id: 'handler', name: 'Handler', kind: 'shell', command: 'printf handled' }
+      : { ...definition.steps[0]!, id: 'handler', name: 'Handler' }], edges: [{ id: 'timeout', from: 'call', to: 'handler', outcome: 'timeout' }] };
+    const started = await f.service.start({ sessionId: f.id, definition: graph, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    f.backend.latest.workflowSubagents[0]!.fail();
+    assert.equal((await f.service.scheduler.wait(f.id, started.execution.id)).status, 'recovery-required');
+    await until(() => f.service.view(f.id, started.execution.id).execution.steps.call!.status === 'timed-out');
+    if (handler === 'agent') {
+      await until(() => f.backend.latest.workflowSubagents.length === 2);
+      f.backend.latest.workflowSubagents[1]!.complete('handled');
+    }
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.status, 'completed-with-recovery');
+    await until(() => completions === 1);
+  } finally { await f.close(); }
+});
+
+it('preflights all called definitions before any Agent work or execution record', async () => {
+  const f = await fixture();
+  try {
+    const agent = definition.steps[0]!;
+    assert.ok(agent.kind === 'agent');
+    const bad: WorkflowDefinition[] = [
+      { ...definition, backend: 'other' },
+      { ...definition, projectId: f.root + '-other' },
+      { ...definition, steps: [{ ...agent, model: 'missing' }] },
+      { ...definition, steps: [{ ...definition.steps[0]!, secrets: { TOKEN: 'missing-secret' } }] },
+      { ...definition, steps: [{ id: 'mcp', name: 'MCP', kind: 'mcp', tool: { connectionId: 'missing', connectionName: 'Missing', identity: '0'.repeat(64), serverIdentity: '1'.repeat(64), toolName: 'tool', inputSchema: true } }] },
+    ];
+    for (const [index, candidate] of bad.entries()) {
+      const child = { ...candidate, id: `child-${index}` };
+      f.workflows.saveDefinition(child);
+      const middle = { ...definition, id: `middle-${index}`, steps: [nestedCall('deep', child)] };
+      f.workflows.saveDefinition(middle);
+      await assert.rejects(f.service.start({ sessionId: f.id, definition: { ...definition, steps: [definition.steps[0]!, nestedCall('call', middle)] }, input: {} }));
+      assert.equal(f.backend.latest.workflowSubagents.length, 0);
+      assert.equal(f.service.list(f.id).executions.length, 0);
+    }
+    f.config.update({ workflowRuntime: { nodePath: '/missing-node' } });
+    const child: WorkflowDefinition = { ...definition, id: 'code-child', steps: [{ id: 'code', name: 'Code', kind: 'typescript', code: 'return 1', outputSchema: { type: 'number' } }] };
+    f.workflows.saveDefinition(child);
+    await assert.rejects(f.service.start({ sessionId: f.id, definition: { ...definition, steps: [definition.steps[0]!, nestedCall('call', child)] }, input: {} }));
+    assert.equal(f.backend.latest.workflowSubagents.length, 0);
+    assert.equal(f.service.list(f.id).executions.length, 0);
+  } finally { await f.close(); }
+});
+
+it('passes only a called definition’s declared secrets to its nested Agent Steps', async () => {
+  const f = await fixture();
+  try {
+    f.secrets.set('ROOT_TOKEN', 'root-secret-value');
+    f.secrets.set('CHILD_TOKEN', 'child-secret-value');
+    const child = { ...definition, id: 'child', steps: [{ ...definition.steps[0]!, secrets: { child: 'CHILD_TOKEN' } }] };
+    f.workflows.saveDefinition(child);
+    const started = await f.service.start({ sessionId: f.id, definition: { ...definition, steps: [{ ...nestedCall('call', child), secrets: { inherited: 'ROOT_TOKEN' } }] }, input: {} });
+    await until(() => f.backend.latest.workflowSubagents.length === 1);
+    const handle = f.backend.latest.workflowSubagents[0]!;
+    assert.match(handle.options.instructions, /child-secret-value/);
+    assert.doesNotMatch(handle.options.instructions, /root-secret-value|inherited/);
+    handle.emit({ type: 'notice', level: 'info', text: 'root-secret-value child-secret-value' });
+    handle.complete('child-secret-value');
+    const done = await f.service.scheduler.wait(f.id, started.execution.id);
+    assert.equal(done.result, '[REDACTED]');
+    assert.doesNotMatch(JSON.stringify(f.service.view(f.id, started.execution.id)), /root-secret-value|child-secret-value/);
   } finally { await f.close(); }
 });
