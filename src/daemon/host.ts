@@ -1015,7 +1015,7 @@ export class SessionHost {
    * Code uses, so Flow's own legacy records are in this listing too. They are left out: offering to
    * import an Agent Session into the host that already holds it would make a second copy of it.
    */
-  listImports(source: ImportSource, scope: string): ImportableConversation[] {
+  async listImports(source: ImportSource, scope: string): Promise<ImportableConversation[]> {
     this.refuseUnknownImportSource(source);
     const key = scopeKey(scope);
     const imported = new Map<string, string>();
@@ -1024,7 +1024,7 @@ export class SessionHost {
       if (record.imported?.source === source && record.scope === key) imported.set(record.imported.conversationId, record.id);
       else if (record.backendName === "claude" && record.resumeToken) ours.add(record.resumeToken);
     }
-    return listClaudeCodeConversations(this.importEnv, key)
+    return (await listClaudeCodeConversations(this.importEnv, key))
       .filter((conversation) => !ours.has(conversation.id))
       .map((conversation) => {
         const as = imported.get(conversation.id);
@@ -2491,7 +2491,7 @@ export class SessionHost {
       case "list_skills":
         return await this.listSkills(command.sessionId);
       case "list_imports":
-        return this.listImports(command.source, command.scope);
+        return await this.listImports(command.source, command.scope);
       case "import":
         return this.importConversation(command);
       case "list":

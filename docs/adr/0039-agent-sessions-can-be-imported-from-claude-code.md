@@ -37,6 +37,23 @@ redacted reasoning and Subagent sidechains. It rebuilds slash commands and `!` s
 typed, and shows their output as notices. A tool call with no recorded result is closed as an error,
 so it does not spin forever. Prompt images become Attachments when Flow supports their media type.
 
+**Only the human's words are shown as the human's.** A `user` record whose `origin.kind` is not
+`human` is a background task finishing or another agent reporting back. It becomes a notice and
+never starts a turn. A prompt typed while a turn ran is often recorded only as a `queued_command`
+attachment, so the importer shows it from there as a steer, and skips the later `user` record that
+delivers the same text. A queued command whose mode is not `prompt` is a task notification and is
+skipped. The `[Request interrupted by user]` marker ends its turn as `aborted` instead of appearing
+as typed text. A title the owner set with `/rename` (`custom-title`) wins over Claude Code's own.
+
+**Subagents keep their cards.** An `Agent` or `Task` call gets the same `subagent` snapshots the live
+adapter emits. A backgrounded one stays running after its launch receipt until its task notification
+reports how it ended. One still open at the end of the file is closed as `aborted`.
+
+**Listing only skims.** `list_imports` runs on the Session Host's one thread whenever the picker
+opens, and a Scope's files can run to a hundred megabytes. It reads files asynchronously and parses
+only the lines that can change the listing: human prompts, queued commands and titles. The file's
+last timestamp gives the time the conversation last moved.
+
 **Records are read in file order.** Claude Code rebuilds a conversation by walking `parentUuid` from
 the leaf. But the results of parallel tool calls hang off sibling branches, and a walk drops them. So
 the importer reads the file in order and skips duplicate records. An abandoned rewind branch can then
@@ -53,4 +70,5 @@ first Revive, the host writes `capabilities_changed` unless the adapter has alre
 forks the conversation, but `imported` keeps naming the original. A second source is then a new
 member of `ImportSource`, not a change to the commands.
 
-The TUI does not offer Import yet. `flow import` covers the terminal.
+In the web client, Import is a collapsed section beneath the Chat composer, not a tab of its own:
+an import is another way to start a chat. The TUI does not offer Import yet. `flow import` covers the terminal.

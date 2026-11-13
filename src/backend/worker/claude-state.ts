@@ -140,7 +140,14 @@ export function migrateLegacyClaudeState(stateDir: string | undefined, inherited
  * while the transcript above it says otherwise.
  */
 export function importClaudeConversation(stateDir: string, inherited: NodeJS.ProcessEnv, scope: string, conversationId: string): void {
-  migrateLegacyClaudeState(stateDir, inherited, scope, conversationId);
+  try {
+    migrateLegacyClaudeState(stateDir, inherited, scope, conversationId);
+  } catch (error) {
+    // The copy refuses links and shared inodes, which it reports in terms of legacy migration. Said
+    // here in the terms of what was asked, with the import that needs no copy at all.
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not copy this conversation's context (${reason}). It can still be imported read-only.`);
+  }
   if (!existsSync(join(ownedProjects(stateDir), projectKey(scope), `${conversationId}.jsonl`))) {
     throw new Error("Claude Code conversation not found");
   }

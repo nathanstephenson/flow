@@ -155,18 +155,107 @@ describe("Claude Code import translation", () => {
     assert.throws(() => readClaudeCodeConversation(env, scope, OTHER_CONVERSATION, () => undefined), /not found/);
   });
 
-  it("lists a Scope's conversations newest first, without the empty ones", () => {
+  it("lists a Scope's conversations newest first, without the empty ones", async () => {
     writeConversation(config, scope, CONVERSATION, ordinaryConversation());
     writeConversation(config, scope, OTHER_CONVERSATION, [prompt("u9", "Later work"), reply("a9", [{ type: "text", text: "Sure" }])]);
     writeConversation(config, scope, "11111111-1111-4111-8111-111111111111", [{ type: "permission-mode", permissionMode: "auto" }]);
-    const listed = listClaudeCodeConversations(env, scope);
+    const listed = await listClaudeCodeConversations(env, scope);
     assert.deepEqual(listed.map(({ id, title, prompts }) => ({ id, title, prompts })), [
       { id: OTHER_CONVERSATION, title: "Later work", prompts: 1 },
       { id: CONVERSATION, title: "Fix failing test", prompts: 2 },
     ]);
   });
 
-  it("lists nothing for a Scope Claude Code never ran in", () => {
-    assert.deepEqual(listClaudeCodeConversations(env, scope), []);
+  it("lists nothing for a Scope Claude Code never ran in", async () => {
+    assert.deepEqual(await listClaudeCodeConversations(env, scope), []);
+  });
+
+  it("keeps a prompt typed mid-turn that only a queued command recorded", () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Build it"),
+      reply("a1", [{ type: "tool_use", id: "t1", name: "Bash", input: {} }]),
+      { type: "attachment", uuid: "q1", timestamp: "2026-11-01T10:00:00.000Z",
+        attachment: { type: "queued_command", prompt: "use pnpm", origin: { kind: "human" } } },
+      prompt("u2", [{ type: "tool_result", tool_use_id: "t1", content: "ok" }]),
+      reply("a2", [{ type: "text", text: "Switched to pnpm." }]),
+    ]);
+    const translated = events();
+    assert.deepEqual(translated.flatMap((event) => event.type === "user_message" ? [event.text] : []), ["Build it", "use pnpm"]);
+    assert.equal(translated.filter((event) => event.type === "turn_started").length, 1, "a steer, not a turn of its own");
+  });
+
+  it("shows a queued prompt once when a later user record delivers it too", () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Build it"),
+      { type: "attachment", uuid: "q1", attachment: { type: "queued_command", prompt: "then test it", origin: { kind: "human" } } },
+      reply("a1", [{ type: "text", text: "Built." }]),
+      prompt("u2", "then test it"),
+      reply("a2", [{ type: "text", text: "Tested." }]),
+    ]);
+    const said = events().flatMap((event) => event.type === "user_message" ? [event.text] : []);
+    assert.deepEqual(said, ["Build it", "then test it"]);
+  });
+
+  it("does not put a background task's or another agent's words in the human's mouth", () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Fan out"),
+      reply("a1", [{ type: "tool_use", id: "t1", name: "Agent", input: { subagent_type: "general-purpose", description: "Review UI" } }]),
+      prompt("u2", [{ type: "tool_result", tool_use_id: "t1", content: "launched" }], { toolUseResult: { status: "async_launched" } }),
+      prompt("u3", "<task-notification><task-id>x</task-id><tool-use-id>t1</tool-use-id><status>completed</status><summary>Agent \"Review UI\" finished</summary></task-notification>",
+        { origin: { kind: "task-notification" } }),
+      prompt("u4", "report from a peer", { origin: { kind: "peer" } }),
+      { type: "attachment", uuid: "q1", attachment: { type: "queued_command", commandMode: "task-notification", prompt: "<task-notification>…</task-notification>" } },
+    ]);
+    const translated = events();
+    assert.deepEqual(translated.flatMap((event) => event.type === "user_message" ? [event.text] : []), ["Fan out"]);
+    assert.deepEqual(translated.flatMap((event) => event.type === "notice" ? [event.text] : []), ['Agent "Review UI" finished', "report from a peer"]);
+    assert.equal(translated.filter((event) => event.type === "turn_started").length, 1);
+  });
+
+  it("gives a Subagent call the card a live one has, settled by its task notification", () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Fan out"),
+      reply("a1", [{ type: "tool_use", id: "t1", name: "Agent", input: { subagent_type: "general-purpose", description: "Review UI" } }]),
+      prompt("u2", [{ type: "tool_result", tool_use_id: "t1", content: "launched" }], { toolUseResult: { status: "async_launched" } }),
+      reply("a2", [{ type: "tool_use", id: "t2", name: "Task", input: { description: "Run checks" } }]),
+      prompt("u3", [{ type: "tool_result", tool_use_id: "t2", content: "failed", is_error: true }]),
+      prompt("u4", "<task-notification><tool-use-id>t1</tool-use-id><status>completed</status></task-notification>", { origin: { kind: "task-notification" } }),
+    ]);
+    const cards = events().flatMap((event) => event.type === "subagent" ? [[event.subagentId, event.name, event.state]] : []);
+    assert.deepEqual(cards, [
+      ["t1", "general-purpose", "running"],
+      ["t2", "Task", "running"],
+      ["t2", "Task", "error"],
+      ["t1", "general-purpose", "complete"],
+    ]);
+  });
+
+  it("ends an interrupted turn as aborted without showing the marker as typed", () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Refactor everything"),
+      reply("a1", [{ type: "text", text: "Starting." }]),
+      prompt("u2", [{ type: "text", text: "[Request interrupted by user]" }]),
+      prompt("u3", "Smaller, please"),
+    ]);
+    const translated = events();
+    assert.deepEqual(translated.flatMap((event) => event.type === "user_message" ? [event.text] : []), ["Refactor everything", "Smaller, please"]);
+    assert.deepEqual(translated.flatMap((event) => event.type === "turn_ended" ? [event.reason] : []), ["aborted", "complete"]);
+  });
+
+  it("prefers the title its owner gave the conversation", async () => {
+    writeConversation(config, scope, CONVERSATION, [
+      ...ordinaryConversation(),
+      { type: "custom-title", customTitle: "Flaky test hunt" },
+    ]);
+    assert.equal(readClaudeCodeConversation(env, scope, CONVERSATION, () => undefined).title, "Flaky test hunt");
+    assert.equal((await listClaudeCodeConversations(env, scope))[0]?.title, "Flaky test hunt");
+  });
+
+  it("lists the time the conversation last moved, not its last prompt", async () => {
+    writeConversation(config, scope, CONVERSATION, [
+      prompt("u1", "Hello", { timestamp: "2026-11-02T08:00:00.000Z" }),
+      reply("a1", [{ type: "text", text: "Hi" }], { timestamp: "2026-11-02T09:30:00.000Z" }),
+    ]);
+    assert.equal((await listClaudeCodeConversations(env, scope))[0]?.updatedAt, "2026-11-02T09:30:00.000Z");
   });
 });

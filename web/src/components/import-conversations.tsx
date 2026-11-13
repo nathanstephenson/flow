@@ -28,7 +28,9 @@ export function ImportConversations({
   // whenever `useCommand` hands back a new function — that would list again on every render.
   const listWith = useRef(run);
   listWith.current = run;
-  const [conversations, setConversations] = useState<ImportableConversation[] | undefined>();
+  /** `null` when the listing failed, which must not read as a Project with nothing in it. */
+  const [conversations, setConversations] = useState<ImportableConversation[] | null | undefined>();
+  const [attempt, setAttempt] = useState(0);
   const [importing, setImporting] = useState<string | undefined>();
 
   useEffect(() => {
@@ -38,12 +40,12 @@ export function ImportConversations({
     // cannot replace the one for this.
     let current = true;
     void listWith.current<ImportableConversation[]>({ type: "list_imports", source: "claude-code", scope }).then((listed) => {
-      if (current) setConversations(listed ?? []);
+      if (current) setConversations(listed ?? null);
     });
     return () => {
       current = false;
     };
-  }, [scope]);
+  }, [scope, attempt]);
 
   const bring = useCallback(
     async (conversation: ImportableConversation, mode: ImportMode) => {
@@ -61,6 +63,14 @@ export function ImportConversations({
 
   if (scope === undefined) {
     return <p className="text-center text-sm text-muted-foreground">Choose a Project to see the Claude Code conversations recorded in it.</p>;
+  }
+  if (conversations === null) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-destructive" role="alert">
+        <span>Could not list the Claude Code conversations in {projectName ?? "this Project"}.</span>
+        <Button size="sm" variant="ghost" onClick={() => setAttempt((count) => count + 1)}>Try again</Button>
+      </div>
+    );
   }
   if (conversations === undefined) {
     return <p className="text-sm text-muted-foreground">Looking for Claude Code conversations…</p>;
