@@ -24,6 +24,7 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { workflowIssue } from "@/presentation/workflows.ts";
 import { retainWorkflowLaunch } from "@/workflow-launch.ts";
 import { Composer } from "@/components/composer.tsx";
+import { ImportConversations } from "@/components/import-conversations.tsx";
 import { initialValue, ValueEditor } from "@/components/workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "@/components/workflow-api.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -57,7 +58,8 @@ import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
 import { cn } from "@/lib/utils.ts";
 
 /**
- * Create an Agent Session for ordinary chat or launch a full Workflow Execution into one.
+ * Create an Agent Session for ordinary chat, launch a full Workflow Execution into one, or import
+ * one from a Claude Code conversation (ADR 0039).
  *
  * Scope and runtime choices live above/below the tab panels, so switching tabs cannot produce two
  * disagreeing launch forms. The Chat Draft is still owned by `Composer`; the workflow draft stays in
@@ -74,7 +76,10 @@ export function NewAgentSessionPage({
 }) {
   const { config, refresh } = useHost();
   const run = useCommand();
-  const [tab, setTab] = useState<"chat" | "workflow">("chat");
+  const [tab, setTab] = useState<"chat" | "workflow" | "import">("chat");
+  // An import brings its own backend and starts nothing, so the controls that configure a new
+  // Backend Session would only be choices the import then ignores.
+  const importing = tab === "import";
   const [mcpChoices, setMcpChoices] = useState<Record<string, boolean>>({});
   const mcpConnectionIds = (config.mcp ?? [])
     .filter((connection) => mcpChoices[connection.id] ?? connection.enabledByDefault)
@@ -329,14 +334,14 @@ export function NewAgentSessionPage({
         <Tabs
           value={tab}
           onValueChange={(value) => {
-            if (value === "chat" || value === "workflow") setTab(value);
+            if (value === "chat" || value === "workflow" || value === "import") setTab(value);
           }}
           className="contents"
         >
           <TabsList aria-label="New Agent Session mode" className="flex w-full">
-            {(["chat", "workflow"] as const).map((mode) => (
+            {(["chat", "workflow", "import"] as const).map((mode) => (
               <TabsTrigger key={mode} value={mode} className="h-8 min-w-0 flex-1">
-                {mode === "chat" ? "Chat" : "Workflow"}
+                {mode === "chat" ? "Chat" : mode === "workflow" ? "Workflow" : "Import"}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -349,11 +354,14 @@ export function NewAgentSessionPage({
               <TabsContent value="workflow">
                 <NoProjects uncurated={uncurated} />
               </TabsContent>
+              <TabsContent value="import">
+                <NoProjects uncurated={uncurated} />
+              </TabsContent>
             </>
           ) : (
             <>
               <div className="flex items-center justify-center gap-2">
-                <Select
+                {importing ? null : <Select
                   value={backend}
                   onValueChange={(value) => {
                     if (typeof value !== "string") return;
@@ -371,7 +379,7 @@ export function NewAgentSessionPage({
                       <SelectItem key={name} value={name}>{name}</SelectItem>
                     ))}
                   </SelectContent>
-                </Select>
+                </Select>}
                 <ProjectPicker
                   fieldRef={projectField}
                   groups={groups}
@@ -385,7 +393,7 @@ export function NewAgentSessionPage({
                 />
               </div>
 
-              {capabilityProblem ? (
+              {capabilityProblem && !importing ? (
                 <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground" role="status">
                   <span>{capabilityProblem}</span>
                   {!modelsLoading && discoveryProblem ? (
@@ -471,7 +479,17 @@ export function NewAgentSessionPage({
                 </div>
               </TabsContent>
 
-              {(config.mcp ?? []).length > 0 && (
+              <TabsContent value="import" className="grid gap-4 rounded-xl border bg-card/30 p-4">
+                <div>
+                  <h2 className="font-medium">Import from Claude Code</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. Nothing runs until you write to it.
+                  </p>
+                </div>
+                <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
+              </TabsContent>
+
+              {(config.mcp ?? []).length > 0 && !importing && (
                 <Accordion>
                   <AccordionItem value="mcp">
                     <AccordionTrigger>
@@ -493,7 +511,7 @@ export function NewAgentSessionPage({
                 </Accordion>
               )}
 
-              {repository && config.git !== false ? (
+              {repository && config.git !== false && !importing ? (
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-2">
                     <input
