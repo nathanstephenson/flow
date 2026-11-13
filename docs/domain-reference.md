@@ -277,6 +277,14 @@ Transcript stays readable, but it refuses a Revive. Unlike Settled it is never R
 disk until removed by hand.
 _Avoid_: closed, deleted, terminated, killed, settled
 
+**Import**:
+Creating an Agent Session from one conversation that another tool recorded in a Scope. Today the
+only source is Claude Code (ADR 0039). A continue import copies that conversation's Conversation
+Context into the Agent Session's own records and starts Dormant, so its first message Revives it
+onto that conversation. A view import brings only the Presentation Transcript and starts Ended.
+Neither starts a Backend Session, and neither reads any conversation but the one named.
+_Avoid_: migrate, sync, adopt, bulk import
+
 **Scope**:
 The working directory an Agent Session is bound to. When machine-wide filesystem isolation is
 enabled, local Backend Sessions, their Subagents and Background Calls, local Workflow code and

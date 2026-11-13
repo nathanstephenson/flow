@@ -318,9 +318,15 @@ function AttachedPane({
         chrome={chrome}
         actions={actions}
         drafts={drafts}
+        /*
+         * A stopped Agent Session with no models is an imported one that nothing has served yet
+         * (ADR 0039) — creation refuses to return one any other way. A Dormant one is Revived by its
+         * first message, which is what learns the real Capabilities, so refusing that message would
+         * leave it stuck. An Ended one already says why it is locked, and this would talk over it.
+         */
         unavailable={!chrome.capabilities
           ? "Loading model capabilities before agent work can start…"
-          : chrome.capabilities.models.length === 0
+          : chrome.capabilities.models.length === 0 && chrome.status !== "dormant" && chrome.status !== "ended"
             ? "No confirmed model capabilities are available. Revive or restart the Backend Session to retry."
             : undefined}
         /*

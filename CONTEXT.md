@@ -115,6 +115,9 @@ _Avoid_: resume, restart, reconnect
 **Ended**: Deliberately disposed of, with no Backend Session running. Its Presentation Transcript remains readable, but it cannot be Revived and is never Reaped.
 _Avoid_: closed, deleted, settled
 
+**Import**: Create an Agent Session from one conversation another tool recorded in its Scope, today only Claude Code (ADR 0039). A continue import copies that conversation's Conversation Context and starts Dormant. A view import brings only the Presentation Transcript and starts Ended. Neither starts a Backend Session.
+_Avoid_: migrate, sync, adopt
+
 ### Directories and shells
 
 **Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036).

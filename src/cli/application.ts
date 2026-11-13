@@ -18,6 +18,7 @@ import { answerLines } from "../client/enquiry.ts";
 import { authorisationLabel } from "../client/permission.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
+import type { ImportableConversation } from "../protocol/imports.ts";
 import type { AssetManifest } from "../web/assets.ts";
 import { runTui } from "../tui/app.ts";
 import { updateUnsupportedReason, type Installation } from './install-guard.ts';
@@ -36,6 +37,8 @@ const USAGE = `usage:
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow serve start|status|stop|restart [--force]          control a background Session Host
   flow list                                             list Agent Sessions
+  flow import [--scope DIR]                             list Claude Code conversations to import
+  flow import ID [--scope DIR] [--view]                 import one; --view makes it read-only
   flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
                                                                one prompt, then exit
 
@@ -82,6 +85,7 @@ async function main(): Promise<number> {
       help: { type: "boolean", default: false },
       version: { type: "boolean", default: false },
       force: { type: 'boolean', default: false },
+      view: { type: 'boolean', default: false },
       'background-host': { type: 'boolean', default: false },
     },
   });
@@ -149,6 +153,11 @@ async function main(): Promise<number> {
       await stop();
     }
     return 0;
+  }
+
+  if (command === "import") {
+    if (positionals.length > 2) throw new Error(`Unexpected import arguments: ${positionals.slice(2).join(' ')}`);
+    return await importConversation(positionals[1], values);
   }
 
   const prompt = positionals.join(" ").trim();
@@ -225,6 +234,35 @@ async function clientConnection(): Promise<{ connection: Connection; stop: () =>
 
   const { daemon, stop } = await startHost();
   return { connection: connect(daemon), stop };
+}
+
+/**
+ * List the Claude Code conversations recorded in a Scope, or import one of them (ADR 0039).
+ *
+ * The Scope defaults to this directory, as a one-shot prompt's does, and not to the Project Root:
+ * Claude Code keys its conversations by the directory it was started in, so the directory somebody
+ * is standing in is the one whose conversations they mean.
+ */
+async function importConversation(id: string | undefined, values: { scope?: string; view?: boolean }): Promise<number> {
+  const scope = resolve(values.scope ?? process.cwd());
+  const { connection, stop } = await clientConnection();
+  try {
+    if (id === undefined) {
+      const conversations = await connection.command<ImportableConversation[]>({ type: "list_imports", source: "claude-code", scope });
+      if (conversations.length === 0) console.log(`no Claude Code conversations in ${scope}`);
+      for (const conversation of conversations) {
+        const imported = conversation.importedAs ? `  (imported as ${conversation.importedAs})` : "";
+        console.log(`${conversation.id}  ${conversation.updatedAt.slice(0, 10)}  ${String(conversation.prompts).padStart(3)} prompts  ${conversation.title}${imported}`);
+      }
+      return 0;
+    }
+    const mode = values.view ? "view" : "continue";
+    const sessionId = await connection.command<string>({ type: "import", source: "claude-code", scope, conversationId: id, mode });
+    console.log(mode === "view" ? `session ${sessionId} (read-only)` : `session ${sessionId}\n  continue with: --session ${sessionId}`);
+    return 0;
+  } finally {
+    await stop();
+  }
 }
 
 async function oneShot(

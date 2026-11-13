@@ -128,6 +128,32 @@ export function migrateLegacyClaudeState(stateDir: string | undefined, inherited
 }
 
 /**
+ * Copy one Claude Code conversation into an Agent Session's owned records, for Import (ADR 0039).
+ *
+ * The very copy a legacy Revive makes, and deliberately so: it already brings exactly one UUID's
+ * record and sidecars, refuses links, and never overwrites a newer owned record. Run at import time
+ * rather than left to the first Revive so the Conversation Context matches the Presentation
+ * Transcript the import wrote — Claude Code may append to its copy afterwards.
+ *
+ * Unlike a Revive, finding nothing is an error. A legacy record that is absent means there was
+ * never one to migrate; an imported one that is absent would Revive onto an empty conversation
+ * while the transcript above it says otherwise.
+ */
+export function importClaudeConversation(stateDir: string, inherited: NodeJS.ProcessEnv, scope: string, conversationId: string): void {
+  try {
+    migrateLegacyClaudeState(stateDir, inherited, scope, conversationId);
+  } catch (error) {
+    // The copy refuses links and shared inodes, which it reports in terms of legacy migration. Said
+    // here in the terms of what was asked, with the import that needs no copy at all.
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not copy this conversation's context (${reason}). It can still be imported read-only.`);
+  }
+  if (!existsSync(join(ownedProjects(stateDir), projectKey(scope), `${conversationId}.jsonl`))) {
+    throw new Error("Claude Code conversation not found");
+  }
+}
+
+/**
  * Keep projects durable in the Backend Session's state. CLAUDE_SECURESTORAGE_CONFIG_DIR
  * separates Claude's auth root (credential storage AND refresh/write locks) from its config /
  * transcript root on Linux and macOS. Unrestricted launches keep the ordinary shared auth root;
