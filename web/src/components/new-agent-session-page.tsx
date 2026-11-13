@@ -58,8 +58,8 @@ import { QUIET_TRIGGER } from "@/lib/quiet-trigger.ts";
 import { cn } from "@/lib/utils.ts";
 
 /**
- * Create an Agent Session for ordinary chat, launch a full Workflow Execution into one, or import
- * one from a Claude Code conversation (ADR 0039).
+ * Create an Agent Session for ordinary chat or launch a full Workflow Execution into one. The Chat
+ * tab can also import one from a Claude Code conversation instead (ADR 0039).
  *
  * Scope and runtime choices live above/below the tab panels, so switching tabs cannot produce two
  * disagreeing launch forms. The Chat Draft is still owned by `Composer`; the workflow draft stays in
@@ -76,10 +76,7 @@ export function NewAgentSessionPage({
 }) {
   const { config, refresh } = useHost();
   const run = useCommand();
-  const [tab, setTab] = useState<"chat" | "workflow" | "import">("chat");
-  // An import brings its own backend and starts nothing, so the controls that configure a new
-  // Backend Session would only be choices the import then ignores.
-  const importing = tab === "import";
+  const [tab, setTab] = useState<"chat" | "workflow">("chat");
   const [mcpChoices, setMcpChoices] = useState<Record<string, boolean>>({});
   const mcpConnectionIds = (config.mcp ?? [])
     .filter((connection) => mcpChoices[connection.id] ?? connection.enabledByDefault)
@@ -334,14 +331,14 @@ export function NewAgentSessionPage({
         <Tabs
           value={tab}
           onValueChange={(value) => {
-            if (value === "chat" || value === "workflow" || value === "import") setTab(value);
+            if (value === "chat" || value === "workflow") setTab(value);
           }}
           className="contents"
         >
           <TabsList aria-label="New Agent Session mode" className="flex w-full">
-            {(["chat", "workflow", "import"] as const).map((mode) => (
+            {(["chat", "workflow"] as const).map((mode) => (
               <TabsTrigger key={mode} value={mode} className="h-8 min-w-0 flex-1">
-                {mode === "chat" ? "Chat" : mode === "workflow" ? "Workflow" : "Import"}
+                {mode === "chat" ? "Chat" : "Workflow"}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -354,14 +351,11 @@ export function NewAgentSessionPage({
               <TabsContent value="workflow">
                 <NoProjects uncurated={uncurated} />
               </TabsContent>
-              <TabsContent value="import">
-                <NoProjects uncurated={uncurated} />
-              </TabsContent>
             </>
           ) : (
             <>
               <div className="flex items-center justify-center gap-2">
-                {importing ? null : <Select
+                <Select
                   value={backend}
                   onValueChange={(value) => {
                     if (typeof value !== "string") return;
@@ -379,7 +373,7 @@ export function NewAgentSessionPage({
                       <SelectItem key={name} value={name}>{name}</SelectItem>
                     ))}
                   </SelectContent>
-                </Select>}
+                </Select>
                 <ProjectPicker
                   fieldRef={projectField}
                   groups={groups}
@@ -393,7 +387,7 @@ export function NewAgentSessionPage({
                 />
               </div>
 
-              {capabilityProblem && !importing ? (
+              {capabilityProblem ? (
                 <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground" role="status">
                   <span>{capabilityProblem}</span>
                   {!modelsLoading && discoveryProblem ? (
@@ -412,6 +406,22 @@ export function NewAgentSessionPage({
                   drafts={drafts}
                   authorisingSummary={undefined}
                 />
+                {/*
+                  * Beside the composer rather than a tab of its own: an import is another way to
+                  * start a chat, not a third kind of work. Collapsed by default, and its panel
+                  * unmounts when closed, so the Project's conversations are read only when asked for.
+                  */}
+                <Accordion>
+                  <AccordionItem value="import">
+                    <AccordionTrigger>Import from Claude Code</AccordionTrigger>
+                    <AccordionContent className="grid gap-3">
+                      <p className="text-xs text-muted-foreground">
+                        Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. They always use the claude backend, and nothing runs until you write to one.
+                      </p>
+                      <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </TabsContent>
               <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">
                 <div>
@@ -479,17 +489,7 @@ export function NewAgentSessionPage({
                 </div>
               </TabsContent>
 
-              <TabsContent value="import" className="grid gap-4 rounded-xl border bg-card/30 p-4">
-                <div>
-                  <h2 className="font-medium">Import from Claude Code</h2>
-                  <p className="text-xs text-muted-foreground">
-                    Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. Nothing runs until you write to it.
-                  </p>
-                </div>
-                <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
-              </TabsContent>
-
-              {(config.mcp ?? []).length > 0 && !importing && (
+              {(config.mcp ?? []).length > 0 && (
                 <Accordion>
                   <AccordionItem value="mcp">
                     <AccordionTrigger>
@@ -511,7 +511,7 @@ export function NewAgentSessionPage({
                 </Accordion>
               )}
 
-              {repository && config.git !== false && !importing ? (
+              {repository && config.git !== false ? (
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-2">
                     <input

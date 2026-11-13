@@ -110,7 +110,7 @@ transcripts. Nothing runs and nothing is spent. The next message revives a Dorma
 ### Importing Claude Code conversations
 
 You can bring a conversation you had in Claude Code into Flow. In the web UI, open **New Agent
-Session → Import** and choose a Project. From a terminal, run `flow import` in the directory where
+Session**, choose a Project, and expand **Import from Claude Code** under the Chat composer. From a terminal, run `flow import` in the directory where
 you ran Claude Code. Flow lists only the conversations recorded in that directory.
 
 - **Continue** brings the transcript and the conversation's context. The session starts Dormant,

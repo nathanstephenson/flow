@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
 
 /**
- * The New Agent Session page's Import tab: the Claude Code conversations recorded in the chosen
+ * The Chat tab's Import from Claude Code section: the Claude Code conversations recorded in the chosen
  * Project, each importable to continue or to read (ADR 0039).
  *
  * Listed per Project rather than machine-wide, because Claude Code keys its conversations by the
