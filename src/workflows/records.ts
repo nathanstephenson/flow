@@ -39,7 +39,11 @@ const invocationValidator = z.object({
 }).strict();
 export const workflowExecutionValidator = z.object({
   ...checkpointFields, version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
-  retainedDefinitions: dictionaryRecord(workflowDefinitionValidator).optional(), invocations: dictionaryRecord(invocationValidator).optional(),
+  retainedDefinitions: z.preprocess(
+    value => value && typeof value === 'object' && !Array.isArray(value) ? new Map(Object.entries(value)) : value,
+    z.map(workflowDefinitionValidator.shape.id, workflowDefinitionValidator),
+  ).transform(entries => Object.fromEntries(entries)).optional(),
+  invocations: dictionaryRecord(invocationValidator).optional(),
   launchId: z.string().min(1).optional(), naming: z.enum(['pending', 'requested']).optional(), testStepId: z.string().optional(),
 }).strict();
 

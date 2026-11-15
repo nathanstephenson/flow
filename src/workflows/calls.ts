@@ -12,19 +12,19 @@ export function deriveResultSchema(definition: WorkflowDefinition): VisualSchema
 }
 
 export function resolveWorkflowCalls(definition: WorkflowDefinition, lookup: (id: string) => WorkflowDefinition, testStepId?: string): Record<string, WorkflowDefinition> {
-  const retained: Record<string, WorkflowDefinition> = {};
+  const retained = new Map<string, WorkflowDefinition>();
   const visited = new Set<string>();
   const visit = (candidate: WorkflowDefinition, ancestry: Set<string>, selected?: string): void => {
     if (ancestry.has(candidate.id)) throw new Error(`Recursive Workflow call: ${candidate.id}`);
     const graph = validateDefinition(candidate);
     const current = graph.definition;
     if (selected !== undefined && !current.steps.some(step => step.id === selected)) throw new Error('Unknown test step');
-    retained[current.id] = current;
+    retained.set(current.id, current);
     const path = new Set([...ancestry, current.id]);
     for (const step of current.steps) {
       if (step.kind !== 'workflow' || (selected !== undefined && step.id !== selected)) continue;
       if (path.has(step.workflowId)) throw new Error(`Recursive Workflow call: ${step.workflowId}`);
-      let target = Object.hasOwn(retained, step.workflowId) ? retained[step.workflowId] : undefined;
+      let target = retained.get(step.workflowId);
       if (!target) {
         try { target = lookup(step.workflowId); }
         catch { throw new Error(`Missing Workflow call target: ${step.workflowId}`); }
@@ -37,5 +37,5 @@ export function resolveWorkflowCalls(definition: WorkflowDefinition, lookup: (id
     visited.add(current.id);
   };
   visit(definition, new Set(), testStepId);
-  return retained;
+  return Object.fromEntries(retained);
 }

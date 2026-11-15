@@ -41,6 +41,30 @@ test('nested calls wait, map results and use one root slot and record', async t 
   assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
 });
 
+for (const id of ['constructor', 'prototype', '__proto__']) for (const owner of ['root', 'called']) test(`${owner} definition ID ${id} survives invocation persistence and restart`, async t => {
+  let fail = true, effects = 0;
+  const f = fixture(t, async () => { effects++; if (fail) throw new Error('stop'); return 7; });
+  const child = definition(owner === 'called' ? id : 'child', [leaf('inner')]);
+  const parent = definition(owner === 'root' ? id : 'parent', [call('call', child)]);
+  f.store.saveDefinition(child); f.store.saveDefinition(parent);
+  assert.equal(f.store.getDefinition(owner === 'root' ? parent.id : child.id).id, id);
+  const started = f.scheduler.start(parent, session, {});
+  const blocked = await f.scheduler.wait(session.sessionId, started.id);
+  assert.equal(blocked.status, 'recovery-required');
+  assert.ok(Object.hasOwn(blocked.retainedDefinitions!, id));
+  assert.deepEqual(f.store.getExecution(session.sessionId, started.id), blocked);
+  const restored = new WorkflowScheduler(f.store, f.executors);
+  fail = false;
+  restored.recover(session, started.id, { kind: 'retry', stepId: 'inner', invocationId: Object.keys(blocked.invocations!)[0]! });
+  const done = await restored.wait(session.sessionId, started.id);
+  assert.equal(done.result, 7);
+  assert.equal(effects, 2);
+  assert.deepEqual(f.store.getExecution(session.sessionId, started.id), done);
+  const finished = new WorkflowScheduler(f.store, f.executors);
+  assert.equal(finished.occupied(session.sessionId), false);
+  assert.deepEqual(finished.get(session.sessionId, started.id), done);
+});
+
 test('inner recovery keeps completed outputs and does not replay the call', async t => {
   const seen: string[] = [];
   let fail = true;
