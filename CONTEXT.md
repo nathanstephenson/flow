@@ -39,6 +39,9 @@ _Avoid_: script, pipeline
 **Workflow Execution**: Work owned by one Agent Session, with a retained Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
 _Avoid_: parent turn, Background Call
 
+**Workflow Invocation**: One awaited call of a Workflow Definition, owned by a calling Workflow Step within its Workflow Execution. It has its own inputs, attempts, results and recovery checkpoint.
+_Avoid_: child Agent Session, detached execution
+
 **Workflow Step**: One typed operation in a Workflow Definition. Each attempt owns its work until it stops.
 _Avoid_: turn, node
 

@@ -5,6 +5,7 @@ import { SecretStore } from './secret-store.ts';
 import { WorkflowStore } from '../workflows/store.ts';
 import { WorkflowExecutionService } from './workflow-executions.ts';
 import { WorkflowBuilderService } from './workflow-builder.ts';
+import { workflowCatalogue } from './workflow-routes.ts';
 import { WorkflowMcpAuthoringService } from './workflow-mcp-authoring.ts';
 import { SessionHost } from './host.ts';
 import { McpAuth } from './mcp-auth.ts';
@@ -90,6 +91,8 @@ export async function startRuntime(options: {
     workflowBuilders = new WorkflowBuilderService({
       host, config, scope: process.cwd(), stateRoot: root,
       validateDefinition: definition => workflowExecutions.validateDefinitionCredentials(definition),
+      workflowCatalogue: () => workflowCatalogue(workflows),
+      workflowDefinition: id => { try { return workflows.getDefinition(id); } catch { return undefined; } },
       mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
       mcpTool: (scope, projectId, scopeIdentity, connectionId, toolName) => workflowMcpAuthoring!.tool(projectId, connectionId, toolName, { scope, scopeIdentity }),
     });

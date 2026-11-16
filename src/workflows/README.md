@@ -8,10 +8,11 @@ The Session Host owns execution through `src/daemon/workflow-executions.ts` and 
 
 - `GET /api/sessions/:sessionId/workflows` returns `WorkflowExecutionList`.
 - `POST /api/sessions/:sessionId/workflows` accepts `StartWorkflow` and returns `WorkflowExecutionView`.
-- `GET /api/sessions/:sessionId/workflows/:executionId` returns `WorkflowExecutionView`.
+- `GET /api/sessions/:sessionId/workflows/:executionId` returns `WorkflowExecutionView`. Optional `invocationId` selects a nested checkpoint while retaining the root execution ID.
+- `GET /api/sessions/:sessionId/workflows/:executionId/activity` returns paginated activity. Optional `invocationId`, `stepId` and `attempt` select an exact nested attempt.
 - `POST /api/sessions/:sessionId/workflows/:executionId/cancel` returns `WorkflowExecutionView`.
 - `POST /api/sessions/:sessionId/workflows/:executionId/recover` accepts `RecoverWorkflow` and returns `WorkflowExecutionView`.
-- `POST /api/workflows/test` accepts `TestWorkflowStep` and returns `WorkflowExecutionView`. The submitted definition can be unsaved; only the selected step executes.
+- `POST /api/workflows/test` accepts `TestWorkflowStep` and returns `WorkflowExecutionView`. The submitted definition can be unsaved; only the selected step executes. A selected workflow-call Step executes its called subtree, not caller siblings or successors.
 - `GET /api/workflow-runtime` returns `WorkflowRuntimeStatus` for local code steps, requiring host Node 22 or later and, when filesystem isolation is enabled, available Linux enforcement. Agent steps inherit their Backend Session's boundary.
 
 Mutations validate their bodies before execution. Occupied slots return 409. Other error responses follow the existing resource API. Human responses are accepted only through an active parent relay tool call; the public workflow routes do not expose direct answer endpoints. Model, Effort, instructions and schemas come from the execution's fixed definition. Missing Spend remains unknown, not zero.
@@ -21,6 +22,7 @@ Mutations validate their bodies before execution. Occupied slots return 409. Oth
 All routes require the normal bearer token or cookie and same-origin checks. PUT creates or replaces; DELETE is idempotent and returns `{ deleted: true }`.
 
 - `GET /api/workflows` → `{ workflows: WorkflowDefinition[] }`.
+- `GET /api/workflow-catalogue` returns saved workflow metadata and host-derived input/result contracts for call selection and explicit refresh.
 - `GET /api/workflows/:id` → `{ workflow: WorkflowDefinition }`.
 - `PUT /api/workflows/:id` accepts a `WorkflowDefinition`, with matching ID, and returns `{ workflow: WorkflowDefinition }`. Schema and graph validation run before storage. The body limit is 1,000,000 bytes.
 - `DELETE /api/workflows/:id` deletes only the definition. Execution snapshots remain unchanged.
@@ -44,7 +46,9 @@ The CLI constructs one WorkflowStore, SecretStore and WorkflowExecutionService. 
 - `src/protocol/workflows.ts`: JSON definitions, schemas, graph connections, execution snapshots, and attempt records.
 - `schema.ts`: `toZod`, `parseValue`, `toTypeScript`, schema paths, and standard Shell output. Object fields are optional unless required or defaulted. Generated unions describe converging inputs; recovery partial outputs have optional object fields.
 - `graph.ts`: `validateDefinition` returns a validated copy, topological order, incoming/outgoing connections, and generated input/output schemas. Mappings use step IDs, not names. Conditional availability is checked across possible outcomes. A mapping cannot access a possibly absent step output; it can access a completed join with optional fields.
-- `records.ts`: `parseExecution` validates saved records and their definition/attempt identities.
+- `calls.ts`: derives result contracts and captures reachable definitions, rejecting missing targets, contract changes and recursion.
+- `invocations.ts`: reconstructs an invocation from its retained definition, local corrections and checkpoint.
+- `records.ts`: `parseExecution` validates saved records, manifests, invocation ownership and definition/attempt identities.
 - `store.ts`: `WorkflowStore` stores machine-wide definitions in `workflows/` and execution history in `sessions/<id>/workflows/`. Writes replace snapshots atomically and sync files and directory entries. Reaping the Agent Session directory removes its history.
 - `scheduler.ts`: `WorkflowScheduler`, `WorkflowExecutor`, `ExecutorContext`, and `WorkflowStepError`.
 
@@ -52,7 +56,19 @@ Create one scheduler per Session Host and state root. Its constructor reconciles
 
 `recover` accepts Retry, schema-valid Supply output, or explicit Continue when an interruption occurred between steps. Completed outputs are retained. Failed handling paths require manual recovery; their own failure connections do not launch another handling path. Recover the failed handling step, not the already handled original failure.
 
-Use `start(..., testStepId)` for one-step tests. Sample input uses that step's input schema. No other step or handling connection executes. Failed tests retain the slot until recovery or cancellation.
+Use `start(..., testStepId)` for one-step tests. Sample input uses that step's input schema. No other caller step or handling connection executes. A selected workflow-call Step runs its called subtree. Failed tests retain the slot until recovery or cancellation.
+
+## Workflow calls
+
+A `kind: 'workflow'` Step selects `workflowId` and saves `contract: { inputSchema, outputSchema }`. Ordinary mappings supply the called inputs; the awaited result becomes the call Step's output. Result contracts follow terminal result semantics, including parallel and recovery paths. Contract changes require explicit refresh and mapping repair. Implementation-only edits apply to future executions.
+
+Before effects, the host captures every reachable definition and checks Backend Adapter, Project identity, models, MCP snapshots, runtime and secret references. Each invocation shares root Scope and captured isolation policy. An explicit enclosing Ask cannot be weakened, and secret aliases are not inherited.
+
+The root owns one slot, execution file, activity log and billed Spend total. Its `retainedDefinitions` manifest is fixed; flat `invocations` checkpoints retain each call attempt and parent identity. Recovery actions and parent inspection tools accept `invocationId`. Inner recovery preserves caller and completed inner work. Saved corrections apply only to the addressed invocation.
+
+Call timeouts include human and recovery waits. Descendants stop before the caller timeout path starts. The service retains runtime resources while a call deadline can resume execution; the scheduler's optional `onResume` callback restores settlement monitoring after that automatic transition. Root cancellation stops every descendant. Calls have no fixed depth/admission limit, detached mode or separate cancellation control. See ADR 0039.
+
+The editor selects and explicitly refreshes host contracts without changing mappings. The builder reads `workflows.json` and can submit compact workflow IDs; the host supplies contracts. Execution breadcrumbs open exact retained invocations, including repeated calls.
 
 ## Executor requirements
 

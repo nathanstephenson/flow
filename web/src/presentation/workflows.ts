@@ -7,7 +7,7 @@ import type {
   WorkflowExecution,
 } from "../../../src/protocol/workflows.ts";
 import { analyzeLoops } from "../../../src/workflows/loops.ts";
-import { validateDefinition } from "../../../src/workflows/graph.ts";
+import { mappingSourceGraph, validateDefinition } from "../../../src/workflows/graph.ts";
 import { parseValue } from "../../../src/workflows/schema.ts";
 export function nextStepName(definition: WorkflowDefinition, kind: WorkflowStep["kind"]): string {
   let index = 1;
@@ -60,7 +60,7 @@ export function mappingChoices(
     }),
   };
   let graph;
-  try { graph = validateDefinition(base); }
+  try { graph = mappingSourceGraph(base); }
   catch {
     const headers = new Set(analyzeLoops(definition).loops.map(loop => loop.headerId));
     base = {
@@ -78,7 +78,7 @@ export function mappingChoices(
         return copy;
       }),
     };
-    graph = validateDefinition(base);
+    graph = mappingSourceGraph(base);
   }
   const candidates: { label: string; reference: InputReference }[] =
     schemaPaths(definition.inputSchema).map((path) => ({
@@ -102,7 +102,7 @@ export function mappingChoices(
   for (const candidate of available) {
       const { reference } = candidate;
       try {
-        validateDefinition({
+        mappingSourceGraph({
           ...base,
           steps: base.steps.map((s) =>
             s.id === stepId

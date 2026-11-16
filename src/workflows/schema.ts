@@ -76,6 +76,7 @@ export const shellOutputSchema: VisualSchema = { type: 'object', fields: {
 } };
 
 export function declaredOutputSchema(step: WorkflowStep): VisualSchema | undefined {
+  if (step.kind === 'workflow') return step.contract.outputSchema;
   if (step.kind === 'mcp') return { type: 'object', fields: { structuredContent: { required: true, schema: { type: 'json', ...(step.tool.outputSchema === undefined ? {} : { schema: step.tool.outputSchema }) } }, content: { required: true, schema: { type: 'array', items: { type: 'json' } } } } };
   if (step.kind === 'shell') return shellOutputSchema;
   if (step.kind === 'branch') return { type: 'boolean' };

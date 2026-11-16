@@ -5,7 +5,7 @@ import { it } from "node:test";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import type { ReactElement } from "react";
-import type { WorkflowStep } from "../../../src/protocol/workflows.ts";
+import type { WorkflowDefinition, WorkflowStep } from "../../../src/protocol/workflows.ts";
 import {
   WORKFLOW_CARD_HEIGHT,
   WORKFLOW_CARD_WIDTH,
@@ -63,6 +63,90 @@ it("uses manual graph layering so loop-connected edges stay below containers and
   const source = readFileSync(new URL("./workflow-graph.tsx", import.meta.url), "utf8");
   assert.match(source, /zIndexMode="manual"/);
   assert.match(source, /sourceHandle: edge\.outcome, label: edge\.outcome, zIndex: 0/);
+});
+
+it("refreshes root and child topology with one execution id without relayout on polling", () => {
+  const module = { exports: {} as { WorkflowGraph: (props: any) => Element } };
+  const require = createRequire(import.meta.url);
+  const states: any[] = [];
+  const memos: { deps: any[]; value: any }[] = [];
+  const effectDeps: any[][] = [];
+  let stateIndex = 0, memoIndex = 0, effectIndex = 0, layouts = 0;
+  let pending: (() => void)[] = [];
+  const same = (a: any[] | undefined, b: any[]) =>
+    a?.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  const code = transformSync(
+    readFileSync(new URL("./workflow-graph.tsx", import.meta.url), "utf8"),
+    { loader: "tsx", format: "cjs", jsx: "automatic" },
+  ).code;
+  runInNewContext(code, {
+    module,
+    exports: module.exports,
+    require: (name: string) => {
+      if (name.endsWith(".css")) return {};
+      if (name === "react") return {
+        useState(initial: any) {
+          const index = stateIndex++;
+          if (!(index in states)) states[index] = initial;
+          return [states[index], (value: any) => {
+            states[index] = typeof value === "function" ? value(states[index]) : value;
+          }];
+        },
+        useCallback: (callback: any) => callback,
+        useMemo(factory: () => any, deps: any[]) {
+          const index = memoIndex++;
+          if (!same(memos[index]?.deps, deps)) memos[index] = { deps, value: factory() };
+          return memos[index].value;
+        },
+        useEffect(effect: () => void, deps: any[]) {
+          const index = effectIndex++;
+          if (!same(effectDeps[index], deps)) {
+            effectDeps[index] = deps;
+            pending.push(effect);
+          }
+        },
+      };
+      if (name === "@xyflow/react") return { ReactFlow: "ReactFlow", Position: {} };
+      if (name === "../presentation/workflow-execution.ts") {
+        const actual = require(name);
+        return { ...actual, executionLayout: (...args: any[]) => {
+          layouts++;
+          return actual.executionLayout(...args);
+        } };
+      }
+      if (name.startsWith("./ui/")) return {};
+      return require(name);
+    },
+  });
+  const render = (definition: WorkflowDefinition) => {
+    const props = { definition, execution: { id: "shared-root", steps: {} }, onSelect() {} };
+    for (let pass = 0; pass < 5; pass++) {
+      stateIndex = memoIndex = effectIndex = 0;
+      pending = [];
+      const element = module.exports.WorkflowGraph(props);
+      if (!pending.length) return descendants(element).find(item => item.type === "ReactFlow")!.props.nodes;
+      for (const effect of pending) effect();
+    }
+    assert.fail("graph effects did not settle");
+  };
+  const root: WorkflowDefinition = {
+    version: 1, id: "root", name: "Root", backend: "fake",
+    inputSchema: { type: "object", fields: {} },
+    steps: [{ id: "root-step", name: "Root step", kind: "join" }], edges: [],
+  };
+  const child: WorkflowDefinition = {
+    ...root, id: "child", name: "Child",
+    steps: [{ id: "child-step", name: "Child step", kind: "join" }],
+  };
+  for (const [index, definition] of [root, child, root].entries()) {
+    const nodes = render(definition);
+    assert.deepEqual(Array.from(nodes, (node: any) => node.id), definition.steps.map(step => step.id));
+    assert.equal(layouts, index + 1);
+    const polledNodes = render(structuredClone(definition));
+    assert.deepEqual(Array.from(polledNodes, (node: any) => node.id), definition.steps.map(step => step.id));
+    assert.strictEqual(polledNodes[0].position, nodes[0].position);
+    assert.equal(layouts, index + 1, "polling must reuse layout");
+  }
 });
 
 for (const [vertical, position, orientation] of [

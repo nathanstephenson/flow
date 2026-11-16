@@ -266,6 +266,42 @@ it('serves mcp-tools/ paths only through the authoring service, never the filesy
   } finally { await f.cleanup(); }
 });
 
+it('opens stale saved call contracts without silently refreshing mappings or contracts', async () => {
+  const oldContract = { inputSchema: { type: 'object' as const, fields: {} }, outputSchema: { type: 'number' as const } };
+  const original: WorkflowDefinition = { ...valid(), steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: 'child', contract: oldContract, mapping: { kind: 'object', fields: {} } }] };
+  const current = { ...oldContract, outputSchema: { type: 'string' as const } };
+  const f = fixture({ workflowDefinition: id => id === original.id ? original : undefined, workflowCatalogue: () => ({ workflows: [{ id: 'child', name: 'Child', backend: 'fake', projectId: undefined, contract: current }], errors: [] }) });
+  try {
+    const view = await f.service.create({ definition: original });
+    assert.deepEqual(view.definition, original);
+    f.service.message(view.id, 'Refresh Child');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    await capabilities.write(JSON.stringify({ ...original, steps: [{ ...original.steps[0], contract: current }] }));
+    assert.deepEqual(f.service.view(view.id).definition.steps[0]!.mapping, original.steps[0]!.mapping);
+    assert.deepEqual((f.service.view(view.id).definition.steps[0] as Extract<WorkflowDefinition['steps'][number], { kind: 'workflow' }>).contract, current);
+  } finally { await f.cleanup(); }
+});
+
+it('hydrates compact Workflow calls from host contracts and rejects fabricated contracts', async () => {
+  const contract = { inputSchema: { type: 'object' as const, fields: {} }, outputSchema: { type: 'number' as const } };
+  const entry = { id: 'child', name: 'Child', backend: 'fake', projectId: undefined, contract };
+  const f = fixture({ workflowCatalogue: () => ({ workflows: [entry], errors: [] }) });
+  try {
+    const view = await f.service.create({ definition: { ...draft(), steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: 'unselected', contract: { inputSchema: { type: 'object', fields: {} }, outputSchema: { type: 'object', fields: {} } } }] } });
+    f.service.message(view.id, 'Call Child');
+    const capabilities = f.sessions[0]!.options.workflowBuilder!;
+    assert.deepEqual(JSON.parse(await capabilities.read('workflows.json')).workflows[0].contract, contract);
+    const compact = { ...valid(), steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: 'child' }] };
+    await capabilities.write(JSON.stringify(compact));
+    const accepted = { ...compact, steps: [{ ...compact.steps[0], contract }] };
+    assert.deepEqual(f.service.view(view.id).definition, accepted);
+    for (const step of [{ ...compact.steps[0], workflowId: 'missing' }, { ...compact.steps[0], contract: { ...contract, outputSchema: { type: 'string' } } }]) {
+      await assert.rejects(capabilities.write(JSON.stringify({ ...compact, steps: [step] })), /previous draft preserved/);
+      assert.deepEqual(f.service.view(view.id).definition, accepted);
+    }
+  } finally { await f.cleanup(); }
+});
+
 it('resolves compact MCP references to exact host snapshots without accepting altered schemas or identities', async () => {
   const tool = { connectionId: 'configured', connectionName: 'Configured service', identity: 'a'.repeat(64), serverIdentity: 'b'.repeat(64), toolName: 'lookup', inputSchema: { type: 'object', properties: { q: { type: 'string', description: 'Exact description' } }, required: ['q'] }, outputSchema: { type: 'object', properties: { answer: { type: 'string' } } } };
   const { connectionId, identity, serverIdentity, toolName } = tool;

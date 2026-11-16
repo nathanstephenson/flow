@@ -7,6 +7,7 @@ import type { WorkflowActivity, WorkflowActivityPage } from "../../../src/protoc
 import { isPinned } from "../presentation/stick-to-bottom.ts";
 import { entryKey } from "../presentation/entry-key.ts";
 import { pollAfterInitialLoad } from "../presentation/workflow-transcript-polling.ts";
+import { workflowActivityQuery } from "../presentation/workflow-calls.ts";
 import { TranscriptEntry } from "./transcript-entry.tsx";
 import { workflowApi } from "./workflow-api.ts";
 import { Button } from "./ui/button.tsx";
@@ -22,8 +23,8 @@ const POLL_MS = 2_000;
  * merging makes reconnects and overlapping pages idempotent. The scroller uses the same pin rule as
  * the parent transcript: output follows only while the reader is already at the bottom.
  */
-export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, completed }: { base: string; sessionId: string; stepId: string; attempt: number; legacy: boolean; completed: boolean }) {
-  const query = `stepId=${encodeURIComponent(stepId)}${legacy ? "" : `&attempt=${attempt}`}`;
+export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, completed, invocationId }: { base: string; sessionId: string; stepId: string; attempt: number; legacy: boolean; completed: boolean; invocationId?: string }) {
+  const query = workflowActivityQuery(stepId, attempt, legacy, invocationId);
   const [activity, setActivity] = useState<WorkflowActivity[]>([]);
   const events = useRef<WorkflowActivity[]>([]);
   const [previous, setPrevious] = useState<number>();

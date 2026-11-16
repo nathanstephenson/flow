@@ -27,9 +27,12 @@ npm start -- --backend claude "Use Glob to list *.json here, then say DONE"
 | `FLOW_ASSETS=1 npm test` | A Vite build, to prove the embedder handles everything that it emits. |
 | `FLOW_E2E=1 npm test` | The live Claude contract. This spends tokens. |
 | `FLOW_E2E_PI=1 npm test` | The live pi contract. This needs pi credentials. |
+| `FLOW_MCP_STRESS=1 node --test --experimental-strip-types test/mcp-buffered-exit.test.ts` | Four rounds of 32 concurrent MCP clients. |
 
-These three stay out of the default loop. `npm test` must need no credentials, no network and no
-bundler. So a fresh clone with no `web/dist`, and an `--omit=dev` install with no Vite, still
+These optional checks stay out of the default loop. The normal MCP reply tests force exit-before-read
+ordering and check actual pipes with two clients. Large stress runs are not a required validation check.
+
+`npm test` must need no credentials, no network and no bundler. So a fresh clone with no `web/dist`, and an `--omit=dev` install with no Vite, still
 pass. This is true by construction: no test reads a build output. Tests about serving a web client
 get a fixture (`test/assets-fixture.ts`).
 

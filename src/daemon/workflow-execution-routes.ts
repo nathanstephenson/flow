@@ -24,11 +24,12 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
         ...(query.has('before') ? { before: Number(query.get('before')) } : {}),
         ...(query.get('latest') === 'true' ? { latest: true } : {}),
         limit: Number(query.get('limit') ?? 100),
+        ...(query.has('invocationId') ? { invocationId: query.get('invocationId')! } : {}),
         ...(query.has('stepId') ? { stepId: query.get('stepId')! } : {}),
         ...(query.has('attempt') ? { attempt: Number(query.get('attempt')) } : {}),
       }));
     }
-    else if (request.method === 'GET' && match && !match[3]) reply(200, match[2] ? service.view(match[1]!, match[2]) : service.list(match[1]!));
+    else if (request.method === 'GET' && match && !match[3]) reply(200, match[2] ? service.view(match[1]!, match[2], new URL(request.url!, 'http://localhost').searchParams.get('invocationId') ?? undefined) : service.list(match[1]!));
     else if (request.method === 'POST' && !runtime) {
       const chunks: Buffer[] = [];
       for await (const chunk of request) { const bytes = Buffer.from(chunk); chunks.push(bytes); }
@@ -50,18 +51,19 @@ export async function workflowExecutionRoutes(request: IncomingMessage, response
         switch (match![3]) {
           case 'cancel': keys(); reply(200, await service.cancel(sessionId, executionId)); break;
           case 'recover': {
-            if (body.kind === 'continue') keys('kind');
+            if (body.invocationId !== undefined) string('invocationId');
+            if (body.kind === 'continue') keys('kind', 'invocationId');
             else if (body.kind === 'extend-loop') {
-              keys('kind', 'headerId', 'activation', 'try', 'guidance'); string('headerId');
+              keys('kind', 'invocationId', 'headerId', 'activation', 'try', 'guidance'); string('headerId');
               if (![body.activation, body.try].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error();
               if (body.guidance !== undefined && (typeof body.guidance !== 'string' || body.guidance.length > 100_000)) throw new Error();
             }
-            else if (body.kind === 'retry') { keys('kind', 'stepId'); string('stepId'); }
+            else if (body.kind === 'retry') { keys('kind', 'invocationId', 'stepId'); string('stepId'); }
             else if (body.kind === 'retry-updated') {
-              keys('kind', 'stepId', 'definitionRevision'); string('stepId');
+              keys('kind', 'invocationId', 'stepId', 'definitionRevision'); string('stepId');
               if (!/^[a-f0-9]{64}$/.test(string('definitionRevision'))) throw new Error();
             }
-            else if (body.kind === 'supply') { keys('kind', 'stepId', 'output'); string('stepId'); if (!Object.hasOwn(body, 'output')) throw new Error(); }
+            else if (body.kind === 'supply') { keys('kind', 'invocationId', 'stepId', 'output'); string('stepId'); if (!Object.hasOwn(body, 'output')) throw new Error(); }
             else throw new Error();
             reply(200, await service.recover(sessionId, executionId, body as RecoverWorkflow)); break;
           }

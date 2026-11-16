@@ -165,6 +165,25 @@ try {
     assert.match(runtimeStatus.error, /unavailable/i);
     await assertCodeRefused();
   }
+  const child = { ...definition, id: 'package-child', name: 'Packed child', inputSchema: { type: 'object', fields: { message: { schema: { type: 'string' }, required: true } } }, steps: [{ id: 'echo', name: 'Echo input', kind: 'join' }] };
+  await request('/api/workflows/package-child', { method: 'PUT', body: JSON.stringify(child) });
+  const catalogue = await (await request('/api/workflow-catalogue')).json();
+  const parent = { ...definition, id: 'package-parent', name: 'Packed parent', inputSchema: { type: 'object', fields: { request: { schema: { type: 'string' }, required: true } } }, steps: [{ id: 'call', name: 'Call child', kind: 'workflow', workflowId: child.id, contract: catalogue.workflows.find(item => item.id === child.id).contract, mapping: { kind: 'object', fields: { message: { source: 'input', path: ['request'] } } } }] };
+  await request('/api/workflows/package-parent', { method: 'PUT', body: JSON.stringify(parent) });
+  const nested = await (await request(`/api/sessions/${sessions[0].id}/workflows`, { method: 'POST', body: JSON.stringify({ workflowId: parent.id, input: { request: 'packed nested input' } }) })).json();
+  let rootExecution;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    ({ execution: rootExecution } = await (await request(`/api/sessions/${sessions[0].id}/workflows/${nested.execution.id}`)).json());
+    if (rootExecution.finishedAt) break;
+    await delay(100);
+  }
+  assert.equal(rootExecution.status, 'completed', JSON.stringify(rootExecution));
+  assert.deepEqual(rootExecution.result, { message: 'packed nested input' });
+  assert.equal(Object.keys(rootExecution.invocations).length, 1);
+  assert.deepEqual(Object.values(rootExecution.invocations)[0].input, rootExecution.result);
+  assert.equal(Object.values(rootExecution.invocations)[0].status, 'completed');
+  assert.ok(Object.hasOwn(rootExecution.retainedDefinitions, child.id));
+  assert.equal((await (await request(`/api/sessions/${sessions[0].id}/workflows`)).json()).executions.length, runtimeStatus.available ? 2 : 1);
   // Also cover unavailable configuration on supported hosts; never fall back to host Node.
   await request('/api/config', { method: 'PUT', body: JSON.stringify({ workflowRuntime: { nodePath: join(temp, 'missing-node') } }) });
   assert.equal((await runtimeReadiness()).available, false);
@@ -227,20 +246,20 @@ try {
   // Bundle/QuickJS packaging coverage on every platform. Direct --guest is an internal
   // artifact probe, not a production code launch; the Session Host boundary is tested above.
   const runtime = join(prefix, 'lib/node_modules', metadata.name, 'build/workflow-runtime.cjs');
-  const child = spawn(process.execPath, [runtime, '--guest'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
-  const closed = once(child, 'close');
+  const guest = spawn(process.execPath, [runtime, '--guest'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+  const closed = once(guest, 'close');
   let output = '', errors = '';
-  child.stdout.on('data', data => { output += data; });
-  child.stderr.on('data', data => { errors += data; });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+  guest.stdout.on('data', data => { output += data; });
+  guest.stderr.on('data', data => { errors += data; });
+  const timer = setTimeout(() => guest.kill('SIGKILL'), 15_000);
   try {
-    child.stdin.write(JSON.stringify({ kind: 'typescript', scope: cwd, code: 'return input + 1;', input: 41,
+    guest.stdin.write(JSON.stringify({ kind: 'typescript', scope: cwd, code: 'return input + 1;', input: 41,
       inputType: 'number', outputType: 'number', secrets: {}, timeout: 10_000 }) + '\n');
     const [code] = await closed;
     assert.equal(code, 0, errors);
     assert.deepEqual(JSON.parse(output), { output: 42 });
-  } finally { clearTimeout(timer); child.kill('SIGKILL'); }
-  console.log(`Packed install: host control, TUI ownership, version, web assets, fake backend, Workflow bundle, and code runtime ${runtimeStatus.available ? 'execution/refusal' : 'fail-closed refusal'} passed.`);
+  } finally { clearTimeout(timer); guest.kill('SIGKILL'); }
+  console.log(`Packed install: host control, TUI ownership, version, web assets, fake backend, nested Workflows, Workflow bundle, and code runtime ${runtimeStatus.available ? 'execution/refusal' : 'fail-closed refusal'} passed.`);
 } finally {
   if (host) {
     host.kill('SIGTERM');
