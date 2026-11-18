@@ -2502,8 +2502,8 @@ export class SessionHost {
           mcpConnectionIds: source.mcpConnectionIds ?? [],
           permissionMode: source.permissionMode === 'auto' && name !== 'claude' ? 'ask' : source.permissionMode });
         // Persist a receipt even if cancellation loses the RPC result; never blindly recreate.
-        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}` });
-        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}` });
+        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}`, sessionId });
+        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}`, sessionId: source.id });
         try {
           check(signal);
           await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);

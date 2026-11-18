@@ -5,6 +5,8 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { authorisationLabel } from "@client/permission.ts";
 import { toolSummary } from "@client/tool-summary.ts";
+import { sessionLabel } from "@client/session-label.ts";
+import { useAgentSessions } from "@/agent-sessions.tsx";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
@@ -518,10 +520,13 @@ const NOTICE_TONE: Record<Of<"notice">["level"], string> = {
 
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
   const tone = NOTICE_TONE[entry.level];
+  const { sessions } = useAgentSessions();
+  const named = entry.sessionId === undefined ? undefined : sessions.find((session) => session.id === entry.sessionId);
+  const text = named ? entry.text.replace(named.id, sessionLabel(named)) : entry.text;
   return (
     <Row gutter="!" gutterClassName={tone}>
       <p className={cn("m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>
-        <Highlighted text={entry.text} query={query} />
+        <Highlighted text={text} query={query} />
       </p>
     </Row>
   );
