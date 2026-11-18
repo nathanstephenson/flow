@@ -13,11 +13,13 @@ import { useNow } from "@/lib/use-now.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
+import { Button } from "@/components/ui/button.tsx";
 import { ToolName } from "@/components/tool-name.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import { toolOutcome } from "@/presentation/tool-display.ts";
 import { messageTime } from "@/presentation/message-time.ts";
+import { MessageActionButtons, useOpenSession } from "@/components/message-actions.tsx";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -41,7 +43,12 @@ export type TranscriptEntryProps = {
   background?: Of<"background_call"> | undefined;
 };
 
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId, background }: TranscriptEntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry(props: TranscriptEntryProps) {
+  // Still the human's record, but no longer what the model sees.
+  return props.entry.rewound ? <div className="opacity-50">{entryView(props)}</div> : entryView(props);
+});
+
+function entryView({ entry, query, sessionId, background }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -74,19 +81,29 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return null;
     }
   }
-});
+}
 
 type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
 
 function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: string; sessionId: string }) {
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
-    <div className="relative flex flex-col items-end py-3">
-      <div className="min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
+    // The `before` band spans the transcript's width, so hovering anywhere at this message's height
+    // shows its actions. The scroll container clips it.
+    <div className="group/message relative flex flex-col items-end py-3 before:absolute before:inset-y-0 before:-right-[100vw] before:-left-[100vw] before:content-['']">
+      <div className="relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
       </div>
-      {entry.at ? <MessageTime at={entry.at} side="right" /> : null}
+      {entry.at ? (
+        <MessageTime at={entry.at} side="right">
+          {entry.rewound ? null : (
+            <span className="inline-flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+              <MessageActionButtons userMessageId={entry.id} />
+            </span>
+          )}
+        </MessageTime>
+      ) : null}
     </div>
   );
 }
@@ -142,13 +159,12 @@ function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: s
  * message's last line when the margin has room — the user's on the right, the agent's on the left —
  * and under the message, on its own side, when it does not.
  */
-function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
+function MessageTime({ at, side, children }: { at: string; side: "left" | "right"; children?: ReactNode }) {
   return (
-    <time
-      dateTime={at}
-      title={new Date(at).toLocaleString()}
+    <div
       className={cn(
-        "mt-1 block text-xs whitespace-nowrap text-muted-foreground/70",
+        "relative mt-1 flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground/70",
+        side === "right" && "flex-row-reverse @min-[68rem]/transcript:flex-row",
         // The message's own line height in the margin, so the time's baseline meets the text's.
         "@min-[68rem]/transcript:absolute @min-[68rem]/transcript:mt-0 @min-[68rem]/transcript:leading-[1.375rem]",
         side === "right"
@@ -156,8 +172,9 @@ function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
           : "@min-[68rem]/transcript:right-full @min-[68rem]/transcript:bottom-1 @min-[68rem]/transcript:mr-4",
       )}
     >
-      {messageTime(at, new Date())}
-    </time>
+      <time dateTime={at} title={new Date(at).toLocaleString()}>{messageTime(at, new Date())}</time>
+      {children}
+    </div>
   );
 }
 
@@ -542,12 +559,15 @@ const MARKER_TONE: Record<Of<"marker">["marker"], string> = {
   // Receded with the other two: compaction is something a reader wants to be able to find later,
   // not something to interrupt them with. It is also the only marker that can appear mid-turn.
   compacted: "text-muted-foreground",
+  rewound: "text-muted-foreground",
+  forked: "text-muted-foreground",
 };
 
 function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
   // These two read `--color-status-settled` and `--color-status-dormant` until the mapping that
   // defined them was deleted; the label already says which of the two this is.
   const tone = MARKER_TONE[entry.marker];
+  const openSession = useOpenSession();
   return (
     <div
       className={cn("flex items-center gap-2 py-2", tone)}
@@ -555,7 +575,13 @@ function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
       aria-label={entry.text}
     >
       <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
-      <span className="text-xs">{entry.text}</span>
+      {entry.fromSessionId && openSession ? (
+        <Button variant="link" size="xs" className="h-auto p-0 text-xs text-current" onClick={() => openSession(entry.fromSessionId!)}>
+          Forked from another Agent Session
+        </Button>
+      ) : (
+        <span className="text-xs">{entry.text}</span>
+      )}
       <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
     </div>
   );

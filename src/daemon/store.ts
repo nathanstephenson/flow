@@ -48,6 +48,8 @@ export type SessionMeta = {
   updatedAt: string;
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */
   resumeToken?: string;
+  /** A Rewind not yet followed by a turn: the next Backend Session ends its context before this user message. */
+  rewindTo?: string;
   modelId?: string;
   effort?: EffortLevel;
   permissionMode?: AgentPermissionMode;

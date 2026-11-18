@@ -65,7 +65,8 @@ export type Authorisation = "asked" | "allowed" | "always" | "denied";
  */
 export type OpenPermission = { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer };
 
-export type Entry =
+/** `rewound` marks an entry a Rewind took out of the Conversation Context. It stays in the Presentation Transcript. */
+export type Entry = ({ rewound?: true }) & (
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   /** `at`: when the message was logged. */
   | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string }
@@ -199,7 +200,7 @@ export type Entry =
    * a fact about the Conversation Context rather than the Agent Session, and a reader needs to tell
    * "the model was given a summary of what it had read" apart from "this session stopped".
    */
-  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted"; text: string };
+  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted" | "rewound" | "forked"; text: string; fromSessionId?: string });
 
 function combinedSpend(values: Spend[]): Spend {
   const result: Spend = { tokens: 0, cached: 0, costUSD: 0, models: [] };
@@ -724,6 +725,28 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: [
           ...state.entries,
           { kind: "marker", id: `settled-${state.entries.length}`, marker: "settled", text: "Settled" },
+        ],
+      };
+
+    case "rewound": {
+      const from = state.entries.findIndex((entry) => entry.kind === "user" && entry.id === event.userMessageId);
+      const text = event.restore === "files" ? "Files rewound" : event.restore === "both" ? "Rewound conversation and files" : "Rewound conversation";
+      return {
+        ...state,
+        entries: [
+          ...(from < 0 || event.restore === "files" ? state.entries
+            : state.entries.map((entry, index) => index < from || entry.rewound ? entry : { ...entry, rewound: true as const })),
+          { kind: "marker", id: `rewound-${state.entries.length}`, marker: "rewound", text },
+        ],
+      };
+    }
+
+    case "forked":
+      return {
+        ...state,
+        entries: [
+          ...state.entries,
+          { kind: "marker", id: `forked-${state.entries.length}`, marker: "forked", text: "Forked", fromSessionId: event.fromSessionId },
         ],
       };
 

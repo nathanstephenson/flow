@@ -42,7 +42,9 @@ import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { BackgroundCalls } from "./background-calls.ts";
-import { prepareClaudeState } from "../worker/claude-state.ts";
+import { prepareClaudeState, projectKey } from "../worker/claude-state.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { AutoPermissionUnavailable } from "../permission-errors.ts";
 export { AutoPermissionUnavailable } from "../permission-errors.ts";
@@ -224,7 +226,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, subagents: true, enquiries: true, permissions: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, rewind: true, rewindFiles: true, subagents: true, enquiries: true, permissions: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -288,7 +290,7 @@ class ClaudeSession implements BackendSession {
   private readonly claudeState: ReturnType<typeof prepareClaudeState>;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions,
-    claudeState: ReturnType<typeof prepareClaudeState>) {
+    claudeState: ReturnType<typeof prepareClaudeState>, resumeAt?: string) {
     this.claudeState = claudeState;
     this.parentWorkflow = options.workflowBuilder ? workflowBuilderServer(options.workflowBuilder)
       : workflowParentServer(options.tools === "none" ? undefined : options.workflow);
@@ -350,6 +352,8 @@ class ClaudeSession implements BackendSession {
       // while the model list is still in flight. Levels Claude does not have wait for the clamp.
       ...(startingEffort ? { effort: startingEffort } : {}),
       ...(options.resume ? { resume: options.resume } : {}),
+      ...(resumeAt ? { resumeSessionAt: resumeAt } : {}),
+      ...(builder || toolless ? {} : { enableFileCheckpointing: true }),
       ...(backendOptions.pathToClaudeCodeExecutable
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
         : {}),
@@ -474,7 +478,14 @@ class ClaudeSession implements BackendSession {
     return this.sdkSessionId || undefined;
   }
 
-  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
+  async rewindFiles(messageId: string): Promise<void> {
+    const preview = await this.stream.rewindFiles(messageId, { dryRun: true });
+    if (!preview.canRewind) throw new Error(preview.error ?? "No file checkpoint exists for this message");
+    const result = await this.stream.rewindFiles(messageId);
+    if (!result.canRewind) throw new Error(result.error ?? "Files could not be rewound");
+  }
+
+  async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
     if (this.disposed) throw new Error("Backend Session disposed");
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
@@ -483,6 +494,7 @@ class ClaudeSession implements BackendSession {
       message: { role: "user", content: userContent(text, attachments) },
       parent_tool_use_id: null,
       session_id: this.sdkSessionId,
+      ...(messageId ? { uuid: messageId } : {}),
     } as SDKUserMessage);
   }
 
@@ -1140,7 +1152,13 @@ export class ClaudeBackend implements AgentBackend {
     // is still in flight lets the first send race the empty provisional capabilities.
     const claudeState = prepareClaudeState(options.stateDir, process.env, options.scope, options.resume);
     let session: ClaudeSession;
-    try { session = new ClaudeSession(options, this.options, claudeState); }
+    try {
+      const resumeAt = options.resume && options.resumeBefore ? resumePoint(claudeState.env, options.scope, options.resume, options.resumeBefore) : undefined;
+      // A Rewind to the first message keeps nothing, so it starts a new conversation.
+      const { resume: _discarded, ...fresh } = options;
+      session = resumeAt === null ? new ClaudeSession(fresh, this.options, claudeState)
+        : new ClaudeSession(options, this.options, claudeState, resumeAt);
+    }
     catch (error) { claudeState.cleanup(); throw error; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1165,6 +1183,18 @@ export class ClaudeBackend implements AgentBackend {
       if (timer) clearTimeout(timer);
     }
   }
+}
+
+/** The chain entry just before user message `before`, or null when `before` starts the conversation. */
+function resumePoint(env: NodeJS.ProcessEnv, scope: string, resume: string, before: string): string | null {
+  const record = join(env.CLAUDE_CONFIG_DIR ?? "", "projects", projectKey(scope), `${resume}.jsonl`);
+  const lines = existsSync(record) ? readFileSync(record, "utf8").split("\n") : [];
+  for (const line of lines) {
+    if (!line.includes(before)) continue;
+    const entry = JSON.parse(line) as { uuid?: string; parentUuid?: string | null };
+    if (entry.uuid === before) return entry.parentUuid ?? null;
+  }
+  throw new Error("This message cannot be rewound: Claude has no record of it");
 }
 
 /** Claude reports one Provider, and per-model effort: haiku carries no supportedEffortLevels. */

@@ -1,6 +1,6 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
-import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision } from "./events.ts";
+import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
 import type { Branch } from "./git.ts";
 import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
@@ -252,6 +252,13 @@ export type Command =
    * `instructions` steer what the summary keeps. Both backends take them; neither requires them.
    */
   | { type: "compact"; sessionId: string; instructions?: string }
+  /**
+   * Return to just before a user message. Refused while the Agent Session has a turn, a queued
+   * message, or live background work. Answers with the user message's text and Attachment ids.
+   */
+  | { type: "rewind"; sessionId: string; userMessageId: string; restore: RewindRestore }
+  /** Start a new Agent Session from just before a user message. Answers with the new session id. */
+  | { type: "fork"; sessionId: string; userMessageId: string; worktree?: { from: string; branch?: string } }
   /**
    * The Skills this Agent Session's Scope offers, for the composer's menu.
    *

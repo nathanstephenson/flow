@@ -75,6 +75,7 @@ export function Composer({
   unavailable,
   placeholder,
   drafts,
+  seed: given,
   authorisingSummary,
   work = NO_WORK,
   onOpenWork,
@@ -131,6 +132,8 @@ export function Composer({
    * has moved on still has to clear the Draft it came from.
    */
   drafts: DraftStash;
+  /** Starts the Composer with this instead of the stashed Draft, e.g. a rewound message. */
+  seed?: Draft | undefined;
   /**
    * The précis of the call awaiting authorisation, passed in rather than looked up.
    *
@@ -159,7 +162,7 @@ export function Composer({
    * at another Agent Session. A read rather than a take — see web/src/drafts.ts for why StrictMode
    * requires that — and `useRef` so the seed is taken once rather than on every render.
    */
-  const seed = useRef(drafts.read(id)).current;
+  const seed = useRef(given ?? drafts.read(id)).current;
   const [text, setText] = useState(seed.text);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(seed.attachments);
   /** A Workflow relay borrows the input for free text without consuming the ordinary Draft. */

@@ -354,6 +354,7 @@ export function AppShell() {
               drafts={drafts}
               shells={config.shell === true}
               onOpenProject={openProject}
+              onOpenSession={onCreated}
             />
           )}
         </SidebarInset>

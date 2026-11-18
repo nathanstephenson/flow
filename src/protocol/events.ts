@@ -115,7 +115,12 @@ export type Capabilities = {
   models: ModelInfo[];
   compaction: boolean;
   autoCompaction?: "startup" | "model-change";
+  /** Set when a Fork of this Agent Session can start with its Conversation Context. */
   fork: boolean;
+  /** Set when the Conversation Context can return to just before one of its user messages. */
+  rewind?: boolean;
+  /** Set when the Scope's files can also return to their state at one of its user messages. */
+  rewindFiles?: boolean;
   /**
    * Set when this Backend Adapter reports Subagents. False is not "this backend has no subagents"
    * but "this backend does not tell us about them" — the distinction `effortLevels` draws for a
@@ -469,7 +474,13 @@ export type AgentEvent =
   | { type: "session_settled" }
   /** `scope` is where the Agent Session is now bound; it changes only after a relocation (ADR 0036). */
   | { type: "revived"; fromSeq: number; scope?: string }
+  /** The Conversation Context, files, or both, went back to just before `userMessageId`. */
+  | { type: "rewound"; userMessageId: string; restore: RewindRestore }
+  /** This Agent Session is a Fork. The events before this one are copied from the source. */
+  | { type: "forked"; fromSessionId: string; userMessageId: string }
   | { type: "session_ended"; reason: string };
+
+export type RewindRestore = "conversation" | "files" | "both";
 
 export type AgentEventType = AgentEvent["type"];
 
@@ -492,6 +503,8 @@ export const HOST_OWNED_EVENT_TYPES = [
   "session_ended",
   "branch_changed",
   "workflow_spend",
+  "rewound",
+  "forked",
 ] as const;
 
 export type HostOwnedEventType = (typeof HOST_OWNED_EVENT_TYPES)[number];

@@ -110,7 +110,7 @@ export function runWorker(): void {
     if (!session || closing) throw new Error("Backend worker is not running");
     let result: unknown;
     switch (method) {
-      case "prompt": result = await session.prompt(args[0] as string, args[1] as PromptAttachment[] | undefined); break;
+      case "prompt": result = await session.prompt(args[0] as string, args[1] as PromptAttachment[] | undefined, args[2] as string | undefined); break;
       case "abort": result = await session.abort(); break;
       case "setModel": result = await session.setModel(args[0] as string); break;
       case "setEffort": result = await session.setEffort(args[0] as EffortLevel); break;
@@ -122,6 +122,7 @@ export function runWorker(): void {
         break;
       }
       case "compact": result = await session.compact?.(args[0] as string | undefined); break;
+      case "rewindFiles": if (!session.rewindFiles) throw new Error("File rewind is not supported"); result = await session.rewindFiles(args[0] as string); break;
       case "skills": result = await session.skills?.(); break;
       case "answerEnquiry": result = await session.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
       case "answerPermission": result = await session.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
