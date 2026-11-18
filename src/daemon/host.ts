@@ -3,7 +3,7 @@ import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendI
 import { sessionToolSummary, sessionToolPage } from './session-tool-views.ts';
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
@@ -40,6 +40,7 @@ import type {
   PermissionDecision,
   Producer,
   Question,
+  RewindRestore,
   ScopeSkills,
   Skill,
   Spend,
@@ -227,6 +228,7 @@ type SessionRecord = {
    */
   spend: Spend | undefined;
   resumeToken: string | undefined;
+  rewindTo: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
   permissionMode: AgentPermissionMode;
@@ -846,6 +848,7 @@ export class SessionHost {
         spend: spendFrom(entries),
         mcpConnectionIds: meta.mcpConnectionIds ?? [],
         resumeToken: meta.resumeToken,
+        rewindTo: meta.rewindTo,
         modelId: meta.modelId,
         effort: meta.effort,
         permissionMode: meta.permissionMode ?? this.permissionDefault(meta.backend),
@@ -877,6 +880,7 @@ export class SessionHost {
     permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
+    fork?: { source: SessionRecord; userMessageId: string; prefix: LoggedEvent[] };
   }): Promise<string> {
     const connections = this.mcpConnections?.() ?? [];
     if (options.mcpConnectionIds !== undefined && (!Array.isArray(options.mcpConnectionIds) || options.mcpConnectionIds.some((id) => typeof id !== "string"))) throw new Error("Invalid MCP selection");
@@ -933,6 +937,7 @@ export class SessionHost {
       spend: undefined,
       mcpConnectionIds,
       resumeToken: undefined,
+      rewindTo: undefined,
       /*
        * Resolved here and never again.
        *
@@ -955,6 +960,7 @@ export class SessionHost {
     record.buffered = [];
     let session: BackendSession;
     try {
+      if (options.fork) this.copyForkState(record, options.fork.source, options.fork.userMessageId, options.fork.prefix);
       session = await this.startPermissionBackend(record);
       if (session.capabilities.models.length === 0) {
         throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
@@ -977,6 +983,7 @@ export class SessionHost {
       permissionMode: record.permissionMode,
       ...(worktree === undefined ? {} : { worktree: true as const }),
     });
+    if (options.fork) this.appendForkPrefix(record, options.fork.source.id, options.fork.userMessageId, options.fork.prefix);
     this.flushBuffered(record);
     // After session_started, never before: the transcript has to open with it (see `buffered`).
     await this.refreshBranch(record);
@@ -1570,6 +1577,104 @@ export class SessionHost {
     record.turnInFlight = true;
     await session.compact(instructions);
     this.touch(record);
+  }
+
+  /** Rewind (CONTEXT.md). Answers with the user message, for the composer to offer again. */
+  async rewind(sessionId: string, userMessageId: string, restore: RewindRestore): Promise<{ text: string; attachments: string[] }> {
+    const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
+    if (record.lifecycle === "ended") throw new CommandRefused(`Agent Session ${sessionId} has Ended`);
+    const message = userMessage(record.log.since(0), userMessageId)?.event;
+    if (message?.type !== "user_message") throw new CommandRefused("That user message is not in this Agent Session");
+    if (!record.session) await this.revive(sessionId);
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
+    const session = record.session;
+    if (!session) throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session`);
+    if (record.turnInFlight || record.queue.length > 0 || record.openSubagentIds.size > 0 || record.openBackgroundCallIds.size > 0) {
+      throw new CommandRefused("Wait for the turn, the queued messages and the background work to finish, or abort them, before rewinding");
+    }
+    const files = restore !== "conversation";
+    const conversation = restore !== "files";
+    if (conversation && !session.capabilities.rewind) throw new CommandRefused(`${record.backendName} cannot rewind a Conversation Context`);
+    if (files && (!session.capabilities.rewindFiles || !session.rewindFiles)) throw new CommandRefused(`${record.backendName} cannot rewind files`);
+    if (files) {
+      try { await session.rewindFiles!(userMessageId); }
+      catch (error) { throw new CommandRefused(`Files were not rewound: ${errorMessage(error)}`); }
+    }
+    if (conversation) {
+      record.rewindTo = userMessageId;
+      this.persist(record);
+      record.session = undefined;
+      await this.stopBackendSession(record.scope, session, record.id);
+      record.buffered = [];
+      record.backendEpoch += 1;
+      try { await this.startPermissionBackend(record); }
+      catch (error) {
+        record.buffered = undefined;
+        record.lifecycle = "dormant";
+        record.log.append({ type: "session_dormant", reason: `rewind failed: ${errorMessage(error)}` });
+        this.touch(record);
+        throw error;
+      }
+    }
+    record.log.append({ type: "rewound", userMessageId, restore });
+    this.flushBuffered(record);
+    this.touch(record);
+    return { text: message.text, attachments: message.attachments ?? [] };
+  }
+
+  /** Fork (CONTEXT.md). Answers with the new Agent Session's id. */
+  async fork(sessionId: string, userMessageId: string, worktree?: { from: string; branch?: string }): Promise<string> {
+    const source = this.record(sessionId);
+    if (!source.capabilities?.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    const events = source.log.since(0);
+    const at = userMessage(events, userMessageId);
+    if (!at) throw new CommandRefused("That user message is not in this Agent Session");
+    return await this.create({
+      scope: worktree ? source.worktree?.repo ?? source.scope : source.scope,
+      backend: source.backendName,
+      ...(source.modelId === undefined ? {} : { modelId: source.modelId }),
+      ...(source.effort === undefined ? {} : { effort: source.effort }),
+      permissionMode: source.permissionMode,
+      mcpConnectionIds: source.mcpConnectionIds ?? [],
+      ...(worktree === undefined ? {} : { worktree }),
+      fork: { source, userMessageId, prefix: events.filter((entry) => entry.seq < at.seq) },
+    });
+  }
+
+  /** Give a Fork the source's Conversation Context, to be cut before the user message on start. */
+  private copyForkState(record: SessionRecord, source: SessionRecord, userMessageId: string, prefix: LoggedEvent[]): void {
+    record.title = `${source.title} (fork)`;
+    record.titleSource = "summary";
+    const backend = this.backendFor(source.backendName);
+    const kept = prefix.some(({ event }) => event.type === "user_message");
+    if (!kept || !this.store || !source.resumeToken) return;
+    if (!backend.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    record.resumeToken = backend.fork(
+      { stateDir: this.store.backendDir(source.id), scope: source.scope, resume: source.resumeToken },
+      { stateDir: this.store.backendDir(record.id), scope: record.scope },
+    );
+    record.rewindTo = userMessageId;
+    this.persist(record);
+  }
+
+  /** Copy what the human saw before the Fork point. The source's session start, scope and queue are not this session's. */
+  private appendForkPrefix(record: SessionRecord, sourceId: string, userMessageId: string, prefix: LoggedEvent[]): void {
+    for (const { event, at } of prefix) {
+      if (event.type === "session_started" || event.type === "queue_changed") continue;
+      if (event.type === "revived") { record.log.append({ type: "revived", fromSeq: event.fromSeq }, at); continue; }
+      if (event.type === "user_message" && event.attachments && this.store) {
+        const to = this.store.attachmentsDir(record.id);
+        mkdirSync(to, { recursive: true });
+        for (const id of event.attachments) {
+          const from = join(this.store.attachmentsDir(sourceId), id);
+          if (existsSync(from)) copyFileSync(from, join(to, id));
+        }
+      }
+      record.log.append(event, at);
+    }
+    this.closeTornTurn(record, record.log.since(0));
+    record.log.append({ type: "forked", fromSessionId: sourceId, userMessageId });
   }
 
   /**
@@ -2320,6 +2425,10 @@ export class SessionHost {
         return await this.rename(command.sessionId);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
+      case "rewind":
+        return await this.rewind(command.sessionId, command.userMessageId, command.restore);
+      case "fork":
+        return await this.fork(command.sessionId, command.userMessageId, command.worktree);
       case "answer_enquiry":
         return await this.answerEnquiry(command.sessionId, command.askId, command.answers);
       case "answer_permission":
@@ -2563,6 +2672,7 @@ export class SessionHost {
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
+      ...(record.resumeToken === undefined || record.rewindTo === undefined ? {} : { resumeBefore: record.rewindTo }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
       // Read here rather than held, so a Revive picks up every grant made since this Agent Session
@@ -2610,8 +2720,8 @@ export class SessionHost {
       } else await abort();
     };
     const prompt = session.prompt.bind(session);
-    session.prompt = (text, attachments) => {
-      pendingTurn = waitForMcp(() => prompt(text, attachments));
+    session.prompt = (text, attachments, messageId) => {
+      pendingTurn = waitForMcp(() => prompt(text, attachments, messageId));
       return pendingTurn;
     };
     if (session.compact) {
@@ -2776,9 +2886,10 @@ export class SessionHost {
     const startingTurn = !record.turnInFlight;
     const generation = record.turnGeneration = (record.turnGeneration ?? 0) + (startingTurn ? 1 : 0);
     record.turnInFlight = true;
+    const messageId = randomUUID();
     record.log.append({
       type: "user_message",
-      id: randomUUID(),
+      id: messageId,
       text: sent,
       ...(attachments.length > 0 ? { attachments } : {}),
     });
@@ -2810,7 +2921,7 @@ export class SessionHost {
       this.recordDispatchFailure(record, error, startingTurn);
     };
     try {
-      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments)).catch(failed);
+      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments), messageId).catch(failed);
     } catch (error) {
       failed(error);
     }
@@ -2859,6 +2970,10 @@ export class SessionHost {
 
     if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
       record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;
+    }
+    if (event.type === "turn_started" && record.rewindTo !== undefined) {
+      record.rewindTo = undefined;
+      this.persist(record);
     }
     const before = this.activityOf(record);
     const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
@@ -3098,6 +3213,7 @@ export class SessionHost {
       readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
+      ...(record.rewindTo === undefined ? {} : { rewindTo: record.rewindTo }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
@@ -3115,6 +3231,10 @@ export function suggestedScope(scope: string, worktreesRoot: string): string | u
   if (at < 0) return undefined;
   const candidate = join(worktreesRoot, scope.slice(at + marker.length));
   return candidate !== scope && existsSync(candidate) ? candidate : undefined;
+}
+
+function userMessage(entries: LoggedEvent[], id: string): LoggedEvent | undefined {
+  return entries.find(({ event }) => event.type === "user_message" && event.id === id);
 }
 
 /** The turn still open at the end of these entries, if any. */

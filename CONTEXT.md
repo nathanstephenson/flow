@@ -115,6 +115,12 @@ _Avoid_: cleanup, purge, expire
 **Revive**: Attach a fresh Backend Session to a Dormant Agent Session, continuing its Presentation Transcript; also un-settles a Settled Agent Session.
 _Avoid_: resume, restart, reconnect
 
+**Rewind**: Return an Agent Session's Conversation Context, and optionally its Scope's files, to just before one of its user messages. The Presentation Transcript records it and keeps the rewound entries.
+_Avoid_: undo, revert, reset
+
+**Fork**: A new Agent Session started from just before a user message of another Agent Session, with a copy of that session's Presentation Transcript up to that point. The source session does not change.
+_Avoid_: branch, clone, copy
+
 **Ended**: Deliberately disposed of, with no Backend Session running. Its Presentation Transcript remains readable, but it cannot be Revived and is never Reaped.
 _Avoid_: closed, deleted, settled
 

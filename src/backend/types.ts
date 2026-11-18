@@ -43,6 +43,8 @@ export type BackendCreateOptions = {
   permissionMode?: AgentPermissionMode;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */
   resume?: string;
+  /** With `resume`: the Conversation Context ends just before this user message id. */
+  resumeBefore?: string;
   /** A directory this adapter may keep its own session state in, beside our transcript. */
   stateDir?: string;
   /**
@@ -127,7 +129,8 @@ export interface BackendSession {
    * declared on `ModelInfo.acceptsImages`, and the host refuses a send that contradicts it, so an
    * adapter that receives them has already been told they are servable.
    */
-  prompt(text: string, attachments?: PromptAttachment[]): Promise<void>;
+  /** `messageId` is the host's `user_message` id, kept so the message can be a Rewind target. */
+  prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void>;
   abort(): Promise<void>;
   setModel(modelId: string): Promise<void>;
   /**
@@ -153,6 +156,8 @@ export interface BackendSession {
    * never closes it pins the Agent Session in `running` and refuses everything sent afterwards.
    */
   compact?(instructions?: string): Promise<void>;
+  /** Return the Scope's files to their state at a user message. Throws and changes nothing if it cannot. */
+  rewindFiles?(messageId: string): Promise<void>;
   /**
    * The Skills this Agent Session's Scope offers.
    *
@@ -205,4 +210,6 @@ export interface AgentBackend {
   create(options: BackendCreateOptions): Promise<BackendSession>;
   /** Move this backend's records in `stateDir` from Scope `from` to Scope `to`, with no Backend Session running. */
   relocate?(stateDir: string, from: string, to: string): void;
+  /** Copy a Conversation Context for a Fork. Returns the resume token for `to`. */
+  fork?(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string;
 }

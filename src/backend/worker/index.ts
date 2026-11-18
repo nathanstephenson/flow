@@ -19,8 +19,8 @@ import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
-import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState } from "./claude-state.ts";
-import { relocatePiState } from "../pi/state.ts";
+import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
+import { relocatePiState, forkPiState } from "../pi/state.ts";
 import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
@@ -145,6 +145,10 @@ export class WorkerBackend implements AgentBackend {
     else relocatePiState(stateDir, from, to);
   }
 
+  fork(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
+    return this.name === "claude" ? forkClaudeState(from, to) : forkPiState(from.stateDir, to.stateDir, to.scope);
+  }
+
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const begin = performance.now();
     options.signal?.throwIfAborted();
@@ -215,6 +219,7 @@ class WorkerSession implements BackendSession {
   refreshMcp?: () => Promise<void>;
   startWorkflowSubagent?: (options: WorkflowSubagentOptions) => WorkflowSubagentHandle;
   compact?: (instructions?: string) => Promise<void>;
+  rewindFiles?: (messageId: string) => Promise<void>;
   skills?: () => Promise<Skill[]>;
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
@@ -309,6 +314,7 @@ class WorkerSession implements BackendSession {
       const methods = new Set(state.methods);
       if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
+      if (methods.has("rewindFiles")) this.rewindFiles = (messageId) => this.rpc.call("rewindFiles", [messageId]);
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
@@ -379,7 +385,7 @@ class WorkerSession implements BackendSession {
     void this.worker.stop(async () => {}).then(this.cleanup).catch(() => {});
   }
   resumeToken() { return this.resume; }
-  prompt(text: string, attachments?: PromptAttachment[]) { return this.rpc.call<void>("prompt", [text, attachments]); }
+  prompt(text: string, attachments?: PromptAttachment[], messageId?: string) { return this.rpc.call<void>("prompt", [text, attachments, messageId]); }
   abort() { return this.rpc.call<void>("abort"); }
   setModel(modelId: string) { return this.rpc.call<void>("setModel", [modelId]); }
   setEffort(effort: EffortLevel) { return this.rpc.call<void>("setEffort", [effort]); }

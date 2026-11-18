@@ -116,7 +116,7 @@ for (const modes of [[false, true, false], [true, false, true]]) {
       } finally { await session.dispose(); }
       if (!enabled) assert.equal(existsSync(config!), false, "remove ephemeral credential/config view after worker exit");
     }
-    assert.deepEqual(readdirSync(f.stateDir), ["claude-projects"], "durable state must not carry global credentials");
+    assert.deepEqual(readdirSync(f.stateDir).sort(), ["claude-file-history", "claude-projects"], "durable state must not carry global credentials");
     assert.deepEqual(readdirSync(join(f.auth, "projects")), ["unrelated.jsonl"]);
     assert.equal(readFileSync(join(f.auth, ".credentials.json"), "utf8"), '{"fixture":"credential"}');
   });

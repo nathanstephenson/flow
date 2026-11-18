@@ -4,6 +4,9 @@ import { piWorkflowBuilderTools } from "./workflow-builder.ts";
 import { piMcpTools } from "./mcp.ts";
 import type { McpSession } from "../mcp.ts";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { USER_MESSAGE_MAP } from "./state.ts";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -118,6 +121,8 @@ export class PiSession implements BackendSession {
   private effort: EffortLevel | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
+  /** Host user message ids sent but not yet seen as pi user messages, oldest first. */
+  private readonly unmappedMessageIds: string[] = [];
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
     support: { workflowBuilder?: boolean; mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
@@ -159,7 +164,8 @@ export class PiSession implements BackendSession {
     return this.sessionDir;
   }
 
-  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
+    if (messageId && this.sessionDir) this.unmappedMessageIds.push(messageId);
     this.turnId = `turn-${++this.messageSeq}`;
     this.emit({ type: "turn_started", turnId: this.turnId });
     await this.session.prompt(text, {
@@ -358,6 +364,15 @@ export class PiSession implements BackendSession {
     this.scheduleCompletions();
   }
 
+  /** pi appends the entry just after `message_end` reaches listeners, so look it up after that. */
+  private mapUserMessage(messageId: string, message: unknown): void {
+    queueMicrotask(() => {
+      const entry = this.session.sessionManager.getBranch().findLast((candidate) => candidate.type === "message" && candidate.message === message);
+      if (!entry || !this.sessionDir) return;
+      writeFileSync(join(this.sessionDir, USER_MESSAGE_MAP), JSON.stringify({ ...readUserMessageMap(this.sessionDir), [messageId]: entry.id }), { mode: 0o600 });
+    });
+  }
+
   private translate(event: AgentSessionEvent): void {
     switch (event.type) {
       case "agent_start":
@@ -376,6 +391,7 @@ export class PiSession implements BackendSession {
       case "message_end":
         this.emitMessage(event.message, true);
         this.currentMessageId = undefined;
+        if (event.message.role === "user" && this.unmappedMessageIds.length) this.mapUserMessage(this.unmappedMessageIds.shift()!, event.message);
         return;
 
       case "tool_execution_start":
@@ -568,6 +584,11 @@ export class PiBackend implements AgentBackend {
       });
     };
     let { session, extensionsResult } = await start();
+    if (options.resumeBefore && sessionDir) {
+      const entryId = readUserMessageMap(sessionDir)[options.resumeBefore];
+      if (!entryId) { session.dispose(); throw new Error("This message cannot be rewound: pi has no record of it"); }
+      await session.navigateTree(entryId);
+    }
 
     const extensionError = options.compactionModelId && compactionExtensionError(extensionsResult.errors);
     if (extensionError) {
@@ -681,6 +702,11 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   }
 }
 
+function readUserMessageMap(sessionDir: string): Record<string, string> {
+  const path = join(sessionDir, USER_MESSAGE_MAP);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, string> : {};
+}
+
 function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: boolean, permissions = true): Capabilities {
   // The SDK populates this auth-filtered snapshot before createAgentSession resolves. Every model is
   // described directly: effort discovery is observational and must never switch the active model.
@@ -691,7 +717,8 @@ function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: bo
     models,
     compaction: true,
     autoCompaction: "model-change",
-    fork: false,
+    fork: true,
+    rewind: true,
     subagents,
     enquiries,
     permissions,

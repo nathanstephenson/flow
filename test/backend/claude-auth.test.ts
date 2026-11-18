@@ -43,7 +43,7 @@ test("installed Claude: two unrestricted SDK workers and normal CLI share atomic
   assert.ok(f.authorization.length >= 3);
   assert.ok(f.authorization.every(value => value === "Bearer fake-new-access"));
   await Promise.all(sessions.map(session => session.dispose()));
-  for (const state of states) assert.deepEqual(readdirSync(state), ["claude-projects"], "no durable credentials");
+  for (const state of states) assert.deepEqual(readdirSync(state).sort(), ["claude-file-history", "claude-projects"], "no durable credentials");
   // A fresh Backend Session after disposal must read the rotated token from the ordinary store.
   const rebuiltEvents: BackendEvent[] = [];
   const rebuilt = await new WorkerBackend({ backend: "claude", env: { ...f.env, FLOW_CLAUDE_PATH: cli },
