@@ -7,6 +7,7 @@ import type {
   Capabilities,
   EffortLevel,
   PermissionDecision,
+  Producer,
   Question,
   Skill,
   Spend,
@@ -360,12 +361,14 @@ export class FakeSession implements BackendSession {
    *
    * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
    * torn-Subagent fixture, and the Session Host is what has to cope with it.
+   *
+   * `producer` names the Subagent spawning this one, for a nested Subagent.
    */
-  beginSubagent(name: string, description?: string): FakeSubagent {
+  beginSubagent(name: string, description?: string, producer?: Producer): FakeSubagent {
     const subagentId = randomUUID();
-    const subagent = new FakeSubagent(subagentId, name, description, this.emit);
+    const subagent = new FakeSubagent(subagentId, name, description, this.emit, producer);
     this.subagents.push(subagent);
-    this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description } });
+    this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description }, ...(producer ? { producer } : {}) });
     subagent.snapshot({ state: "running" });
     return subagent;
   }
@@ -433,6 +436,7 @@ export class FakeSubagent {
   readonly subagentId: string;
   readonly name: string;
   readonly description: string | undefined;
+  readonly producer: Producer | undefined;
   finished = false;
   launched = false;
 
@@ -445,11 +449,13 @@ export class FakeSubagent {
     name: string,
     description: string | undefined,
     emit: (event: BackendEvent) => void,
+    producer?: Producer,
   ) {
     this.subagentId = subagentId;
     this.name = name;
     this.description = description;
     this.emit = emit;
+    this.producer = producer;
   }
 
   /**
@@ -502,6 +508,7 @@ export class FakeSubagent {
       callId: this.subagentId,
       result: `${this.name} launched in the background`,
       isError: false,
+      ...this.attribution(),
     });
   }
 
@@ -513,7 +520,7 @@ export class FakeSubagent {
     // A backgrounded one already returned it at launch, and returning it twice is a shape no adapter
     // produces.
     if (this.launched) return;
-    this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error" });
+    this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error", ...this.attribution() });
   }
 
   /** @internal — used by FakeSession to emit the opening snapshot. */
@@ -523,8 +530,13 @@ export class FakeSubagent {
       subagentId: this.subagentId,
       name: this.name,
       ...(this.description === undefined ? {} : { description: this.description }),
+      ...this.attribution(),
       ...state,
     });
+  }
+
+  private attribution(): { producer?: Producer } {
+    return this.producer ? { producer: this.producer } : {};
   }
 }
 

@@ -3,7 +3,7 @@ import type { BackendEvent, Producer, TurnEndReason } from "../../protocol/event
 
 export type ToolResult = AgentToolResult<unknown>;
 export type WorkBrief =
-  | { type: "subagent"; subagentId: string; name: string; description: string }
+  | { type: "subagent"; subagentId: string; name: string; description: string; producer?: Producer }
   | { type: "background_call"; callId: string; tool: string; producer?: Producer };
 export type Completion = { brief: WorkBrief; state: TurnEndReason; result: ToolResult };
 type Work = { brief: WorkBrief; controller: AbortController; done: Promise<Completion>; state: "running" | "waiting" | TurnEndReason; result: ToolResult };

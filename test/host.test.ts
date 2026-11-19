@@ -639,6 +639,17 @@ describe("a Subagent the turn left behind", () => {
     assert.equal(aborted.length, 2, "the one that finished must not be closed again");
   });
 
+  it("keeps a nested Subagent's producer on the snapshot that aborts it", async () => {
+    const parent = backend.latest.beginSubagent("explorer");
+    backend.latest.beginSubagent("planner", undefined, { subagentId: parent.subagentId });
+    await host.shutdown();
+
+    const aborted = events(host, sessionId).find(
+      (event) => event.type === "subagent" && event.name === "planner" && event.state === "aborted",
+    );
+    assert.deepEqual(aborted && "producer" in aborted && aborted.producer, { subagentId: parent.subagentId });
+  });
+
   it("closes a Subagent that was waiting, not only one that was running", async () => {
     backend.latest.beginSubagent("explorer").wait("permission");
     await host.shutdown();

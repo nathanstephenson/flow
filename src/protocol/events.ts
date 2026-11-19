@@ -328,8 +328,10 @@ export type AgentEvent =
    *
    * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
    * `since: N` holds a lifecycle it can complete.
+   *
+   * `producer` is the Subagent that spawned this one, absent for one the Agent Session spawned.
    */
-  | ({ type: "subagent"; subagentId: string; name: string; description?: string } & SubagentState)
+  | ({ type: "subagent"; subagentId: string; name: string; description?: string; producer?: Producer } & SubagentState)
   /**
    * One Background Call, wholly — a tool call the Backend Session goes on running past the turn that
    * made it, reporting back into a later one (ADR 0021).

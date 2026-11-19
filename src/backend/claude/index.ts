@@ -916,8 +916,8 @@ class ClaudeSession implements BackendSession {
           this.calls.called(block.id, { tool: block.name, ...attribution(producer) });
           if (block.name !== SUBAGENT_TOOL) continue;
           const brief = briefOf(block.input);
-          this.subagents.spawn(block.id, brief);
-          this.emit({ type: "subagent", subagentId: block.id, ...brief, state: "running" });
+          this.subagents.spawn(block.id, brief, producer);
+          this.emit({ type: "subagent", subagentId: block.id, ...brief, ...attribution(producer), state: "running" });
         }
         return;
       }
@@ -950,6 +950,7 @@ class ClaudeSession implements BackendSession {
                 type: "subagent",
                 subagentId: block.tool_use_id,
                 ...brief,
+                ...attribution(this.subagents.parentOf(block.tool_use_id)),
                 state: isError ? "error" : "complete",
               });
             }
@@ -1086,7 +1087,7 @@ class ClaudeSession implements BackendSession {
     if (callId === undefined) return;
     const brief = this.subagents.describe(callId);
     if (brief !== undefined) {
-      this.emit({ type: "subagent", subagentId: callId, ...brief, state: outcome });
+      this.emit({ type: "subagent", subagentId: callId, ...brief, ...attribution(this.subagents.parentOf(callId)), state: outcome });
       this.closeSubagent(callId);
       return;
     }
@@ -1127,8 +1128,8 @@ class ClaudeSession implements BackendSession {
     // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
     this.subagents.clear();
     // Drops the calls this turn announced. Open Background Calls survive — one outlives the turn
-    // that made it, which is the whole of ADR 0021.
-    this.calls.clear();
+    // that made it, which is the whole of ADR 0021 — and so do calls detached work announced.
+    this.calls.clear((brief) => brief.producer !== undefined && !ended(brief.producer.subagentId));
     this.enquiries.clear();
     if (!turnId) return;
     this.turnId = undefined;

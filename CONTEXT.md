@@ -21,7 +21,7 @@ _Avoid_: history, transcript, memory
 **Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
 _Avoid_: usage, cost, tokens, context
 
-**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session.
+**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session. Work started by backgrounded work is backgrounded too.
 _Avoid_: child session, task, sidechain, agent
 
 **Background Call**: A tool call continuing past its turn, owned by its Backend Session and identified by the call. Unlike a Subagent, it has no conversation; it does not occupy the Agent Session.

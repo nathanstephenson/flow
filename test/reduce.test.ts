@@ -285,6 +285,15 @@ describe("a Subagent in the Presentation Transcript", () => {
     assert.equal(parent?.kind === "assistant" && parent.producer, undefined);
   });
 
+  it("carries the Subagent that spawned it", () => {
+    const view = lifecycle(
+      { type: "subagent", subagentId: "call_2", name: "planner", producer: { subagentId: "call_1" }, state: "running" },
+      { type: "subagent", subagentId: "call_2", name: "planner", producer: { subagentId: "call_1" }, state: "complete" },
+    );
+    const entry = view.entries[0];
+    assert.deepEqual(entry?.kind === "subagent" && entry.producer, { subagentId: "call_1" });
+  });
+
   it("keeps a parent and a Subagent streaming at once from stealing each other's text", () => {
     const view = lifecycle(
       { type: "message", id: "m1", text: "parent par", final: false },
