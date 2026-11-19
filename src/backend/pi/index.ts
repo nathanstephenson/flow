@@ -691,6 +691,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
     signal.throwIfAborted();
     await adapter.setEffort(effort);
     signal.throwIfAborted();
+    emit({ type: "subagent_instruction", id: `${id}:brief`, text: input.prompt, producer });
     await adapter.prompt(input.prompt);
     if (reason !== "complete") throw new Error(failure ?? `Subagent ${reason}`);
     return textResult(output || "Subagent completed without text output");

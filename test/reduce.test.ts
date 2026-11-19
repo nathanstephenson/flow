@@ -294,6 +294,17 @@ describe("a Subagent in the Presentation Transcript", () => {
     assert.deepEqual(entry?.kind === "subagent" && entry.producer, { subagentId: "call_1" });
   });
 
+  it("shows an instruction as a user message attributed to the Subagent that received it", () => {
+    const view = lifecycle(
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent_instruction", id: "i1", text: "Also check the tests", producer: { subagentId: "call_1" } },
+    );
+    const entry = view.entries[1];
+    assert.equal(entry?.kind, "user");
+    assert.deepEqual(entry?.kind === "user" && [entry.text, entry.producer], ["Also check the tests", { subagentId: "call_1" }]);
+    assert.notEqual(view.spoken, true, "an instruction is not the human speaking");
+  });
+
   it("keeps a parent and a Subagent streaming at once from stealing each other's text", () => {
     const view = lifecycle(
       { type: "message", id: "m1", text: "parent par", final: false },

@@ -69,7 +69,7 @@ export type OpenPermission = { callId: string; tool: string; context?: string; a
 export type Entry = ({ rewound?: true }) & (
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   /** `at`: when the message was logged. */
-  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string; fromSessionId?: string }
+  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string; fromSessionId?: string; producer?: Producer }
   /** `endedAt`: when the turn ended, on the parent's last message of that turn only. */
   | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer; endedAt?: string }
   | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
@@ -356,7 +356,7 @@ export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = init
 function stampTurnEnd(entries: Entry[], at: string): Entry[] {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!;
-    if (entry.kind === "user") return entries;
+    if (entry.kind === "user" && entry.producer === undefined) return entries;
     if (entry.kind === "assistant" && entry.producer === undefined) {
       if (entry.endedAt === at) return entries;
       const next = entries.slice();
@@ -432,6 +432,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           at,
         }),
       };
+
+    case "subagent_instruction":
+      return { ...state, entries: upsert(state.entries, { kind: "user", id: event.id, text: event.text, producer: event.producer, at }) };
 
     case "turn_started":
       return { ...state, turnInFlight: true };

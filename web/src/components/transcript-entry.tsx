@@ -97,7 +97,7 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
       <div
         className={cn(
           "relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm px-4 py-3 sm:max-w-[80%]",
-          entry.fromSessionId === undefined ? "bg-muted" : "border border-border bg-muted/40 text-muted-foreground",
+          entry.fromSessionId === undefined && entry.producer === undefined ? "bg-muted" : "border border-border bg-muted/40 text-muted-foreground",
         )}
       >
         {entry.fromSessionId === undefined ? null : (
@@ -105,12 +105,15 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
             From <SessionLink sessionId={entry.fromSessionId} query={query} /> · not human authorization
           </p>
         )}
+        {entry.producer === undefined ? null : (
+          <p className="m-0 mb-2 text-xs text-muted-foreground">From the parent agent · not human authorization</p>
+        )}
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
       </div>
       {entry.at ? (
         <MessageTime at={entry.at} side="right">
-          {entry.rewound ? null : (
+          {entry.rewound || entry.producer ? null : (
             <span className="inline-flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
               <MessageActionButtons userMessageId={entry.id} />
             </span>

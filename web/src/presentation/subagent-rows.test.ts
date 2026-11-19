@@ -107,6 +107,14 @@ describe("splitting a Subagent's rows from the session's own", () => {
     ]);
   });
 
+  it("puts an instruction in the receiving Subagent's rows, not the session's", () => {
+    const instruction: Entry = { kind: "user", id: "i1", text: "Also check the tests", producer: { subagentId: "call_1" } };
+    const keys = [entryKey(subagentEntry), entryKey(instruction)];
+    const get = (key: string) => (key === entryKey(instruction) ? instruction : getEntry(key));
+    assert.deepEqual(ownKeys(keys, get), [entryKey(subagentEntry)]);
+    assert.deepEqual(ownKeys(keys, get, subagentKey("call_1")), [entryKey(instruction)]);
+  });
+
   it("shows a nested Subagent's card in its parent's rows, not in the session's", () => {
     assert.ok(!ownKeys(KEYS, getEntry).includes(entryKey(nestedEntry)));
     const parentRows = ownKeys(KEYS, getEntry, subagentKey("call_1"));
