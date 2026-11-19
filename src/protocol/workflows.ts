@@ -140,10 +140,14 @@ export interface WorkflowInvocation {
   result?: Json;
   definitionUpdates?: WorkflowDefinitionUpdate[];
 }
-export interface WorkflowExecution {
-  version: 1;
+export type ExecutionOwner = { kind: 'session'; sessionId: string } | { kind: 'occurrence'; occurrenceId: string };
+export type ExecutionIdentity =
+  | { version: 1; sessionId: string; occurrenceId?: never }
+  | { version: 2; occurrenceId: string; sessionId?: string };
+
+export type WorkflowExecution = ExecutionIdentity & {
+  runtime?: { nodePath?: string; isolationMode: import('./settings.ts').FilesystemIsolationMode };
   id: string;
-  sessionId: string;
   scope: string;
   definition: WorkflowDefinition;
   retainedDefinitions?: Record<string, WorkflowDefinition>;

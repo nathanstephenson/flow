@@ -1,4 +1,5 @@
 import type { WorkflowExecution, WorkflowInvocation } from '../protocol/workflows.ts';
+import { executionIdentity } from './owner.ts';
 
 export function invocationExecution(root: WorkflowExecution, invocationId: string): WorkflowExecution {
   const invocation = root.invocations?.[invocationId];
@@ -11,10 +12,10 @@ export function invocationExecution(root: WorkflowExecution, invocationId: strin
     if (index < 0) throw new Error('Invalid invocation correction');
     definition.steps[index] = structuredClone(correction.nextStep);
   }
-  return { ...structuredClone(invocation), version: 1, sessionId: root.sessionId, scope: root.scope, definition };
+  return { ...structuredClone(invocation), ...executionIdentity(root), scope: root.scope, definition };
 }
 
 export function invocationCheckpoint(record: WorkflowExecution, ownership: Pick<WorkflowInvocation, 'parentInvocationId' | 'callStepId' | 'callAttempt' | 'definitionId'>): WorkflowInvocation {
-  const { version: _, sessionId: __, scope: ___, definition: ____, ...state } = record;
+  const { version: _, occurrenceId: _occurrence, runtime: _runtime, sessionId: __, scope: ___, definition: ____, ...state } = record;
   return { ...state, ...ownership };
 }

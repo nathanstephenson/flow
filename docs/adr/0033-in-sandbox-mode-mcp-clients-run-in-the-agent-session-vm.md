@@ -35,3 +35,13 @@ Sandbox-to-sandbox features that go through the Flow host are unaffected, becaus
 worker channel, not the network. An access token and any Secret-backed header value are readable by
 the agent inside the VM until they expire or change. Local MCP server commands must exist in the
 guest image.
+
+## Scheduled ownership amendment
+
+[ADR 0040](0040-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
+occurrence-owned execution checkpoints, backend-free code/MCP environments and lazy Agent Session
+attachment. Scheduled code/MCP keep their captured environment after attachment rather than moving
+to the Backend Session VM. Shared Sandbox additionally mounts private scheduled execution state.
+Scheduled Worktrees are journaled before provisioning and adopted, not recreated, on attachment.
+Sessionless terminal history expires after seven days with safe Worktree cleanup; Agent Session
+Reap and transcript/Spend retention remain independent. Existing manual execution rules still apply.

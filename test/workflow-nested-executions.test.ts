@@ -450,17 +450,32 @@ test('explicit caller ask cannot be weakened by child settings', async t => {
   assert.deepEqual(permissions, ['ask']);
 });
 
-test('call timeout stops descendant work before its timeout handler', async t => {
-  let cleaned = false;
+test('call timeout stops descendant work before its timeout handler', { timeout: 5_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  let cleaned = false, begin!: () => void, abort!: () => void;
+  const began = new Promise<void>(resolve => { begin = resolve; });
+  const aborted = new Promise<void>(resolve => { abort = resolve; });
   const f = fixture(t, async context => {
     if (context.step.id === 'handler') { assert.equal(cleaned, true); return 9; }
-    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => setTimeout(() => { cleaned = true; resolve(); }, 10), { once: true }));
+    await new Promise<void>(resolve => {
+      context.signal.addEventListener('abort', () => {
+        abort();
+        setTimeout(() => { cleaned = true; resolve(); }, 10);
+      }, { once: true });
+      begin();
+    });
     return 1;
   });
   const child = definition('child', [leaf('inner')]);
   f.store.saveDefinition(child);
   const parent = definition('parent', [{ ...call('call', child), timeoutMs: 20 }, leaf('handler')], [{ id: 'timeout', from: 'call', to: 'handler', outcome: 'timeout' }]);
   const started = f.scheduler.start(parent, session, {});
+  await began;
+  t.mock.timers.tick(20);
+  await aborted;
+  assert.equal(cleaned, false);
+  assert.equal(f.scheduler.get(session.sessionId, started.id).steps.handler!.status, 'pending');
+  t.mock.timers.tick(10);
   const done = await f.scheduler.wait(session.sessionId, started.id);
   assert.equal(done.status, 'completed-with-recovery');
   assert.equal(done.result, 9);

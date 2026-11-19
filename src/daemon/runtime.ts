@@ -1,3 +1,6 @@
+import { WorkflowScheduleStore } from '../workflows/schedule-store.ts';
+import { WorkflowScheduleService } from './workflow-schedules.ts';
+import { scheduleDriver } from './workflow-schedule-driver.ts';
 import { registerBackends } from '../backend/registry.ts';
 import { createOidcGateFromEnv, readOrCreateToken, type OidcGate } from './auth.ts';
 import { ConfigStore } from './config-store.ts';
@@ -62,6 +65,8 @@ export async function startRuntime(options: {
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
     });
     const shells = new ShellRegistry();
+    let workflowSchedules: WorkflowScheduleService | undefined;
+    let workflowExecutions: WorkflowExecutionService | undefined;
     let workflowBuilders: WorkflowBuilderService | undefined;
     let workflowMcpAuthoring: WorkflowMcpAuthoringService | undefined;
     let running: RunningServer | undefined;
@@ -71,6 +76,9 @@ export async function startRuntime(options: {
     let stopping: Promise<void> | undefined;
     const stop = (): Promise<void> => stopping ??= (async () => {
       clearInterval(sweep);
+      const scheduledErrors: unknown[] = [];
+      try { await workflowSchedules?.stopAdmission(); } catch (error) { scheduledErrors.push(error); }
+      try { await workflowExecutions?.stopScheduled(); } catch (error) { scheduledErrors.push(error); }
       const interrupt = async () => { await Promise.all([host.shutdown(), workflowBuilders?.shutdown(), workflowMcpAuthoring?.shutdown(), shells.killAll(), reaping]); };
       if (running) await running.stopAdmission(interrupt);
       else await interrupt();
@@ -80,25 +88,32 @@ export async function startRuntime(options: {
       if (running) await running.close();
       else { mcpAuth.dispose(); oidc?.dispose(); }
       ownership.release();
+      if (scheduledErrors.length) throw new AggregateError(scheduledErrors, 'Scheduled workflow cleanup failed');
     })();
     cleanup = stop;
     registerBackends(host);
     trimTimings(root);
     void host.models(config.projectRoot() ?? process.cwd());
     const workflows = new WorkflowStore(root);
-    const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());
+    store.onSessionDeleted = sessionId => workflows.deleteOwner({ kind: 'session', sessionId });
+    workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());
     workflowMcpAuthoring = new WorkflowMcpAuthoringService({ host, config, scope: process.cwd() });
     workflowBuilders = new WorkflowBuilderService({
       host, config, scope: process.cwd(), stateRoot: root,
-      validateDefinition: definition => workflowExecutions.validateDefinitionCredentials(definition),
+      validateDefinition: definition => workflowExecutions!.validateDefinitionCredentials(definition),
       workflowCatalogue: () => workflowCatalogue(workflows),
       workflowDefinition: id => { try { return workflows.getDefinition(id); } catch { return undefined; } },
       mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
       mcpTool: (scope, projectId, scopeIdentity, connectionId, toolName) => workflowMcpAuthoring!.tool(projectId, connectionId, toolName, { scope, scopeIdentity }),
     });
     await host.load();
+    const schedules = new WorkflowScheduleStore(root);
+    workflowSchedules = new WorkflowScheduleService(schedules, scheduleDriver({ host, config, workflows, executions: workflowExecutions, schedules, transcripts: store }));
+    workflowExecutions.onScheduledResult = async record => { workflowSchedules!.result(record); };
+    await workflowSchedules.start();
     workflowExecutions.reconcile();
-    sweep = setInterval(() => { reaping = reaping.then(async () => { await host.reap(); }); }, 60 * 60 * 1000);
+    await workflowSchedules.prune();
+    sweep = setInterval(() => { reaping = reaping.then(async () => { await host.reap(); await workflowSchedules?.prune(); }); }, 60 * 60 * 1000);
     sweep.unref();
     host.onSessionClosed(sessionId => shells.killFor(sessionId));
     const token = readOrCreateToken(root);
@@ -107,7 +122,7 @@ export async function startRuntime(options: {
       instanceId: ownership.instanceId, pid: process.pid, version: options.version, url: '', token, mode: options.mode,
       settings: { port: options.port ?? 0, address: options.address ?? '127.0.0.1', cwd: process.cwd(), oidc: oidcFingerprint() },
     };
-    const hasActiveWork = () => host.hasActiveWork() || workflowBuilders!.hasActiveWork() || workflowMcpAuthoring!.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions.list(session.id).occupied);
+    const hasActiveWork = () => !!workflowSchedules?.hasActiveWork() || host.hasActiveWork() || workflowBuilders!.hasActiveWork() || workflowMcpAuthoring!.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions!.list(session.id).occupied);
     const updates = new WebUpdateController({
       root,
       installedVersion: options.version,
@@ -120,7 +135,7 @@ export async function startRuntime(options: {
     running = await serve({
       control: { identity, stop, hasActiveWork },
       updates,
-      host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions, workflowBuilders, workflowMcpAuthoring,
+      host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions, workflowSchedules, workflowBuilders, workflowMcpAuthoring,
       assets: options.assets(), scope: process.cwd(),
       ...(oidc === undefined ? {} : { oidc }),
       ...(options.port === undefined ? {} : { port: options.port }),

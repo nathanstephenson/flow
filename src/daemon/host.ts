@@ -1,4 +1,5 @@
 import type { WorkflowParent } from "../backend/workflow-tools.ts";
+import { waitForAbort } from "../backend/worker/rpc.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput, type SessionTools } from '../backend/session-tools.ts';
 import { sessionToolSummary, sessionToolPage } from './session-tool-views.ts';
 import { credentialKey } from './credential-redaction.ts';
@@ -213,6 +214,7 @@ type SessionRecord = {
   branchGeneration: number;
   /** Set when this Scope is a worktree this host made, and so may remove again. */
   worktree: { path: string; repo: string; branch: string } | undefined;
+  scheduledOccurrenceId?: string;
   /**
    * A line held back to ride along with the next message, telling the model the branch moved under
    * it. See `switchBranch` for why it cannot go through the Steering Queue.
@@ -843,6 +845,7 @@ export class SessionHost {
         branch: branchFrom(entries),
         branchGeneration: 0,
         worktree: meta.worktree,
+        ...(meta.scheduledOccurrenceId ? { scheduledOccurrenceId: meta.scheduledOccurrenceId } : {}),
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
         spend: spendFrom(entries),
@@ -871,7 +874,23 @@ export class SessionHost {
     await this.reap();
   }
 
+  private readonly scheduledAttachments = new Map<string, Promise<string>>();
+
+  /** Internal attachment lane: concurrent agent/input/recovery callbacks share creation and Revive.
+   * The caller has already journaled the intended identity before entering this operation. */
+  attachScheduled(options: Parameters<SessionHost['create']>[0] & { scheduled: NonNullable<Parameters<SessionHost['create']>[0]['scheduled']> }): Promise<string> {
+    if (this.workflowShutdown) return Promise.reject(new CommandRefused('Session Host is stopping'));
+    const id = options.scheduled.id;
+    const pending = this.scheduledAttachments.get(id);
+    if (pending) return pending;
+    const attachment = this.create(options).finally(() => { this.scheduledAttachments.delete(id); });
+    this.scheduledAttachments.set(id, attachment);
+    return attachment;
+  }
+
   async create(options: {
+    /** Internal scheduled attachment only; not accepted by routes. */
+    scheduled?: { id: string; occurrenceId: string; isolationMode: import("../protocol/settings.ts").FilesystemIsolationMode; worktree?: { path: string; repo: string; branch: string } };
     mcpConnectionIds?: string[];
     scope: string;
     backend?: string;
@@ -882,6 +901,14 @@ export class SessionHost {
     worktree?: { from: string; branch?: string };
     fork?: { source: SessionRecord; userMessageId: string; prefix: LoggedEvent[] };
   }): Promise<string> {
+    if (options.scheduled) {
+      const existing = this.sessions.get(options.scheduled.id);
+      if (existing) {
+        if (existing.scheduledOccurrenceId !== options.scheduled.occurrenceId) throw new Error('Scheduled association mismatch');
+        await this.openWorkflowSession(existing.id);
+        return existing.id;
+      }
+    }
     const connections = this.mcpConnections?.() ?? [];
     if (options.mcpConnectionIds !== undefined && (!Array.isArray(options.mcpConnectionIds) || options.mcpConnectionIds.some((id) => typeof id !== "string"))) throw new Error("Invalid MCP selection");
     const mcpConnectionIds = connections.filter((connection) => options.mcpConnectionIds ? options.mcpConnectionIds.includes(connection.id) : connection.enabledByDefault).map((connection) => connection.id);
@@ -891,18 +918,19 @@ export class SessionHost {
     // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
     const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
     this.validatePermissionMode(backend.name, permissionMode);
-    const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
+    const worktree = options.scheduled?.worktree ?? (options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined);
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
     const scope = scopeKey(worktree?.path ?? options.scope);
-    const id = randomUUID();
+    const id = options.scheduled?.id ?? randomUUID();
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
     const effort = options.effort ?? this.defaultEffort?.(backend.name);
 
     const record: SessionRecord = {
       id,
+      ...(options.scheduled ? { scheduledOccurrenceId: options.scheduled.occurrenceId } : {}),
       scope,
       backendName: backend.name,
       log: this.newLog(id),
@@ -969,7 +997,7 @@ export class SessionHost {
       // Creation never returns an Agent Session without confirmed models. In particular, do not
       // leave a persisted, empty Agent Session (or a newly cut worktree) after a failed probe.
       await record.session?.dispose().catch(() => {});
-      await this.releaseWorktree(record);
+      if (!options.scheduled) await this.releaseWorktree(record);
       record.log.closeSubscribers();
       this.sessions.delete(id);
       this.store?.deleteSession(id);
@@ -996,7 +1024,7 @@ export class SessionHost {
      * how a spare gets dropped when somebody clears the Setting: nothing will ever *tell* us it
      * changed (ADR 0009), so a read-through is the only moment it can be noticed.
      */
-    this.warmSummaryModel(backend.name);
+    if (!options.scheduled) this.warmSummaryModel(backend.name);
     return id;
   }
 
@@ -1817,6 +1845,8 @@ export class SessionHost {
   workflowOwner?: {
     stop(sessionId: string): Promise<void>;
     forget(sessionId: string): Promise<void>;
+    /** Durable scheduled recovery may still need this session and its worktree. */
+    canForget?(sessionId: string, occurrenceId?: string): boolean;
     active(sessionId: string): number;
     context(sessionId: string): string;
     parent(sessionId: string): WorkflowParent;
@@ -2171,6 +2201,7 @@ export class SessionHost {
     const reaped: string[] = [];
     for (const record of [...this.sessions.values()]) {
       if (record.lifecycle !== "settled") continue;
+      if (this.workflowOwner?.canForget?.(record.id, record.scheduledOccurrenceId) === false) continue;
       const settledAt = record.settledAt === undefined ? NaN : Date.parse(record.settledAt);
       // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
       if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
@@ -2329,7 +2360,7 @@ export class SessionHost {
     this.workflowShutdown = true;
     // Creation can still be awaiting backend startup after its caller disconnects. Drain those
     // accepted operations before walking sessions, so late children cannot escape shutdown.
-    await Promise.allSettled([...this.sessionToolOperations]);
+    await Promise.allSettled([...this.sessionToolOperations, ...this.scheduledAttachments.values()]);
     // First, so that a naming still in flight cannot warm a replacement on the way out — the
     // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
@@ -2474,6 +2505,22 @@ export class SessionHost {
     return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
   }
 
+  scheduledConnections(ids: string[]) {
+    const connections = this.mcpConnections?.() ?? [];
+    if (ids.some(id => !connections.some(connection => connection.id === id))) throw new Error('Selected MCP connection is unavailable');
+    return structuredClone(connections.filter(connection => ids.includes(connection.id)));
+  }
+
+  scheduledMcp(scope: string, ids: string[], mode: import('../protocol/settings.ts').FilesystemIsolationMode) {
+    const connections = this.scheduledConnections(ids);
+    const oauth = this.mcpAuth ? (connection: import('../protocol/mcp.ts').McpConnection) => this.mcpAuth!.provider(connection) : undefined;
+    return import('../backend/mcp.ts').then(({ McpSession }) => new McpSession(connections, scope, oauth, true, this.resolveSecret, undefined, this.filesystemStateRoot(), mode));
+  }
+
+  scheduledSandboxMcp(scope: string, ids: string[]) {
+    return import('../backend/worker/sandbox-mcp.ts').then(({ SandboxMcpSession }) => new SandboxMcpSession(this.scheduledConnections(ids), scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, this.resolveSecret));
+  }
+
   /** Include an SDK-supplied owning root in every local execution's filesystem policy. */
   filesystemStateRoot(): string | undefined { return this.store?.root; }
 
@@ -2481,20 +2528,28 @@ export class SessionHost {
   filesystemIsolationMode(): import("../protocol/settings.ts").FilesystemIsolationMode { return this.filesystemIsolation?.() ?? "bubblewrap"; }
   sandboxSupport(): import("../isolation/sandbox.ts").SandboxSupport | undefined { return this.sandbox?.(); }
   /** The Shared Sandbox, when the Settings choose one VM for all sandbox sessions. */
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const mounts = [...this.backends.values()].flatMap(backend => backend.scheduledSandboxMounts?.(scope) ?? []);
+    return { writable: mounts.flatMap(item => item.writable), readable: mounts.flatMap(item => item.readable) };
+  }
+
   sharedSandbox(): SharedSandbox | undefined { return this.sandboxSharing?.() === "shared" ? this.shared : undefined; }
 
-  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
+  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode(), signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (isolationMode === "sandbox") {
-      await this.openWorkflowSession(id);
+      await waitForAbort(this.openWorkflowSession(id), signal);
+      signal?.throwIfAborted();
       const { SandboxMcpSession } = await import("../backend/worker/sandbox-mcp.ts");
       const mcp = this.record(id).mcp;
       if (!(mcp instanceof SandboxMcpSession)) throw new Error("Sandbox isolation is unavailable; unrestricted launch refused: the Agent Session has no sandbox");
-      return mcp.directView(connectionId);
+      return mcp.directView(connectionId, signal);
     }
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
+    signal?.throwIfAborted();
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
   }
 
@@ -2649,6 +2704,7 @@ export class SessionHost {
     const compactionModelId = this.compactionModel?.(backend.name);
     let attached: BackendSession | undefined;
     const session = await backend.create({
+      isolationMode,
       mcp,
       onFailure: () => {
         if (!attached || record.session !== attached) return;
@@ -3196,6 +3252,7 @@ export class SessionHost {
     if (!this.store) return;
     const meta: SessionMeta = {
       id: record.id,
+      ...(record.scheduledOccurrenceId ? { scheduledOccurrenceId: record.scheduledOccurrenceId } : {}),
       scope: record.scope,
       backend: record.backendName,
       title: record.title,

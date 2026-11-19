@@ -1,3 +1,4 @@
+import { workflowScheduleRoutes } from './workflow-schedule-routes.ts';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -64,6 +65,7 @@ export type ServeOptions = {
   control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
+  workflowSchedules?: import('./workflow-schedules.ts').WorkflowScheduleService;
   workflowBuilders?: import('./workflow-builder.ts').WorkflowBuilderService;
   workflowMcpAuthoring?: import('../protocol/workflow-mcp-authoring.ts').WorkflowMcpAuthoring;
   secrets?: SecretStore;
@@ -377,6 +379,7 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
   }
 
   if (await workflowMcpAuthoringRoutes(request, response, url.pathname, options.workflowMcpAuthoring)) return;
+  if (await workflowScheduleRoutes(request, response, url, options.workflowSchedules, options.workflowExecutions)) return;
   if (await workflowBuilderRoutes(request, response, url.pathname, options.workflowBuilders)) return;
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
   if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets, options.workflowExecutions)) return;

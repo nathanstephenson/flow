@@ -42,3 +42,13 @@ isolated from each other, and processes that drop the supervisor's marker or run
 the VM are stopped only when the VM is removed. Sandbox sessions start slower (tens of seconds to
 create a VM). Single-executable builds and Windows hosts cannot use sandbox mode. Flow depends on
 sbx's experimental `sbx env` file format.
+
+## Scheduled ownership amendment
+
+[ADR 0040](0040-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
+occurrence-owned execution checkpoints, backend-free code/MCP environments and lazy Agent Session
+attachment. Scheduled code/MCP keep their captured environment after attachment rather than moving
+to the Backend Session VM. Shared Sandbox additionally mounts private scheduled execution state.
+Scheduled Worktrees are journaled before provisioning and adopted, not recreated, on attachment.
+Sessionless terminal history expires after seven days with safe Worktree cleanup; Agent Session
+Reap and transcript/Spend retention remain independent. Existing manual execution rules still apply.
