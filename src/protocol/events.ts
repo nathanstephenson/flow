@@ -469,7 +469,7 @@ export type AgentEvent =
   | { type: "permission_mode_changed"; mode: AgentPermissionMode }
   | { type: "branch_changed"; branch: Branch }
   | { type: 'workflow_spend'; executionId: string; spend: Spend }
-  | { type: "notice"; level: NoticeLevel; text: string }
+  | { type: "notice"; level: NoticeLevel; text: string; sessionId?: string }
   | { type: "session_dormant"; reason: string }
   | { type: "session_settled" }
   /** `scope` is where the Agent Session is now bound; it changes only after a relocation (ADR 0036). */

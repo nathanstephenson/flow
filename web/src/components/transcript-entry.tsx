@@ -5,6 +5,9 @@ import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { authorisationLabel } from "@client/permission.ts";
 import { toolSummary } from "@client/tool-summary.ts";
+import { sessionLabel } from "@client/session-label.ts";
+import { useAgentSessions } from "@/agent-sessions.tsx";
+import { formatRoute } from "@/presentation/route.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
@@ -535,10 +538,32 @@ const NOTICE_TONE: Record<Of<"notice">["level"], string> = {
 
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
   const tone = NOTICE_TONE[entry.level];
+  const { sessions } = useAgentSessions();
+  const at = entry.sessionId === undefined ? -1 : entry.text.indexOf(entry.sessionId);
+  const named = sessions.find((session) => session.id === entry.sessionId);
   return (
     <Row gutter="!" gutterClassName={tone}>
       <p className={cn("m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>
-        <Highlighted text={entry.text} query={query} />
+        {at === -1 || entry.sessionId === undefined ? (
+          <Highlighted text={entry.text} query={query} />
+        ) : (
+          <>
+            <Highlighted text={entry.text.slice(0, at)} query={query} />
+            {named ? (
+              <a
+                href={formatRoute({ sessionId: named.id })}
+                className="rounded-sm font-sans font-medium text-foreground outline-none transition-[text-shadow] duration-150 hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
+              >
+                <Highlighted text={sessionLabel(named)} query={query} />
+              </a>
+            ) : (
+              <span className="text-foreground">
+                <Highlighted text={entry.sessionId} query={query} />
+              </span>
+            )}
+            <Highlighted text={entry.text.slice(at + entry.sessionId.length)} query={query} />
+          </>
+        )}
       </p>
     </Row>
   );

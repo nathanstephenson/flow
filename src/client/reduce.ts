@@ -188,7 +188,7 @@ export type Entry = ({ rewound?: true }) & (
       context?: string;
       producer?: Producer;
     }
-  | { kind: "notice"; id: string; level: NoticeLevel; text: string }
+  | { kind: "notice"; id: string; level: NoticeLevel; text: string; sessionId?: string }
   /**
    * Going Dormant, Settling and Reviving are structural facts about an Agent Session's life, not
    * messages about it — ADR 0003 calls a Revive "a visible marker". Collapsing them into `notice`
@@ -674,7 +674,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "notice":
       return {
         ...state,
-        entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
+        entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text,
+          ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }) }],
       };
 
     case "compacting":
