@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
+import type { Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 
+import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import {
+  ClaudeBackend,
   addSpend,
   briefOf,
   describeCompaction,
@@ -435,5 +438,65 @@ describe("a compaction boundary", () => {
     assert.equal(said("auto", 22_000), "Compacted automatically, 84k → 22k tokens");
     assert.equal(said("manual", 22_000), "Compacted, 84k → 22k tokens");
     assert.equal(said("auto", undefined), "Compacted automatically, from 84k tokens");
+  });
+});
+
+/** Real SDK message shapes for an `Agent` call made by another Subagent, fed through a session. */
+async function nestingFixture(t: TestContext) {
+  const messages = new AsyncQueue<SDKMessage>();
+  const events: BackendEvent[] = [];
+  const backend = new ClaudeBackend({ allowedTools: [], query: (() => ({
+    [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+    supportedModels: async () => [{ value: "sonnet", supportedEffortLevels: ["high"] }],
+    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+    close: () => messages.close(),
+  }) as unknown as Query) as typeof query });
+  const session = await backend.create({ scope: "/tmp", emit: (event) => events.push(event) });
+  t.after(() => session.dispose());
+  const push = (message: unknown) => messages.push(message as SDKMessage);
+  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const spawn = async (id: string, parent: string | null) => {
+    push({ type: "assistant", parent_tool_use_id: parent, message: { id: `message-${id}`, content: [{
+      type: "tool_use", id, name: "Agent", input: { subagent_type: "general-purpose", description: id },
+    }] } });
+    await drain();
+  };
+  const answer = async (id: string, parent: string | null, background = false) => {
+    push({ type: "user", parent_tool_use_id: parent,
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: "done" }] },
+      ...(background ? { tool_use_result: { status: "async_launched" } } : {}) });
+    await drain();
+  };
+  const finish = async () => {
+    push({ type: "result", subtype: "success" });
+    await drain();
+  };
+  const snapshots = (id: string) => events.filter((event) => event.type === "subagent" && event.subagentId === id);
+  const turnsEnded = () => events.filter((event) => event.type === "turn_ended").length;
+  return { spawn, answer, finish, snapshots, turnsEnded };
+}
+
+describe("a Subagent spawned by another Subagent", () => {
+  it("names its parent as producer on every snapshot", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("parent", null);
+    await f.spawn("child", "parent");
+    await f.answer("child", "parent");
+
+    assert.deepEqual(f.snapshots("child").map((event) => [event.type === "subagent" && event.state, "producer" in event && event.producer]),
+      [["running", { subagentId: "parent" }], ["complete", { subagentId: "parent" }]]);
+    assert.equal("producer" in f.snapshots("parent")[0]!, false, "a root Subagent has no producer");
+  });
+
+  it("holds no turn when its parent is backgrounded", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("parent", null);
+    await f.answer("parent", null, true);
+    await f.spawn("child", "parent");
+    await f.finish();
+
+    assert.equal(f.turnsEnded(), 1, "the child of detached work must not hold the turn");
+    await f.answer("child", "parent");
+    assert.deepEqual(f.snapshots("child").map((event) => event.type === "subagent" && event.state), ["running", "complete"]);
   });
 });

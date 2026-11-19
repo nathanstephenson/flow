@@ -12,6 +12,7 @@ import type { Entry, ViewState } from "../client/reduce.ts";
 import { toolSummary } from "../client/tool-summary.ts";
 import { relativeTime } from "../client/relative-time.ts";
 import { scopeKindLabel } from "../client/scope-kind.ts";
+import { depthOf, producerKey, subagentKey, subagentParents } from "../client/subagent-tree.ts";
 import { sessionLabel } from "../client/session-label.ts";
 import { railGroup, railGroupLabel, RAIL_GROUPS } from "../client/status.ts";
 
@@ -270,7 +271,12 @@ function status(ui: UiState, width: number): string {
 }
 
 function transcript(view: ViewState, width: number, height: number): string[] {
-  const lines = view.entries.flatMap((entry) => entryLines(entry, width));
+  const subagents = new Map(view.entries.flatMap((entry) => entry.kind === "subagent" ? [[subagentKey(entry.id), entry]] : []));
+  const parents = subagentParents([...subagents.keys()], (key) => subagents.get(key));
+  const lines = view.entries.flatMap((entry) => {
+    const indent = "  ".repeat(depthOf(parents, producerKey(entry)));
+    return entryLines(entry, Math.max(1, width - indent.length)).map((line) => indent + line);
+  });
   return padTo(lines.slice(-height), height, width);
 }
 

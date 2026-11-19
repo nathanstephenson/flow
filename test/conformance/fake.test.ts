@@ -17,7 +17,7 @@ runContract({
    * Two Subagents, because the two now end differently: a foreground one closes on its own
    * `tool_result`, and a backgrounded one returns at launch and reports back after the turn has
    * ended (ADR 0016). The second is what stops the pairing assertion quietly only ever seeing the
-   * easy case.
+   * easy case. The explorer spawns one of its own, so the producer assertions see a nested Subagent.
    */
   async runTurn(session, text) {
     const fake = session as FakeSession;
@@ -31,6 +31,9 @@ runContract({
     subagent.wait("provider");
     subagent.resume();
     subagent.say("reading a.ts: contents", true);
+    const nested = fake.beginSubagent("planner", "plan a.ts", { subagentId: subagent.subagentId });
+    nested.say("planned", true);
+    nested.finish("complete");
     subagent.finish("complete");
 
     const detached = fake.beginSubagent("watcher", "watch b.ts");

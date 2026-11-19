@@ -383,8 +383,8 @@ function AttachedPane({
         // or a click would close the thing it asked to see. A Background Call has no pane of its
         // own, so it goes to the tool row that launched it.
         onOpenWork={(work) =>
-          work.kind === "agent"
-            ? docks.dispatch({ type: "open-subagents", subagentId: work.key })
+          work.kind === "agent" || work.subagent
+            ? docks.dispatch({ type: "open-subagents", subagentId: work.kind === "agent" ? work.key : work.subagent! })
             : revealEntry(work.key)
         }
       />

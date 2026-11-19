@@ -6,7 +6,7 @@ import type { ComposerActions } from "@/composer-actions.ts";
 import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
 import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
-import type { RunningWork } from "@/presentation/running-work.ts";
+import { nestedLabel, type RunningWork } from "@/presentation/running-work.ts";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { AttachmentTray } from "@/components/attachment-tray.tsx";
@@ -1024,7 +1024,10 @@ function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpe
               {card.detail ? (
                 <span className={cn("min-w-0 truncate", card.kind === "call" && "font-mono")}>{card.detail}</span>
               ) : null}
-              <Loader2 aria-hidden className="ml-auto size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              <span className="ml-auto flex shrink-0 items-center gap-2">
+                {card.kind === "agent" ? nestedLabel(card.nested) : null}
+                <Loader2 aria-hidden className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              </span>
             </button>
           )}
         </li>
