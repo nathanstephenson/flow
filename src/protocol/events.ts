@@ -333,6 +333,13 @@ export type AgentEvent =
    */
   | ({ type: "subagent"; subagentId: string; name: string; description?: string; producer?: Producer } & SubagentState)
   /**
+   * Instructions a Subagent received from the model that spawned it: its first brief and every
+   * message sent to it later. The Backend Adapter reports these, because a model sends them inside
+   * the Backend Session, where the Session Host never sees them. `producer` is the Subagent that
+   * received them. Not a `user_message`: that is what the human sent, and the host owns it.
+   */
+  | { type: "subagent_instruction"; id: string; text: string; producer: Producer }
+  /**
    * One Background Call, wholly — a tool call the Backend Session goes on running past the turn that
    * made it, reporting back into a later one (ADR 0021).
    *

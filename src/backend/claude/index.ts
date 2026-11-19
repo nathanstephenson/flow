@@ -167,6 +167,11 @@ function attribution(producer: string): { producer?: Producer } {
  * something a transcript row can show. Falls back to the tool name so a client always has something
  * to print, which is what the protocol promises.
  */
+function promptOf(input: unknown): string | undefined {
+  const prompt = (input as { prompt?: unknown } | null)?.prompt;
+  return typeof prompt === "string" && prompt !== "" ? prompt : undefined;
+}
+
 export function briefOf(input: unknown): SubagentBrief {
   const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown };
   const name = typeof fields.subagent_type === "string" ? fields.subagent_type : SUBAGENT_TOOL;
@@ -259,6 +264,8 @@ class ClaudeSession implements BackendSession {
   private readonly subagents = new Subagents();
   /** Tool calls announced this turn, and the ones the CLI is running past it (ADR 0021). */
   private readonly calls = new BackgroundCalls();
+  /** Each Subagent's brief, reported from its `Agent` call, so the same text echoed into its stream is not reported twice. */
+  private readonly briefs = new Map<string, string>();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
   /** Spawning call id for each parked ordinary-Subagent permission, through its terminal event. */
@@ -792,6 +799,7 @@ class ClaudeSession implements BackendSession {
     // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
     // Session Host records that from the transcript, the way it does a torn turn.
     this.subagents.abandon();
+    this.briefs.clear();
     // Background Calls are children of that process too, and go the same way for the same reason.
     this.calls.abandon();
     this.inbox.close();
@@ -918,12 +926,17 @@ class ClaudeSession implements BackendSession {
           const brief = briefOf(block.input);
           this.subagents.spawn(block.id, brief, producer);
           this.emit({ type: "subagent", subagentId: block.id, ...brief, ...attribution(producer), state: "running" });
+          const prompt = promptOf(block.input);
+          if (prompt === undefined) continue;
+          this.briefs.set(block.id, prompt);
+          this.emit({ type: "subagent_instruction", id: `${block.id}:brief`, text: prompt, producer: { subagentId: block.id } });
         }
         return;
       }
 
       case "user": {
         const content = sdkMessage.message.content;
+        this.instructSubagent(sdkMessage);
         if (typeof content === "string") return;
         for (const block of content) {
           if (block.type === "tool_result") {
@@ -1035,6 +1048,7 @@ class ClaudeSession implements BackendSession {
   }
 
   private closeSubagent(callId: string): void {
+    this.briefs.delete(callId);
     this.abandonPermissions("the Subagent stopped", (producer) => producer === callId);
     this.permissions.clearRefusals((producer) => producer === callId);
     const released = this.subagents.returned(callId);
@@ -1112,6 +1126,22 @@ class ClaudeSession implements BackendSession {
     if (this.turnId) return;
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
+  }
+
+  /** Report text the spawning model sent into a Subagent. The Agent Session's own user text is the host's to record. */
+  private instructSubagent(sdkMessage: SDKUserMessage): void {
+    const subagentId = producerOf(sdkMessage);
+    if (subagentId === "") return;
+    const content = sdkMessage.message.content;
+    const text = typeof content === "string"
+      ? content
+      : content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+    if (text === "") return;
+    if (this.briefs.get(subagentId) === text) {
+      this.briefs.delete(subagentId);
+      return;
+    }
+    this.emit({ type: "subagent_instruction", id: sdkMessage.uuid ?? randomUUID(), text, producer: { subagentId } });
   }
 
   private endTurn(reason: TurnEndReason): void {

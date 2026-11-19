@@ -474,6 +474,13 @@ export class FakeSubagent {
     if (final) this.messageIndex += 1;
   }
 
+  /** Instructions from the model that spawned it. */
+  instruct(text: string): string {
+    const id = randomUUID();
+    this.emit({ type: "subagent_instruction", id, text, producer: { subagentId: this.subagentId } });
+    return id;
+  }
+
   /** An attributed tool call — the subagent's Read, not the parent's. */
   useTool(name: string, input: unknown, result: unknown, isError = false): string {
     const callId = randomUUID();

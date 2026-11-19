@@ -455,9 +455,9 @@ async function nestingFixture(t: TestContext) {
   t.after(() => session.dispose());
   const push = (message: unknown) => messages.push(message as SDKMessage);
   const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
-  const spawn = async (id: string, parent: string | null) => {
+  const spawn = async (id: string, parent: string | null, prompt?: string) => {
     push({ type: "assistant", parent_tool_use_id: parent, message: { id: `message-${id}`, content: [{
-      type: "tool_use", id, name: "Agent", input: { subagent_type: "general-purpose", description: id },
+      type: "tool_use", id, name: "Agent", input: { subagent_type: "general-purpose", description: id, ...(prompt ? { prompt } : {}) },
     }] } });
     await drain();
   };
@@ -473,7 +473,12 @@ async function nestingFixture(t: TestContext) {
   };
   const snapshots = (id: string) => events.filter((event) => event.type === "subagent" && event.subagentId === id);
   const turnsEnded = () => events.filter((event) => event.type === "turn_ended").length;
-  return { spawn, answer, finish, snapshots, turnsEnded };
+  const send = async (parent: string | null, content: unknown, uuid?: string) => {
+    push({ type: "user", parent_tool_use_id: parent, message: { content }, ...(uuid ? { uuid } : {}) });
+    await drain();
+  };
+  const instructions = () => events.flatMap((event) => event.type === "subagent_instruction" ? [[event.producer.subagentId, event.text]] : []);
+  return { spawn, answer, finish, send, snapshots, turnsEnded, instructions };
 }
 
 describe("a Subagent spawned by another Subagent", () => {
@@ -498,5 +503,30 @@ describe("a Subagent spawned by another Subagent", () => {
     assert.equal(f.turnsEnded(), 1, "the child of detached work must not hold the turn");
     await f.answer("child", "parent");
     assert.deepEqual(f.snapshots("child").map((event) => event.type === "subagent" && event.state), ["running", "complete"]);
+  });
+});
+
+describe("instructions a Subagent receives", () => {
+  it("reports its brief once, even when the stream echoes it", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("child", null, "Find every caller");
+    await f.send("child", [{ type: "text", text: "Find every caller" }]);
+
+    assert.deepEqual(f.instructions(), [["child", "Find every caller"]]);
+  });
+
+  it("reports a later message sent into it", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("child", null, "Find every caller");
+    await f.send("child", "Also check the tests", "u1");
+
+    assert.deepEqual(f.instructions(), [["child", "Find every caller"], ["child", "Also check the tests"]]);
+  });
+
+  it("leaves the Agent Session's own user text to the host", async (t) => {
+    const f = await nestingFixture(t);
+    await f.send(null, "hello");
+
+    assert.deepEqual(f.instructions(), []);
   });
 });
