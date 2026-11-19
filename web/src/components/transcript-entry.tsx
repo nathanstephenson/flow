@@ -535,14 +535,14 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
             {named ? (
               <a
                 href={formatRoute({ sessionId: named.id })}
-                className="font-bold text-foreground underline decoration-muted-foreground underline-offset-2 hover:decoration-foreground"
+                className="rounded-sm font-sans font-medium text-foreground outline-none transition-[text-shadow] duration-150 hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
               >
                 <Highlighted text={sessionLabel(named)} query={query} />
               </a>
             ) : (
-              <strong className="text-foreground">
+              <span className="text-foreground">
                 <Highlighted text={entry.sessionId} query={query} />
-              </strong>
+              </span>
             )}
             <Highlighted text={entry.text.slice(at + entry.sessionId.length)} query={query} />
           </>
