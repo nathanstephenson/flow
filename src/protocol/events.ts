@@ -307,7 +307,7 @@ export type AgentEvent =
    * replayed on every Revive (ADR 0001), so a line of it carrying megabytes of base64 would make the
    * record unreadable and unbounded — the bytes live beside it and are fetched when shown.
    */
-  | { type: "user_message"; id: string; text: string; attachments?: string[] }
+  | { type: "user_message"; id: string; text: string; attachments?: string[]; fromSessionId?: string }
   | { type: "turn_started"; turnId: string }
   /**
    * `producer` on these five is what attributes a Subagent's work to it (ADR 0015). Absent means

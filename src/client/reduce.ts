@@ -69,7 +69,7 @@ export type OpenPermission = { callId: string; tool: string; context?: string; a
 export type Entry = ({ rewound?: true }) & (
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   /** `at`: when the message was logged. */
-  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string }
+  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string; fromSessionId?: string }
   /** `endedAt`: when the turn ended, on the parent's last message of that turn only. */
   | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer; endedAt?: string }
   | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
@@ -425,7 +425,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: upsert(state.entries, {
           kind: "user",
           id: event.id,
-          text: event.text,
+          ...(event.fromSessionId === undefined
+            ? { text: event.text }
+            : { text: event.text.slice(event.text.indexOf("\n") + 1), fromSessionId: event.fromSessionId }),
           ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
           at,
         }),

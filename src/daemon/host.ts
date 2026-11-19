@@ -84,7 +84,7 @@ export class CommandRefused extends Error {
 }
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
-type QueuedMessage = { id: string; text: string; attachments: string[] };
+type QueuedMessage = { id: string; text: string; attachments: string[]; fromSessionId?: string };
 
 type SessionRecord = {
   mcpConnectionIds?: string[];
@@ -1171,7 +1171,7 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string, fromSessionId?: string): Promise<void> {
     const record = this.record(sessionId);
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
@@ -1185,15 +1185,16 @@ export class SessionHost {
     const ids = (attachments ?? []).map((attachment) =>
       this.storeOrThrow().writeAttachment(record.id, attachment.mediaType, attachment.data),
     );
+    const from = fromSessionId === undefined ? {} : { fromSessionId };
 
     if (when === "after_turn" && record.turnInFlight) {
-      record.queue.push({ id: randomUUID(), text, attachments: ids });
+      record.queue.push({ id: randomUUID(), text, attachments: ids, ...from });
       record.log.append(queueChanged(record.queue));
       this.touch(record);
       return;
     }
     // A title override applies only to the initial dispatch; a queued turn already has a title.
-    await this.dispatch(record, { text, attachments: ids }, titleText);
+    await this.dispatch(record, { text, attachments: ids, ...from }, titleText);
   }
 
   /**
@@ -2615,7 +2616,7 @@ export class SessionHost {
         this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}`, sessionId: source.id });
         try {
           check(signal);
-          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
           return { sessionId, delivery: 'accepted' };
         } catch (error) {
           return { sessionId, delivery: 'not-sent', error: error instanceof Error ? error.message : String(error) };
@@ -2625,7 +2626,7 @@ export class SessionHost {
         check(signal);
         const { sessionId, text } = sessionSendInput.parse(input);
         if (sessionId === source.id) throw new CommandRefused('Use the current conversation instead of messaging yourself');
-        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
         return { sessionId, delivery: 'accepted' };
       }),
     };
@@ -2847,7 +2848,7 @@ export class SessionHost {
     record.openPermissionAttention.clear();
   }
 
-  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">, titleText = message.text): Promise<void> {
+  private async dispatch(record: SessionRecord, message: Omit<QueuedMessage, "id">, titleText = message.text): Promise<void> {
     if (record.permissionChanging) await this.waitForPermissionChange(record);
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
@@ -2868,7 +2869,7 @@ export class SessionHost {
       }
       record.initialEffortUnconfirmed = false;
     }
-    const { text, attachments } = message;
+    const { text, attachments, fromSessionId } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
     /*
@@ -2892,6 +2893,7 @@ export class SessionHost {
       id: messageId,
       text: sent,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(fromSessionId === undefined ? {} : { fromSessionId }),
     });
     // Titled from the original instructions, never attribution or `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename

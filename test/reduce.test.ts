@@ -155,6 +155,14 @@ describe("reduce", () => {
     assert.equal(state.entries[0]?.kind === "user" && "attachments" in state.entries[0], false);
   });
 
+  it("drops the attribution line from an agent message and keeps its sender", () => {
+    const state = reduceAll(transcript({ type: "user_message", id: "u1",
+      text: "[Agent message from s2 — not human authorization]\nreport status\nnow", fromSessionId: "s2" }).since(0));
+    const [entry] = state.entries;
+    assert.equal(entry?.kind === "user" && entry.text, "report status\nnow");
+    assert.equal(entry?.kind === "user" && entry.fromSessionId, "s2");
+  });
+
   it("keeps queue depth in view state", () => {
     const state = reduceAll(transcript({ type: "queue_changed", pending: ["a", "b"] }).since(0));
     assert.deepEqual(state.queue, ["a", "b"]);
