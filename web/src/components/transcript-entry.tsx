@@ -95,6 +95,11 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
     // shows its actions. The scroll container clips it.
     <div className="group/message relative flex flex-col items-end py-3 before:absolute before:inset-y-0 before:-right-[100vw] before:-left-[100vw] before:content-['']">
       <div className="relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
+        {entry.fromSessionId === undefined ? null : (
+          <p className="m-0 mb-2 text-xs text-muted-foreground">
+            From <SessionLink sessionId={entry.fromSessionId} query={query} /> · not human authorization
+          </p>
+        )}
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
       </div>
@@ -536,11 +541,26 @@ const NOTICE_TONE: Record<Of<"notice">["level"], string> = {
   error: "text-destructive",
 };
 
+function SessionLink({ sessionId, query }: { sessionId: string; query: string }) {
+  const { sessions } = useAgentSessions();
+  const named = sessions.find((session) => session.id === sessionId);
+  return named ? (
+    <a
+      href={formatRoute({ sessionId: named.id })}
+      className="rounded-sm font-sans font-medium text-foreground outline-none transition-[text-shadow] duration-150 hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
+    >
+      <Highlighted text={sessionLabel(named)} query={query} />
+    </a>
+  ) : (
+    <span className="text-foreground">
+      <Highlighted text={sessionId} query={query} />
+    </span>
+  );
+}
+
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
   const tone = NOTICE_TONE[entry.level];
-  const { sessions } = useAgentSessions();
   const at = entry.sessionId === undefined ? -1 : entry.text.indexOf(entry.sessionId);
-  const named = sessions.find((session) => session.id === entry.sessionId);
   return (
     <Row gutter="!" gutterClassName={tone}>
       <p className={cn("m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>
@@ -549,18 +569,7 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
         ) : (
           <>
             <Highlighted text={entry.text.slice(0, at)} query={query} />
-            {named ? (
-              <a
-                href={formatRoute({ sessionId: named.id })}
-                className="rounded-sm font-sans font-medium text-foreground outline-none transition-[text-shadow] duration-150 hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
-              >
-                <Highlighted text={sessionLabel(named)} query={query} />
-              </a>
-            ) : (
-              <span className="text-foreground">
-                <Highlighted text={entry.sessionId} query={query} />
-              </span>
-            )}
+            <SessionLink sessionId={entry.sessionId} query={query} />
             <Highlighted text={entry.text.slice(at + entry.sessionId.length)} query={query} />
           </>
         )}
