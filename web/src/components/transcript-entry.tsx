@@ -94,7 +94,12 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
     // The `before` band spans the transcript's width, so hovering anywhere at this message's height
     // shows its actions. The scroll container clips it.
     <div className="group/message relative flex flex-col items-end py-3 before:absolute before:inset-y-0 before:-right-[100vw] before:-left-[100vw] before:content-['']">
-      <div className="relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
+      <div
+        className={cn(
+          "relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm px-4 py-3 sm:max-w-[80%]",
+          entry.fromSessionId === undefined ? "bg-muted" : "border border-border bg-muted/40 text-muted-foreground",
+        )}
+      >
         {entry.fromSessionId === undefined ? null : (
           <p className="m-0 mb-2 text-xs text-muted-foreground">
             From <SessionLink sessionId={entry.fromSessionId} query={query} /> · not human authorization
