@@ -37,7 +37,7 @@ export type { BackendModels };
  * Never throws: a backend that cannot answer reports a `problem`, and its section of the Settings
  * offers a text field instead of a list. A refusal here must not make the whole page unreachable.
  */
-export async function probeModels(backend: AgentBackend, scope: string, workflowBuilder = false, keep?: (held: HeldSession) => void): Promise<BackendModels> {
+export async function probeModels(backend: AgentBackend, scope: string, workflowBuilder = false, keep?: (held: HeldSession) => void, refresh = false): Promise<BackendModels> {
   let models: ModelInfo[] = [];
   let settle: (() => void) | undefined;
   // Claude reports a provisional Capabilities at create and the real list moments later, over
@@ -55,7 +55,7 @@ export async function probeModels(backend: AgentBackend, scope: string, workflow
   let session;
   try {
     const refuseTool = async () => { throw new Error("Model discovery cannot use workflow builder tools"); };
-    session = await backend.create({ ...options, ...(workflowBuilder ? { workflowBuilder: {
+    session = await backend.create({ ...options, ...(refresh ? { refreshModels: true } : {}), ...(workflowBuilder ? { workflowBuilder: {
       instructions: "List available models only.", read: refuseTool, list: refuseTool, write: refuseTool,
     } } : {}) });
   } catch (error) {

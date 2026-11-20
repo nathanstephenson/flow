@@ -3,7 +3,8 @@ import type { McpTool } from "../mcp.ts";
 import type { Capabilities } from "../../protocol/events.ts";
 
 export type McpToolMetadata = Omit<McpTool, "call">;
-export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "sessionTools" | "onFailure" | "signal"> & {
+export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "sessionTools" | "piAuth" | "onFailure" | "signal"> & {
+  piAuth?: readonly import('../pi/model-auth.ts').PiProviderAuth[];
   /** Only instructions cross the worker channel; the three callbacks remain in the host. */
   workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];

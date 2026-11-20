@@ -21,6 +21,7 @@ import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
 import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
 import { relocatePiState, forkPiState } from "../pi/state.ts";
+import { createPiModelAuth, type PiModelAuth } from '../pi/model-auth.ts';
 import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
@@ -44,7 +45,16 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
 export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
+  private piAuth?: PiModelAuth;
+  private stopped = false;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  async shutdown(): Promise<void> {
+    this.stopped = true;
+    await this.piAuth?.close?.();
+  }
+  private assertRunning(): void {
+    if (this.stopped) throw new Error("Backend Adapter stopped");
+  }
   scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
     const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
     const readable = [packageRoot, ...(this.options.readablePaths ?? [])];
@@ -111,7 +121,7 @@ export class WorkerBackend implements AgentBackend {
       rmSync(agent, { recursive: true, force: true });
       mkdirSync(agent, { recursive: true, mode: 0o700 });
       cleanups.push(() => rmSync(agent, { recursive: true, force: true }));
-      for (const name of ["auth.json", "models.json", "settings.json"]) {
+      for (const name of ["models.json", "settings.json"]) {
         if (existsSync(join(source, name))) copyFileSync(join(source, name), join(agent, name));
       }
       // Keep user resources live and read-only, including Git-managed trees reached through
@@ -145,6 +155,7 @@ export class WorkerBackend implements AgentBackend {
         ({ startup } = sandbox);
         cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       }
+      this.assertRunning();
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       await this.opened(proxy, options.signal, "sandbox", begin, { sharing: shared ? "shared" : "own", remove: Math.round(startup.remove), create: Math.round(startup.create) });
@@ -165,8 +176,14 @@ export class WorkerBackend implements AgentBackend {
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
+    this.assertRunning();
     const begin = performance.now();
     options.signal?.throwIfAborted();
+    if (this.name === 'pi' && !this.options.backendModule && !options.piAuth) {
+      const directory = this.options.env?.PI_CODING_AGENT_DIR;
+      this.piAuth ??= createPiModelAuth(directory ? { authPath: join(directory, 'auth.json') } : {});
+      options = { ...options, piAuth: this.piAuth };
+    }
     const isolationMode = options.isolationMode ?? this.options.isolationMode?.() ?? "bubblewrap";
     if (isolationMode === "sandbox") return this.createSandboxed(options);
     if (isolationMode === "none") {
@@ -203,6 +220,7 @@ export class WorkerBackend implements AgentBackend {
       env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
+      this.assertRunning();
       options.signal?.throwIfAborted();
       if (this.name === "claude") migrateLegacyClaudeState(options.stateDir,
         { ...process.env, ...this.options.env }, isolation.scope, options.resume);
@@ -224,6 +242,7 @@ class WorkerSession implements BackendSession {
   private readonly worker: ReturnType<typeof launchWorker>;
   private readonly rpc: WorkerRpc;
   private failed: Error | undefined;
+  private piAuthProviders = new Set<string>();
   private disposing = false;
   private disposal: Promise<void> | undefined;
   private readonly workflows = new Map<string, {
@@ -254,11 +273,22 @@ class WorkerSession implements BackendSession {
     }, async (method, args, signal) => {
       if (this.disposing || this.failed) throw new Error("Backend Session stopped");
       // Builders never inherit other host capabilities, even if the worker asks directly.
-      if (this.options.workflowBuilder && !["workflowBuilder.read", "workflowBuilder.list", "workflowBuilder.write"].includes(method)) {
+      if (this.options.workflowBuilder && !["pi.auth.snapshot", "pi.auth.resolve", "workflowBuilder.read", "workflowBuilder.list", "workflowBuilder.write"].includes(method)) {
         throw new Error("Host capability is not enabled for workflow builder");
       }
       // Never look up host functions by a worker-supplied property name.
       switch (method) {
+        case 'pi.auth.snapshot': return this.snapshotPiAuth(signal);
+        case 'pi.auth.resolve': {
+          const auth = this.requirePiAuth();
+          const provider = args[0];
+          if (typeof provider !== 'string' || !this.piAuthProviders.has(provider)) throw new Error('Unknown Pi provider');
+          try { return await auth.resolve(provider, signal); }
+          catch {
+            signal.throwIfAborted();
+            throw new Error(`Pi authentication failed for ${provider}. Check sign-in and auth.json access. Move any !command credentials to models.json.`);
+          }
+        }
         case "mcp.token": {
           if (!(this.options.mcp instanceof SandboxMcpSession) || typeof args[0] !== "string") throw new Error("Host capability is not enabled");
           return this.options.mcp.token(args[0], args[1] === true);
@@ -292,6 +322,17 @@ class WorkerSession implements BackendSession {
     child.once("exit", (code, signal) => this.fail(new Error(`Backend worker exited (${signal ?? code ?? "unknown"})${this.worker.diagnostics() ? `: ${this.worker.diagnostics()}` : ""}`)));
   }
 
+  private requirePiAuth() {
+    if ((this.launchOptions.backend ?? 'pi') !== 'pi' || !this.options.piAuth) throw new Error('Pi auth is not enabled');
+    return this.options.piAuth;
+  }
+
+  private async snapshotPiAuth(signal?: AbortSignal) {
+    const metadata = await this.requirePiAuth().snapshot(signal);
+    this.piAuthProviders = new Set(metadata.map(({ providerId }) => providerId));
+    return metadata;
+  }
+
   private requireWorkflowBuilder(input: unknown) {
     if (!this.options.workflowBuilder) throw new Error("Workflow builder tools are not enabled");
     if (typeof input !== "string") throw new Error("Invalid workflow builder input: expected a string");
@@ -309,14 +350,16 @@ class WorkerSession implements BackendSession {
   }
 
   async open(signal?: AbortSignal): Promise<SessionSnapshot["startup"]> {
-    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, sessionTools, ...options } = this.options;
+    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, sessionTools, piAuth, ...options } = this.options;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
     if (signal?.aborted) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });
     const timer = setTimeout(() => controller.abort(), this.launchOptions.startupTimeoutMs ?? 60_000);
     try {
+      const auth = piAuth ? await this.snapshotPiAuth(controller.signal) : undefined;
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
+        ...(auth ? { piAuth: auth } : {}),
         workflowEnabled: !workflowBuilder && !!workflow,
         sessionToolsEnabled: !workflowBuilder && options.tools !== "none" && !!sessionTools,
         ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }

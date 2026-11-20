@@ -61,6 +61,7 @@ import {
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
+import { PiModelProbeCache } from "./pi-model-cache.ts";
 import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
 import { probeSkills, type HeldSession } from "./skills.ts";
 import { recordTiming } from "./timings.ts";
@@ -320,6 +321,7 @@ export class SessionHost {
   private readonly backends = new Map<string, AgentBackend>();
   /** Model probes by backend name, held in flight rather than resolved — see `models`. */
   private readonly modelProbes = new Map<string, Promise<BackendModels>>();
+  private readonly piModelProbeCache = new PiModelProbeCache();
   /** One warm Skills session per Backend Adapter, for the last Scope asked — see `skillsFor` (ADR 0035). */
   private readonly skillSessions = new Map<string, HeldSession>();
   /**
@@ -582,7 +584,8 @@ export class SessionHost {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
       const probe = this.timed("models", backend, false, (timed) =>
-        probeModels(timed, scope, false, (held) => this.holdSkillSession(backend.name, held, false)));
+        probeModels(backend.name === 'pi' ? this.piModelProbeCache.wrap(timed) : timed,
+          scope, false, (held) => this.holdSkillSession(backend.name, held, false), refresh));
       this.modelProbes.set(backend.name, probe);
       return probe;
     });
@@ -2397,6 +2400,9 @@ export class SessionHost {
       this.persist(record);
     }
     await this.shared?.close().catch((error: unknown) => console.error(`Shared sandbox removal failed: ${(error as Error).message}`));
+    const stopped = await Promise.allSettled([...this.backends.values()].map(async backend => backend.shutdown?.()));
+    const failures = stopped.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Backend Adapter shutdown failed");
   }
 
   async execute(command: Command): Promise<unknown> {
