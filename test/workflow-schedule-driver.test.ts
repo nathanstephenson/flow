@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,6 +121,7 @@ test('driver forwards provisioning cancellation and reads the durable execution 
   assert.deepEqual(await service.prune(), [f.occurrence.id]);
 });
 test('retention closes a live environment before reclaiming its journal, without duplicate Sandbox removal', { timeout: 10_000 }, async t => {
+  execFileSync(process.execPath, ['scripts/build-worker.mjs']);
   const f = await fixture(t);
   const provider = fakeProvider(t, 'cp "$1" "$LOG/spec.json"; touch "$LOG/alive"; echo create >> "$LOG/calls"', 'test -f "$LOG/alive" || exit 1; rm "$LOG/alive"; echo "remove $1" >> "$LOG/calls"');
   const host = new SessionHost({ sandboxSupport: () => provider.support });

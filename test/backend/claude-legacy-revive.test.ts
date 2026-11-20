@@ -113,7 +113,7 @@ test("a legacy Claude Agent Session revives after a Host update and keeps owned 
   writeFileSync(join(config, ".credentials.json"), credential);
   const store = new TranscriptStore(join(root, "flow"));
   async function host(backend: AgentBackend) {
-    const result = new SessionHost({ store });
+    const result = new SessionHost({ store, filesystemIsolationMode: () => "none" });
     hosts.push(result);
     result.registerBackend(backend);
     await result.load();

@@ -177,6 +177,7 @@ test('restart reconciles running descendants even when the root already requires
 });
 
 test('recovery does not launch effects after an enclosing call deadline has expired', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
   let effects = 0;
   const f = fixture(t, async context => { if (context.step.id === 'handler') return 9; effects++; throw new Error('stop'); });
   const child = definition('child', [leaf('inner')]);
@@ -185,10 +186,11 @@ test('recovery does not launch effects after an enclosing call deadline has expi
   const started = f.scheduler.start(parent, session, {});
   await f.scheduler.wait(session.sessionId, started.id);
   const snapshot = await f.scheduler.interrupt(session.sessionId, started.id);
-  await new Promise(resolve => setTimeout(resolve, 50));
+  t.mock.timers.tick(50);
   const restored = new WorkflowScheduler(f.store, f.executors);
   const invocationId = Object.keys(snapshot.invocations!)[0]!;
   restored.recover(session, started.id, { kind: 'retry', stepId: 'inner', invocationId });
+  t.mock.timers.tick(0);
   assert.equal((await restored.wait(session.sessionId, started.id)).result, 9);
   assert.equal(effects, 1);
 });
