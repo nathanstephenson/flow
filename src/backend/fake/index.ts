@@ -355,7 +355,7 @@ export class FakeSession implements BackendSession {
    */
   beginSubagent(name: string, description?: string): FakeSubagent {
     const subagentId = randomUUID();
-    const subagent = new FakeSubagent(subagentId, name, description, this.emit);
+    const subagent = new FakeSubagent(subagentId, name, description, this.emit, this.modelId, this.effort);
     this.subagents.push(subagent);
     this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description } });
     subagent.snapshot({ state: "running" });
@@ -425,6 +425,8 @@ export class FakeSubagent {
   readonly subagentId: string;
   readonly name: string;
   readonly description: string | undefined;
+  readonly model: string;
+  readonly effort: EffortLevel | undefined;
   finished = false;
   launched = false;
 
@@ -437,11 +439,15 @@ export class FakeSubagent {
     name: string,
     description: string | undefined,
     emit: (event: BackendEvent) => void,
+    model: string,
+    effort: EffortLevel | undefined,
   ) {
     this.subagentId = subagentId;
     this.name = name;
     this.description = description;
     this.emit = emit;
+    this.model = model;
+    this.effort = effort;
   }
 
   /**
@@ -515,6 +521,8 @@ export class FakeSubagent {
       subagentId: this.subagentId,
       name: this.name,
       ...(this.description === undefined ? {} : { description: this.description }),
+      model: this.model,
+      ...(this.effort === undefined ? {} : { effort: this.effort }),
       ...state,
     });
   }

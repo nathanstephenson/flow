@@ -56,7 +56,7 @@ test("Pi worker preserves foreground Subagent attribution and background complet
   const session = await new WorkerBackend({ env: { PI_CODING_AGENT_DIR: f.scope, PI_OFFLINE: "1" } }).create({ scope, stateDir, modelId: "flow-test/parent", emit: (event) => events.push(event) });
   try {
     await session.prompt("Subagent");
-    assert.deepEqual(events.filter((event) => event.type === "subagent").map((event) => [event.subagentId, event.state]), [["spawn-1", "running"], ["spawn-1", "complete"]]);
+    assert.deepEqual(events.filter((event) => event.type === "subagent").map((event) => [event.subagentId, event.state]), [["spawn-1", "running"], ["spawn-1", "running"], ["spawn-1", "complete"]]);
     assert.ok(events.some((event) => event.type === "message" && event.text === "Child result" && event.producer?.subagentId === "spawn-1"));
     assert.equal(f.requests.find((request) => request.model === "child")?.reasoning_effort, "high");
     await session.prompt("Background");

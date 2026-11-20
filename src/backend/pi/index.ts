@@ -669,6 +669,7 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   try {
     signal.throwIfAborted();
     await adapter.setEffort(effort);
+    work.refine(id, { model: describeModel(model).id, effort: child.thinkingLevel as EffortLevel });
     signal.throwIfAborted();
     await adapter.prompt(input.prompt);
     if (reason !== "complete") throw new Error(failure ?? `Subagent ${reason}`);

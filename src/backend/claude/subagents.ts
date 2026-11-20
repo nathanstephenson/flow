@@ -1,7 +1,7 @@
-import type { TurnEndReason } from "../../protocol/events.ts";
+import type { EffortLevel, TurnEndReason } from "../../protocol/events.ts";
 
-/** What a Subagent was called and asked to do, as the spawning tool call reported it. */
-export type SubagentBrief = { name: string; description?: string };
+/** What a Subagent was called and asked to do, as the spawning tool call reported it, and what it runs on. */
+export type SubagentBrief = { name: string; description?: string; model?: string; effort?: EffortLevel };
 
 /**
  * The Subagents open in one turn, the turn end held back while any of them is, and the backgrounded
@@ -48,6 +48,16 @@ export class Subagents {
    */
   describe(callId: string): SubagentBrief | undefined {
     return this.open.get(callId) ?? this.detached.get(callId);
+  }
+
+  /** Correct what an open or detached Subagent runs on. Answers the new brief, or undefined when nothing changed. */
+  refine(callId: string, patch: Pick<SubagentBrief, "model" | "effort">): SubagentBrief | undefined {
+    const brief = this.describe(callId);
+    if (brief === undefined) return undefined;
+    if ((patch.model ?? brief.model) === brief.model && (patch.effort ?? brief.effort) === brief.effort) return undefined;
+    const refined = { ...brief, ...patch };
+    (this.open.has(callId) ? this.open : this.detached).set(callId, refined);
+    return refined;
   }
 
   /**

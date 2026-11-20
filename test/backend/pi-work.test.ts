@@ -22,7 +22,8 @@ it("runs a foreground Subagent with isolated context, model/Effort overrides, an
   assert.equal(JSON.stringify(child.messages).includes("Parent private instructions"), false);
   assert.equal(child.tools?.some((tool) => ["subagent", "ask_question"].includes(tool.function.name)), false);
   const states = fixture.events.filter((event) => event.type === "subagent");
-  assert.deepEqual(states.map((event) => [event.subagentId, event.state]), [["spawn-1", "running"], ["spawn-1", "complete"]]);
+  assert.deepEqual(states.map((event) => [event.subagentId, event.state]), [["spawn-1", "running"], ["spawn-1", "running"], ["spawn-1", "complete"]]);
+  assert.deepEqual(states.slice(1).map((event) => event.type === "subagent" && [event.model, event.effort]), [["flow-test/child", "high"], ["flow-test/child", "high"]]);
   assert.ok(fixture.events.some((event) => event.type === "message" && event.text === "Child result" && event.producer?.subagentId === "spawn-1"));
   assert.equal(fixture.events.filter((event) => event.type === "turn_started").length, 1);
   assert.equal(fixture.events.filter((event) => event.type === "turn_ended").length, 1);
@@ -87,6 +88,8 @@ it("defaults to concurrent background Subagents, inherits at launch, and separat
   assert.equal(new Set(messages.map((event) => event.id)).size, 2);
   assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").filter((event) => event.state === "complete").map((event) => event.subagentId),
     ["spawn-B", "spawn-A"]);
+  assert.deepEqual(fixture.events.filter((event) => event.type === "subagent" && event.state === "complete").map((event) => event.type === "subagent" && [event.model, event.effort]),
+    [["flow-test/parent", "medium"], ["flow-test/parent", "medium"]]);
   const turns = fixture.events.filter((event) => event.type === "turn_started");
   assert.equal(new Set(turns.map((event) => event.turnId)).size, 3);
 });
@@ -111,7 +114,7 @@ it("inherits tool restrictions and refuses nested Subagents and child Enquiries"
   const child = fixture.requests.find((request) => userText(request) === "Child");
   assert.deepEqual(child?.tools?.map((tool) => tool.function.name), ["read"]);
   assert.equal(fixture.events.some((event) => event.type === "enquiry"), false);
-  assert.equal(fixture.events.filter((event) => event.type === "subagent").length, 2);
+  assert.equal(fixture.events.filter((event) => event.type === "subagent").length, 3);
   const results = fixture.events.filter((event) => event.type === "tool_ended").filter((event) => event.producer);
   assert.deepEqual(results.map((event) => [event.callId, event.isError]), [["spawn-1/nested", true], ["spawn-1/question", true]]);
 });

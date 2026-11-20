@@ -116,6 +116,8 @@ export type Entry =
       id: string;
       name: string;
       description?: string;
+      model?: string;
+      effort?: EffortLevel;
       status: SubagentStatus;
       waitingOn?: SubagentWait;
       producer?: Producer;
@@ -504,6 +506,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           id: event.subagentId,
           name: event.name,
           ...(event.description === undefined ? {} : { description: event.description }),
+          ...(event.model === undefined ? {} : { model: event.model }),
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
           status: event.state,
           // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.

@@ -1,5 +1,6 @@
 import { relativeTime } from "../../../src/client/relative-time.ts";
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
+import type { ModelInfo } from "../../../src/protocol/events.ts";
 
 /**
  * The Subagents of one Agent Session, as a list a reader can scan.
@@ -113,4 +114,14 @@ export function timing(
     case "error":
       return { label: "failed", at: relativeTime(entry.endedAt ?? entry.startedAt, now) };
   }
+}
+
+/**
+ * The line under a row's title: the type when the brief is the title, then the model by its label
+ * where the list has one, then the effort.
+ */
+export function subtitle(entry: Extract<Entry, { kind: "subagent" }>, models: readonly ModelInfo[]): string | undefined {
+  const model = entry.model === undefined ? undefined : (models.find((known) => known.id === entry.model)?.label ?? entry.model);
+  const parts = [entry.description === undefined ? undefined : entry.name, model, entry.effort].filter((part) => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(" · ");
 }

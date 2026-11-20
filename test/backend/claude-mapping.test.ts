@@ -8,6 +8,7 @@ import {
   describeContextUsage,
   describeSpend,
   isAsyncLaunch,
+  resolvedModelOf,
 } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
@@ -295,6 +296,37 @@ describe("what the Agent tool says a Subagent is", () => {
 
   it("omits a description that is not a string rather than printing one", () => {
     assert.deepEqual(briefOf({ subagent_type: "Explore", description: 42 }), { name: "Explore" });
+  });
+
+  it("takes the model the call asked for over the definition and the parent", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore", model: "haiku" }, { model: "opus", effort: "high" }, new Map([["Explore", "sonnet"]])),
+      { name: "Explore", model: "haiku", effort: "high" });
+  });
+
+  it("takes the agent definition's model before the parent's", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore" }, { model: "opus" }, new Map([["Explore", "sonnet"]])),
+      { name: "Explore", model: "sonnet" });
+  });
+
+  it("inherits the parent's model and effort when nothing else names them", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore" }, { model: "opus", effort: "low" }), { name: "Explore", model: "opus", effort: "low" });
+  });
+});
+
+describe("the model a Subagent resolved to", () => {
+  const aliases = new Map([["claude-haiku-4-5", "haiku"]]);
+
+  it("maps the resolved id back to the picker's alias", () => {
+    assert.equal(resolvedModelOf({ status: "async_launched", resolvedModel: "claude-haiku-4-5" }, aliases), "haiku");
+  });
+
+  it("keeps a resolved id the picker has no alias for", () => {
+    assert.equal(resolvedModelOf({ status: "completed", resolvedModel: "claude-opus-9" }, aliases), "claude-opus-9");
+  });
+
+  it("is undefined when the result names no model", () => {
+    assert.equal(resolvedModelOf({ status: "completed" }, aliases), undefined);
+    assert.equal(resolvedModelOf(undefined, aliases), undefined);
   });
 });
 

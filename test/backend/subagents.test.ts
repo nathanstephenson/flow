@@ -167,3 +167,27 @@ describe("what a Subagent was asked to do", () => {
     assert.equal(subagents.describe("some_read"), undefined);
   });
 })
+
+describe("correcting what a Subagent runs on", () => {
+  it("merges the correction into an open brief and answers the new one", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", model: "opus", effort: "high" });
+    assert.deepEqual(subagents.refine("call_1", { effort: "low" }), { name: "Explore", model: "opus", effort: "low" });
+    assert.deepEqual(subagents.describe("call_1"), { name: "Explore", model: "opus", effort: "low" });
+  });
+
+  it("corrects a detached brief too", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", model: "opus" });
+    subagents.background("call_1");
+    assert.deepEqual(subagents.refine("call_1", { model: "haiku" }), { name: "Explore", model: "haiku" });
+    assert.equal(subagents.isDetached("call_1"), true);
+  });
+
+  it("answers nothing when the correction changes nothing, or the call is not a Subagent", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", effort: "high" });
+    assert.equal(subagents.refine("call_1", { effort: "high" }), undefined);
+    assert.equal(subagents.refine("some_read", { effort: "low" }), undefined);
+  });
+});

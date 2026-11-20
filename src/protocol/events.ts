@@ -320,11 +320,12 @@ export type AgentEvent =
    *
    * `name` is the subagent's declared identity where a backend reports one and the tool name where
    * it does not, so a client always has something to print. `description` is the brief it was given.
+   * `model` and `effort` are what it resolved to, which later changes to the parent do not touch.
    *
    * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
    * `since: N` holds a lifecycle it can complete.
    */
-  | ({ type: "subagent"; subagentId: string; name: string; description?: string } & SubagentState)
+  | ({ type: "subagent"; subagentId: string; name: string; description?: string; model?: string; effort?: EffortLevel } & SubagentState)
   /**
    * One Background Call, wholly — a tool call the Backend Session goes on running past the turn that
    * made it, reporting back into a later one (ADR 0021).

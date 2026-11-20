@@ -3298,15 +3298,19 @@ function openBackgroundCalls(entries: LoggedEvent[]): { callId: string; tool: st
   return [...open].map(([callId, brief]) => ({ callId, ...brief }));
 }
 
-function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {
-  const open = new Map<string, string>();
+function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string; model?: string; effort?: EffortLevel }[] {
+  const open = new Map<string, { name: string; model?: string; effort?: EffortLevel }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "subagent") continue;
-    if (event.state === "running" || event.state === "waiting") open.set(event.subagentId, event.name);
+    if (event.state === "running" || event.state === "waiting") open.set(event.subagentId, {
+      name: event.name,
+      ...(event.model === undefined ? {} : { model: event.model }),
+      ...(event.effort === undefined ? {} : { effort: event.effort }),
+    });
     else open.delete(event.subagentId);
   }
-  return [...open].map(([subagentId, name]) => ({ subagentId, name }));
+  return [...open].map(([subagentId, brief]) => ({ subagentId, ...brief }));
 }
 
 /** What the transcript last reported this Agent Session had spent, across every Backend Session. */

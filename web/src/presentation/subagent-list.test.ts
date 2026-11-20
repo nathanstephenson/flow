@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
 import { entryKey } from "./entry-key.ts";
-import { activeKeys, ordered, subagentKeys, timing } from "./subagent-list.ts";
+import { activeKeys, ordered, subagentKeys, subtitle, timing } from "./subagent-list.ts";
 
 const subagent = (id: string, status: SubagentStatus): Entry => ({
   kind: "subagent",
@@ -200,5 +200,24 @@ describe("when a Subagent started or stopped", () => {
 
   it("says nothing rather than something wrong for an unparseable time", () => {
     assert.equal(of(timed("running", "")).at, "");
+  });
+});
+
+describe("what a Subagent row says under its title", () => {
+  const models = [{ id: "haiku", provider: "anthropic", label: "Haiku" }];
+  const entry = (fields: Partial<Extract<Entry, { kind: "subagent" }>>): Extract<Entry, { kind: "subagent" }> =>
+    ({ kind: "subagent", id: "a", name: "Explore", status: "running", startedAt: "", ...fields });
+
+  it("names the type, the model by its label, and the effort", () => {
+    assert.equal(subtitle(entry({ description: "read", model: "haiku", effort: "low" }), models), "Explore · Haiku · low");
+  });
+
+  it("prints the raw id of a model the list cannot describe", () => {
+    assert.equal(subtitle(entry({ description: "read", model: "claude-opus-9" }), models), "Explore · claude-opus-9");
+  });
+
+  it("leaves out the type when it is already the title", () => {
+    assert.equal(subtitle(entry({ model: "haiku", effort: "low" }), models), "Haiku · low");
+    assert.equal(subtitle(entry({}), models), undefined);
   });
 });
