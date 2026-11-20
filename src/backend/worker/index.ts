@@ -103,7 +103,7 @@ export class WorkerBackend implements AgentBackend {
       env.FLOW_CLAUDE_PATH = support.provider.claudePath;
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
-        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
+        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && !["projects", "file-history"].includes(entry)) assets.push(realpathSync(link));
       }
     } else {
       const source = this.options.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");

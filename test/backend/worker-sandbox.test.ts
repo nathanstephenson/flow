@@ -117,6 +117,16 @@ test("a Claude sandbox session mounts the provider's Claude sign-in folder writa
   assert.ok(f.spec().additionalWorkspaces.some((mount) => mount.path === realpathSync(auth) && !mount.readOnly));
 });
 
+test("a Claude sandbox session shares nothing inside its writable state folder read-only", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, tools: "none", emit: () => {} });
+  t.after(() => session.dispose());
+  const state = f.spec().additionalWorkspaces.find((mount) => !mount.readOnly)!.path;
+  assert.deepEqual(f.spec().additionalWorkspaces.filter((mount) => mount.readOnly && mount.path.startsWith(`${state}/`)), []);
+});
+
 test("a Summary Model naming session starts in an own sandbox", async (t) => {
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
