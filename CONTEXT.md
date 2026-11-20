@@ -161,7 +161,7 @@ _Avoid_: VM reuse, pooling
 **Shared Sandbox**: The one Sandbox that serves all Agent Sessions in Sandbox mode when Sandbox Sharing is shared. It lives while the Session Host runs. It accepts only Scopes under the Project Root, a Worktree or a Workflow builder.
 _Avoid_: global VM, pool
 
-**Sandbox Provider**: The file naming the sbx commands and guest paths that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
+**Sandbox Provider**: The file naming the sbx commands, guest paths and an optional host Claude path that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
 _Avoid_: harness (the harness only supplies a base environment)
 
 **MCP Connection**: A machine-wide definition of an external tool service. Selected for an Agent Session and inherited by its Subagents and Workflow Steps. Its identity survives edits.

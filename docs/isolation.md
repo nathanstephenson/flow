@@ -108,7 +108,8 @@ Sandbox mode needs a sandbox provider file. The Session Host reads it once, at s
 | --- | --- |
 | `version` | `1` |
 | `nodePath` | Absolute path of Node in the guest. |
-| `claudePath` | Absolute path of Claude in the guest. |
+| `claudePath` | Absolute path of Claude in the guest. Set this or `hostClaudePath`, not both. |
+| `hostClaudePath` | Absolute path of a native Claude on the host. See [Host-installed Claude](#host-installed-claude). |
 | `claudeAuthDir` | Optional. Host folder that holds Claude's `.credentials.json`. |
 | `probe` | Argv template. Sandbox is available only when `probe` exits with 0. |
 | `create` | Argv template with `{spec}`, and optionally `{name}`. |
@@ -137,6 +138,30 @@ Example, with a base environment from `harness plan --out <dir>`:
   "shell": ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"]
 }
 ```
+
+### Host-installed Claude
+
+Set `hostClaudePath` to use the host's Claude, for example `/home/<you>/.local/bin/claude`. Then the
+sandbox template does not need to install Claude.
+
+When a sandbox Backend Session starts, Flow:
+
+1. resolves the symlinks of `hostClaudePath`, for example to
+   `~/.local/share/claude/versions/<version>`,
+2. refuses the work unless that file is a 64-bit Linux ELF executable for the host CPU,
+3. refuses the work unless its directory contains only regular files,
+4. mounts that directory read-only at the same path in the VM, and runs the resolved file. The
+   symlink itself is not mounted.
+
+Flow sets `DISABLE_AUTOUPDATER=1` for this Claude. The host updates Claude, not the VM.
+
+- A native install on a Linux host with a glibc guest is supported. macOS binaries and npm
+  (JavaScript) installs are refused. Flow does not change to unrestricted execution.
+- If the guest libc does not match, the Claude SDK reports the failed launch at the first prompt.
+- When a host update moves the symlink, new Backend Sessions and Revives use the new version. Running
+  sessions keep the old version while it stays in the directory. The mount does not change, so a
+  Shared Sandbox is not replaced.
+- Credentials do not change: `claudeAuthDir` works as before.
 
 ### Pi instructions, skills and prompts
 
