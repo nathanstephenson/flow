@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test, { before } from "node:test";
 import { WorkerBackend } from "../../src/backend/worker/index.ts";
-import { fakeProvider } from "./sandbox-fixture.ts";
+import { fakeHostClaude, fakeProvider } from "./sandbox-fixture.ts";
 import { summariseToName } from "../../src/daemon/summariser.ts";
 import type { BackendEvent } from "../../src/protocol/events.ts";
+import type { SandboxSupport } from "../../src/isolation/sandbox.ts";
 
 const backendModule = new URL("./worker-fixture.ts", import.meta.url).href;
 
@@ -115,6 +116,59 @@ test("a Claude sandbox session mounts the provider's Claude sign-in folder writa
   const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
   t.after(() => session.dispose());
   assert.ok(f.spec().additionalWorkspaces.some((mount) => mount.path === realpathSync(auth) && !mount.readOnly));
+});
+
+function hostSupport(support: SandboxSupport, hostClaudePath: string): SandboxSupport {
+  if (!support.supported) return support;
+  const { claudePath: _, ...provider } = support.provider;
+  return { ...support, provider: { ...provider, hostClaudePath } };
+}
+
+test("a Claude sandbox session runs the host-installed Claude from its read-only versions directory", async (t) => {
+  const f = fakeProvider(t);
+  const host = join(f.stateRoot, "..", "host-claude");
+  let install = fakeHostClaude(host, "2.1.0");
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => hostSupport(f.support, install.link) });
+  const start = async () => {
+    const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
+    await session.dispose();
+    assert.ok(f.spec().additionalWorkspaces.some((mount) => mount.path === install.versions && mount.readOnly));
+    assert.ok(!f.spec().additionalWorkspaces.some((mount) => mount.path === dirname(install.link)));
+    assert.ok(f.argv().includes(`FLOW_CLAUDE_PATH=${install.executable}`));
+    assert.ok(f.argv().includes("DISABLE_AUTOUPDATER=1"));
+  };
+  await start();
+  install = fakeHostClaude(host, "2.2.0");
+  await start();
+});
+
+test("a Claude sandbox session refuses an incompatible host Claude before it creates a VM", async (t) => {
+  const f = fakeProvider(t);
+  const install = fakeHostClaude(join(f.stateRoot, "..", "host-claude"), "2.1.0", 3);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => hostSupport(f.support, install.link) });
+  await assert.rejects(backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} }),
+    /Sandbox isolation is unavailable; unrestricted launch refused: host Claude .* is not a 64-bit/);
+  assert.equal(existsSync(join(f.stateRoot, "..", "log", "calls")), false);
+});
+
+test("a Claude sandbox session with a guest Claude passes the guest path unchanged", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
+  await session.dispose();
+  assert.ok(f.argv().includes("FLOW_CLAUDE_PATH=/bin/false"));
+  assert.ok(!f.argv().includes("DISABLE_AUTOUPDATER=1"));
+});
+
+test("a Claude sandbox session without a Claude path leaves the SDK's own Claude in place", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => { if (!f.support.supported) return f.support; const { claudePath: _, ...provider } = f.support.provider; return { ...f.support, provider }; } });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
+  await session.dispose();
+  assert.ok(!f.argv().some((part) => part.startsWith("FLOW_CLAUDE_PATH=")));
 });
 
 test("a Claude sandbox session shares nothing inside its writable state folder read-only", async (t) => {

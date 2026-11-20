@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
-import { createSandbox, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
+import { createSandbox, hostClaude, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
 import { validateFilesystemScope } from "../../isolation/filesystem.ts";
 import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/shared-sandbox.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
@@ -100,6 +100,14 @@ export class WorkerBackend implements AgentBackend {
     const assets = [packageRoot, bundle, ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
     assets.push(...nodeExecutionAssets(assets));
+    let claudePath = support.provider.claudePath;
+    if (support.provider.hostClaudePath && (shared || this.name === "claude")) {
+      let host: ReturnType<typeof hostClaude>;
+      try { host = hostClaude(support.provider.hostClaudePath); }
+      catch (error) { throw new Error(`${sandboxUnavailable().message}: ${(error as Error).message}`); }
+      claudePath = host.executable;
+      assets.push(host.directory);
+    }
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
     const cleanups: (() => void)[] = [];
@@ -110,7 +118,8 @@ export class WorkerBackend implements AgentBackend {
       cleanups.push(claude.cleanup);
       env.CLAUDE_CONFIG_DIR = claude.env.CLAUDE_CONFIG_DIR!;
       if (claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
-      env.FLOW_CLAUDE_PATH = support.provider.claudePath;
+      if (claudePath) env.FLOW_CLAUDE_PATH = claudePath;
+      if (support.provider.hostClaudePath) env.DISABLE_AUTOUPDATER = "1";
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
         if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && !["projects", "file-history"].includes(entry)) assets.push(realpathSync(link));

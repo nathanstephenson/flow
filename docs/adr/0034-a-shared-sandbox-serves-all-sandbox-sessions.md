@@ -18,6 +18,7 @@ sbx cannot add mounts to a VM after create. Thus the Shared Sandbox mounts fixed
 - writable: the Project Root, `<state root>/worktrees`, `<state root>/sessions`, and the Workflow
   builder folder `<tmpdir>/flow-workflow-builders`;
 - writable: `claudeAuthDir`, if the Sandbox Provider sets it;
+- read-only: the versions directory of `hostClaudePath`, if the Sandbox Provider sets it (ADR 0042);
 - read-only: the assets that a per-session VM mounts (the Flow package, `node_modules`, Claude
   extras).
 

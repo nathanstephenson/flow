@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, sep } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { sandboxSupervisorSource } from "./sandbox-supervisor.ts";
 
 export type SandboxProvider = {
-  version: 1; nodePath: string; claudePath: string; claudeAuthDir?: string;
+  version: 1; nodePath: string; claudePath?: string; hostClaudePath?: string; claudeAuthDir?: string;
   probe: string[]; create: string[]; exec: string[]; remove: string[]; shell?: string[];
 };
 export type SandboxSupport =
@@ -31,10 +31,11 @@ export function sandboxProviderPath(stateRoot: string, env: NodeJS.ProcessEnv = 
 export function parseSandboxProvider(text: string): SandboxProvider {
   const value = JSON.parse(text) as Record<string, unknown> | null;
   if (!value || typeof value !== "object" || value.version !== 1) throw new Error("version must be 1");
-  for (const key of ["nodePath", "claudePath", "claudeAuthDir"] as const) {
-    if (key === "claudeAuthDir" && value[key] === undefined) continue;
+  for (const key of ["nodePath", "claudePath", "hostClaudePath", "claudeAuthDir"] as const) {
+    if (key !== "nodePath" && value[key] === undefined) continue;
     if (typeof value[key] !== "string" || !isAbsolute(value[key])) throw new Error(`${key} must be an absolute path`);
   }
+  if (value.claudePath !== undefined && value.hostClaudePath !== undefined) throw new Error("set claudePath or hostClaudePath, not both");
   for (const [command, { allowed, required }] of Object.entries(placeholders)) {
     const template = value[command];
     if (command === "shell" && template === undefined) continue;
@@ -47,6 +48,24 @@ export function parseSandboxProvider(text: string): SandboxProvider {
     for (const part of required) if (!template.includes(part)) throw new Error(`${command} must contain ${part}`);
   }
   return value as SandboxProvider;
+}
+
+const elfMachines: Partial<Record<NodeJS.Architecture, number>> = { x64: 62, arm64: 183 };
+
+/** Resolves a host-installed native Claude and the dedicated directory that holds its versions. */
+export function hostClaude(path: string): { executable: string; directory: string } {
+  const executable = realpathSync(path);
+  if (!statSync(executable).isFile()) throw new Error(`host Claude ${executable} is not a file`);
+  const header = Buffer.alloc(20);
+  const fd = openSync(executable, "r");
+  try { readSync(fd, header, 0, header.length, 0); } finally { closeSync(fd); }
+  if (header.readUInt32BE(0) !== 0x7f454c46) throw new Error(`host Claude ${executable} is not a Linux native executable; the sandbox cannot run it`);
+  const machine = header[5] === 1 ? header.readUInt16LE(18) : header.readUInt16BE(18);
+  if (header[4] !== 2 || machine !== elfMachines[process.arch]) throw new Error(`host Claude ${executable} is not a 64-bit ${process.arch} executable`);
+  const directory = dirname(executable);
+  const other = readdirSync(directory, { withFileTypes: true }).find((entry) => !entry.isFile());
+  if (other) throw new Error(`host Claude directory ${directory} holds ${other.name}, which is not a regular file; only a dedicated versions directory is mounted`);
+  return { executable, directory };
 }
 
 export function fillTemplate(template: string[], values: Record<string, string>): string[] {
