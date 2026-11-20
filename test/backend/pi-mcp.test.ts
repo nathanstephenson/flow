@@ -70,6 +70,7 @@ it(
     const session = await fixture.create({ mcp, scope });
     // piFixture keeps its SDK credential/config directory separate from the restricted Scope.
     await mcp.open();
+    assert.equal(mcp.status()[0]?.state, "connected", JSON.stringify(mcp.status()));
     await session.refreshMcp!();
     await session.prompt("Use MCP");
     assert.ok(

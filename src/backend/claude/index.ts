@@ -840,6 +840,15 @@ class ClaudeSession implements BackendSession {
   private translate(sdkMessage: SDKMessage): void {
     switch (sdkMessage.type) {
       case "system":
+        if (sdkMessage.subtype === "informational") {
+          this.emit({ type: "notice", level: sdkMessage.level === "warning" ? "warn" : "info", text: sdkMessage.content });
+          return;
+        }
+        if (sdkMessage.subtype === "session_writes_lost") {
+          const lost = sdkMessage.lost.map(part => part === "transcript" ? "its conversation record" : "its global configuration");
+          this.emit({ type: "notice", level: "warn", text: `Claude Code could not save ${lost.join(" and ")} (${sdkMessage.error_code}).` });
+          return;
+        }
         if (sdkMessage.subtype === "init") {
           this.sdkSessionId = sdkMessage.session_id;
           this.noteBootedModel(sdkMessage.model);

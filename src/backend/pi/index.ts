@@ -21,6 +21,7 @@ import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachme
 import type { AutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import { piEffortLevels } from "./effort-capabilities.ts";
+import { findPiModel, piModelUnavailable } from "./model-selection.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -32,6 +33,7 @@ import type {
 import { clampEffort } from "../effort.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
 import { createWorkerPiModelRuntime } from "./model-auth.ts";
+import { streamingCacheWarming } from "./cache-warming.ts";
 import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
@@ -92,7 +94,7 @@ export class PiSession implements BackendSession {
     this.unsubscribe();
     current.dispose();
     this.session = await this.recreate(current);
-    this.unsubscribe = this.session.subscribe((event) => this.translate(event));
+    this.unsubscribe = this.bindSession();
   }
   private readonly standingAuthorisations: readonly string[];
   private readonly agentPermissions: PiAgentPermissions | undefined;
@@ -146,7 +148,16 @@ export class PiSession implements BackendSession {
     if (this.agentPermissions) this.answerPermission = async (callId, decision) => this.agentPermissions!.answer(callId, decision);
     if (enquiries) this.answerEnquiry = async (askId, answers) => enquiries.answer(askId, answers);
     this.capabilities = capabilitiesOf(session, support.enquiries !== undefined, support.subagents ?? false, !this.workflowBuilder);
-    this.unsubscribe = session.subscribe((event) => this.translate(event));
+    this.unsubscribe = this.bindSession();
+  }
+
+  private bindSession(): () => void {
+    const stream = this.session.agent?.streamFunction;
+    if (stream) this.session.agent.streamFunction = (...args) => {
+      if (this.disposed) throw new Error("Backend Session stopped");
+      return stream(...args);
+    };
+    return this.session.subscribe((event) => this.translate(event));
   }
 
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
@@ -166,6 +177,7 @@ export class PiSession implements BackendSession {
   }
 
   async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
+    if (this.disposed) return;
     if (messageId && this.sessionDir) this.unmappedMessageIds.push(messageId);
     this.turnId = `turn-${++this.messageSeq}`;
     this.emit({ type: "turn_started", turnId: this.turnId });
@@ -189,10 +201,8 @@ export class PiSession implements BackendSession {
 
   async setModel(modelId: string): Promise<void> {
     const available = await this.session.modelRuntime.getAvailable();
-    const qualified = available.find((candidate) => describeModel(candidate).id === modelId);
-    const legacy = available.filter((candidate) => candidate.id === modelId);
-    const model = qualified ?? (legacy.length === 1 ? legacy[0] : undefined);
-    if (!model) throw new Error(`Unknown model: ${modelId}`);
+    const model = findPiModel(available, modelId, true);
+    if (!model) throw new Error(piModelUnavailable(modelId));
     await this.session.setModel(model);
     this.applyAutoCompaction?.(this.session.model);
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
@@ -424,7 +434,7 @@ export class PiSession implements BackendSession {
       }
 
       case "agent_settled":
-        this.finishTurn(this.aborting ? "aborted" : this.turnReason);
+        this.finishTurn(event.aborted || this.aborting ? "aborted" : this.turnReason);
         return;
 
       case "auto_retry_start":
@@ -524,7 +534,7 @@ export class PiBackend implements AgentBackend {
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.
     const builder = options.workflowBuilder;
-    const settingsManager = builder ? SettingsManager.inMemory() : SettingsManager.create(options.scope, agentDir);
+    const settingsManager = builder ? SettingsManager.inMemory({ cacheWarming: "streaming" }) : SettingsManager.create(options.scope, agentDir);
     const agentPermissions = builder || options.tools === "none" ? undefined : new PiAgentPermissions(options.permissionMode ?? "always", options.standingAuthorisations ?? [], options.emit);
     const resourceLoader = new DefaultResourceLoader({
       cwd: options.scope,
@@ -538,6 +548,7 @@ export class PiBackend implements AgentBackend {
         systemPromptOverride: () => builder.instructions,
       } : {
         extensionFactories: [
+          streamingCacheWarming(settingsManager),
           ...(agentPermissions ? [agentPermissions.extension()] : []),
           ...(options.compactionModelId ? [compactionModelExtension(options.compactionModelId,
             (text) => options.emit({ type: "notice", level: "error", text }))] : []),
@@ -606,9 +617,11 @@ export class PiBackend implements AgentBackend {
 
     const autoCompaction = structuredClone(options.autoCompaction);
     const piSession = new PiSession(session, options.emit, sessionDir, { workflowBuilder: !!builder, ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
-    if (options.modelId) {
+    const modelId = options.modelId ?? (settingsManager.getDefaultProvider() === "azure-openai-responses" && settingsManager.getDefaultModel()
+      ? `azure-openai-responses/${settingsManager.getDefaultModel()}` : undefined);
+    if (modelId) {
       try {
-        await piSession.setModel(options.modelId);
+        await piSession.setModel(modelId);
       } catch (error) {
         await piSession.dispose();
         throw error;
@@ -644,14 +657,15 @@ export class PiBackend implements AgentBackend {
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
   input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession, compactionModelId?: string, agentPermissions?: PiAgentPermissions): Promise<ToolResult> {
   const available = parent.modelRuntime.getAvailableSnapshot();
-  const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
-  if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
+  const model = input.model ? findPiModel(available, input.model) : parent.model;
+  if (!model) throw new Error(`${piModelUnavailable(input.model ?? "(inherited)")} Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
   const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_") && !name.startsWith("session_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
   const producer = { subagentId: id };
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
     extensionFactories: [
+      streamingCacheWarming(settingsManager),
       ...(agentPermissions ? [agentPermissions.extension(producer)] : []),
       ...(compactionModelId ? [compactionModelExtension(compactionModelId,
         (text) => emit({ type: "notice", level: "error", text }))] : []),

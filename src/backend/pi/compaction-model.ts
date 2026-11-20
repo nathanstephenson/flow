@@ -1,4 +1,5 @@
 import { compact, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { findPiModel, piModelUnavailable } from "./model-selection.ts";
 
 /** Keep Pi's preparation, split-turn handling, file tracking and usage accounting, changing only
  * the model for its summary calls. External extensions remain disabled in Flow's Backend Sessions. */
@@ -10,8 +11,8 @@ export function compactionModelExtension(modelId: string, notice: (message: stri
   return { name: "flow-compaction-model", hidden: true, factory: (pi) => {
     pi.on("session_before_compact", async (event, ctx) => {
       try {
-        const model = ctx.modelRegistry.getAvailable().find((candidate) => `${candidate.provider}/${candidate.id}` === modelId);
-        if (!model) throw new Error(`Configured compaction model “${modelId}” is unavailable`);
+        const model = findPiModel(ctx.modelRegistry.getAvailable(), modelId);
+        if (!model) throw new Error(piModelUnavailable(modelId, "Configured compaction model is unavailable"));
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
         if (!auth.ok) throw new Error(auth.error);
         const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
