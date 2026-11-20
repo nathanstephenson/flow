@@ -12,7 +12,7 @@ const bundle = await build({
       import React from 'react';
       import { createRoot } from 'react-dom/client';
       import { TranscriptEntry } from '@/components/transcript-entry.tsx';
-      import { EnquiryToolRow, EnquiryToolRowLines, EnquiryToolRowCount, EnquiryExchange, EnquiryDecisionList, EnquiryOptions } from '@/components/enquiry-entry-variants.tsx';
+      import { EnquiryPerQuestion, EnquiryToolRow, EnquiryToolRowLines, EnquiryToolRowCount, EnquiryExchange, EnquiryDecisionList, EnquiryOptions } from '@/components/enquiry-entry-variants.tsx';
       const q = (header, question, options) => ({ header, question, multiSelect: false, options: options.map((label) => ({ label })) });
       const enquiries = [
         { kind: 'enquiry', id: 'a', status: 'answered', answers: [['Version dir (Recommended)']], questions: [q('Mount',
@@ -40,6 +40,9 @@ const bundle = await build({
         'lines-open-notes': (e) => <EnquiryToolRowLines entry={e} query="" detail="notes" />,
         'lines-open-rule': (e) => <EnquiryToolRowLines entry={e} query="" detail="rule" />,
         'lines-open-chips': (e) => <EnquiryToolRowLines entry={e} query="" detail="chips" />,
+        'per-question-notes': (e) => <EnquiryPerQuestion entry={e} query="" detail="notes" />,
+        'per-question-rule': (e) => <EnquiryPerQuestion entry={e} query="" detail="rule" />,
+        'per-question-chips': (e) => <EnquiryPerQuestion entry={e} query="" detail="chips" />,
         'tool-row-count': (e) => <EnquiryToolRowCount entry={e} query="" />,
         'tool-row-open': (e) => <EnquiryToolRow entry={e} query="" />,
         exchange: (e) => <EnquiryExchange entry={e} query="" />,
@@ -76,9 +79,10 @@ await page.setContent(`<style>${css}</style><div id="root"></div>`);
 await page.addScriptTag({ content: bundle.outputFiles[0].text });
 await page.waitForSelector("#options");
 await page.evaluate(() => document.querySelectorAll("#tool-row-open details, [id^=lines-open] details").forEach((d) => { d.open = true; }));
+await page.evaluate(() => document.querySelectorAll("[id^=per-question]").forEach((section) => section.querySelectorAll("details").forEach((d, index) => { d.open = [0, 2, 5].includes(index); })));
 for (const theme of ["light", "dark"]) {
   await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
-  for (const name of ["current", "tool-row", "tool-row-lines", "tool-row-count", "tool-row-open", "lines-open-notes", "lines-open-rule", "lines-open-chips", "exchange", "decision-list", "options"]) {
+  for (const name of ["current", "tool-row", "tool-row-lines", "tool-row-count", "tool-row-open", "lines-open-notes", "lines-open-rule", "lines-open-chips", "per-question-notes", "per-question-rule", "per-question-chips", "exchange", "decision-list", "options"]) {
     await page.locator(`#${name}`).screenshot({ path: `${out}/enquiry-${name}-${theme}.png` });
   }
 }

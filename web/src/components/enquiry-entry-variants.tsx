@@ -95,6 +95,29 @@ export function EnquiryToolRowCount({ entry, query }: Props) {
   );
 }
 
+export function EnquiryPerQuestion({ entry, query, detail }: Props & { detail: Detail }) {
+  return (
+    <div className="flex items-start gap-2 px-1.5 py-1 text-foreground">
+      <MessageCircleQuestionMark aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        {entry.questions.map((question, index) => (
+          <details key={question.question} className="group/question">
+            <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 text-sm select-none hover:bg-muted/50">
+              <span className="min-w-0 truncate">
+                <Pair entry={entry} index={index} />
+              </span>
+              <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/question:rotate-90" />
+            </summary>
+            <div className={cn("mt-0.5 mb-1.5", detail === "rule" && "border-l pl-3")}>
+              <LightDetail entry={entry} index={index} query={query} detail={detail} labelled={false} />
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ToolRowShell({ entry, query, children, detail = "card" }: Props & { children: ReactNode; detail?: Detail }) {
   return (
     <details className="group/tool text-foreground">
@@ -219,7 +242,7 @@ function OptionList({ entry, index, query }: Props & { index: number }) {
   );
 }
 
-function LightDetail({ entry, index, query, detail }: Props & { index: number; detail: Detail }) {
+function LightDetail({ entry, index, query, detail, labelled = true }: Props & { index: number; detail: Detail; labelled?: boolean }) {
   const question = entry.questions[index]!;
   const chosen = entry.answers?.[index] ?? [];
   const others = question.options.filter((option) => !chosen.includes(option.label));
@@ -227,7 +250,7 @@ function LightDetail({ entry, index, query, detail }: Props & { index: number; d
   return (
     <div className="space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
       <p>
-        {entry.questions.length > 1 ? <span className="mr-1.5 text-foreground/70">{question.header}</span> : null}
+        {labelled && entry.questions.length > 1 ? <span className="mr-1.5 text-foreground/70">{question.header}</span> : null}
         <Highlighted text={question.question} query={query} />
       </p>
       {detail === "notes" ? (
