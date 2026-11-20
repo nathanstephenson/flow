@@ -12,7 +12,7 @@ const bundle = await build({
       import React from 'react';
       import { createRoot } from 'react-dom/client';
       import { TranscriptEntry } from '@/components/transcript-entry.tsx';
-      import { EnquiryToolRow, EnquiryExchange, EnquiryDecisionList, EnquiryOptions } from '@/components/enquiry-entry-variants.tsx';
+      import { EnquiryToolRow, EnquiryToolRowLines, EnquiryToolRowCount, EnquiryExchange, EnquiryDecisionList, EnquiryOptions } from '@/components/enquiry-entry-variants.tsx';
       const q = (header, question, options) => ({ header, question, multiSelect: false, options: options.map((label) => ({ label })) });
       const enquiries = [
         { kind: 'enquiry', id: 'a', status: 'answered', answers: [['Version dir (Recommended)']], questions: [q('Mount',
@@ -22,14 +22,22 @@ const bundle = await build({
           q('Reject', 'How should Flow reject an incompatible host Claude? Host-side check catches macOS (Mach-O), scripts/JS installs and wrong CPU arch before the VM is created. It cannot see the guest libc (glibc vs musl).',
             ['Host ELF check (Recommended)', 'Guest probe', 'No check']),
           q('Version', 'Which Claude version should the sandbox default to?', ['Latest', 'Match host'])] },
+        { kind: 'enquiry', id: 'd', status: 'answered',
+          answers: [['Rebuild on every start'], ['Keep the last three versions'], ['Warn in the transcript and continue'], ['Both arm64 and x86_64']],
+          questions: [q('Cache', 'When should Flow rebuild the sandbox image?', ['Rebuild on every start', 'Rebuild on version change']),
+            q('Retention', 'How many old Claude versions should stay mounted?', ['Keep the last three versions', 'Keep only the current version']),
+            q('Mismatch', 'What should happen when the guest libc does not match?', ['Warn in the transcript and continue', 'Stop the session']),
+            q('Arch', 'Which CPU architectures should the sandbox support?', ['Both arm64 and x86_64', 'Host architecture only'])] },
         { kind: 'enquiry', id: 'c', status: 'asked', questions: [q('Config', 'Provider file shape for host Claude? claudePath keeps its guest meaning in all options.',
           ['hostClaudePath field (Recommended)', 'Nested host block'])] },
       ];
-      const before = { kind: 'assistant', id: 'x', final: true, text: 'Three design questions before I change the sandbox mount.' };
+      const before = { kind: 'assistant', id: 'x', final: true, text: 'Some design questions before I change the sandbox mount.' };
       const after = { kind: 'assistant', id: 'y', final: true, text: 'Thanks. I will mount the version directory read-only.' };
       const variants = {
         current: (e) => <TranscriptEntry entry={e} query="" sessionId="s" />,
         'tool-row': (e) => <EnquiryToolRow entry={e} query="" />,
+        'tool-row-lines': (e) => <EnquiryToolRowLines entry={e} query="" />,
+        'tool-row-count': (e) => <EnquiryToolRowCount entry={e} query="" />,
         'tool-row-open': (e) => <EnquiryToolRow entry={e} query="" />,
         exchange: (e) => <EnquiryExchange entry={e} query="" />,
         'decision-list': (e) => <EnquiryDecisionList entry={e} query="" />,
@@ -67,7 +75,7 @@ await page.waitForSelector("#options");
 await page.evaluate(() => document.querySelectorAll("#tool-row-open details.group\\/tool").forEach((d) => { d.open = true; }));
 for (const theme of ["light", "dark"]) {
   await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
-  for (const name of ["current", "tool-row", "tool-row-open", "exchange", "decision-list", "options"]) {
+  for (const name of ["current", "tool-row", "tool-row-lines", "tool-row-count", "tool-row-open", "exchange", "decision-list", "options"]) {
     await page.locator(`#${name}`).screenshot({ path: `${out}/enquiry-${name}-${theme}.png` });
   }
 }

@@ -1,4 +1,5 @@
 import { Check, ChevronRight, MessageCircleQuestionMark } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Entry } from "@client/reduce.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -18,19 +19,86 @@ function pending(entry: Enquiry): string {
 
 export function EnquiryToolRow({ entry, query }: Props) {
   return (
-    <details className="group/tool text-foreground">
-      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
-        <MessageCircleQuestionMark aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 truncate text-sm">
-          {entry.questions.map((question, index) => (
-            <span key={question.question}>
-              {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
-              <span className="text-muted-foreground">{question.header} </span>
-              {entry.status === "answered" ? answerOf(entry, index) ?? "—" : <span className="text-muted-foreground italic">{pending(entry)}</span>}
+    <ToolRowShell entry={entry} query={query}>
+      <span className="min-w-0 truncate text-sm">
+        {entry.questions.map((_, index) => (
+          <span key={index}>
+            {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
+            <Pair entry={entry} index={index} />
+          </span>
+        ))}
+      </span>
+    </ToolRowShell>
+  );
+}
+
+export function EnquiryToolRowLines({ entry, query }: Props) {
+  return (
+    <ToolRowShell entry={entry} query={query}>
+      <span className="flex min-w-0 flex-col text-sm">
+        {entry.questions.map((_, index) => (
+          <span key={index} className="truncate">
+            <Pair entry={entry} index={index} />
+          </span>
+        ))}
+      </span>
+    </ToolRowShell>
+  );
+}
+
+export function EnquiryToolRowCount({ entry, query }: Props) {
+  const row = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState(entry.questions.length);
+  useLayoutEffect(() => {
+    const element = row.current!;
+    const fit = () => {
+      const widths = [...element.querySelectorAll<HTMLElement>("[data-measure]")].map((pair) => pair.offsetWidth);
+      const space = element.clientWidth;
+      const total = widths.reduce((sum, width) => sum + width, 0);
+      if (total <= space) return setShown(widths.length);
+      let used = 0;
+      let count = 0;
+      while (count < widths.length && used + widths[count]! <= space - 80) used += widths[count++]!;
+      setShown(Math.max(1, count));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [entry]);
+  const hidden = entry.questions.length - shown;
+  return (
+    <ToolRowShell entry={entry} query={query}>
+      <span ref={row} className="relative flex min-w-0 flex-1 overflow-hidden text-sm whitespace-nowrap">
+        <span aria-hidden className="invisible absolute flex">
+          {entry.questions.map((_, index) => (
+            <span key={index} data-measure>
+              {index > 0 ? " · " : null}
+              <Pair entry={entry} index={index} />
             </span>
           ))}
         </span>
-        <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90" />
+        <span className="min-w-0 truncate">
+          {entry.questions.slice(0, shown).map((_, index) => (
+            <span key={index}>
+              {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
+              <Pair entry={entry} index={index} />
+            </span>
+          ))}
+        </span>
+        {hidden > 0 ? <span className="ml-2 shrink-0 text-muted-foreground">+{hidden} more</span> : null}
+      </span>
+    </ToolRowShell>
+  );
+}
+
+function ToolRowShell({ entry, query, children }: Props & { children: ReactNode }) {
+  return (
+    <details className="group/tool text-foreground">
+      <summary className="flex cursor-default items-start gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
+        <MessageCircleQuestionMark aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
+        {children}
+        <ChevronRight aria-hidden className="mt-[3px] ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90" />
       </summary>
       <div className="my-1 ml-6 space-y-3 rounded-lg border p-3">
         {entry.questions.map((question, index) => (
@@ -38,6 +106,15 @@ export function EnquiryToolRow({ entry, query }: Props) {
         ))}
       </div>
     </details>
+  );
+}
+
+function Pair({ entry, index }: { entry: Enquiry; index: number }) {
+  return (
+    <>
+      <span className="text-muted-foreground">{entry.questions[index]!.header} </span>
+      {entry.status === "answered" ? answerOf(entry, index) ?? "—" : <span className="text-muted-foreground italic">{pending(entry)}</span>}
+    </>
   );
 }
 
