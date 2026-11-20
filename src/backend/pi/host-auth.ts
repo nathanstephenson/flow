@@ -8,6 +8,7 @@ import lockfile from "proper-lockfile";
 import { waitForAbort } from "../worker/rpc.ts";
 import type { PiModelAuth, PiProviderAuth } from "./model-auth.ts";
 import { projectPi099RadiusCatalog, registerPiNativeProvider } from "./model-catalog.ts";
+import { parsePiModelConfig } from "./model-config.ts";
 
 type RawCredentials = Record<string, unknown>;
 
@@ -36,7 +37,7 @@ function radiusGateways(modelsPath: string): Map<string, string> {
   try {
     if (!fstatSync(fd).isFile()) throw new Error("Pi models.json must be a regular file");
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(fd, "utf8").replace(/^\uFEFF/, "")); }
+    try { raw = parsePiModelConfig(readFileSync(fd, "utf8")); }
     catch { throw new Error("Invalid Pi models.json: expected valid JSON"); }
     if (!object(raw)) throw new Error("Invalid Pi models.json: expected an object");
     const gateways = new Map<string, string>();
