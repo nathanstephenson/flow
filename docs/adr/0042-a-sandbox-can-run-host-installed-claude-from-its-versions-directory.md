@@ -6,9 +6,12 @@ Accepted. Amends ADR 0032 and ADR 0034.
 
 ## Decision
 
-The Sandbox Provider names Claude with exactly one of `claudePath` (a guest path, as in ADR 0032)
-or `hostClaudePath` (a host path). A guest install in the base environment makes each VM create
-slow, so `hostClaudePath` lets the VM use the host's native install.
+The Sandbox Provider names Claude with at most one of `claudePath` (a guest path, as in ADR 0032)
+or `hostClaudePath` (a host path). With neither, Flow does not set `FLOW_CLAUDE_PATH`, and the Claude
+SDK runs the Claude in Flow's own `node_modules`, which the VM already mounts read-only. That works
+when Flow was installed on Linux for the guest's CPU and libc, the same as Pi, which needs only the
+guest's `nodePath`. A guest install in the base environment makes each VM create slow, so
+`hostClaudePath` lets the VM use the host's own native install, with its own update schedule.
 
 The native install is a symlink, such as `~/.local/bin/claude`, to one self-contained executable in
 a versions directory, such as `~/.local/share/claude/versions/<version>`. When a sandbox Backend

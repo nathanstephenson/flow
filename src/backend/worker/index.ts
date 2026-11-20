@@ -108,7 +108,7 @@ export class WorkerBackend implements AgentBackend {
       cleanups.push(claude.cleanup);
       env.CLAUDE_CONFIG_DIR = claude.env.CLAUDE_CONFIG_DIR!;
       if (claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
-      env.FLOW_CLAUDE_PATH = claudePath!;
+      if (claudePath) env.FLOW_CLAUDE_PATH = claudePath;
       if (support.provider.hostClaudePath) env.DISABLE_AUTOUPDATER = "1";
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);

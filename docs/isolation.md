@@ -108,8 +108,8 @@ Sandbox mode needs a sandbox provider file. The Session Host reads it once, at s
 | --- | --- |
 | `version` | `1` |
 | `nodePath` | Absolute path of Node in the guest. |
-| `claudePath` | Absolute path of Claude in the guest. Set this or `hostClaudePath`, not both. |
-| `hostClaudePath` | Absolute path of a native Claude on the host. See [Host-installed Claude](#host-installed-claude). |
+| `claudePath` | Optional. Absolute path of Claude in the guest. |
+| `hostClaudePath` | Optional. Absolute path of a native Claude on the host. See [Host-installed Claude](#host-installed-claude). |
 | `claudeAuthDir` | Optional. Host folder that holds Claude's `.credentials.json`. |
 | `probe` | Argv template. Sandbox is available only when `probe` exits with 0. |
 | `create` | Argv template with `{spec}`, and optionally `{name}`. |
@@ -117,6 +117,10 @@ Sandbox mode needs a sandbox provider file. The Session Host reads it once, at s
 | `remove` | Argv template with `{name}`. |
 | `shell` | Optional argv template with `{name}` and `{cwd}`. Opens a Shell in the session's VM. |
 
+- Set `claudePath` or `hostClaudePath`, not both. With neither, the Claude SDK runs the Claude in
+  Flow's own `node_modules`, which Flow mounts read-only. That Claude matches the SDK version, and
+  changes only when you update Flow. It runs only if Flow was installed on Linux with the guest's
+  CPU and libc. For example, a macOS host needs `claudePath` or `hostClaudePath`.
 - Flow adds `/bin/bash -l` to the `shell` template.
 - Without `shell`, Flow refuses to open a Shell in sandbox mode.
 - Flow mounts `claudeAuthDir` writable in the VM, so refreshed tokens stay on the host.
@@ -129,7 +133,6 @@ Example, with a base environment from `harness plan --out <dir>`:
 {
   "version": 1,
   "nodePath": "/usr/local/bin/node",
-  "claudePath": "/home/agent/.local/bin/claude",
   "claudeAuthDir": "/Users/<you>/.local/state/goodstack-ai-harness/goodstack/claude",
   "probe": ["sbx", "ls", "--json"],
   "create": ["sbx", "env", "create", "<dir>", "{spec}", "--force"],

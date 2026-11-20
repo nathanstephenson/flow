@@ -35,7 +35,7 @@ export function parseSandboxProvider(text: string): SandboxProvider {
     if (key !== "nodePath" && value[key] === undefined) continue;
     if (typeof value[key] !== "string" || !isAbsolute(value[key])) throw new Error(`${key} must be an absolute path`);
   }
-  if ((value.claudePath === undefined) === (value.hostClaudePath === undefined)) throw new Error("exactly one of claudePath and hostClaudePath is required");
+  if (value.claudePath !== undefined && value.hostClaudePath !== undefined) throw new Error("set claudePath or hostClaudePath, not both");
   for (const [command, { allowed, required }] of Object.entries(placeholders)) {
     const template = value[command];
     if (command === "shell" && template === undefined) continue;

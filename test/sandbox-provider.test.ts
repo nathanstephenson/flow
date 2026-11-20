@@ -28,13 +28,14 @@ describe("sandbox provider file", () => {
     assert.deepEqual(parseSandboxProvider(JSON.stringify(shell)), shell);
     const host = { ...valid, claudePath: undefined, hostClaudePath: "/home/me/.local/bin/claude" };
     assert.deepEqual(parseSandboxProvider(JSON.stringify(host)), JSON.parse(JSON.stringify(host)));
+    const bundled = { ...valid, claudePath: undefined };
+    assert.deepEqual(parseSandboxProvider(JSON.stringify(bundled)), JSON.parse(JSON.stringify(bundled)));
   });
 
   for (const [label, change, error] of [
     ["wrong version", { version: 2 }, /version must be 1/],
     ["relative node path", { nodePath: "node" }, /nodePath must be an absolute path/],
-    ["missing claude path", { claudePath: undefined }, /exactly one of claudePath and hostClaudePath is required/],
-    ["guest and host claude paths", { hostClaudePath: "/home/me/.local/bin/claude" }, /exactly one of claudePath and hostClaudePath is required/],
+    ["guest and host claude paths", { hostClaudePath: "/home/me/.local/bin/claude" }, /set claudePath or hostClaudePath, not both/],
     ["relative host claude path", { claudePath: undefined, hostClaudePath: "claude" }, /hostClaudePath must be an absolute path/],
     ["relative auth dir", { claudeAuthDir: "claude" }, /claudeAuthDir must be an absolute path/],
     ["missing command", { remove: undefined }, /remove must be a non-empty array/],

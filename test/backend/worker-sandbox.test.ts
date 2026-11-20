@@ -162,6 +162,15 @@ test("a Claude sandbox session with a guest Claude passes the guest path unchang
   assert.ok(!f.argv().includes("DISABLE_AUTOUPDATER=1"));
 });
 
+test("a Claude sandbox session without a Claude path leaves the SDK's own Claude in place", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
+    sandbox: () => { if (!f.support.supported) return f.support; const { claudePath: _, ...provider } = f.support.provider; return { ...f.support, provider }; } });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, emit: () => {} });
+  await session.dispose();
+  assert.ok(!f.argv().some((part) => part.startsWith("FLOW_CLAUDE_PATH=")));
+});
+
 test("a Claude sandbox session shares nothing inside its writable state folder read-only", async (t) => {
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
