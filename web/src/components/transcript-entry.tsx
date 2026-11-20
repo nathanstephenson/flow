@@ -1,4 +1,4 @@
-import { Bot, LoaderCircle } from "lucide-react";
+import { Bot, ChevronRight, LoaderCircle, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
@@ -355,7 +355,7 @@ function ToolCallEntryView({
 /**
  * What the model asked, and what it was told.
  *
- * **No controls.** A live Enquiry renders here as a card and nothing more; the answering surface is
+ * **No controls.** A live Enquiry renders here as a row and nothing more; the answering surface is
  * the composer and only the composer. Two answering surfaces for one Enquiry is two cursors, two
  * selections and one blocked turn — and the duplication with the open picker is the same duplication
  * `SubagentStrip` has with the Subagent rows, which reads the same way.
@@ -366,39 +366,46 @@ function ToolCallEntryView({
  */
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
-    <div className="py-0.5">
-      <div className="w-full rounded-lg border px-3 py-2 text-foreground [overflow-wrap:anywhere]">
-        <div className="flex items-center gap-2">
-          <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
-          <span className="shrink-0 text-xs text-muted-foreground">?</span>
-          <span className="min-w-0 font-mono text-sm">
-            {entry.questions.length === 1 ? "Asked a question" : `Asked ${entry.questions.length} questions`}
-          </span>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            {entry.status === "asked" ? "waiting…" : entry.status}
-          </span>
-        </div>
-        <dl className="mt-1 space-y-1">
-          {entry.questions.map((question, index) => {
-            const chosen = entry.answers?.[index] ?? [];
-            return (
-              <div key={question.question} className="text-sm">
-                <dt className="text-xs text-muted-foreground">
-                  <Highlighted text={question.question} query={query} />
-                </dt>
-                <dd className={cn("font-medium", chosen.length === 0 && "text-muted-foreground italic")}>
-                  {chosen.length === 0 ? (
-                    entry.status === "asked" ? "unanswered" : "no answer"
-                  ) : (
-                    <Highlighted text={chosen.join(", ")} query={query} />
-                  )}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
+    <div className="flex items-start gap-2 px-1.5 py-1 text-foreground">
+      <MessageCircleQuestionMark aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        {entry.questions.map((question, index) => (
+          <EnquiryQuestionView key={question.question} entry={entry} index={index} query={query} />
+        ))}
       </div>
     </div>
+  );
+}
+
+function EnquiryQuestionView({ entry, index, query }: { entry: Of<"enquiry">; index: number; query: string }) {
+  const question = entry.questions[index]!;
+  const chosen = entry.answers?.[index] ?? [];
+  const others = question.options.filter((option) => !chosen.includes(option.label)).map((option) => option.label);
+  return (
+    <details className="group/question">
+      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 text-sm select-none hover:bg-muted/50">
+        <span className="min-w-0 truncate">
+          <span className="text-muted-foreground">{question.header} </span>
+          {chosen.length === 0 ? (
+            <span className="text-muted-foreground italic">{entry.status === "asked" ? "waiting…" : "no answer"}</span>
+          ) : (
+            <Highlighted text={chosen.join(", ")} query={query} />
+          )}
+        </span>
+        <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/question:rotate-90" />
+      </summary>
+      <div className="mt-0.5 mb-1.5 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        <p>
+          <Highlighted text={question.question} query={query} />
+        </p>
+        {others.length === 0 ? null : (
+          <p className="text-muted-foreground/70">
+            {chosen.length === 0 ? "Options: " : "Other options: "}
+            <Highlighted text={others.join(" · ")} query={query} />
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -506,31 +513,6 @@ function BackgroundStatus({ entry }: { entry: Of<"background_call"> }) {
 function backgroundDot(status: Of<"background_call">["status"]): "running" | "complete" | "error" {
   if (status === "error") return "error";
   return status === "running" ? "running" : "complete";
-}
-
-/**
- * A failed tool call is one of the three things `--destructive` is spent on — rhea's only coloured
- * token, and a failure is worth it. Running is filled and finished is a quiet ring, the same "shape
- * carries the state, not only colour" rule the Agent Session dots follow. `--chart-2` used to stand
- * in for "finished" and is a grey indistinguishable from the muted text beside it.
- */
-const TOOL_TONE: Record<Of<"tool">["status"], string> = {
-  running: "text-foreground",
-  complete: "text-muted-foreground",
-  error: "text-destructive",
-};
-
-function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "inline-block size-1.5 shrink-0 rounded-full",
-        TOOL_TONE[status],
-        status === "complete" ? "border-[1.5px] border-current" : "bg-current",
-      )}
-    />
-  );
 }
 
 /**
