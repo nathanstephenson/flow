@@ -516,7 +516,10 @@ export class PiBackend implements AgentBackend {
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const agentDir = getAgentDir();
     const modelRuntime = options.piAuth
-      ? await createWorkerPiModelRuntime(options.piAuth, join(agentDir, "models.json"))
+      ? await createWorkerPiModelRuntime(options.piAuth, join(agentDir, "models.json"), options.signal, {
+        ...(options.stateDir ? { modelsStorePath: join(options.stateDir, 'models-store.json') } : {}),
+        discovery: options.refreshModels ? 'refresh' : 'automatic',
+      })
       : undefined;
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.

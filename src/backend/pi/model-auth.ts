@@ -24,7 +24,8 @@ const emptyCredentials: CredentialStore = {
   async delete() { throw new Error('Worker Pi credentials are read-only'); },
 };
 
-export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: string | null, signal?: AbortSignal): Promise<ModelRuntime> {
+export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: string | null, signal?: AbortSignal,
+  options: { modelsStorePath?: string; discovery?: 'automatic' | 'refresh' } = {}): Promise<ModelRuntime> {
   let metadata = new Map((await auth.snapshot(signal)).map(entry => [entry.providerId, entry]));
   const storedKey = Symbol('host credential metadata');
   type StoredKey = ApiKeyCredential & { [storedKey]?: true };
@@ -42,10 +43,13 @@ export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: 
     },
   };
   const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-  const { builtinProviders, radiusProvider } = await import('@earendil-works/pi-ai/providers/all');
-  const runtime = await ModelRuntime.create({ credentials, modelsPath, refreshOnCreate: false, ...(signal ? { signal } : {}) });
+  const { radiusProvider } = await import('@earendil-works/pi-ai/providers/all');
+  const catalog = await ModelRuntime.create({ credentials: emptyCredentials, modelsPath: null, refreshOnCreate: false });
+  const runtime = await ModelRuntime.create({ credentials, modelsPath,
+    ...(options.modelsStorePath ? { modelsStorePath: options.modelsStorePath } : {}),
+    refreshOnCreate: false, ...(signal ? { signal } : {}) });
   const refresh = runtime.refresh.bind(runtime);
-  const builtins = new Map(builtinProviders().map(provider => [provider.id, provider]));
+  const builtins = new Map(catalog.getProviders().map(provider => [provider.id, provider]));
   const registered = new Set<string>();
   const registeredGateways = new Map<string, string>();
 
@@ -65,7 +69,7 @@ export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: 
       return credential?.key ? { auth: { apiKey: credential.key }, ...(credential.env ? { env: credential.env } : {}) } : undefined;
     },
   };
-  const brokered = (provider: Provider): Provider => {
+  const brokered = (provider: Provider, catalogAuth = provider.id === 'radius'): Provider => {
     const id = provider.id;
     const apiKey = provider.auth.apiKey ?? genericApiKey;
     const oauth = provider.auth.oauth;
@@ -101,7 +105,7 @@ export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: 
         } } : {}),
       },
       ...(provider.refreshModels ? { async refreshModels(context) {
-        if (context.allowNetwork && context.credential?.type === 'oauth') {
+        if (catalogAuth && context.allowNetwork && context.credential?.type === 'oauth') {
           const result = await auth.resolve(id, context.signal);
           if (!result) return;
           return provider.refreshModels!({ ...context, credential: {
@@ -126,7 +130,7 @@ export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: 
     for (const [id, gateway] of gateways) {
       if (registeredGateways.get(id) === gateway) continue;
       const provider = radiusProvider({ id, ...(gateway ? { gateway } : {}) });
-      registerPiNativeProvider(runtime, brokered(withPi099RadiusCatalog(provider, () => metadata.get(id)?.cachedModels)));
+      registerPiNativeProvider(runtime, brokered(withPi099RadiusCatalog(provider, () => metadata.get(id)?.cachedModels), true));
       registeredGateways.set(id, gateway);
       registered.add(id);
     }
@@ -150,5 +154,13 @@ export async function createWorkerPiModelRuntime(auth: PiModelAuth, modelsPath: 
     return refresh(options);
   };
   await refresh({ allowNetwork: false, ...(signal ? { signal } : {}) });
+  if (options.discovery && process.env['PI_OFFLINE'] === undefined) {
+    const force = options.discovery === 'refresh';
+    const providers = runtime.getProviders().filter(provider => runtime.hasConfiguredAuth(provider.id)
+      && (force || (builtins.has(provider.id) && provider.id !== 'radius' && !registeredGateways.has(provider.id))))
+      .map(provider => provider.id);
+    const timeout = AbortSignal.timeout(5_000);
+    await runtime.refresh({ allowNetwork: true, force, providers, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+  }
   return runtime;
 }

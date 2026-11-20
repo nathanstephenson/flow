@@ -36,6 +36,7 @@ export type BackendCreateOptions = {
   /** Host-mediated communication between independent Agent Sessions; parent tools only. */
   sessionTools?: import("./session-tools.ts").SessionTools;
   piAuth?: import("./pi/model-auth.ts").PiModelAuth;
+  refreshModels?: boolean;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: AutoCompaction;

@@ -32,6 +32,25 @@ it("builder model discovery uses only the selected backend and does not reuse or
   assert.equal(fake.latest.disposed, true);
 });
 
+it("Check again requests catalog refresh while ordinary model discovery stays cached", async t => {
+  const host = new SessionHost();
+  t.after(() => host.shutdown());
+  const fake = new FakeBackend();
+  const opened: BackendCreateOptions[] = [];
+  host.registerBackend({ name: "fake", create: async options => {
+    opened.push(options);
+    const session = await fake.create(options);
+    session.prompt = async () => { assert.fail("Model discovery must not prompt"); };
+    return session;
+  } });
+  await host.models("/tmp");
+  await host.models("/tmp");
+  assert.deepEqual(opened.map(options => options.refreshModels), [undefined]);
+  await host.models("/tmp", true);
+  await host.models("/tmp");
+  assert.deepEqual(opened.map(options => options.refreshModels), [undefined, true]);
+});
+
 it("builder model probes never prompt and report startup failures without an ordinary retry", async () => {
   let attempts = 0;
   const listing = await probeModels({ name: "broken", create: async options => {

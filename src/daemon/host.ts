@@ -582,7 +582,7 @@ export class SessionHost {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
       const probe = this.timed("models", backend, false, (timed) =>
-        probeModels(timed, scope, false, (held) => this.holdSkillSession(backend.name, held, false)));
+        probeModels(timed, scope, false, (held) => this.holdSkillSession(backend.name, held, false), refresh));
       this.modelProbes.set(backend.name, probe);
       return probe;
     });

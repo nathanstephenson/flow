@@ -69,8 +69,12 @@ writable. Pi credential refresh belongs to the Session Host. It uses the canonic
 file and SDK locks, shared with other Pi processes. Pi workers receive non-secret availability
 metadata and request auth for an allowed Provider through private IPC, never OAuth refresh tokens
 or a copy of the credential file. Agent Sessions, Summary Model requests, Subagents, compaction and
-Revive use this same owner. Availability metadata does not refresh tokens. Network catalog requests
-can resolve request auth. Worker cancellation does not cancel an issued refresh. Host shutdown stops
+Revive use this same owner. Availability metadata does not refresh tokens. Automatic model discovery
+preserves the SDK's public catalog providers and checks only public metadata. Explicit **Check again**
+can refresh configured Provider catalogs, including authenticated ones, through the same auth owner.
+Catalog checks have a five-second deadline and use the SDK cache fallback. Each Backend Session keeps
+its catalog cache in its private state for Revive. Offline mode prevents network catalog checks.
+Worker cancellation does not cancel an issued credential refresh. Host shutdown stops
 new auth requests and waits for issued refreshes to store their replacement credentials. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
 without admitting symlinks or parents that contain protected host state. Restricted Workflow Builders
