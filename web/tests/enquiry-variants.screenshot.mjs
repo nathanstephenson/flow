@@ -37,6 +37,9 @@ const bundle = await build({
         current: (e) => <TranscriptEntry entry={e} query="" sessionId="s" />,
         'tool-row': (e) => <EnquiryToolRow entry={e} query="" />,
         'tool-row-lines': (e) => <EnquiryToolRowLines entry={e} query="" />,
+        'lines-open-notes': (e) => <EnquiryToolRowLines entry={e} query="" detail="notes" />,
+        'lines-open-rule': (e) => <EnquiryToolRowLines entry={e} query="" detail="rule" />,
+        'lines-open-chips': (e) => <EnquiryToolRowLines entry={e} query="" detail="chips" />,
         'tool-row-count': (e) => <EnquiryToolRowCount entry={e} query="" />,
         'tool-row-open': (e) => <EnquiryToolRow entry={e} query="" />,
         exchange: (e) => <EnquiryExchange entry={e} query="" />,
@@ -72,10 +75,10 @@ page.on("console", (message) => console.error(message.text()));
 await page.setContent(`<style>${css}</style><div id="root"></div>`);
 await page.addScriptTag({ content: bundle.outputFiles[0].text });
 await page.waitForSelector("#options");
-await page.evaluate(() => document.querySelectorAll("#tool-row-open details.group\\/tool").forEach((d) => { d.open = true; }));
+await page.evaluate(() => document.querySelectorAll("#tool-row-open details, [id^=lines-open] details").forEach((d) => { d.open = true; }));
 for (const theme of ["light", "dark"]) {
   await page.evaluate((dark) => document.documentElement.classList.toggle("dark", dark), theme === "dark");
-  for (const name of ["current", "tool-row", "tool-row-lines", "tool-row-count", "tool-row-open", "exchange", "decision-list", "options"]) {
+  for (const name of ["current", "tool-row", "tool-row-lines", "tool-row-count", "tool-row-open", "lines-open-notes", "lines-open-rule", "lines-open-chips", "exchange", "decision-list", "options"]) {
     await page.locator(`#${name}`).screenshot({ path: `${out}/enquiry-${name}-${theme}.png` });
   }
 }
