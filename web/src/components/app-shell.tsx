@@ -1,4 +1,3 @@
-import { WorkflowSchedulesPage } from "./workflow-schedules-page.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { occupied, railGroup } from "@client/status.ts";
@@ -21,6 +20,7 @@ import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-laye
 import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsDialog } from "@/components/settings-dialog.tsx";
+import { WorkflowSchedulesPage } from "@/components/workflow-schedules-page.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 

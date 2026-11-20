@@ -1,4 +1,4 @@
-# 40. Scheduled work has occurrence ownership and lazy Agent Sessions
+# 41. Scheduled work has occurrence ownership and lazy Agent Sessions
 
 ## Status
 
@@ -13,19 +13,25 @@ an overlap limit (default 3, range 1–100) and optional local-base-branch Workt
 
 Intervals measure elapsed minutes/hours/days, with a one-minute minimum. Daily schedules save an
 IANA timezone and HH:mm: skip nonexistent local times and use only the earlier repeated time.
-Temporal 0.5.1 supplies these semantics on Node 22. Enable/re-enable and timing edits establish a
-strictly future cursor; unrelated edits retain it. Completion never shifts an interval anchor.
+Enabling or re-enabling an interval schedule resets its anchor and waits a full interval, so pausing
+and re-enabling shifts its timing. Timing edits also establish a strictly future due time; unrelated
+edits preserve the anchor and next due time. Completion never shifts an interval anchor.
 
 Admission is serialized with mutations. A stable identity derived from schedule ID, activation and
 due time is durably claimed before effects; provisioning reserves overlap capacity. Running and
 input/recovery waits also reserve capacity. Excess occurrences are recorded, not queued. Live
-callbacks tolerate 30 seconds of lateness. Startup and older due times record grouped missed ranges
-and advance to the future: no replay backlog. A crash during uncertain provisioning is interrupted,
+callbacks tolerate 30 seconds of lateness. Startup admits only future due times: even a due time
+one second before startup is missed, not caught up. Startup and older due times record grouped
+missed ranges and advance to the future: no replay backlog. A crash during uncertain provisioning is interrupted,
 not relaunched. This is not exactly-once remote execution.
 
-Each launch reads and validates current root/reachable definitions, inputs, source Project and MCP
-contracts, then retains an immutable execution snapshot. Preflight failures create redacted history,
-not Agent Sessions, and do not disable future occurrences.
+Before scheduled effects, each launch validates the current root and reachable called definitions,
+inputs, source Project and MCP contracts. Preflight validates every agent step's model and Effort
+against the backend catalog, including unreached branches in those definitions. A cold catalog may
+require a metadata-only Backend Session probe, but never an Agent Session, Presentation Transcript,
+Summary Model or paid inference. Definitions without agent steps need no backend. Each launch
+retains an immutable execution snapshot. Preflight failures create redacted history, not Agent
+Sessions, and do not disable future occurrences.
 
 ### Ownership and interaction
 
@@ -38,10 +44,9 @@ Agent Session queries do not scan unrelated occurrence checkpoints. After launch
 checkpoint is authoritative for occurrence status and overlap capacity, even if a history-summary
 write fails. Incomplete admission claims are interrupted, not replayed or left reserving capacity.
 
-Code and direct MCP execute without an AgentBackend. Only reaching an agent step, asking for human
-input, or entering recovery attaches an Agent Session. An unreached agent branch never probes its
-model. A shared attachment promise and durable intended identity prevent concurrent callbacks from
-creating duplicate sessions. Failed attachment remains visible and requires explicit retry; uncertain
+Code and direct MCP execute without a Backend Session. Only reaching an agent step, asking for human
+input, or entering recovery attaches an Agent Session. Preflight model validation does not attach one.
+Concurrent attachment requests share one intended Agent Session identity to prevent duplicates. Failed attachment remains visible and requires explicit retry; uncertain
 effects are not replayed. Attached work uses existing parent relays, authorisation, Attention,
 completion and Spend. Pure automated success has no naming or completion-model turn.
 
@@ -59,11 +64,15 @@ occurrence lease. Recovery waits retain the environment; rejected recovery never
 invalidates executors still used by deadline handlers. Durable own-VM ownership is reconciled even
 when a crash precedes the first execution checkpoint, and failed removal retains its journal for retry.
 Unavailable isolation fails closed. Captured policy belongs to the occurrence's code/MCP environment;
-new Backend Sessions use current Settings, including when an associated Agent Session is Revived.
+newly attached Backend Sessions use current Settings, including when an associated Agent Session
+is Revived. If Settings change from Sandbox to none before attachment or Revive, agent work is
+unrestricted while code/MCP remain in their captured Sandbox environment.
 Explicit recovery can replace a failed MCP worker without replacing its Sandbox or replaying calls.
 Cancellation and shutdown abort provisioning before waiting for it, then stop owned workers. Failed
 Sandbox reclamation retains its journal for retry and cannot skip unrelated host shutdown work.
-Admission stops before execution shutdown. Sessionless work participates in update/drain guards.
+Admission stops before execution shutdown. Occurrence launch, cancellation, attachment retry,
+reconciliation and cleanup are serialized per occurrence. Shutdown waits for admitted occurrence
+operations to finish. Sessionless work participates in update/drain guards.
 
 ### Worktrees and retention
 
@@ -76,7 +85,13 @@ Pausing/deleting does not cancel admitted work or erase its history. Terminal hi
 days after completion; active/input/recovery work never expires. Agent Session Reap cannot erase
 scheduled history, and history expiry cannot delete transcripts or Spend. Sessionless Worktree
 cleanup checks cleanliness and the Worktree's current HEAD against merged refs, not only its original
-branch; unsafe cleanup preserves the tree/refs and a compact warning independent of expired payloads.
+branch. Safety checks use the saved local base branch, not the source checkout's HEAD. Unsafe
+cleanup preserves the tree/refs and a compact warning independent of expired payloads. If execution
+does not start, provisioned resources are removed promptly when safe, without shortening the
+seven-day history window; failed removal remains recorded for retry. Operational Git failures keep
+that retry pending; successful cleanup clears its warning. Protected work requires manual review.
+Reconciliation or cleanup failure for one
+occurrence does not block Session Host startup or retention of other occurrences.
 External retention cleanup does not hold the admission or schedule-mutation queue. Associated Worktrees follow Agent Session lifecycle rules,
 except that a nonterminal scheduled occurrence pins its associated Agent Session and Worktree against
 Reap, including after Settle and during startup before reconciliation. Settle stops execution without

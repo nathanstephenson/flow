@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { z } from 'zod';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,10 @@ import { WorkflowStore } from '../src/workflows/store.ts';
 import { WorkflowExecutionService } from '../src/daemon/workflow-executions.ts';
 import { WorkflowScheduleStore } from '../src/workflows/schedule-store.ts';
 import { WorkflowScheduleService } from '../src/daemon/workflow-schedules.ts';
+import { ScheduleValidationError } from '../src/workflows/schedule-errors.ts';
+import { resolveWorkflowCalls } from '../src/workflows/calls.ts';
+import { WorkflowValidationError } from '../src/workflows/errors.ts';
+import { WorkflowConflict } from '../src/daemon/workflow-execution-values.ts';
 import { occurrenceId, occurrenceSettings } from '../src/workflows/schedules.ts';
 import { serve } from '../src/daemon/server.ts';
 import type { WorkflowSchedule, WorkflowOccurrencePage, WorkflowScheduleSettings } from '../src/protocol/workflow-schedules.ts';
@@ -44,19 +49,55 @@ test('schedule HTTP routes preserve auth/origin gates, strict validation, revisi
   assert.equal(store.getSchedule(schedule.id).nextDue, undefined);
   assert.deepEqual(occurrenceSettings(store.getSchedule(schedule.id)), settings);
   for (const message of ['Deleted workflow', 'Missing Project', 'Missing branch', 'Missing MCP']) {
-    dependencyError = new Error(message);
+    dependencyError = new ScheduleValidationError(message);
     assert.equal((await request(`${base}/${schedule.id}/enable`, 'POST', { revision: 2 })).status, 400);
     assert.equal(store.getSchedule(schedule.id).enabled, false);
   }
+  const diagnostics: string[] = [];
+  t.mock.method(console, 'error', (...values: unknown[]) => { diagnostics.push(values.map(String).join(' ')); });
+  for (const failure of [new Error('synthetic-private-detail'), new SyntaxError('synthetic-private-detail'), new z.ZodError([]), Object.assign(new Error('synthetic-private-detail'), { status: 413 }),
+    Object.assign(new Error('synthetic-private-detail'), { code: 'EIO' }), Object.assign(new Error('synthetic-private-detail'), { code: 'ENOENT' })]) {
+    dependencyError = failure;
+    const response = await request(`${base}/${schedule.id}/enable`, 'POST', { revision: 2 });
+    assert.equal(response.status, 500);
+    assert.doesNotMatch(await response.text(), /synthetic-private-detail/);
+    assert.equal(store.getSchedule(schedule.id).enabled, false);
+  }
+  assert.equal(diagnostics.length, 6);
+  assert.doesNotMatch(diagnostics.join('\n'), /synthetic-private-detail/);
+  try {
+    resolveWorkflowCalls({ version: 1, id: 'root', name: 'Root', backend: 'fake', inputSchema: { type: 'object', fields: {} }, edges: [],
+      steps: [{ kind: 'workflow', id: 'call', name: 'Call', workflowId: 'missing', contract: { inputSchema: { type: 'object', fields: {} }, outputSchema: { type: 'number' } } }] },
+    () => { throw Object.assign(new Error('synthetic-private-detail'), { code: 'ENOENT' }); });
+  } catch (error) { dependencyError = error as Error; }
+  assert.ok(dependencyError instanceof WorkflowValidationError);
+  assert.equal((await request(`${base}/${schedule.id}/enable`, 'POST', { revision: 2 })).status, 400);
+  dependencyError = new WorkflowConflict();
+  assert.equal((await request(`${base}/${schedule.id}/enable`, 'POST', { revision: 2 })).status, 409);
+  const malformed = await fetch(server.url + base, { method: 'POST', headers: { authorization: 'Bearer test' }, body: '{' });
+  assert.equal(malformed.status, 400);
+  assert.equal(diagnostics.length, 6);
   const occurrence = { version: 1 as const, id: occurrenceId(schedule.id, 1, 61_000), scheduleId: schedule.id, activation: 1, revision: 1, scheduledAt: 61_000, createdAt: 61_000, finishedAt: 61_000, settings: occurrenceSettings(schedule), status: 'capacity-skipped' as const };
   store.claimOccurrence(occurrence);
   assert.equal((await request(`${base}/${schedule.id}`, 'DELETE', { revision: 2 })).status, 200);
   const history = await request(`${base}/${schedule.id}/history?limit=1`);
   assert.equal(history.status, 200); assert.equal((await history.json() as WorkflowOccurrencePage).occurrences[0]!.id, occurrence.id);
   assert.equal((await request(`/api/workflow-occurrences/${occurrence.id}`)).status, 200);
+  assert.equal((await request(`/api/workflow-occurrences/${occurrence.id}/execution`)).status, 404);
+  assert.equal((await request(`/api/workflow-occurrences/${occurrence.id}/activity`)).status, 404);
+  const activityOccurrence = { version: 1 as const, id: occurrenceId(schedule.id, 1, 62_000), scheduleId: schedule.id, activation: 1, revision: 1,
+    scheduledAt: 62_000, createdAt: 62_000, settings: occurrenceSettings(schedule), status: 'running' as const, executionId: 'fixture-execution' };
+  store.claimOccurrence(activityOccurrence);
+  const activity = t.mock.method(executions, 'activity', async () => { throw new Error('Invalid cursor reached activity'); });
+  for (const query of ['after=1&before=2', 'after=1&latest=true', 'before=0', 'attempt=0', 'limit=0']) {
+    assert.equal((await request(`/api/workflow-occurrences/${activityOccurrence.id}/activity?${query}`)).status, 400);
+  }
+  assert.equal(activity.mock.callCount(), 0);
   assert.equal((await request(`${base}/${schedule.id}/history?limit=0`)).status, 400);
   assert.equal((await request(`${base}/${schedule.id}/history?limit=1&limit=2`)).status, 400);
   assert.equal((await request(`${base}/${schedule.id}/history?before=absent`)).status, 400);
+  assert.equal((await request(`${base}/${schedule.id}/history?before=invalid%2Fcursor`)).status, 400);
+  assert.equal((await request(`${base}/${schedule.id}/history?before=${'9'.repeat(40)}_${'a'.repeat(64)}`)).status, 400);
   assert.equal((await request(base, 'POST', { padding: 'x'.repeat(1_000_001) })).status, 413);
   assert.equal((await request(`${base}/preview`, 'POST', { timing: settings.timing })).status, 200);
   assert.equal((await request(`${base}/%2Fescape`)).status, 400);

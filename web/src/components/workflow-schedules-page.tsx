@@ -72,8 +72,10 @@ function SchedulesView({ scheduleId, occurrenceId, onNavigate, onSession }: Sche
           </div>
         </header>
         <p className="text-sm text-muted-foreground">
-          The Session Host must remain running. Enabling waits until the next future occurrence; it never runs
-          immediately. There is no catch-up after downtime. Each occurrence reads the latest saved workflow
+          The Session Host must remain running. Enabling an interval schedule waits a full interval.
+          Pausing and re-enabling starts that interval again and shifts future run times. Daily schedules
+          wait until the next future local time. There is no catch-up after downtime, even one second
+          after a due time. Each occurrence reads the latest saved workflow
           and called definitions, then keeps its own immutable snapshot. Terminal history is retained for
           seven days; input and recovery waits are kept.
         </p>
@@ -370,7 +372,10 @@ export function ScheduleForm({
           </Select>
         </label>
       </SettingsGroup>
-      <SettingsGroup title="Timing">
+      <SettingsGroup
+        title="Timing"
+        description="Enabling or re-enabling waits a full interval or until the next future daily time. Pausing and re-enabling shifts interval run times; unrelated edits keep them."
+      >
         <label className="flex flex-col gap-1">
           <span className="text-sm font-medium">Recurrence</span>
           <Select

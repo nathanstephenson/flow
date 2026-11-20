@@ -146,11 +146,11 @@ test('retention saves the authoritative terminal projection before external clea
   const active = occurrence(schedule), terminal = { ...active, status: 'completed' as const, finishedAt: active.createdAt + 1 };
   store.claimOccurrence(active);
   store.setOccurrenceProjection(() => terminal);
-  await assert.rejects(store.prune(terminal.finishedAt + SCHEDULE_RETENTION_MS, async () => {
+  assert.deepEqual(await store.prune(terminal.finishedAt + SCHEDULE_RETENTION_MS, async () => {
     store.setOccurrenceProjection(value => value);
     assert.equal(new WorkflowScheduleStore(root).getOccurrence(active.id).status, 'completed');
     throw new Error('external cleanup failed');
-  }), /external cleanup failed/);
+  }), []);
   assert.equal(store.getOccurrence(active.id).status, 'completed');
   assert.equal(store.page().occurrences.length, 1);
 });

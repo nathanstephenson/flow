@@ -60,7 +60,7 @@ explicit Retry, Supply output, Continue or Cancel before the slot is free.
 
 ## Scheduled ownership amendment
 
-[ADR 0040](0040-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
+[ADR 0041](0041-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
 occurrence-owned execution checkpoints, backend-free code/MCP environments and lazy Agent Session
 attachment. Scheduled code/MCP keep their captured environment after attachment rather than moving
 to the Backend Session VM. Shared Sandbox additionally mounts private scheduled execution state.

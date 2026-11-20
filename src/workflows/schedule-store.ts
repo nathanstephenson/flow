@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { WorkflowOccurrence, WorkflowOccurrencePage, WorkflowSchedule } from '../protocol/workflow-schedules.ts';
+import { ScheduleValidationError } from './schedule-errors.ts';
 import { isActiveOccurrence, occurrenceValidator, scheduleValidator, SCHEDULE_RETENTION_MS, storageId, timestamp } from './schedules.ts';
 
 function sync(directory: string): void {
@@ -26,8 +28,19 @@ function atomicWrite(path: string, value: unknown): void {
     renameSync(temporary, path); sync(directory);
   } finally { rmSync(temporary, { force: true }); }
 }
-function ids(directory: string): string[] {
-  return existsSync(directory) ? readdirSync(directory).filter(name => name.endsWith('.json')).map(name => storageId.parse(name.slice(0, -5))) : [];
+function ids(directory: string, invalid?: () => void): string[] {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).filter(name => name.endsWith('.json')).flatMap(name => {
+    const id = storageId.safeParse(name.slice(0, -5));
+    if (id.success) return [id.data];
+    invalid?.();
+    console.error('Workflow Schedule record has an invalid filename. File retained for manual review.');
+    return [];
+  });
+}
+const cleanupJournalValidator = z.object({ occurrenceId: storageId, status: z.enum(['pending', 'done']) }).strict();
+function needsUnstartedCleanup(value: WorkflowOccurrence): boolean {
+  return value.executionId === undefined && ['interrupted', 'launch-failed', 'cancelled'].includes(value.status);
 }
 export class ScheduleRecordNotFound extends Error {}
 export class ScheduleRevisionConflict extends Error {
@@ -45,18 +58,56 @@ export class WorkflowScheduleStore {
   private readonly activeBySchedule = new Map<string, Set<string>>();
   private projection: ((occurrence: WorkflowOccurrence) => WorkflowOccurrence) | undefined;
   private pruning: Promise<string[]> | undefined;
+  private unknownOccurrences = false;
+  private readonly unstartedCleanup = new Map<string, 'pending' | 'done' | 'unknown'>();
   constructor(stateRoot: string) {
     this.root = join(stateRoot, 'workflow-schedules');
+    for (const id of ids(join(this.root, 'unstarted-cleanup'))) {
+      try {
+        const value = cleanupJournalValidator.parse(JSON.parse(readFileSync(this.cleanupPath(id), 'utf8')));
+        if (value.occurrenceId !== id) throw new Error('Invalid cleanup identity');
+        this.unstartedCleanup.set(id, value.status);
+      } catch {
+        this.unstartedCleanup.set(id, 'unknown');
+        console.error('Workflow Occurrence cleanup journal is invalid. File retained for manual review.');
+      }
+    }
     for (const id of ids(join(this.root, 'definitions'))) {
-      const value = scheduleValidator.parse(JSON.parse(readFileSync(this.schedulePath(id), 'utf8')));
-      if (value.id !== id) throw new Error('Invalid schedule identity');
-      this.schedules.set(id, value);
+      try {
+        const value = scheduleValidator.parse(JSON.parse(readFileSync(this.schedulePath(id), 'utf8')));
+        if (value.id !== id) throw new Error('Invalid schedule identity');
+        this.schedules.set(id, value);
+      } catch { console.error('Workflow Schedule record is invalid. File retained for manual review.'); }
     }
-    for (const id of ids(join(this.root, 'occurrences'))) {
-      const value = occurrenceValidator.parse(JSON.parse(readFileSync(this.occurrencePath(id), 'utf8')));
-      if (value.id !== id) throw new Error('Invalid occurrence identity');
-      this.indexOccurrence(value);
+    for (const id of ids(join(this.root, 'occurrences'), () => { this.unknownOccurrences = true; })) {
+      try {
+        const value = occurrenceValidator.parse(JSON.parse(readFileSync(this.occurrencePath(id), 'utf8')));
+        if (value.id !== id) throw new Error('Invalid occurrence identity');
+        this.indexOccurrence(value);
+        try { this.queueUnstartedCleanup(value); }
+        catch {
+          this.unstartedCleanup.set(id, 'pending');
+          console.error('Workflow Occurrence cleanup journal could not be saved. Its record will be retained for retry.');
+        }
+      } catch {
+        this.unknownOccurrences = true;
+        console.error('Workflow Occurrence record is invalid. File retained for manual review.');
+      }
     }
+  }
+  private cleanupPath(id: string): string { return join(this.root, 'unstarted-cleanup', `${storageId.parse(id)}.json`); }
+  private queueUnstartedCleanup(value: WorkflowOccurrence): void {
+    if (!needsUnstartedCleanup(value) || this.unstartedCleanup.has(value.id)) return;
+    atomicWrite(this.cleanupPath(value.id), { occurrenceId: value.id, status: 'pending' });
+    this.unstartedCleanup.set(value.id, 'pending');
+  }
+  pendingUnstartedCleanup(): string[] { return [...this.unstartedCleanup].filter(([, status]) => status === 'pending').map(([id]) => id); }
+  prepareUnstartedCleanup(id: string): void {
+    atomicWrite(this.cleanupPath(id), { occurrenceId: id, status: 'pending' });
+  }
+  completeUnstartedCleanup(id: string): void {
+    atomicWrite(this.cleanupPath(id), { occurrenceId: id, status: 'done' });
+    this.unstartedCleanup.set(id, 'done');
   }
   setOccurrenceProjection(project: (occurrence: WorkflowOccurrence) => WorkflowOccurrence): void { this.projection = project; }
   private project(value: WorkflowOccurrence): WorkflowOccurrence {
@@ -139,26 +190,43 @@ export class WorkflowScheduleStore {
     if (value.id !== id) throw new Error('Invalid occurrence identity');
     return value;
   }
+  getStoredOccurrence(id: string): WorkflowOccurrence { return structuredClone(this.readOccurrence(id)); }
   getOccurrence(id: string): WorkflowOccurrence { return this.project(this.readOccurrence(id)); }
   listOccurrences(scheduleId?: string): WorkflowOccurrence[] {
     return this.historyIds(scheduleId).map(id => this.getOccurrence(id));
   }
   page(options: { scheduleId?: string; before?: string | undefined; limit?: number } = {}): WorkflowOccurrencePage {
     const limit = options.limit ?? 50;
-    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('Invalid history limit');
-    let values = this.historyIds(options.scheduleId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new ScheduleValidationError('Invalid history limit');
+    const values = this.historyIds(options.scheduleId);
+    let start = 0;
     if (options.before !== undefined) {
-      storageId.parse(options.before);
-      const index = values.indexOf(options.before);
-      if (index < 0) throw new Error('Invalid history cursor');
-      values = values.slice(index + 1);
+      if (!storageId.safeParse(options.before).success) throw new ScheduleValidationError('Invalid history cursor');
+      const cursor = /^(\d+)_([a-f0-9]{64})$/.exec(options.before);
+      if (cursor) {
+        const parsed = timestamp.safeParse(Number(cursor[1]));
+        if (!parsed.success) throw new ScheduleValidationError('Invalid history cursor');
+        const due = parsed.data, id = cursor[2]!;
+        let high = values.length;
+        while (start < high) {
+          const mid = (start + high) >>> 1, other = this.occurrences.get(values[mid]!)!;
+          if (other.scheduledAt > due || (other.scheduledAt === due && other.id >= id)) start = mid + 1;
+          else high = mid;
+        }
+      } else {
+        const index = values.indexOf(options.before);
+        if (index < 0) throw new ScheduleValidationError('Invalid history cursor');
+        start = index + 1;
+      }
     }
-    return { occurrences: values.slice(0, limit).map(id => this.getOccurrence(id)), ...(values.length > limit ? { next: values[limit - 1]! } : {}) };
+    const last = this.occurrences.get(values[start + limit - 1]!);
+    return { occurrences: values.slice(start, start + limit).map(id => this.getOccurrence(id)), ...(values.length > start + limit ? { next: `${last!.scheduledAt}_${last!.id}` } : {}) };
   }
   /** Durable admission claim. Call before provisioning or executable effects; never overwrite. */
   claimOccurrence(value: WorkflowOccurrence): boolean {
     const validated = occurrenceValidator.parse(value);
-    if (this.occurrences.has(value.id)) return false;
+    if (this.occurrences.has(value.id) || existsSync(this.occurrencePath(value.id))) return false;
+    this.queueUnstartedCleanup(validated);
     atomicWrite(this.occurrencePath(value.id), validated);
     this.indexOccurrence(validated);
     return true;
@@ -169,46 +237,64 @@ export class WorkflowScheduleStore {
     if (saved.scheduleId !== value.scheduleId || saved.activation !== value.activation || saved.scheduledAt !== value.scheduledAt || saved.revision !== value.revision) throw new Error('Occurrence identity cannot change');
     if (!isDeepStrictEqual(saved.settings, validated.settings)) throw new Error('Occurrence settings cannot change');
     if (!isActiveOccurrence(saved) && !isDeepStrictEqual(saved, validated)) throw new Error('Terminal occurrence is immutable');
+    this.queueUnstartedCleanup(validated);
     atomicWrite(this.occurrencePath(value.id), validated);
     this.indexOccurrence(validated);
   }
   saveCleanupWarning(occurrence: WorkflowOccurrence, warning: string): void {
     atomicWrite(join(this.root, 'cleanup', `${storageId.parse(occurrence.id)}.json`), { occurrenceId: occurrence.id, worktree: occurrence.worktree, warning });
   }
+  clearCleanupWarning(id: string): void {
+    const path = join(this.root, 'cleanup', `${storageId.parse(id)}.json`);
+    if (!existsSync(path)) return;
+    rmSync(path); sync(dirname(path));
+  }
   cleanupWarnings(): unknown[] {
-    return ids(join(this.root, 'cleanup')).map(id => JSON.parse(readFileSync(join(this.root, 'cleanup', `${id}.json`), 'utf8')) as unknown);
+    return ids(join(this.root, 'cleanup')).flatMap(id => {
+      try { return [JSON.parse(readFileSync(join(this.root, 'cleanup', `${id}.json`), 'utf8')) as unknown]; }
+      catch { console.error('Workflow Occurrence cleanup warning is invalid. File retained for manual review.'); return []; }
+    });
   }
 
   /** The callback owns execution cleanup; no Agent Session directories are ever removed here. */
-  prune(now: number, cleanup: (occurrence: WorkflowOccurrence) => Promise<void>): Promise<string[]> {
-    this.pruning ??= this.pruneExpired(now, cleanup).finally(() => { this.pruning = undefined; });
+  prune(now: number, cleanup: (occurrence: WorkflowOccurrence) => Promise<void>, canPrune: (id: string) => boolean = () => true): Promise<string[]> {
+    this.pruning ??= this.pruneExpired(now, cleanup, canPrune).finally(() => { this.pruning = undefined; });
     return this.pruning;
   }
-  private async pruneExpired(now: number, cleanup: (occurrence: WorkflowOccurrence) => Promise<void>): Promise<string[]> {
+  private async pruneExpired(now: number, cleanup: (occurrence: WorkflowOccurrence) => Promise<void>, canPrune: (id: string) => boolean): Promise<string[]> {
     timestamp.parse(now);
     const removed: string[] = [];
     for (const id of [...this.history]) {
+      if (!canPrune(id)) continue;
       const indexed = this.occurrences.get(id)!;
       if (!isActiveOccurrence(indexed) && (indexed.finishedAt === undefined || indexed.finishedAt > now - SCHEDULE_RETENTION_MS)) continue;
-      const value = this.getOccurrence(id);
-      if (isActiveOccurrence(value) || value.finishedAt === undefined || value.finishedAt > now - SCHEDULE_RETENTION_MS) continue;
-      if (this.active.has(value.id)) this.saveOccurrence(value);
-      await cleanup(value);
-      rmSync(this.occurrencePath(value.id)); sync(dirname(this.occurrencePath(value.id)));
-      this.occurrences.delete(value.id);
-      this.activeRecords.delete(value.id);
-      this.active.delete(value.id);
-      this.activeBySchedule.get(value.scheduleId)?.delete(value.id);
-      const history = this.historyBySchedule.get(value.scheduleId)!;
-      for (const list of [this.history, history]) list.splice(list.indexOf(value.id), 1);
-      if (!history.length) { this.historyBySchedule.delete(value.scheduleId); this.activeBySchedule.delete(value.scheduleId); }
-      removed.push(value.id);
+      try {
+        const value = this.getOccurrence(id);
+        if (isActiveOccurrence(value) || value.finishedAt === undefined || value.finishedAt > now - SCHEDULE_RETENTION_MS) continue;
+        if (this.active.has(value.id)) this.saveOccurrence(value);
+        await cleanup(value);
+        if (this.unstartedCleanup.has(id) && this.unstartedCleanup.get(id) !== 'unknown') {
+          rmSync(this.cleanupPath(id), { force: true }); sync(dirname(this.cleanupPath(id)));
+          this.unstartedCleanup.delete(id);
+        }
+        rmSync(this.occurrencePath(value.id)); sync(dirname(this.occurrencePath(value.id)));
+        this.occurrences.delete(value.id);
+        this.activeRecords.delete(value.id);
+        this.active.delete(value.id);
+        this.activeBySchedule.get(value.scheduleId)?.delete(value.id);
+        const history = this.historyBySchedule.get(value.scheduleId)!;
+        for (const list of [this.history, history]) list.splice(list.indexOf(value.id), 1);
+        if (!history.length) { this.historyBySchedule.delete(value.scheduleId); this.activeBySchedule.delete(value.scheduleId); }
+        removed.push(value.id);
+      } catch { console.error('Workflow Occurrence retention failed. Its record and owned work will be retained for retry.'); }
     }
     const retained = new Set(this.historyBySchedule.keys());
     for (const schedule of this.listSchedules(true)) {
-      if (schedule.deletedAt === undefined || retained.has(schedule.id) || schedule.deletedAt > now - SCHEDULE_RETENTION_MS) continue;
-      rmSync(this.schedulePath(schedule.id)); sync(dirname(this.schedulePath(schedule.id)));
-      this.schedules.delete(schedule.id);
+      if (this.unknownOccurrences || schedule.deletedAt === undefined || retained.has(schedule.id) || schedule.deletedAt > now - SCHEDULE_RETENTION_MS) continue;
+      try {
+        rmSync(this.schedulePath(schedule.id)); sync(dirname(this.schedulePath(schedule.id)));
+        this.schedules.delete(schedule.id);
+      } catch { console.error('Workflow Schedule retention failed. Its record will be retained for retry.'); }
     }
     return removed;
   }

@@ -61,6 +61,7 @@ import {
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
+import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
 import { probeSkills, type HeldSession } from "./skills.ts";
 import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
@@ -574,9 +575,10 @@ export class SessionHost {
    * In flight rather than resolved is what is remembered, so two clients opening the page at once
    * spawn one probe between them rather than one each.
    */
-  async models(scope: string, refresh = false): Promise<BackendModels[]> {
+  async models(scope: string, refresh = false, backendName?: string): Promise<BackendModels[]> {
     if (refresh) this.modelProbes.clear();
-    const probes = [...this.backends.values()].map((backend) => {
+    const backends = backendName === undefined ? [...this.backends.values()] : [this.backendFor(backendName)];
+    const probes = backends.map((backend) => {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
       const probe = this.timed("models", backend, false, (timed) =>
@@ -585,6 +587,14 @@ export class SessionHost {
       return probe;
     });
     return await Promise.all(probes);
+  }
+
+  async workflowAgentModels(scope: string, backend: string) {
+    const [catalogue] = await this.models(scope, false, backend);
+    if (!catalogue || catalogue.problem) throw new Error(catalogue?.problem ?? 'Workflow model capabilities are unavailable');
+    const probe = this.skillSessions.get(backend);
+    if (!probe || probe.dead || !probe.session.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
+    return catalogue.models;
   }
 
   /**
@@ -890,7 +900,7 @@ export class SessionHost {
 
   async create(options: {
     /** Internal scheduled attachment only; not accepted by routes. */
-    scheduled?: { id: string; occurrenceId: string; isolationMode: import("../protocol/settings.ts").FilesystemIsolationMode; worktree?: { path: string; repo: string; branch: string } };
+    scheduled?: { id: string; occurrenceId: string; worktree?: { path: string; repo: string; branch: string } };
     mcpConnectionIds?: string[];
     scope: string;
     backend?: string;
@@ -2507,7 +2517,7 @@ export class SessionHost {
 
   scheduledConnections(ids: string[]) {
     const connections = this.mcpConnections?.() ?? [];
-    if (ids.some(id => !connections.some(connection => connection.id === id))) throw new Error('Selected MCP connection is unavailable');
+    if (ids.some(id => !connections.some(connection => connection.id === id))) throw new ScheduleValidationError('Selected MCP connection is unavailable');
     return structuredClone(connections.filter(connection => ids.includes(connection.id)));
   }
 

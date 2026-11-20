@@ -31,8 +31,8 @@ async function fixture(t: import('node:test').TestContext, mode: 'none' | 'sandb
   cleanup = async () => { await executions.stopScheduled(); await host.shutdown(); };
   let attaches = 0;
   const id = occurrenceId('test', 1, 60_000);
-  const launch = (graph = definition, occurrence = id, mcpConnectionIds: string[] = []) => executions.startScheduled({ occurrenceId: occurrence, definition: graph, input: {}, scope: root, projectId: root, mcpConnectionIds, attach: async () => { attaches++; return host.create({ scope: root, backend: 'fake', scheduled: { id: 'scheduled-parent', occurrenceId: occurrence, isolationMode: mode } }); } });
-  return { ...f, root, state, config, host, backend, workflows, executions, launch, id, attaches: () => attaches };
+  const launch = (graph = definition, occurrence = id, mcpConnectionIds: string[] = []) => executions.startScheduled({ occurrenceId: occurrence, definition: graph, input: {}, scope: root, projectId: root, mcpConnectionIds, attach: async () => { attaches++; return host.create({ scope: root, backend: 'fake', scheduled: { id: 'scheduled-parent', occurrenceId: occurrence } }); } });
+  return { ...f, root, state, config, host, backend, workflows, executions, launch, id, agents: () => backend.sessions.filter(session => !session.toolless), attaches: () => attaches };
 }
 test('pure code success has no Agent/Backend Session, summary or session directory; history is occurrence-owned', async t => {
   const f = await fixture(t); const view = await f.launch();
@@ -45,9 +45,10 @@ test('parallel agents attach once, retain checkpoint ownership and use existing 
   const f = await fixture(t);
   const agent = { id: 'a', name: 'A', kind: 'agent' as const, model: 'fake-1', effort: 'medium' as const, instructions: 'JSON', outputSchema: { type: 'string' as const } };
   const view = await f.launch({ ...definition, steps: [agent, { ...agent, id: 'b', name: 'B' }] });
-  await until(() => f.backend.sessions[0]?.workflowSubagents.length === 2);
-  assert.equal(f.attaches(), 1); assert.equal(f.host.list().length, 1); assert.equal(f.backend.sessions.length, 1);
-  for (const agent of f.backend.sessions[0]!.workflowSubagents) agent.complete('"done"');
+  await until(() => f.agents()[0]?.workflowSubagents.length === 2);
+  assert.equal(f.attaches(), 1); assert.equal(f.host.list().length, 1); assert.equal(f.agents().length, 1);
+  assert.equal(f.backend.sessions.filter(session => session.toolless).length, 1);
+  for (const agent of f.agents()[0]!.workflowSubagents) agent.complete('"done"');
   const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
   assert.equal(result.sessionId, 'scheduled-parent'); assert.equal(f.executions.scheduler.occupied('scheduled-parent'), false);
   assert.equal(f.executions.list('scheduled-parent').executions[0]!.id, result.id);
@@ -71,14 +72,16 @@ test('Sandbox code executes on a backend-free occurrence VM and cancellation cle
   await f.executions.stopScheduled(); assert.ok(f.calls().some(line => line.startsWith('remove ')));
 });
 
-test('unreached invalid agent model creates no Agent Session', async t => {
+test('unreached invalid agent model rejects launch with only a metadata Backend Session', async t => {
   const f = await fixture(t);
-  const view = await f.launch({ ...definition, steps: [
+  await assert.rejects(f.launch({ ...definition, steps: [
     { id: 'branch', name: 'Branch', kind: 'branch', condition: { operator: 'equals', path: [], value: { no: true } } },
     { id: 'agent', name: 'Unreached', kind: 'agent', model: 'unavailable', effort: 'high', instructions: 'Never run', outputSchema: { type: 'string' } },
-  ], edges: [{ id: 'edge', from: 'branch', to: 'agent', outcome: 'true' }] });
-  const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
-  assert.equal(result.status, 'completed'); assert.equal(result.steps.agent!.status, 'skipped'); assert.equal(f.attaches(), 0); assert.equal(f.backend.sessions.length, 0);
+  ], edges: [{ id: 'edge', from: 'branch', to: 'agent', outcome: 'true' }] }), /Agent model.*unavailable/);
+  assert.equal(f.attaches(), 0); assert.equal(f.host.list().length, 0);
+  assert.equal(f.backend.sessions.length, 1); assert.equal(f.backend.sessions[0]!.toolless, true);
+  assert.deepEqual(f.backend.sessions[0]!.prompts, []);
+  assert.deepEqual(f.workflows.listExecutions(`occurrence-${f.id}`), []);
 });
 for (const mode of ['none', 'sandbox'] as const) test(`backend-free ${mode} stdio MCP pins identity and schemas without a code runtime`, async t => {
   const f = await fixture(t, mode);
@@ -97,7 +100,7 @@ for (const mode of ['none', 'sandbox'] as const) test(`backend-free ${mode} stdi
 
 test('host scheduled attachment is idempotent across concurrent callers and keeps the intended identity', async t => {
   const f = await fixture(t);
-  const options = { scope: f.root, backend: 'fake', scheduled: { id: 'intended', occurrenceId: f.id, isolationMode: 'none' as const } };
+  const options = { scope: f.root, backend: 'fake', scheduled: { id: 'intended', occurrenceId: f.id } };
   const [first, second] = await Promise.all([f.host.attachScheduled(options), f.host.attachScheduled(options)]);
   assert.equal(first, 'intended'); assert.equal(second, first); assert.equal(f.backend.sessions.length, 1);
   assert.equal(await f.host.attachScheduled(options), first); assert.equal(f.backend.sessions.length, 1);
@@ -159,11 +162,11 @@ test('worktree occurrence uses a local base, adopts it on attachment and preserv
   workflows.saveDefinition({ ...definition, steps: [agent] });
   const second = { ...occurrence, id: occurrenceId(schedule.id, 1, 120_000), scheduledAt: 120_000, createdAt: 120_000 };
   schedules.claimOccurrence(second); await driver.launch(second);
-  await until(() => f.backend.sessions[0]?.workflowSubagents.length === 1);
+  await until(() => f.agents()[0]?.workflowSubagents.length === 1);
   const attached = schedules.getOccurrence(second.id), meta = transcripts.readMeta(attached.sessionId!);
   assert.equal(meta?.scope, attached.scope); assert.deepEqual(meta?.worktree, attached.worktree); assert.equal(meta?.scheduledOccurrenceId, second.id);
   assert.equal(git('worktree', 'list', '--porcelain').split('worktree ').length - 1, 3);
-  f.backend.sessions[0]!.workflowSubagents[0]!.complete('"done"');
+  f.agents()[0]!.workflowSubagents[0]!.complete('"done"');
   await f.executions.scheduler.wait(`occurrence-${second.id}`, schedules.getOccurrence(second.id).executionId!);
 });
 
@@ -182,9 +185,9 @@ test('called workflow agents promote the root occurrence without changing nested
   f.workflows.saveDefinition(child);
   const root: WorkflowDefinition = { ...definition, steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: child.id, contract: { inputSchema: child.inputSchema, outputSchema: deriveResultSchema(child) } }] };
   const view = await f.launch(root);
-  await until(() => f.backend.sessions[0]?.workflowSubagents.length === 1);
+  await until(() => f.agents()[0]?.workflowSubagents.length === 1);
   assert.equal(f.attaches(), 1);
-  f.backend.sessions[0]!.workflowSubagents[0]!.complete('"nested"');
+  f.agents()[0]!.workflowSubagents[0]!.complete('"nested"');
   const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
   assert.equal(result.status, 'completed'); assert.equal(result.sessionId, 'scheduled-parent');
   assert.equal(Object.values(result.invocations!).length, 1);
@@ -262,7 +265,7 @@ test('shutdown drains recovery attachment and result publication before disposin
   let attaching = false;
   const view = await f.executions.startScheduled({ occurrenceId: f.id, definition: { ...definition, steps: [{ id: 'slow', name: 'Slow', kind: 'shell', command: 'sleep 30' }] }, input: {}, scope: f.root, projectId: f.root, mcpConnectionIds: [], attach: () => {
     attaching = true;
-    return f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'delayed', occurrenceId: f.id, isolationMode: 'none' } });
+    return f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'delayed', occurrenceId: f.id } });
   } });
   let stopped = false;
   const stop = f.executions.stopScheduled().then(() => { stopped = true; });
@@ -276,7 +279,7 @@ test('shutdown drains recovery attachment and result publication before disposin
   assert.equal(f.backend.sessions.length, 1);
   assert.equal(f.backend.latest.disposed, true);
   assert.equal(f.executions.scheduler.get(`occurrence-${f.id}`, view.execution.id).status, 'recovery-required');
-  await assert.rejects(f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'late', occurrenceId: f.id, isolationMode: 'none' } }), /stopping/);
+  await assert.rejects(f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'late', occurrenceId: f.id } }), /stopping/);
 });
 
 test('named-secret literals in root and retained called definitions fail before a checkpoint or attachment', async t => {
@@ -347,17 +350,38 @@ test('ordinary Revive uses current policy after scheduled work ends, without cha
   const f = await fixture(t);
   const create = t.mock.method(f.backend, 'create');
   const view = await f.launch({ ...definition, steps: [{ id: 'agent', name: 'Agent', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'JSON', outputSchema: { type: 'string' } }] });
-  await until(() => f.backend.sessions[0]?.workflowSubagents.length === 1);
-  f.backend.sessions[0]!.workflowSubagents[0]!.complete('"done"');
+  await until(() => f.agents()[0]?.workflowSubagents.length === 1);
+  f.agents()[0]!.workflowSubagents[0]!.complete('"done"');
   const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
   assert.equal(result.status, 'completed');
   assert.equal(result.runtime?.isolationMode, 'none');
-  assert.equal(create.mock.calls[0]!.arguments[0].isolationMode, 'none');
+  assert.equal(create.mock.calls.find(call => call.arguments[0].tools !== 'none')!.arguments[0].isolationMode, 'none');
   t.mock.method(f.host, 'filesystemIsolationMode', () => 'bubblewrap');
   await f.host.settle('scheduled-parent');
   await f.host.revive('scheduled-parent');
   assert.equal(create.mock.calls.at(-1)!.arguments[0].isolationMode, 'bubblewrap');
   assert.equal(f.workflows.getExecution(`occurrence-${f.id}`, result.id).runtime?.isolationMode, 'none');
+});
+
+test('scheduled attachment uses current unrestricted Settings while code retains its captured Sandbox', async t => {
+  const f = await fixture(t, 'sandbox');
+  const { writeFileSync } = await import('node:fs');
+  const create = t.mock.method(f.backend, 'create');
+  const view = await f.launch({ ...definition, steps: [
+    { id: 'code', name: 'Code', kind: 'shell', command: 'while [ ! -f release ]; do sleep 0.01; done; printf captured' },
+    { id: 'agent', name: 'Agent', kind: 'agent', model: 'fake-1', effort: 'medium', instructions: 'JSON', outputSchema: { type: 'string' } },
+  ], edges: [{ id: 'next', from: 'code', to: 'agent', outcome: 'success' }] });
+  f.config.update({ filesystemIsolation: 'none' });
+  t.mock.method(f.host, 'filesystemIsolationMode', () => 'none');
+  writeFileSync(join(f.root, 'release'), 'ready');
+  await until(() => f.agents()[0]?.workflowSubagents.length === 1);
+  assert.equal(create.mock.calls.find(call => call.arguments[0].tools !== 'none')!.arguments[0].isolationMode, 'none');
+  const meta = new TranscriptStore(f.state).readMeta('scheduled-parent')!;
+  assert.equal(Object.hasOwn(meta, 'capturedIsolationMode'), false);
+  f.agents()[0]!.workflowSubagents[0]!.complete('"done"');
+  const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
+  assert.equal(result.status, 'completed'); assert.equal(result.runtime?.isolationMode, 'sandbox');
+  assert.equal(f.calls().filter(call => call === 'create').length, 1);
 });
 
 test('idle scheduled recovery reuses its live Sandbox and accepts a validated retry', async t => {

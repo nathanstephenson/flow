@@ -106,7 +106,6 @@ export type SessionMeta = {
    */
   worktree?: { path: string; repo: string; branch: string };
   scheduledOccurrenceId?: string;
-  capturedIsolationMode?: import("../protocol/settings.ts").FilesystemIsolationMode;
 };
 
 export function defaultStateRoot(): string {

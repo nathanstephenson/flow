@@ -314,15 +314,23 @@ _Avoid_: project, suggestion, available project
 **Workflow Schedule**:
 A saved Workflow Definition ID, fixed typed inputs, opted-in Project, MCP selection, optional fresh
 Worktree policy, recurrence and overlap limit. Enabling waits a full interval or until the next future
-local daily time in its saved IANA timezone. Intervals measure elapsed time; daily times skip gaps
-and choose the first fold occurrence. Pausing or deleting affects only future admission.
+local daily time in its saved IANA timezone. Re-enabling resets the interval anchor, so pausing and
+re-enabling shifts its timing; unrelated edits preserve it. Intervals measure elapsed time; daily
+times skip gaps and choose the first fold occurrence. Startup admits only future due times, with no
+catch-up even one second after a due time. Pausing or deleting affects only future admission.
 _Avoid_: cron, timer, job
 
 **Workflow Occurrence**:
 One due time and immutable launch configuration, whether admitted, missed, capacity-skipped or failed
 before execution. Each admitted occurrence retains the latest root and reachable called definitions.
-The Session Host owns its execution independently of Agent Sessions. Agent work, human input or
+Before scheduled effects, all agent steps in those definitions, including unreached branches, must
+pass model and Effort catalog validation. A cold catalog permits a metadata-only Backend Session
+probe, never an Agent Session, Presentation Transcript, Summary Model or paid inference. Definitions
+without agent steps need no backend. The Session Host owns execution independently of Agent Sessions. Agent work, human input or
 recovery attaches one Agent Session; successful code/MCP work needs none and requests no model summary.
+Code/MCP retain their captured runtime isolation. Newly attached or Revived Backend Sessions use
+current Settings: a change from Sandbox to none makes agent work unrestricted while code/MCP remain
+in their captured Sandbox environment.
 Terminal history lasts seven days after completion; active/input/recovery work does not expire.
 Agent Session transcripts and Spend follow their own lifecycle, not occurrence history retention.
 _Avoid_: Agent Session, job

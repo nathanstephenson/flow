@@ -41,10 +41,14 @@ test('manual and scheduled agents apply the same confirmed no-control effort pol
   const manualId = await f.host.create({ scope: f.root, backend: 'fake' });
   const manual = await f.service.start({ sessionId: manualId, definition, input: {} });
   const scheduled = await f.service.startScheduled({ occurrenceId: 'scheduled', definition, input: {}, scope: f.root, projectId: f.root, mcpConnectionIds: [],
-    attach: () => f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'scheduled-parent', occurrenceId: 'scheduled', isolationMode: 'none' } }),
+    attach: () => f.host.attachScheduled({ scope: f.root, backend: 'fake', scheduled: { id: 'scheduled-parent', occurrenceId: 'scheduled' } }),
   });
-  await until(() => f.backend.sessions.length === 2 && f.backend.sessions.every(session => session.workflowSubagents.length === 1));
-  for (const session of f.backend.sessions) {
+  await until(() => f.backend.sessions.filter(session => !session.toolless).length === 2 && f.backend.sessions.filter(session => !session.toolless).every(session => session.workflowSubagents.length === 1));
+  const probes = f.backend.sessions.filter(session => session.toolless);
+  assert.equal(probes.length, 1);
+  assert.deepEqual(probes[0]!.workflowSubagents, []);
+  assert.deepEqual(probes[0]!.prompts, []);
+  for (const session of f.backend.sessions.filter(session => !session.toolless)) {
     const agent = session.workflowSubagents[0]!;
     assert.equal(agent.options.effort, 'off');
     agent.complete('"done"');

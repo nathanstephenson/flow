@@ -1,3 +1,9 @@
+import { randomUUID } from 'node:crypto';
+import { closeSync, createReadStream, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { isDeepStrictEqual } from 'node:util';
+import { ZodError } from 'zod';
 import { executionOwner } from '../workflows/records.ts';
 import { executionOwnerKey, executionOwnerOf } from '../workflows/owner.ts';
 import { WorkflowExecutionResources } from './workflow-execution-resources.ts';
@@ -11,16 +17,9 @@ import { workflowAgentNameInput, workflowOutcomeNameInput } from './summariser.t
 import { connectionIdentity, snapshotTool, sameSchema } from './workflow-mcp.ts';
 import { validateJsonSchema } from '../workflows/json-schema.ts';
 import { boundedMcpValue, validateMcpSchemas } from '../workflows/mcp.ts';
-import { createReadStream } from 'node:fs';
-import { isDeepStrictEqual } from 'node:util';
-import { createInterface } from 'node:readline';
-import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { WorkflowSubagentHandle } from '../backend/types.ts';
-import type { Spend } from '../protocol/events.ts';
-import { assertNoSecrets, attemptIdentity, confirmedAgentStep, outcomeNamingData, publicDefinition, publicExecutionData, redact, redactEvent, relayContext, relaySignal, safeError, sameProject, selectWorkflowInvocation, spendKey, sumSpend, uniqueCredentials, WorkflowConflict } from './workflow-execution-values.ts';
-export { WorkflowConflict } from './workflow-execution-values.ts';
+import type { ModelInfo, Spend } from '../protocol/events.ts';
+import { assertNoSecrets, attemptIdentity, confirmedAgentStep, outcomeNamingData, publicDefinition, publicExecutionData, redact, redactEvent, relayContext, relaySignal, safeError, sameProject, selectWorkflowInvocation, spendKey, sumSpend, uniqueCredentials, WorkflowConflict, WorkflowValidationError } from './workflow-execution-values.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
 import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
@@ -32,6 +31,8 @@ import type { WorkflowStore } from '../workflows/store.ts';
 import type { ConfigStore } from './config-store.ts';
 import type { SecretStore } from './secret-store.ts';
 import { SessionHost } from './host.ts';
+
+export { WorkflowConflict } from './workflow-execution-values.ts';
 
 type PrivateView = Omit<WorkflowExecutionView, 'execution'> & {
   automaticAtProgress?: number;
@@ -173,10 +174,6 @@ export class WorkflowExecutionService {
   restoreScheduled(record: WorkflowExecution, connectionIds: string[], attach: () => Promise<string>): void {
     this.privateView(executionOwner(record), record.id);
     this.resources.restore(record, connectionIds, attach);
-  }
-
-  scheduledIsolation(occurrenceId: string) {
-    return this.resources.occurrence(executionOwnerKey({ kind: 'occurrence', occurrenceId })).environment.mode;
   }
 
   private filesystemPolicy() {
@@ -517,10 +514,26 @@ export class WorkflowExecutionService {
     return redactCredentials(message, this.host.workflowMcpCredentials());
   }
 
-  validateScheduledInputs(definition: WorkflowDefinition, input: Json): void {
+  async validateScheduledAgents(definition: WorkflowDefinition, input: Json, scope: string, projectId = scope): Promise<void> {
     const manifest = resolveWorkflowCalls(definition, id => this.store.getDefinition(id));
-    const values = uniqueCredentials(Object.values(manifest).flatMap(candidate => this.referencedSecrets(candidate)));
+    const definitions = Object.values(manifest);
+    for (const candidate of definitions) {
+      if (candidate.backend !== definition.backend) throw new WorkflowValidationError('Backend Adapter mismatch');
+      if (candidate.projectId && !sameProject(candidate.projectId, projectId)) throw new WorkflowValidationError('Workflow is restricted to another Project');
+    }
+    try { parseValue(definition.inputSchema, input); }
+    catch (error) {
+      if (error instanceof ZodError) throw new WorkflowValidationError('Workflow input does not match its schema');
+      throw error;
+    }
+    const values = uniqueCredentials([...this.host.workflowMcpCredentials(), ...definitions.flatMap(candidate => this.referencedSecrets(candidate))]);
+    for (const candidate of definitions) assertNoSecrets(publicDefinition(candidate), values);
     assertNoSecrets(input, values, true);
+    const agents = definitions.flatMap(candidate => candidate.steps.filter(step => step.kind === 'agent'));
+    if (!agents.length) return;
+    const models = await this.host.workflowAgentModels(scope, definition.backend);
+    for (const step of agents) this.checkAgentModel(step, models);
+    if (!isDeepStrictEqual(resolveWorkflowCalls(definition, id => this.store.getDefinition(id)), manifest)) throw new WorkflowConflict();
   }
 
   validateDefinitionCredentials(definition: WorkflowDefinition): void {
@@ -544,6 +557,7 @@ export class WorkflowExecutionService {
         host: this.host, store: this.store, secrets: this.secrets, resources: this.resources, runtimePath: this.runtimePath,
         snapshot: async needsCode => needsCode ? this.codeSnapshot() : { runtime: this.runtimeOptions, code: this.code },
         discover: (id, connection, tools, mode, signal) => this.discoverMcp(id, connection, tools, mode, signal),
+        validateScheduledAgents: (definition, input, scope, projectId) => this.validateScheduledAgents(definition, input, scope, projectId),
       });
       values = prepared.values;
       const raced = existing();
@@ -766,11 +780,15 @@ export class WorkflowExecutionService {
   private checkAgent(sessionId: string, step: Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>) {
     const backend = this.host.workflowSession(sessionId).session;
     if (!backend?.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
-    step = confirmedAgentStep(step, backend.capabilities.models);
-    const model = backend.capabilities.models.find(model => model.id === step.model);
-    if (!model) throw new Error(`Agent model “${step.model}” is unavailable. Refresh models and select an available model.`);
+    return this.checkAgentModel(step, backend.capabilities.models);
+  }
+
+  private checkAgentModel(step: Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>, models: readonly ModelInfo[]) {
+    step = confirmedAgentStep(step, models);
+    const model = models.find(model => model.id === step.model);
+    if (!model) throw new WorkflowValidationError(`Agent model “${step.model}” is unavailable. Refresh models and select an available model.`);
     const levels = model.effortLevels ?? [];
-    if (levels.length > 0 && !levels.includes(step.effort)) throw new Error(`Effort “${step.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.join(', ')}.`);
+    if (levels.length ? !levels.includes(step.effort) : step.effort !== 'off') throw new WorkflowValidationError(`Effort “${step.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.length ? levels.join(', ') : 'off'}.`);
     return step;
   }
 

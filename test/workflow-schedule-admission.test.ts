@@ -162,7 +162,7 @@ test('external retention cleanup does not block mutations or due admission; fail
   await f.service.create({ ...settings, name: 'New' }, true);
   f.time(121_000 + SCHEDULE_RETENTION_MS); await f.service.tick(); await flush();
   assert.equal(f.launches.length, 2);
-  release(); await assert.rejects(pruning, /cleanup failed/);
+  release(); assert.deepEqual(await pruning, []);
   assert.equal(f.store.getOccurrence(old.id).status, 'completed');
   fail = false; assert.deepEqual(await f.service.prune(), [old.id]);
   await f.service.stopAdmission();

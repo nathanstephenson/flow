@@ -1,4 +1,3 @@
-import { workflowScheduleRoutes } from './workflow-schedule-routes.ts';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -8,6 +7,7 @@ import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { workflowScheduleRoutes } from './workflow-schedule-routes.ts';
 import { workflowBuilderRoutes } from './workflow-builder-routes.ts';
 import { workflowMcpAuthoringRoutes } from './workflow-mcp-authoring-routes.ts';
 import { hostControlRoute, type HostControl } from './host-control-routes.ts';

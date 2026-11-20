@@ -1,12 +1,12 @@
-import { WorkflowScheduleStore } from '../workflows/schedule-store.ts';
-import { WorkflowScheduleService } from './workflow-schedules.ts';
-import { scheduleDriver } from './workflow-schedule-driver.ts';
 import { registerBackends } from '../backend/registry.ts';
 import { createOidcGateFromEnv, readOrCreateToken, type OidcGate } from './auth.ts';
 import { ConfigStore } from './config-store.ts';
 import { SecretStore } from './secret-store.ts';
 import { WorkflowStore } from '../workflows/store.ts';
 import { WorkflowExecutionService } from './workflow-executions.ts';
+import { WorkflowScheduleStore } from '../workflows/schedule-store.ts';
+import { WorkflowScheduleService } from './workflow-schedules.ts';
+import { scheduleDriver } from './workflow-schedule-driver.ts';
 import { WorkflowBuilderService } from './workflow-builder.ts';
 import { workflowCatalogue } from './workflow-routes.ts';
 import { WorkflowMcpAuthoringService } from './workflow-mcp-authoring.ts';
@@ -110,10 +110,21 @@ export async function startRuntime(options: {
     const schedules = new WorkflowScheduleStore(root);
     workflowSchedules = new WorkflowScheduleService(schedules, scheduleDriver({ host, config, workflows, executions: workflowExecutions, schedules, transcripts: store }));
     workflowExecutions.onScheduledResult = async record => { workflowSchedules!.result(record); };
-    await workflowSchedules.start();
+    try { await workflowSchedules.start(); }
+    catch { console.error('Workflow Schedule reconciliation failed. Other Session Host services will continue.'); }
     workflowExecutions.reconcile();
-    await workflowSchedules.prune();
-    sweep = setInterval(() => { reaping = reaping.then(async () => { await host.reap(); await workflowSchedules?.prune(); }); }, 60 * 60 * 1000);
+    reaping = reaping.then(async () => {
+      try { await workflowSchedules?.prune(); }
+      catch { console.error('Workflow Schedule retention failed. Cleanup will be retried.'); }
+    });
+    sweep = setInterval(() => {
+      reaping = reaping.then(async () => {
+        try { await host.reap(); }
+        catch { console.error('Agent Session Reaping failed. The next sweep will retry.'); }
+        try { await workflowSchedules?.prune(); }
+        catch { console.error('Workflow Schedule retention failed. The next sweep will retry.'); }
+      });
+    }, 60 * 60 * 1000);
     sweep.unref();
     host.onSessionClosed(sessionId => shells.killFor(sessionId));
     const token = readOrCreateToken(root);

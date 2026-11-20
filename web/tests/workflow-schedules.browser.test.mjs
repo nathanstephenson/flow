@@ -161,6 +161,8 @@ describe('workflow schedules', () => {
     await open();
     await page.evaluate(dark => document.documentElement.classList.toggle('dark', dark), theme === 'dark');
     await page.getByRole('button', { name: 'New schedule', exact: true }).click();
+    await page.getByText('Enabling or re-enabling waits a full interval or until the next future daily time. Pausing and re-enabling shifts interval run times; unrelated edits keep them.', { exact: true }).waitFor();
+    await page.getByText('There is no catch-up after downtime, even one second after a due time.', { exact: false }).waitFor();
     await page.getByRole('textbox', { name: 'Name', exact: true }).fill('New schedule');
     await page.getByRole('combobox', { name: 'Workflow', exact: true }).click();
     await page.getByRole('option', { name: 'Saved check', exact: true }).click();

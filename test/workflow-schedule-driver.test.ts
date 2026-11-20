@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigStore } from '../src/daemon/config-store.ts';
+import { FakeBackend } from '../src/backend/fake/index.ts';
 import { SessionHost } from '../src/daemon/host.ts';
 import { SecretStore } from '../src/daemon/secret-store.ts';
 import { TranscriptStore } from '../src/daemon/store.ts';
@@ -35,17 +36,18 @@ async function fixture(t: import('node:test').TestContext) {
   const occurrence: WorkflowOccurrence = { version: 1, id: occurrenceId(schedule.id, 1, 60_000), scheduleId: schedule.id, activation: 1, revision: 1, scheduledAt: 60_000, createdAt: 60_000, settings: occurrenceSettings(schedule), status: 'provisioning' };
   return { root, repo, host, workflows, executions, schedules, driver, schedule, occurrence };
 }
-for (const state of ['detached-unmerged', 'detached-merged', 'changed-branch', 'unmerged', 'merged'] as const) {
+for (const state of ['dirty', 'detached-unmerged', 'detached-merged', 'changed-branch', 'unmerged', 'merged'] as const) {
   test(`retention checks the current Worktree HEAD: ${state}`, { timeout: 10_000 }, async t => {
     const f = await fixture(t), path = join(f.root, 'worktree'), branch = 'flow/scheduled';
     git(f.repo, 'worktree', 'add', '--quiet', '-b', branch, path, 'main');
     if (state.startsWith('detached')) git(path, 'switch', '--quiet', '--detach');
     if (state === 'changed-branch') git(path, 'switch', '--quiet', '-c', 'other-work');
-    if (state !== 'merged' && state !== 'detached-merged') {
+    if (state === 'dirty') writeFileSync(join(path, 'unsaved'), 'Keep this file');
+    else if (state !== 'merged' && state !== 'detached-merged') {
       writeFileSync(join(path, 'result'), 'Important work'); git(path, 'add', '.'); git(path, 'commit', '--quiet', '-m', 'work');
     }
     const head = git(path, 'rev-parse', 'HEAD').trim();
-    const occurrence: WorkflowOccurrence = { ...f.occurrence, status: 'completed', finishedAt: 61_000, worktree: { path, repo: f.repo, branch } };
+    const occurrence: WorkflowOccurrence = { ...f.occurrence, settings: { ...f.occurrence.settings, worktree: { from: 'main' } }, status: 'completed', finishedAt: 61_000, worktree: { path, repo: f.repo, branch } };
     f.schedules.claimOccurrence(occurrence);
     await f.driver.cleanup(occurrence);
     if (state === 'merged') {
@@ -59,6 +61,28 @@ for (const state of ['detached-unmerged', 'detached-merged', 'changed-branch', '
     }
   });
 }
+for (const change of [{ model: 'missing', effort: 'high' }, { model: 'fake-1', effort: 'max' }] as const) {
+  test(`driver rejects ${JSON.stringify(change)} before Git or execution effects`, { timeout: 10_000 }, async t => {
+    const f = await fixture(t), backend = new FakeBackend();
+    f.host.registerBackend(backend);
+    f.workflows.saveDefinition({ ...definition, steps: [{ id: 'agent', name: 'Agent', kind: 'agent', ...change, instructions: 'JSON', outputSchema: { type: 'string' } }] });
+    const occurrence = { ...f.occurrence, settings: { ...f.occurrence.settings, worktree: { from: 'main' } } };
+    f.schedules.claimOccurrence(occurrence);
+    const start = t.mock.method(f.executions, 'startScheduled');
+    await assert.rejects(f.driver.validate(occurrence.settings), /unavailable|unsupported/);
+    await assert.rejects(f.driver.launch(occurrence), /unavailable|unsupported/);
+    assert.equal(start.mock.callCount(), 0);
+    assert.equal(f.schedules.getOccurrence(occurrence.id).worktree, undefined);
+    assert.deepEqual(f.workflows.listExecutions(`occurrence-${occurrence.id}`), []);
+    assert.deepEqual(f.host.list(), []);
+    assert.equal(git(f.repo, 'worktree', 'list', '--porcelain').match(/^worktree /gm)!.length, 1);
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]!.toolless, true);
+    assert.deepEqual(backend.sessions[0]!.prompts, []);
+    assert.deepEqual(backend.sessions[0]!.workflowSubagents, []);
+  });
+}
+
 test('aborting pre-start validation prevents Worktree and execution effects', { timeout: 10_000 }, async t => {
   const f = await fixture(t), controller = new AbortController();
   const occurrence = { ...f.occurrence, settings: { ...f.occurrence.settings, worktree: { from: 'main' } } };
@@ -124,7 +148,7 @@ test('failed environment cleanup retains occurrence history and its execution ch
   writeFileSync(join(owner, 'sandbox.json'), '{}');
   const expire = t.mock.method(f.executions, 'expireScheduled');
   const time = occurrence.finishedAt! + SCHEDULE_RETENTION_MS;
-  await assert.rejects(f.schedules.prune(time, value => f.driver.cleanup(value)), /Sandbox|sandbox/);
+  assert.deepEqual(await f.schedules.prune(time, value => f.driver.cleanup(value)), []);
   assert.equal(expire.mock.callCount(), 1);
   assert.equal(f.schedules.getOccurrence(occurrence.id).executionId, occurrence.executionId);
   assert.equal(f.workflows.getExecution(`occurrence-${occurrence.id}`, occurrence.executionId!).status, 'completed');

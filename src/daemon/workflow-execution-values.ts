@@ -4,7 +4,9 @@ import type { WorkflowDefinition, WorkflowExecution, WorkflowStep } from '../pro
 import { invocationExecution } from '../workflows/invocations.ts';
 import { WorkflowStepError, type ExecutorContext } from '../workflows/scheduler.ts';
 import { redactCredentials } from './credential-redaction.ts';
+import { WorkflowValidationError } from '../workflows/errors.ts';
 
+export { WorkflowValidationError } from '../workflows/errors.ts';
 export class WorkflowConflict extends Error { constructor() { super('Workflow decision or slot is no longer available'); } }
 
 export function sameProject(project: string, scope: string): boolean {
@@ -63,7 +65,7 @@ export function assertNoSecrets(value: unknown, secrets: string[], checkKeys = f
     if (Array.isArray(item)) return item.some(visit);
     return !!item && typeof item === 'object' && Object.entries(item).some(([key, value]) => (checkKeys && visit(key)) || visit(value));
   };
-  if (visit(value)) throw new Error('Saved workflow data cannot contain secret values');
+  if (visit(value)) throw new WorkflowValidationError('Saved workflow data cannot contain secret values');
 }
 
 export function safeError(error: unknown, values: string[]): Error {

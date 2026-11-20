@@ -25,6 +25,7 @@ export async function prepareWorkflowLaunch(launch: WorkflowLaunch, dependencies
   resources: WorkflowExecutionResources;
   runtimePath: string;
   snapshot(needsCode: boolean): Promise<{ runtime: Runtime; code: WorkflowExecutors }>;
+  validateScheduledAgents(definition: WorkflowDefinition, input: Json, scope: string, projectId: string): Promise<void>;
   discover(owner: string, connection: string, tools: import('../protocol/workflows.ts').McpToolSnapshot[], mode: Runtime['isolationMode'], signal?: AbortSignal): Promise<unknown>;
 }) {
   const { host, store, secrets, resources, runtimePath } = dependencies;
@@ -45,6 +46,8 @@ export async function prepareWorkflowLaunch(launch: WorkflowLaunch, dependencies
   for (const candidate of definitions) assertNoSecrets(publicDefinition(candidate), values);
   assertNoSecrets(input, values, true);
   if (!stepId) parseValue(definition.inputSchema, input);
+  if (launch.kind === 'occurrence') await dependencies.validateScheduledAgents(definition, input, identity.scope, launch.options.projectId);
+  signal?.throwIfAborted();
   const needsCode = selectedSteps.some(step => step.kind === 'shell' || step.kind === 'typescript');
   const snapshot = await dependencies.snapshot(needsCode);
   signal?.throwIfAborted();
