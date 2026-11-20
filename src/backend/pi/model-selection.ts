@@ -11,7 +11,11 @@ export function findPiModel<T extends { provider?: string; id: string }>(availab
     for (const name of ["auth.json", "models.json"]) {
       const path = join(agentDir, name);
       if (!existsSync(path)) continue;
-      const data = JSON.parse(readFileSync(path, "utf8"));
+      const content = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
+      const json = name === "models.json" ? content
+        .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (match) => match.startsWith('"') ? match : "")
+        .replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (match, closing: string | undefined) => closing ?? match) : content;
+      const data = JSON.parse(json);
       const providers = name === "models.json" ? data.providers : data;
       if (providers && Object.hasOwn(providers, legacyAzure) && !Object.hasOwn(providers, "azure")) {
         throw new Error(`Pi 1.6 renamed Provider ${legacyAzure} to azure. Rename its Provider key in ${path} to azure; keep the API name azure-openai-responses unchanged. Flow did not change this file or select another model.`);

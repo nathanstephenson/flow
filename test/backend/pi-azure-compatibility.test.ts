@@ -44,6 +44,35 @@ for (const filename of ["auth.json", "models.json"]) {
   });
 }
 
+for (const [format, prefix] of [["comments", "// Provider settings\n"], ["BOM", "\uFEFF"], ["comments and BOM", "\uFEFF// Provider settings\n"]]) {
+  it(`accepts Pi models.json with ${format} and trailing commas without rewriting it`, (t) => {
+    const agentDir = mkdtempSync(join(tmpdir(), "flow-azure-json-"));
+    t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+    const path = join(agentDir, "models.json");
+    const providers = { azure: { apiKey: 'key"//not a comment', baseUrl: "https://example.invalid/a//b" } };
+    const original = `${prefix}{"providers":${JSON.stringify(providers)},\n}`;
+    writeFileSync(path, original);
+    const model = { provider: "azure", id: "gpt-5.4" };
+    assert.equal(findPiModel([model], "azure-openai-responses/gpt-5.4", false, agentDir), model);
+    assert.equal(readFileSync(path, "utf8"), original);
+    const legacy = original.replace('"azure":', '"azure-openai-responses":');
+    writeFileSync(path, legacy);
+    assert.throws(() => findPiModel([model], "azure/gpt-5.4", false, agentDir), /Pi 1.6 renamed Provider/);
+    assert.equal(readFileSync(path, "utf8"), legacy);
+  });
+}
+
+it("accepts Pi auth.json with a BOM without rewriting it", (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "flow-azure-auth-bom-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const path = join(agentDir, "auth.json");
+  const original = '\uFEFF{"azure":{"type":"api_key","key":"test-only"}}';
+  writeFileSync(path, original);
+  const model = { provider: "azure", id: "gpt-5.4" };
+  assert.equal(findPiModel([model], "azure/gpt-5.4", false, agentDir), model);
+  assert.equal(readFileSync(path, "utf8"), original);
+});
+
 it("selects legacy Azure references in Agent Sessions, Subagents, workflows and compaction", { timeout: 20_000 }, async (t) => {
   const fixture = await piFixture(t, (request) => {
     if (userText(request).includes("<conversation>")) return { text: "## Goal\nKeep the request." };
@@ -59,7 +88,7 @@ it("selects legacy Azure references in Agent Sessions, Subagents, workflows and 
   const config = JSON.parse(readFileSync(path, "utf8"));
   config.providers.azure = config.providers["flow-test"];
   delete config.providers["flow-test"];
-  writeFileSync(path, JSON.stringify(config));
+  writeFileSync(path, `\uFEFF// Provider settings\n${JSON.stringify(config).slice(0, -1)},\n}`);
   const session = await fixture.create({ modelId: "azure-openai-responses/parent", compactionModelId: "azure-openai-responses/child" });
   const inner = (session as unknown as { session: AgentSession }).session;
   assert.equal(inner.model?.provider, "azure");
