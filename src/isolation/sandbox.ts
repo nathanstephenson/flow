@@ -136,7 +136,18 @@ function runProvider(argv: string[], timeoutMs: number, signal?: AbortSignal): P
   });
 }
 
+/** Reclaim an occurrence-owned VM even if no execution checkpoint was written.
+ * Keep its ownership record on provider failure so pruning can retry safely. */
+export async function removeOwnedSandbox(provider: SandboxProvider, specPath: string, expectedName: string): Promise<void> {
+  if (!existsSync(specPath)) return;
+  const saved = JSON.parse(readFileSync(specPath, 'utf8'));
+  if (saved.schemaVersion !== '1' || saved.name !== expectedName) throw new Error('Invalid Sandbox ownership record');
+  await runProvider(fillTemplate(provider.remove, { name: expectedName }), 120_000);
+  rmSync(specPath, { force: true });
+}
+
 export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec, specPath: string, signal?: AbortSignal): Promise<Sandbox> {
+  signal?.throwIfAborted();
   for (const mount of spec.mounts) {
     const stat = statSync(mount.path);
     if (realpathSync(mount.path) !== mount.path || stat.dev !== mount.dev || stat.ino !== mount.ino) throw new Error(`Sandbox mount changed since validation: ${mount.path}`);
@@ -150,27 +161,31 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
   if (stale) await remove().catch(() => {});
   const startup = { remove: performance.now() - start, create: 0 };
   start = performance.now();
-  try { await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
+  try { signal?.throwIfAborted(); await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
   catch (error) { await remove().catch(() => {}); throw error; }
   startup.create = performance.now() - start;
-  let holds = 0, closed = false, removing = false;
-  let finish!: (outcome: Promise<void>) => void;
-  const removed = new Promise<void>((resolve) => { finish = resolve as (outcome: Promise<void>) => void; });
-  removed.catch(() => {});
-  const settle = () => {
-    if (closed && !holds && !removing) { removing = true; finish(remove().then(() => rmSync(specPath, { force: true }))); }
-  };
+  let holds = 0, closed = false;
+  let unheld!: () => void;
+  let drained = Promise.resolve();
+  let removal: Promise<void> | undefined;
   return {
     name: spec.name,
     nodePath: provider.nodePath,
     startup,
     hold: () => {
       if (closed) throw new Error(`Sandbox ${spec.name} is stopping`);
-      holds++;
+      if (!holds++) drained = new Promise<void>(resolve => { unheld = resolve; });
       let released = false;
-      return () => { if (!released) { released = true; holds--; settle(); } };
+      return () => { if (!released) { released = true; if (!--holds) unheld(); } };
     },
-    close: () => { closed = true; settle(); return removed; },
+    close: () => {
+      closed = true;
+      return removal ??= (async () => {
+        if (holds) await drained;
+        await remove();
+        rmSync(specPath, { force: true });
+      })().catch(error => { removal = undefined; throw error; });
+    },
     command: (cwd, argv, env) => {
       const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
       return { command: command!, args: [...args, provider.nodePath, "-e", sandboxSupervisorSource, "--", "env",

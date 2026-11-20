@@ -19,8 +19,8 @@ import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
-import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState } from "./claude-state.ts";
-import { relocatePiState } from "../pi/state.ts";
+import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
+import { relocatePiState, forkPiState } from "../pi/state.ts";
 import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
@@ -45,6 +45,21 @@ export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const readable = [packageRoot, ...(this.options.readablePaths ?? [])];
+    if (this.options.entry) readable.push(this.options.entry);
+    if (this.options.backendModule) readable.push(fileURLToPath(this.options.backendModule));
+    readable.push(...nodeExecutionAssets(readable));
+    const env = { ...process.env, ...this.options.env };
+    const source = this.name === 'pi' ? env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent')
+      : resolve(scope, env.CLAUDE_CONFIG_DIR || join(env.HOME ?? homedir(), '.claude'));
+    const resources = this.name === 'pi' ? ['AGENTS.md', 'skills', 'prompts']
+      : ['CLAUDE.md', 'settings.json', 'commands', 'skills', 'agents', 'rules', 'plugins'];
+    for (const name of resources) if (existsSync(join(source, name))) readable.push(realpathSync(join(source, name)));
+    const support = this.options.sandbox?.();
+    return { readable, writable: support?.supported && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [] };
+  }
   private async opened(proxy: WorkerSession, signal: AbortSignal | undefined, isolation: FilesystemIsolationMode, begin: number,
     sandbox?: { sharing: "shared" | "own"; remove: number; create: number }): Promise<void> {
     const opening = performance.now();
@@ -97,7 +112,7 @@ export class WorkerBackend implements AgentBackend {
       if (support.provider.hostClaudePath) env.DISABLE_AUTOUPDATER = "1";
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
-        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
+        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && !["projects", "file-history"].includes(entry)) assets.push(realpathSync(link));
       }
     } else {
       const source = this.options.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
@@ -154,10 +169,14 @@ export class WorkerBackend implements AgentBackend {
     else relocatePiState(stateDir, from, to);
   }
 
+  fork(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
+    return this.name === "claude" ? forkClaudeState(from, to) : forkPiState(from.stateDir, to.stateDir, to.scope);
+  }
+
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const begin = performance.now();
     options.signal?.throwIfAborted();
-    const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
+    const isolationMode = options.isolationMode ?? this.options.isolationMode?.() ?? "bubblewrap";
     if (isolationMode === "sandbox") return this.createSandboxed(options);
     if (isolationMode === "none") {
       const scope = realpathSync(options.scope);
@@ -224,6 +243,7 @@ class WorkerSession implements BackendSession {
   refreshMcp?: () => Promise<void>;
   startWorkflowSubagent?: (options: WorkflowSubagentOptions) => WorkflowSubagentHandle;
   compact?: (instructions?: string) => Promise<void>;
+  rewindFiles?: (messageId: string) => Promise<void>;
   skills?: () => Promise<Skill[]>;
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
@@ -318,6 +338,7 @@ class WorkerSession implements BackendSession {
       const methods = new Set(state.methods);
       if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
+      if (methods.has("rewindFiles")) this.rewindFiles = (messageId) => this.rpc.call("rewindFiles", [messageId]);
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
@@ -388,7 +409,7 @@ class WorkerSession implements BackendSession {
     void this.worker.stop(async () => {}).then(this.cleanup).catch(() => {});
   }
   resumeToken() { return this.resume; }
-  prompt(text: string, attachments?: PromptAttachment[]) { return this.rpc.call<void>("prompt", [text, attachments]); }
+  prompt(text: string, attachments?: PromptAttachment[], messageId?: string) { return this.rpc.call<void>("prompt", [text, attachments, messageId]); }
   abort() { return this.rpc.call<void>("abort"); }
   setModel(modelId: string) { return this.rpc.call<void>("setModel", [modelId]); }
   setEffort(effort: EffortLevel) { return this.rpc.call<void>("setEffort", [effort]); }

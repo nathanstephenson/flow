@@ -6,7 +6,7 @@ import type { ComposerActions } from "@/composer-actions.ts";
 import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
 import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
-import type { RunningWork } from "@/presentation/running-work.ts";
+import { nestedLabel, type RunningWork } from "@/presentation/running-work.ts";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { AttachmentTray } from "@/components/attachment-tray.tsx";
@@ -75,6 +75,7 @@ export function Composer({
   unavailable,
   placeholder,
   drafts,
+  seed: given,
   authorisingSummary,
   work = NO_WORK,
   onOpenWork,
@@ -131,6 +132,8 @@ export function Composer({
    * has moved on still has to clear the Draft it came from.
    */
   drafts: DraftStash;
+  /** Starts the Composer with this instead of the stashed Draft, e.g. a rewound message. */
+  seed?: Draft | undefined;
   /**
    * The précis of the call awaiting authorisation, passed in rather than looked up.
    *
@@ -159,7 +162,7 @@ export function Composer({
    * at another Agent Session. A read rather than a take — see web/src/drafts.ts for why StrictMode
    * requires that — and `useRef` so the seed is taken once rather than on every render.
    */
-  const seed = useRef(drafts.read(id)).current;
+  const seed = useRef(given ?? drafts.read(id)).current;
   const [text, setText] = useState(seed.text);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(seed.attachments);
   /** A Workflow relay borrows the input for free text without consuming the ordinary Draft. */
@@ -1021,7 +1024,10 @@ function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpe
               {card.detail ? (
                 <span className={cn("min-w-0 truncate", card.kind === "call" && "font-mono")}>{card.detail}</span>
               ) : null}
-              <Loader2 aria-hidden className="ml-auto size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              <span className="ml-auto flex shrink-0 items-center gap-2">
+                {card.kind === "agent" ? nestedLabel(card.nested) : null}
+                <Loader2 aria-hidden className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              </span>
             </button>
           )}
         </li>

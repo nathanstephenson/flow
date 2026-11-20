@@ -7,6 +7,7 @@ import type {
   Capabilities,
   EffortLevel,
   PermissionDecision,
+  Producer,
   Question,
   Skill,
   Spend,
@@ -53,6 +54,11 @@ export class FakeSession implements BackendSession {
   /** Parallel to `prompts`, so a test can assert what reached the backend beside each text. */
   readonly promptedAttachments: PromptAttachment[][] = [];
   readonly resumedFrom: string | undefined;
+  readonly resumedBefore: string | undefined;
+  /** Parallel to `prompts`: the host's user message id for each. */
+  readonly promptIds: Array<string | undefined> = [];
+  readonly rewoundFiles: string[] = [];
+  rewindFiles?: (messageId: string) => Promise<void>;
   /** What this session was told the Agent Session had already spent, for asserting a Revive. */
   readonly priorSpend: Spend | undefined;
   /** What this session was told the machine already authorises, for asserting the read-at-create. */
@@ -176,6 +182,7 @@ export class FakeSession implements BackendSession {
         return true;
       };
     }
+    if (this.capabilities.rewindFiles) this.rewindFiles = async (messageId: string) => { this.rewoundFiles.push(messageId); };
     if (this.capabilities.compaction) {
       // Opens and closes a turn, because a compaction is one: it spends money and holds the backend
       // while it runs, and the Steering Queue only orders messages correctly if it is told so.
@@ -191,6 +198,7 @@ export class FakeSession implements BackendSession {
     this.emit = options.emit;
     this.modelId = options.modelId ?? "fake-1";
     this.resumedFrom = options.resume;
+    this.resumedBefore = options.resumeBefore;
     this.priorSpend = options.priorSpend;
     this.emit({ type: "model_changed", model: { id: this.modelId, provider: "fake" } });
     if (options.effort) void this.setEffort(options.effort);
@@ -200,8 +208,9 @@ export class FakeSession implements BackendSession {
     return "fake-resume";
   }
 
-  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
     this.prompts.push(text);
+    this.promptIds.push(messageId);
     this.promptedAttachments.push(attachments ?? []);
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
@@ -352,12 +361,14 @@ export class FakeSession implements BackendSession {
    *
    * `completeTurn` deliberately does not close an open Subagent: leaving one running is the
    * torn-Subagent fixture, and the Session Host is what has to cope with it.
+   *
+   * `producer` names the Subagent spawning this one, for a nested Subagent.
    */
-  beginSubagent(name: string, description?: string): FakeSubagent {
+  beginSubagent(name: string, description?: string, producer?: Producer): FakeSubagent {
     const subagentId = randomUUID();
-    const subagent = new FakeSubagent(subagentId, name, description, this.emit);
+    const subagent = new FakeSubagent(subagentId, name, description, this.emit, producer);
     this.subagents.push(subagent);
-    this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description } });
+    this.emit({ type: "tool_started", callId: subagentId, name: "Agent", input: { name, description }, ...(producer ? { producer } : {}) });
     subagent.snapshot({ state: "running" });
     return subagent;
   }
@@ -425,6 +436,7 @@ export class FakeSubagent {
   readonly subagentId: string;
   readonly name: string;
   readonly description: string | undefined;
+  readonly producer: Producer | undefined;
   finished = false;
   launched = false;
 
@@ -437,11 +449,13 @@ export class FakeSubagent {
     name: string,
     description: string | undefined,
     emit: (event: BackendEvent) => void,
+    producer?: Producer,
   ) {
     this.subagentId = subagentId;
     this.name = name;
     this.description = description;
     this.emit = emit;
+    this.producer = producer;
   }
 
   /**
@@ -458,6 +472,13 @@ export class FakeSubagent {
       producer: { subagentId: this.subagentId },
     });
     if (final) this.messageIndex += 1;
+  }
+
+  /** Instructions from the model that spawned it. */
+  instruct(text: string): string {
+    const id = randomUUID();
+    this.emit({ type: "subagent_instruction", id, text, producer: { subagentId: this.subagentId } });
+    return id;
   }
 
   /** An attributed tool call — the subagent's Read, not the parent's. */
@@ -494,6 +515,7 @@ export class FakeSubagent {
       callId: this.subagentId,
       result: `${this.name} launched in the background`,
       isError: false,
+      ...this.attribution(),
     });
   }
 
@@ -505,7 +527,7 @@ export class FakeSubagent {
     // A backgrounded one already returned it at launch, and returning it twice is a shape no adapter
     // produces.
     if (this.launched) return;
-    this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error" });
+    this.emit({ type: "tool_ended", callId: this.subagentId, result: `${this.name} finished`, isError: reason === "error", ...this.attribution() });
   }
 
   /** @internal — used by FakeSession to emit the opening snapshot. */
@@ -515,8 +537,13 @@ export class FakeSubagent {
       subagentId: this.subagentId,
       name: this.name,
       ...(this.description === undefined ? {} : { description: this.description }),
+      ...this.attribution(),
       ...state,
     });
+  }
+
+  private attribution(): { producer?: Producer } {
+    return this.producer ? { producer: this.producer } : {};
   }
 }
 
@@ -528,7 +555,7 @@ export class FakeSubagent {
  * is the case clients must hide a control for. A test that wants the other side asks for it.
  */
 export type FakeCapabilityOverrides = Partial<
-  Pick<Capabilities, "models" | "compaction" | "fork" | "enquiries" | "permissions">
+  Pick<Capabilities, "models" | "compaction" | "fork" | "rewind" | "rewindFiles" | "enquiries" | "permissions">
 >;
 
 export class FakeBackend implements AgentBackend {
@@ -571,6 +598,14 @@ export class FakeBackend implements AgentBackend {
   releaseCreate(): void {
     this.holdCreate = false;
     for (const resume of this.waiting.splice(0)) resume();
+  }
+
+  /** Every Fork copy asked of this backend. */
+  readonly forks: Array<{ from: { stateDir: string; scope: string; resume: string }; to: { stateDir: string; scope: string } }> = [];
+
+  fork(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
+    this.forks.push({ from, to });
+    return from.resume;
   }
 
   get latest(): FakeSession {

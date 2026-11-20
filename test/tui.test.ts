@@ -188,6 +188,26 @@ describe("TUI rendering", () => {
     assert.doesNotMatch(frame, /> plain\n\s+\[\d/);
   });
 
+  it("indents a Subagent's rows by how deeply it is nested", () => {
+    const view = {
+      ...initialState(),
+      capabilities: CAPABILITIES,
+      entries: [
+        { kind: "assistant", id: "m0", text: "root says", final: true },
+        { kind: "subagent", id: "a", name: "Outer", status: "running", startedAt: "t" },
+        { kind: "assistant", id: "m1", text: "outer says", final: true, producer: { subagentId: "a" } },
+        { kind: "subagent", id: "b", name: "Inner", status: "running", startedAt: "t", producer: { subagentId: "a" } },
+        { kind: "assistant", id: "m2", text: "inner says", final: true, producer: { subagentId: "b" } },
+      ],
+    } as UiState["view"];
+    const frame = renderFrame(baseUi({ view }), { columns: 60, rows: 14 }).join("\n");
+    assert.match(frame, /^root says/m);
+    assert.match(frame, /^ {4}⤷ \[running\] Outer/m);
+    assert.match(frame, /^ {2}outer says/m);
+    assert.match(frame, /^ {6}⤷ \[running\] Inner/m);
+    assert.match(frame, /^ {4}inner says/m);
+  });
+
   it("renders exactly the terminal height, whatever the content", () => {
     const log = new SessionLog("s1");
     for (let index = 0; index < 50; index += 1) {

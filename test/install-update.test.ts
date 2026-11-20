@@ -30,7 +30,7 @@ const bundle = await build({ stdin: { contents: bootstrap, resolveDir: resolve('
 } }] });
 const hostCode = `
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 export async function runCli() {
@@ -57,7 +57,9 @@ else {
  process.on('SIGTERM', () => server.close(() => { try { unlinkSync(join(root, 'daemon.json')); } catch {} process.exit(0); }));
  server.listen(settings.port, settings.address, () => {
   identity = { pid: process.pid, instanceId: randomUUID(), version, url: 'http://127.0.0.1:' + server.address().port, token: 'test', mode: process.env.TEST_MODE ?? 'background', settings };
-  writeFileSync(join(root, 'daemon.json'), JSON.stringify(identity));
+  const daemon = join(root, 'daemon.json');
+  writeFileSync(daemon + '.tmp', JSON.stringify(identity));
+  renameSync(daemon + '.tmp', daemon);
  });
 }
 }

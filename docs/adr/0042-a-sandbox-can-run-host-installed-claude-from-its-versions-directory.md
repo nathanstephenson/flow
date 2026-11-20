@@ -1,4 +1,4 @@
-# 40. A Sandbox can run host-installed Claude from its versions directory
+# 42. A Sandbox can run host-installed Claude from its versions directory
 
 ## Status
 

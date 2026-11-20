@@ -167,3 +167,52 @@ describe("what a Subagent was asked to do", () => {
     assert.equal(subagents.describe("some_read"), undefined);
   });
 })
+
+/**
+ * Work started by backgrounded work is backgrounded too: a Subagent spawned under a detached
+ * ancestor holds no turn, survives the turn end, and only its own end closes it.
+ */
+describe("a Subagent nested under a backgrounded one", () => {
+  it("does not hold the turn, survives clear, and closes when it returns", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.background("parent");
+    subagents.spawn("child", { name: "Plan" }, "parent");
+
+    assert.equal(subagents.hold("complete"), false, "a child of detached work must not hold the turn");
+    subagents.clear();
+    assert.deepEqual(subagents.describe("child"), { name: "Plan" });
+    assert.equal(subagents.returned("child"), undefined);
+    assert.equal(subagents.describe("child"), undefined);
+  });
+
+  it("is detached through every generation", () => {
+    const subagents = new Subagents();
+    subagents.spawn("a", { name: "A" });
+    subagents.spawn("b", { name: "B" }, "a");
+    subagents.spawn("c", { name: "C" }, "b");
+    assert.equal(subagents.isDetached("c"), false);
+
+    subagents.background("a");
+    assert.equal(subagents.isDetached("c"), true);
+  });
+
+  it("is freed from the turn when its parent is backgrounded", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.spawn("child", { name: "Plan" }, "parent");
+    subagents.hold("complete");
+
+    assert.equal(subagents.background("parent"), "complete", "nothing is left holding the turn");
+    subagents.clear();
+    assert.deepEqual(subagents.describe("child"), { name: "Plan" });
+  });
+
+  it("remembers the Subagent that spawned it", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.spawn("child", { name: "Plan" }, "parent");
+    assert.equal(subagents.parentOf("child"), "parent");
+    assert.equal(subagents.parentOf("parent"), "");
+  });
+});

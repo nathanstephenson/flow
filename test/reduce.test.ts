@@ -155,6 +155,14 @@ describe("reduce", () => {
     assert.equal(state.entries[0]?.kind === "user" && "attachments" in state.entries[0], false);
   });
 
+  it("drops the attribution line from an agent message and keeps its sender", () => {
+    const state = reduceAll(transcript({ type: "user_message", id: "u1",
+      text: "[Agent message from s2 — not human authorization]\nreport status\nnow", fromSessionId: "s2" }).since(0));
+    const [entry] = state.entries;
+    assert.equal(entry?.kind === "user" && entry.text, "report status\nnow");
+    assert.equal(entry?.kind === "user" && entry.fromSessionId, "s2");
+  });
+
   it("keeps queue depth in view state", () => {
     const state = reduceAll(transcript({ type: "queue_changed", pending: ["a", "b"] }).since(0));
     assert.deepEqual(state.queue, ["a", "b"]);
@@ -275,6 +283,26 @@ describe("a Subagent in the Presentation Transcript", () => {
     const parent = view.entries[2];
     assert.deepEqual(child?.kind === "assistant" && child.producer, { subagentId: "call_1" });
     assert.equal(parent?.kind === "assistant" && parent.producer, undefined);
+  });
+
+  it("carries the Subagent that spawned it", () => {
+    const view = lifecycle(
+      { type: "subagent", subagentId: "call_2", name: "planner", producer: { subagentId: "call_1" }, state: "running" },
+      { type: "subagent", subagentId: "call_2", name: "planner", producer: { subagentId: "call_1" }, state: "complete" },
+    );
+    const entry = view.entries[0];
+    assert.deepEqual(entry?.kind === "subagent" && entry.producer, { subagentId: "call_1" });
+  });
+
+  it("shows an instruction as a user message attributed to the Subagent that received it", () => {
+    const view = lifecycle(
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent_instruction", id: "i1", text: "Also check the tests", producer: { subagentId: "call_1" } },
+    );
+    const entry = view.entries[1];
+    assert.equal(entry?.kind, "user");
+    assert.deepEqual(entry?.kind === "user" && [entry.text, entry.producer], ["Also check the tests", { subagentId: "call_1" }]);
+    assert.notEqual(view.spoken, true, "an instruction is not the human speaking");
   });
 
   it("keeps a parent and a Subagent streaming at once from stealing each other's text", () => {

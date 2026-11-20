@@ -1,6 +1,8 @@
+import { executionOwner } from './records.ts';
+import { executionAccessibleBy, executionAssociation, executionIdentity, executionOwnerKey, executionOwnerOf } from './owner.ts';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { Json, StepAttempt, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowPermission, WorkflowStep } from '../protocol/workflows.ts';
+import type { ExecutionOwner, Json, StepAttempt, WorkflowDefinition, WorkflowEdge, WorkflowExecution, WorkflowPermission, WorkflowStep } from '../protocol/workflows.ts';
 import type { RecoverWorkflow } from '../protocol/workflow-executions.ts';
 import { resolveMapping, validateDefinition } from './graph.ts';
 import type { WorkflowGraph } from './graph.ts';
@@ -11,15 +13,19 @@ import { recoverySteps, savedDefinitionRevision, validateCompatibleDefinition } 
 import { resolveWorkflowCalls } from './calls.ts';
 import { invocationCheckpoint, invocationExecution } from './invocations.ts';
 
-export interface WorkflowSession {
-  sessionId: string;
+export type WorkflowSession = ({ sessionId: string; occurrenceId?: string } | { sessionId?: string; occurrenceId: string }) & {
+  runtime?: WorkflowExecution["runtime"];
   backend: string;
   scope: string;
   projectId?: string;
   matchesProject?: (projectId: string) => boolean;
 }
 export interface ExecutorContext {
-  sessionId: string;
+  owner?: ExecutionOwner;
+  /** Stable ownership key, not an Agent Session identity. */
+  ownerId?: string;
+  occurrenceId?: string;
+  sessionId?: string;
   scope: string;
   executionId: string;
   invocationId?: string;
@@ -76,10 +82,10 @@ export class WorkflowScheduler {
     this.store = store;
     this.executors = executors;
     this.onResume = onResume;
-    for (const sessionId of store.listSessionIds()) {
-      for (const record of store.listExecutions(sessionId)) {
+    for (const owner of store.listOwners()) {
+      for (const record of store.listOwnedExecutions(owner)) {
         if (!occupied(record)) continue;
-        if (this.slots.has(sessionId)) throw new Error('Multiple workflow executions occupy one Agent Session');
+        if (this.slots.has(executionOwnerKey(owner))) throw new Error('Multiple workflow executions occupy one execution owner');
         const active = this.install(record);
         this.reconcile(active);
         this.persist(active);
@@ -87,24 +93,24 @@ export class WorkflowScheduler {
     }
   }
 
-  occupied(sessionId: string): boolean { return this.slots.has(sessionId); }
+  occupied(sessionId: string): boolean { return this.slots.has(sessionId) || [...this.active.values()].some(active => executionAssociation(active.record) === sessionId && occupied(active.record)); }
 
   /** Whether the slot contains a full execution doing work, excluding tests and recovery waits. */
   activeFull(sessionId: string): boolean {
-    const executionId = this.slots.get(sessionId);
+    const executionId = this.slots.get(sessionId) ?? [...this.active.values()].find(active => executionAssociation(active.record) === sessionId && occupied(active.record))?.record.id;
     const record = executionId ? this.active.get(executionId)?.record : undefined;
     return record?.status === 'running' && record.testStepId === undefined;
   }
 
   forgetSession(sessionId: string): void {
-    const executions = [...this.active.values()].filter(active => active.record.sessionId === sessionId);
+    const executions = [...this.active.values()].filter(active => executionOwner(active.record) === sessionId);
     if (executions.some(active => this.hasWork(active) || active.record.status === 'running')) throw new Error('Workflow work must stop before forgetting an Agent Session');
     for (const active of executions) this.active.delete(active.record.id);
     this.slots.delete(sessionId);
   }
 
   start(definition: WorkflowDefinition, session: WorkflowSession, input: unknown, testStepId?: string, launchId?: string, namingEligible = false, capturedDefinitions?: Record<string, WorkflowDefinition>): WorkflowExecution {
-    if (this.occupied(session.sessionId)) throw new Error('Agent Session workflow slot is occupied');
+    if (this.occupied(executionOwner(session))) throw new Error('Agent Session workflow slot is occupied');
     const graph = validateDefinition(definition);
     if (graph.definition.backend !== session.backend) throw new Error('Backend Adapter mismatch');
     if (graph.definition.projectId && !(session.matchesProject?.(graph.definition.projectId) ?? graph.definition.projectId === session.projectId)) throw new Error('Workflow is restricted to another Project');
@@ -119,7 +125,7 @@ export class WorkflowScheduler {
     this.check(testStep ? [testStep] : graph.order, session, retainedDefinitions);
     const parsed = parseValue(testStep ? graph.inputSchemas.get(testStep.id)! : graph.definition.inputSchema, input);
     const record: WorkflowExecution = {
-      version: 1, id: randomUUID(), sessionId: session.sessionId, scope: session.scope,
+      ...executionIdentity(session), ...(session.runtime ? { runtime: session.runtime } : {}), id: randomUUID(), scope: session.scope,
       definition: graph.definition, input: parsed, status: 'running', startedAt: Date.now(),
       ...(graph.order.some(step => step.kind === 'workflow') ? { retainedDefinitions, invocations: {} } : {}),
       ...(launchId ? { launchId } : {}),
@@ -133,16 +139,24 @@ export class WorkflowScheduler {
     return structuredClone(record);
   }
 
+  associate(occurrenceId: string, executionId: string, sessionId: string): void {
+    const active = this.require(executionOwnerKey({ kind: 'occurrence', occurrenceId }), executionId);
+    if (executionOwnerOf(active.record).kind !== 'occurrence' || (executionAssociation(active.record) && executionAssociation(active.record) !== sessionId)) throw new Error('Invalid execution association');
+    const visit = (node: ActiveExecution) => { node.record.sessionId = sessionId; for (const call of node.calls.values()) visit(call.child); };
+    visit(active);
+    this.persist(active);
+  }
+
   get(sessionId: string, executionId: string): WorkflowExecution {
     const active = this.active.get(executionId);
-    if (active?.record.sessionId === sessionId) return structuredClone(active.record);
+    if (active !== undefined && executionAccessibleBy(active.record, sessionId)) return structuredClone(active.record);
     return this.store.getExecution(sessionId, executionId);
   }
 
   /** Atomically consume an automatic naming request before model work starts. */
   claimNaming(sessionId: string, executionId: string): boolean {
     const active = this.active.get(executionId);
-    const record = active?.record.sessionId === sessionId ? active.record : this.store.getExecution(sessionId, executionId);
+    const record = active !== undefined && executionAccessibleBy(active.record, sessionId) ? active.record : this.store.getExecution(sessionId, executionId);
     if (record.naming !== 'pending' || record.testStepId) return false;
     record.naming = 'requested';
     if (active?.record === record) this.persist(active);
@@ -160,7 +174,7 @@ export class WorkflowScheduler {
   hasPendingDeadline(sessionId: string, executionId: string): boolean {
     const pending = (active: ActiveExecution): boolean => !active.stopped && [...active.calls.values()].some(call => call.timer !== undefined || pending(call.child));
     const active = this.active.get(executionId);
-    return active?.record.sessionId === sessionId && pending(active);
+    return active !== undefined && executionAccessibleBy(active.record, sessionId) && pending(active);
   }
 
   async cancel(sessionId: string, executionId: string): Promise<WorkflowExecution> {
@@ -181,7 +195,7 @@ export class WorkflowScheduler {
 
   /** replacementDefinition is resolved from saved storage by the host, never from request JSON. */
   recover(session: WorkflowSession, executionId: string, action: RecoverWorkflow, replacementDefinition?: WorkflowDefinition): WorkflowExecution {
-    const root = this.require(session.sessionId, executionId);
+    const root = this.require(executionOwner(session), executionId);
     const active = action.invocationId ? this.findInvocation(root, action.invocationId) : root;
     const record = active.record;
     if (record.status !== 'recovery-required' || this.hasWork(active)) throw new Error('Execution is not ready for recovery');
@@ -280,7 +294,7 @@ export class WorkflowScheduler {
   private install(record: WorkflowExecution): ActiveExecution {
     const active: ActiveExecution = { record, graph: validateDefinition(record.definition), running: new Map(), calls: new Map(), waiters: [], stopped: record.status !== 'running' };
     this.active.set(record.id, active);
-    this.slots.set(record.sessionId, record.id);
+    this.slots.set(executionOwner(record), record.id);
     const installed = new Map<string, ActiveExecution>();
     const restore = (id: string): ActiveExecution => {
       const cached = installed.get(id);
@@ -404,7 +418,7 @@ export class WorkflowScheduler {
     if (!definition) throw new Error('Missing retained called Workflow Definition');
     const graph = validateDefinition(definition);
     const record: WorkflowExecution = {
-      version: 1, id: randomUUID(), sessionId: root.record.sessionId, scope: root.record.scope, definition: graph.definition,
+      ...executionIdentity(root.record), id: randomUUID(), scope: root.record.scope, definition: graph.definition,
       input: structuredClone(attempt.input), status: 'running', startedAt: Date.now(),
       steps: Object.fromEntries(graph.order.map(step => [step.id, { status: 'pending', attempts: [] }])),
       loops: Object.fromEntries(graph.loops.map(loop => [loop.headerId, { activation: 0, try: 0, phase: 'inactive', grants: [] }])),
@@ -479,7 +493,7 @@ export class WorkflowScheduler {
 
   private require(sessionId: string, executionId: string): ActiveExecution {
     const active = this.active.get(executionId);
-    if (!active || active.record.sessionId !== sessionId) throw new Error('Unknown workflow execution');
+    if (!active || !executionAccessibleBy(active.record, sessionId)) throw new Error('Unknown workflow execution');
     return active;
   }
 
@@ -659,7 +673,7 @@ export class WorkflowScheduler {
       if (!active.stopped) this.completeCall(active);
       return;
     }
-    if (!occupied(active.record)) this.slots.delete(active.record.sessionId);
+    if (!occupied(active.record)) this.slots.delete(executionOwner(active.record));
     for (const waiter of active.waiters.splice(0)) {
       if (active.persistenceError) waiter.reject(active.persistenceError);
       else waiter.resolve(structuredClone(active.record));
@@ -741,7 +755,7 @@ export class WorkflowScheduler {
             value = condition.operator === 'greater-than' ? actual > condition.value : actual < condition.value;
             break;
         }
-      } else value = await this.executors[step.kind]!.execute({ sessionId: active.record.sessionId, scope: active.record.scope, executionId: (active.root ?? active).record.id, ...(active.parent ? { invocationId: active.record.id } : {}), attempt: attempt.number, step: this.guidedStep(active, step, attempt), input: structuredClone(attempt.input), inputSchema: active.graph.inputSchemas.get(step.id)!, permission: active.inheritedAsk ? 'ask' : step.permission ?? active.record.definition.permission ?? 'auto-accept', signal: controller.signal });
+      } else value = await this.executors[step.kind]!.execute({ owner: executionOwnerOf(active.record), ownerId: executionOwner(active.record), ...(active.record.sessionId ? { sessionId: active.record.sessionId } : {}), ...(active.record.occurrenceId ? { occurrenceId: active.record.occurrenceId } : {}), scope: active.record.scope, executionId: (active.root ?? active).record.id, ...(active.parent ? { invocationId: active.record.id } : {}), attempt: attempt.number, step: this.guidedStep(active, step, attempt), input: structuredClone(attempt.input), inputSchema: active.graph.inputSchemas.get(step.id)!, permission: active.inheritedAsk ? 'ask' : step.permission ?? active.record.definition.permission ?? 'auto-accept', signal: controller.signal });
       if (active.stopped) return;
       if (timedOut) throw new WorkflowStepError('Step timed out', value);
       const output = this.validateOutput(active, step, value);

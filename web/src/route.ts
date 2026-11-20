@@ -29,6 +29,7 @@ export type Navigation = {
    * is what the empty state was always for.
    */
   openNewAgentSession: () => void;
+  openSchedules: (scheduleId?: string, occurrenceId?: string) => void;
   openSettings: (section?: SettingsSection) => void;
   /** Close the Settings Dialog. The Agent Session view behind it stays as it is. */
   leaveSettings: () => void;
@@ -61,6 +62,8 @@ export function useRoute(): Navigation {
 
   const openNewAgentSession = useCallback(() => setRoute(DEFAULT_ROUTE), []);
 
+  const openSchedules = useCallback((scheduleId?: string, occurrenceId?: string) => setRoute({ sessionId: undefined, schedules: true, ...(scheduleId ? { scheduleId } : {}), ...(occurrenceId ? { occurrenceId } : {}) }), []);
+
   const openSettings = useCallback(
     (section: SettingsSection = "general") => setRoute((current) => ({ ...current, settings: section })),
     [],
@@ -71,5 +74,5 @@ export function useRoute(): Navigation {
     [],
   );
 
-  return { route, sessionId, focus, openNewAgentSession, openSettings, leaveSettings };
+  return { route, sessionId, focus, openNewAgentSession, openSchedules, openSettings, leaveSettings };
 }

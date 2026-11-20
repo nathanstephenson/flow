@@ -56,6 +56,8 @@ test('Agent messages are attributed, queued while busy, and delivered without in
   assert.match(target.prompts[1]!, new RegExp(`Agent message from ${f.id}`));
   assert.match(target.prompts[1]!, /not human authorization/);
   assert.match(target.prompts[1]!, /report status/);
+  const delivered = f.host.logFor(other).since(0).map(({ event }) => event).filter(event => event.type === 'user_message');
+  assert.deepEqual(delivered.map(event => event.fromSessionId), [undefined, f.id]);
   await assert.rejects(f.tools.send({ sessionId: f.id, text: 'loop' }), /yourself/);
   await f.host.dispose(other);
   await assert.rejects(f.tools.send({ sessionId: other, text: 'restart' }));
@@ -70,6 +72,7 @@ test('Agent-created independent sessions retain permission policy and return an 
   assert.equal(options.permissionMode, 'ask');
   assert.equal(options.scope, tmpdir());
   assert.match(f.backend.latest.prompts[0]!, /investigate tests/);
+  assert.ok(f.host.logFor(result.sessionId).since(0).some(({ event }) => event.type === 'user_message' && event.fromSessionId === f.id));
   assert.ok(f.host.logFor(f.id).since(0).some(({ event }) => event.type === 'notice' && event.text.includes(result.sessionId)));
   await assert.rejects(f.tools.create({ text: 'x', scope: 'relative' }), /absolute/);
   await assert.rejects(f.tools.create({ text: 'x', permissionMode: 'always' } as never));

@@ -93,7 +93,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     const stateRoot = options.stateRoot ? { stateRoot: options.stateRoot } : {};
     const scope = canonicalScope(context.scope);
     const runtimePath = realpathSync(options.runtimePath);
-    const sandbox = isolationMode === 'sandbox' ? await options.sandbox!(context.sessionId) : undefined;
+    const sandbox = isolationMode === 'sandbox' ? await options.sandbox!(context.ownerId ?? context.sessionId!) : undefined;
     const nodePath = sandbox ? sandbox.nodePath : realpathSync(options.nodePath);
     const args = ['--noprofile', '--norc', '-c', 'ulimit -c 0; exec "$@"', 'flow-workflow', nodePath, '--max-old-space-size=128', runtimePath];
     const timeout = Math.min(context.step.timeoutMs ?? 60_000, 2_147_000_000);

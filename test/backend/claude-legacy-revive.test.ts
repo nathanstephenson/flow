@@ -113,7 +113,7 @@ test("a legacy Claude Agent Session revives after a Host update and keeps owned 
   writeFileSync(join(config, ".credentials.json"), credential);
   const store = new TranscriptStore(join(root, "flow"));
   async function host(backend: AgentBackend) {
-    const result = new SessionHost({ store });
+    const result = new SessionHost({ store, filesystemIsolationMode: () => "none" });
     hosts.push(result);
     result.registerBackend(backend);
     await result.load();
@@ -184,7 +184,7 @@ test("a legacy Claude Agent Session revives after a Host update and keeps owned 
   // Recent CLIs also create an empty project memory directory on launch; it is not migration.
   assert.deepEqual(readdirSync(join(projects, projectKey)).filter(name => name !== "memory").sort(), [resume!, `${resume}.jsonl`].sort(), "import only the selected UUID and its companions");
   assert.equal(existsSync(join(projects, projectKey, "memory", "unrelated-global-memory.md")), false, "do not import project-wide memory");
-  assert.deepEqual(readdirSync(stateDir), ["claude-projects"], "never persist a config or credential copy");
+  assert.deepEqual(readdirSync(stateDir).sort(), ["claude-file-history", "claude-projects"], "never persist a config or credential copy");
   assert.ok(!files(stateDir).some(file => file.includes(unrelatedId) || file.includes("credentials")));
   await second.shutdown();
   const ownedBytes = readFileSync(ownedFile, "utf8");

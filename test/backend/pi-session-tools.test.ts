@@ -87,6 +87,8 @@ it("Pi excludes parent session capabilities from ordinary Subagents and Workflow
   const step = session.startWorkflowSubagent!({ id: "step", name: "Step", instructions: "Work", input: {},
     modelId: "flow-test/child", effort: "high", permissionMode: "auto-accept", emit: () => {} });
   await step.done;
+  assert.deepEqual(f.events.flatMap(event => event.type === "subagent_instruction" ? [[event.producer.subagentId, event.text]] : []),
+    [["child", "Delegated work"]], "the brief is reported as an instruction to the Subagent");
   const childRequests = f.requests.filter(request => request.model === "child");
   assert.ok(childRequests.length >= 2);
   for (const request of childRequests) assert.equal(request.tools?.some(tool => tool.function.name.startsWith("session_")) ?? false, false);

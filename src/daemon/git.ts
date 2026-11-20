@@ -359,13 +359,15 @@ export async function createWorktree(options: {
   return { ok: true, value: planned.value };
 }
 
-export async function removeMergedBranch(repo: string, branch: string): Promise<GitResult<void>> {
-  const target = await head(repo);
-  if (!target.ok) return target;
-  if (target.value.detached) return refuse(`delete refs/heads/${branch}`, "The source repository has a detached HEAD");
-
+export async function removeMergedBranch(repo: string, branch: string, from?: string): Promise<GitResult<void>> {
+  if (from === undefined) {
+    const target = await head(repo);
+    if (!target.ok) return target;
+    if (target.value.detached) return refuse(`delete refs/heads/${branch}`, "The source repository has a detached HEAD");
+    from = target.value.name;
+  }
   const branchRef = `refs/heads/${branch}`;
-  const targetRef = `refs/heads/${target.value.name}`;
+  const targetRef = `refs/heads/${from}`;
   const merged = await run(repo, ["merge-base", "--is-ancestor", branchRef, targetRef], GIT_READ_TIMEOUT_MS);
   if (!merged.ok) return merged;
 

@@ -1,9 +1,10 @@
 import type { WorkflowParent } from "../backend/workflow-tools.ts";
+import { waitForAbort } from "../backend/worker/rpc.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput, type SessionTools } from '../backend/session-tools.ts';
 import { sessionToolSummary, sessionToolPage } from './session-tool-views.ts';
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
@@ -40,6 +41,7 @@ import type {
   PermissionDecision,
   Producer,
   Question,
+  RewindRestore,
   ScopeSkills,
   Skill,
   Spend,
@@ -59,6 +61,7 @@ import {
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
+import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
 import { probeSkills, type HeldSession } from "./skills.ts";
 import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
@@ -83,7 +86,7 @@ export class CommandRefused extends Error {
 }
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
-type QueuedMessage = { id: string; text: string; attachments: string[] };
+type QueuedMessage = { id: string; text: string; attachments: string[]; fromSessionId?: string };
 
 type SessionRecord = {
   mcpConnectionIds?: string[];
@@ -212,6 +215,7 @@ type SessionRecord = {
   branchGeneration: number;
   /** Set when this Scope is a worktree this host made, and so may remove again. */
   worktree: { path: string; repo: string; branch: string } | undefined;
+  scheduledOccurrenceId?: string;
   /**
    * A line held back to ride along with the next message, telling the model the branch moved under
    * it. See `switchBranch` for why it cannot go through the Steering Queue.
@@ -227,6 +231,7 @@ type SessionRecord = {
    */
   spend: Spend | undefined;
   resumeToken: string | undefined;
+  rewindTo: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
   permissionMode: AgentPermissionMode;
@@ -570,9 +575,10 @@ export class SessionHost {
    * In flight rather than resolved is what is remembered, so two clients opening the page at once
    * spawn one probe between them rather than one each.
    */
-  async models(scope: string, refresh = false): Promise<BackendModels[]> {
+  async models(scope: string, refresh = false, backendName?: string): Promise<BackendModels[]> {
     if (refresh) this.modelProbes.clear();
-    const probes = [...this.backends.values()].map((backend) => {
+    const backends = backendName === undefined ? [...this.backends.values()] : [this.backendFor(backendName)];
+    const probes = backends.map((backend) => {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
       const probe = this.timed("models", backend, false, (timed) =>
@@ -581,6 +587,14 @@ export class SessionHost {
       return probe;
     });
     return await Promise.all(probes);
+  }
+
+  async workflowAgentModels(scope: string, backend: string) {
+    const [catalogue] = await this.models(scope, false, backend);
+    if (!catalogue || catalogue.problem) throw new Error(catalogue?.problem ?? 'Workflow model capabilities are unavailable');
+    const probe = this.skillSessions.get(backend);
+    if (!probe || probe.dead || !probe.session.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
+    return catalogue.models;
   }
 
   /**
@@ -841,11 +855,13 @@ export class SessionHost {
         branch: branchFrom(entries),
         branchGeneration: 0,
         worktree: meta.worktree,
+        ...(meta.scheduledOccurrenceId ? { scheduledOccurrenceId: meta.scheduledOccurrenceId } : {}),
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
         spend: spendFrom(entries),
         mcpConnectionIds: meta.mcpConnectionIds ?? [],
         resumeToken: meta.resumeToken,
+        rewindTo: meta.rewindTo,
         modelId: meta.modelId,
         effort: meta.effort,
         permissionMode: meta.permissionMode ?? this.permissionDefault(meta.backend),
@@ -868,7 +884,23 @@ export class SessionHost {
     await this.reap();
   }
 
+  private readonly scheduledAttachments = new Map<string, Promise<string>>();
+
+  /** Internal attachment lane: concurrent agent/input/recovery callbacks share creation and Revive.
+   * The caller has already journaled the intended identity before entering this operation. */
+  attachScheduled(options: Parameters<SessionHost['create']>[0] & { scheduled: NonNullable<Parameters<SessionHost['create']>[0]['scheduled']> }): Promise<string> {
+    if (this.workflowShutdown) return Promise.reject(new CommandRefused('Session Host is stopping'));
+    const id = options.scheduled.id;
+    const pending = this.scheduledAttachments.get(id);
+    if (pending) return pending;
+    const attachment = this.create(options).finally(() => { this.scheduledAttachments.delete(id); });
+    this.scheduledAttachments.set(id, attachment);
+    return attachment;
+  }
+
   async create(options: {
+    /** Internal scheduled attachment only; not accepted by routes. */
+    scheduled?: { id: string; occurrenceId: string; worktree?: { path: string; repo: string; branch: string } };
     mcpConnectionIds?: string[];
     scope: string;
     backend?: string;
@@ -877,7 +909,16 @@ export class SessionHost {
     permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
+    fork?: { source: SessionRecord; userMessageId: string; prefix: LoggedEvent[] };
   }): Promise<string> {
+    if (options.scheduled) {
+      const existing = this.sessions.get(options.scheduled.id);
+      if (existing) {
+        if (existing.scheduledOccurrenceId !== options.scheduled.occurrenceId) throw new Error('Scheduled association mismatch');
+        await this.openWorkflowSession(existing.id);
+        return existing.id;
+      }
+    }
     const connections = this.mcpConnections?.() ?? [];
     if (options.mcpConnectionIds !== undefined && (!Array.isArray(options.mcpConnectionIds) || options.mcpConnectionIds.some((id) => typeof id !== "string"))) throw new Error("Invalid MCP selection");
     const mcpConnectionIds = connections.filter((connection) => options.mcpConnectionIds ? options.mcpConnectionIds.includes(connection.id) : connection.enabledByDefault).map((connection) => connection.id);
@@ -887,18 +928,19 @@ export class SessionHost {
     // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
     const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
     this.validatePermissionMode(backend.name, permissionMode);
-    const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
+    const worktree = options.scheduled?.worktree ?? (options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined);
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
     const scope = scopeKey(worktree?.path ?? options.scope);
-    const id = randomUUID();
+    const id = options.scheduled?.id ?? randomUUID();
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
     const effort = options.effort ?? this.defaultEffort?.(backend.name);
 
     const record: SessionRecord = {
       id,
+      ...(options.scheduled ? { scheduledOccurrenceId: options.scheduled.occurrenceId } : {}),
       scope,
       backendName: backend.name,
       log: this.newLog(id),
@@ -933,6 +975,7 @@ export class SessionHost {
       spend: undefined,
       mcpConnectionIds,
       resumeToken: undefined,
+      rewindTo: undefined,
       /*
        * Resolved here and never again.
        *
@@ -955,6 +998,7 @@ export class SessionHost {
     record.buffered = [];
     let session: BackendSession;
     try {
+      if (options.fork) this.copyForkState(record, options.fork.source, options.fork.userMessageId, options.fork.prefix);
       session = await this.startPermissionBackend(record);
       if (session.capabilities.models.length === 0) {
         throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
@@ -963,7 +1007,7 @@ export class SessionHost {
       // Creation never returns an Agent Session without confirmed models. In particular, do not
       // leave a persisted, empty Agent Session (or a newly cut worktree) after a failed probe.
       await record.session?.dispose().catch(() => {});
-      await this.releaseWorktree(record);
+      if (!options.scheduled) await this.releaseWorktree(record);
       record.log.closeSubscribers();
       this.sessions.delete(id);
       this.store?.deleteSession(id);
@@ -977,6 +1021,7 @@ export class SessionHost {
       permissionMode: record.permissionMode,
       ...(worktree === undefined ? {} : { worktree: true as const }),
     });
+    if (options.fork) this.appendForkPrefix(record, options.fork.source.id, options.fork.userMessageId, options.fork.prefix);
     this.flushBuffered(record);
     // After session_started, never before: the transcript has to open with it (see `buffered`).
     await this.refreshBranch(record);
@@ -989,7 +1034,7 @@ export class SessionHost {
      * how a spare gets dropped when somebody clears the Setting: nothing will ever *tell* us it
      * changed (ADR 0009), so a read-through is the only moment it can be noticed.
      */
-    this.warmSummaryModel(backend.name);
+    if (!options.scheduled) this.warmSummaryModel(backend.name);
     return id;
   }
 
@@ -1164,7 +1209,7 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string, fromSessionId?: string): Promise<void> {
     const record = this.record(sessionId);
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
@@ -1178,15 +1223,16 @@ export class SessionHost {
     const ids = (attachments ?? []).map((attachment) =>
       this.storeOrThrow().writeAttachment(record.id, attachment.mediaType, attachment.data),
     );
+    const from = fromSessionId === undefined ? {} : { fromSessionId };
 
     if (when === "after_turn" && record.turnInFlight) {
-      record.queue.push({ id: randomUUID(), text, attachments: ids });
+      record.queue.push({ id: randomUUID(), text, attachments: ids, ...from });
       record.log.append(queueChanged(record.queue));
       this.touch(record);
       return;
     }
     // A title override applies only to the initial dispatch; a queued turn already has a title.
-    await this.dispatch(record, { text, attachments: ids }, titleText);
+    await this.dispatch(record, { text, attachments: ids, ...from }, titleText);
   }
 
   /**
@@ -1572,6 +1618,104 @@ export class SessionHost {
     this.touch(record);
   }
 
+  /** Rewind (CONTEXT.md). Answers with the user message, for the composer to offer again. */
+  async rewind(sessionId: string, userMessageId: string, restore: RewindRestore): Promise<{ text: string; attachments: string[] }> {
+    const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
+    if (record.lifecycle === "ended") throw new CommandRefused(`Agent Session ${sessionId} has Ended`);
+    const message = userMessage(record.log.since(0), userMessageId)?.event;
+    if (message?.type !== "user_message") throw new CommandRefused("That user message is not in this Agent Session");
+    if (!record.session) await this.revive(sessionId);
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
+    const session = record.session;
+    if (!session) throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session`);
+    if (record.turnInFlight || record.queue.length > 0 || record.openSubagentIds.size > 0 || record.openBackgroundCallIds.size > 0) {
+      throw new CommandRefused("Wait for the turn, the queued messages and the background work to finish, or abort them, before rewinding");
+    }
+    const files = restore !== "conversation";
+    const conversation = restore !== "files";
+    if (conversation && !session.capabilities.rewind) throw new CommandRefused(`${record.backendName} cannot rewind a Conversation Context`);
+    if (files && (!session.capabilities.rewindFiles || !session.rewindFiles)) throw new CommandRefused(`${record.backendName} cannot rewind files`);
+    if (files) {
+      try { await session.rewindFiles!(userMessageId); }
+      catch (error) { throw new CommandRefused(`Files were not rewound: ${errorMessage(error)}`); }
+    }
+    if (conversation) {
+      record.rewindTo = userMessageId;
+      this.persist(record);
+      record.session = undefined;
+      await this.stopBackendSession(record.scope, session, record.id);
+      record.buffered = [];
+      record.backendEpoch += 1;
+      try { await this.startPermissionBackend(record); }
+      catch (error) {
+        record.buffered = undefined;
+        record.lifecycle = "dormant";
+        record.log.append({ type: "session_dormant", reason: `rewind failed: ${errorMessage(error)}` });
+        this.touch(record);
+        throw error;
+      }
+    }
+    record.log.append({ type: "rewound", userMessageId, restore });
+    this.flushBuffered(record);
+    this.touch(record);
+    return { text: message.text, attachments: message.attachments ?? [] };
+  }
+
+  /** Fork (CONTEXT.md). Answers with the new Agent Session's id. */
+  async fork(sessionId: string, userMessageId: string, worktree?: { from: string; branch?: string }): Promise<string> {
+    const source = this.record(sessionId);
+    if (!source.capabilities?.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    const events = source.log.since(0);
+    const at = userMessage(events, userMessageId);
+    if (!at) throw new CommandRefused("That user message is not in this Agent Session");
+    return await this.create({
+      scope: worktree ? source.worktree?.repo ?? source.scope : source.scope,
+      backend: source.backendName,
+      ...(source.modelId === undefined ? {} : { modelId: source.modelId }),
+      ...(source.effort === undefined ? {} : { effort: source.effort }),
+      permissionMode: source.permissionMode,
+      mcpConnectionIds: source.mcpConnectionIds ?? [],
+      ...(worktree === undefined ? {} : { worktree }),
+      fork: { source, userMessageId, prefix: events.filter((entry) => entry.seq < at.seq) },
+    });
+  }
+
+  /** Give a Fork the source's Conversation Context, to be cut before the user message on start. */
+  private copyForkState(record: SessionRecord, source: SessionRecord, userMessageId: string, prefix: LoggedEvent[]): void {
+    record.title = `${source.title} (fork)`;
+    record.titleSource = "summary";
+    const backend = this.backendFor(source.backendName);
+    const kept = prefix.some(({ event }) => event.type === "user_message");
+    if (!kept || !this.store || !source.resumeToken) return;
+    if (!backend.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    record.resumeToken = backend.fork(
+      { stateDir: this.store.backendDir(source.id), scope: source.scope, resume: source.resumeToken },
+      { stateDir: this.store.backendDir(record.id), scope: record.scope },
+    );
+    record.rewindTo = userMessageId;
+    this.persist(record);
+  }
+
+  /** Copy what the human saw before the Fork point. The source's session start, scope and queue are not this session's. */
+  private appendForkPrefix(record: SessionRecord, sourceId: string, userMessageId: string, prefix: LoggedEvent[]): void {
+    for (const { event, at } of prefix) {
+      if (event.type === "session_started" || event.type === "queue_changed") continue;
+      if (event.type === "revived") { record.log.append({ type: "revived", fromSeq: event.fromSeq }, at); continue; }
+      if (event.type === "user_message" && event.attachments && this.store) {
+        const to = this.store.attachmentsDir(record.id);
+        mkdirSync(to, { recursive: true });
+        for (const id of event.attachments) {
+          const from = join(this.store.attachmentsDir(sourceId), id);
+          if (existsSync(from)) copyFileSync(from, join(to, id));
+        }
+      }
+      record.log.append(event, at);
+    }
+    this.closeTornTurn(record, record.log.since(0));
+    record.log.append({ type: "forked", fromSessionId: sourceId, userMessageId });
+  }
+
   /**
    * The Skills this Agent Session can be sent.
    *
@@ -1711,6 +1855,8 @@ export class SessionHost {
   workflowOwner?: {
     stop(sessionId: string): Promise<void>;
     forget(sessionId: string): Promise<void>;
+    /** Durable scheduled recovery may still need this session and its worktree. */
+    canForget?(sessionId: string, occurrenceId?: string): boolean;
     active(sessionId: string): number;
     context(sessionId: string): string;
     parent(sessionId: string): WorkflowParent;
@@ -2065,6 +2211,7 @@ export class SessionHost {
     const reaped: string[] = [];
     for (const record of [...this.sessions.values()]) {
       if (record.lifecycle !== "settled") continue;
+      if (this.workflowOwner?.canForget?.(record.id, record.scheduledOccurrenceId) === false) continue;
       const settledAt = record.settledAt === undefined ? NaN : Date.parse(record.settledAt);
       // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
       if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
@@ -2223,7 +2370,7 @@ export class SessionHost {
     this.workflowShutdown = true;
     // Creation can still be awaiting backend startup after its caller disconnects. Drain those
     // accepted operations before walking sessions, so late children cannot escape shutdown.
-    await Promise.allSettled([...this.sessionToolOperations]);
+    await Promise.allSettled([...this.sessionToolOperations, ...this.scheduledAttachments.values()]);
     // First, so that a naming still in flight cannot warm a replacement on the way out — the
     // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
@@ -2320,6 +2467,10 @@ export class SessionHost {
         return await this.rename(command.sessionId);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
+      case "rewind":
+        return await this.rewind(command.sessionId, command.userMessageId, command.restore);
+      case "fork":
+        return await this.fork(command.sessionId, command.userMessageId, command.worktree);
       case "answer_enquiry":
         return await this.answerEnquiry(command.sessionId, command.askId, command.answers);
       case "answer_permission":
@@ -2364,6 +2515,22 @@ export class SessionHost {
     return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
   }
 
+  scheduledConnections(ids: string[]) {
+    const connections = this.mcpConnections?.() ?? [];
+    if (ids.some(id => !connections.some(connection => connection.id === id))) throw new ScheduleValidationError('Selected MCP connection is unavailable');
+    return structuredClone(connections.filter(connection => ids.includes(connection.id)));
+  }
+
+  scheduledMcp(scope: string, ids: string[], mode: import('../protocol/settings.ts').FilesystemIsolationMode) {
+    const connections = this.scheduledConnections(ids);
+    const oauth = this.mcpAuth ? (connection: import('../protocol/mcp.ts').McpConnection) => this.mcpAuth!.provider(connection) : undefined;
+    return import('../backend/mcp.ts').then(({ McpSession }) => new McpSession(connections, scope, oauth, true, this.resolveSecret, undefined, this.filesystemStateRoot(), mode));
+  }
+
+  scheduledSandboxMcp(scope: string, ids: string[]) {
+    return import('../backend/worker/sandbox-mcp.ts').then(({ SandboxMcpSession }) => new SandboxMcpSession(this.scheduledConnections(ids), scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, this.resolveSecret));
+  }
+
   /** Include an SDK-supplied owning root in every local execution's filesystem policy. */
   filesystemStateRoot(): string | undefined { return this.store?.root; }
 
@@ -2371,20 +2538,28 @@ export class SessionHost {
   filesystemIsolationMode(): import("../protocol/settings.ts").FilesystemIsolationMode { return this.filesystemIsolation?.() ?? "bubblewrap"; }
   sandboxSupport(): import("../isolation/sandbox.ts").SandboxSupport | undefined { return this.sandbox?.(); }
   /** The Shared Sandbox, when the Settings choose one VM for all sandbox sessions. */
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const mounts = [...this.backends.values()].flatMap(backend => backend.scheduledSandboxMounts?.(scope) ?? []);
+    return { writable: mounts.flatMap(item => item.writable), readable: mounts.flatMap(item => item.readable) };
+  }
+
   sharedSandbox(): SharedSandbox | undefined { return this.sandboxSharing?.() === "shared" ? this.shared : undefined; }
 
-  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
+  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode(), signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (isolationMode === "sandbox") {
-      await this.openWorkflowSession(id);
+      await waitForAbort(this.openWorkflowSession(id), signal);
+      signal?.throwIfAborted();
       const { SandboxMcpSession } = await import("../backend/worker/sandbox-mcp.ts");
       const mcp = this.record(id).mcp;
       if (!(mcp instanceof SandboxMcpSession)) throw new Error("Sandbox isolation is unavailable; unrestricted launch refused: the Agent Session has no sandbox");
-      return mcp.directView(connectionId);
+      return mcp.directView(connectionId, signal);
     }
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
+    signal?.throwIfAborted();
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
   }
 
@@ -2502,11 +2677,11 @@ export class SessionHost {
           mcpConnectionIds: source.mcpConnectionIds ?? [],
           permissionMode: source.permissionMode === 'auto' && name !== 'claude' ? 'ask' : source.permissionMode });
         // Persist a receipt even if cancellation loses the RPC result; never blindly recreate.
-        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}` });
-        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}` });
+        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}`, sessionId });
+        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}`, sessionId: source.id });
         try {
           check(signal);
-          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
           return { sessionId, delivery: 'accepted' };
         } catch (error) {
           return { sessionId, delivery: 'not-sent', error: error instanceof Error ? error.message : String(error) };
@@ -2516,7 +2691,7 @@ export class SessionHost {
         check(signal);
         const { sessionId, text } = sessionSendInput.parse(input);
         if (sessionId === source.id) throw new CommandRefused('Use the current conversation instead of messaging yourself');
-        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
         return { sessionId, delivery: 'accepted' };
       }),
     };
@@ -2539,6 +2714,7 @@ export class SessionHost {
     const compactionModelId = this.compactionModel?.(backend.name);
     let attached: BackendSession | undefined;
     const session = await backend.create({
+      isolationMode,
       mcp,
       onFailure: () => {
         if (!attached || record.session !== attached) return;
@@ -2563,6 +2739,7 @@ export class SessionHost {
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
+      ...(record.resumeToken === undefined || record.rewindTo === undefined ? {} : { resumeBefore: record.rewindTo }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
       // Read here rather than held, so a Revive picks up every grant made since this Agent Session
@@ -2610,8 +2787,8 @@ export class SessionHost {
       } else await abort();
     };
     const prompt = session.prompt.bind(session);
-    session.prompt = (text, attachments) => {
-      pendingTurn = waitForMcp(() => prompt(text, attachments));
+    session.prompt = (text, attachments, messageId) => {
+      pendingTurn = waitForMcp(() => prompt(text, attachments, messageId));
       return pendingTurn;
     };
     if (session.compact) {
@@ -2737,7 +2914,7 @@ export class SessionHost {
     record.openPermissionAttention.clear();
   }
 
-  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">, titleText = message.text): Promise<void> {
+  private async dispatch(record: SessionRecord, message: Omit<QueuedMessage, "id">, titleText = message.text): Promise<void> {
     if (record.permissionChanging) await this.waitForPermissionChange(record);
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
@@ -2758,7 +2935,7 @@ export class SessionHost {
       }
       record.initialEffortUnconfirmed = false;
     }
-    const { text, attachments } = message;
+    const { text, attachments, fromSessionId } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
     /*
@@ -2776,11 +2953,13 @@ export class SessionHost {
     const startingTurn = !record.turnInFlight;
     const generation = record.turnGeneration = (record.turnGeneration ?? 0) + (startingTurn ? 1 : 0);
     record.turnInFlight = true;
+    const messageId = randomUUID();
     record.log.append({
       type: "user_message",
-      id: randomUUID(),
+      id: messageId,
       text: sent,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(fromSessionId === undefined ? {} : { fromSessionId }),
     });
     // Titled from the original instructions, never attribution or `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename
@@ -2810,7 +2989,7 @@ export class SessionHost {
       this.recordDispatchFailure(record, error, startingTurn);
     };
     try {
-      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments)).catch(failed);
+      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments), messageId).catch(failed);
     } catch (error) {
       failed(error);
     }
@@ -2859,6 +3038,10 @@ export class SessionHost {
 
     if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
       record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;
+    }
+    if (event.type === "turn_started" && record.rewindTo !== undefined) {
+      record.rewindTo = undefined;
+      this.persist(record);
     }
     const before = this.activityOf(record);
     const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
@@ -3079,6 +3262,7 @@ export class SessionHost {
     if (!this.store) return;
     const meta: SessionMeta = {
       id: record.id,
+      ...(record.scheduledOccurrenceId ? { scheduledOccurrenceId: record.scheduledOccurrenceId } : {}),
       scope: record.scope,
       backend: record.backendName,
       title: record.title,
@@ -3098,6 +3282,7 @@ export class SessionHost {
       readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
+      ...(record.rewindTo === undefined ? {} : { rewindTo: record.rewindTo }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
@@ -3115,6 +3300,10 @@ export function suggestedScope(scope: string, worktreesRoot: string): string | u
   if (at < 0) return undefined;
   const candidate = join(worktreesRoot, scope.slice(at + marker.length));
   return candidate !== scope && existsSync(candidate) ? candidate : undefined;
+}
+
+function userMessage(entries: LoggedEvent[], id: string): LoggedEvent | undefined {
+  return entries.find(({ event }) => event.type === "user_message" && event.id === id);
 }
 
 /** The turn still open at the end of these entries, if any. */
@@ -3298,15 +3487,16 @@ function openBackgroundCalls(entries: LoggedEvent[]): { callId: string; tool: st
   return [...open].map(([callId, brief]) => ({ callId, ...brief }));
 }
 
-function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {
-  const open = new Map<string, string>();
+function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string; producer?: Producer }[] {
+  const open = new Map<string, { name: string; producer?: Producer }>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "subagent") continue;
-    if (event.state === "running" || event.state === "waiting") open.set(event.subagentId, event.name);
-    else open.delete(event.subagentId);
+    if (event.state === "running" || event.state === "waiting") {
+      open.set(event.subagentId, { name: event.name, ...(event.producer === undefined ? {} : { producer: event.producer }) });
+    } else open.delete(event.subagentId);
   }
-  return [...open].map(([subagentId, name]) => ({ subagentId, name }));
+  return [...open].map(([subagentId, brief]) => ({ subagentId, ...brief }));
 }
 
 /** What the transcript last reported this Agent Session had spent, across every Backend Session. */

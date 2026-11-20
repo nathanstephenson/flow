@@ -158,6 +158,7 @@ export default function WorkflowsSettings() {
   };
   return (
     <SettingsGroup title="Workflows">
+      <p className="mb-3 text-sm"><a className="underline" href="#/schedules">Manage scheduled and repeating workflows</a></p>
       <div className="workflow-editor text-sm">
         <div className="workflow-header">
           <Select

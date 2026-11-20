@@ -42,7 +42,9 @@ import { PendingPermissions } from "./permissions.ts";
 import { StreamedMessages } from "./streamed-message.ts";
 import { Subagents, type SubagentBrief } from "./subagents.ts";
 import { BackgroundCalls } from "./background-calls.ts";
-import { prepareClaudeState } from "../worker/claude-state.ts";
+import { prepareClaudeState, projectKey } from "../worker/claude-state.ts";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { AutoPermissionUnavailable } from "../permission-errors.ts";
 export { AutoPermissionUnavailable } from "../permission-errors.ts";
@@ -165,6 +167,11 @@ function attribution(producer: string): { producer?: Producer } {
  * something a transcript row can show. Falls back to the tool name so a client always has something
  * to print, which is what the protocol promises.
  */
+function promptOf(input: unknown): string | undefined {
+  const prompt = (input as { prompt?: unknown } | null)?.prompt;
+  return typeof prompt === "string" && prompt !== "" ? prompt : undefined;
+}
+
 export function briefOf(input: unknown): SubagentBrief {
   const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown };
   const name = typeof fields.subagent_type === "string" ? fields.subagent_type : SUBAGENT_TOOL;
@@ -224,7 +231,7 @@ const DEFAULT_ALLOWED_TOOLS = [
 ];
 
 class ClaudeSession implements BackendSession {
-  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, subagents: true, enquiries: true, permissions: true };
+  capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, rewind: true, rewindFiles: true, subagents: true, enquiries: true, permissions: true };
 
   private readonly inbox = new AsyncQueue<SDKUserMessage>();
   private readonly emit: (event: BackendEvent) => void;
@@ -257,6 +264,8 @@ class ClaudeSession implements BackendSession {
   private readonly subagents = new Subagents();
   /** Tool calls announced this turn, and the ones the CLI is running past it (ADR 0021). */
   private readonly calls = new BackgroundCalls();
+  /** Each Subagent's brief, reported from its `Agent` call, so the same text echoed into its stream is not reported twice. */
+  private readonly briefs = new Map<string, string>();
   private readonly enquiries = new PendingEnquiries();
   private readonly permissions = new PendingPermissions();
   /** Spawning call id for each parked ordinary-Subagent permission, through its terminal event. */
@@ -288,7 +297,7 @@ class ClaudeSession implements BackendSession {
   private readonly claudeState: ReturnType<typeof prepareClaudeState>;
 
   constructor(options: BackendCreateOptions, backendOptions: ClaudeBackendOptions,
-    claudeState: ReturnType<typeof prepareClaudeState>) {
+    claudeState: ReturnType<typeof prepareClaudeState>, resumeAt?: string) {
     this.claudeState = claudeState;
     this.parentWorkflow = options.workflowBuilder ? workflowBuilderServer(options.workflowBuilder)
       : workflowParentServer(options.tools === "none" ? undefined : options.workflow);
@@ -350,6 +359,8 @@ class ClaudeSession implements BackendSession {
       // while the model list is still in flight. Levels Claude does not have wait for the clamp.
       ...(startingEffort ? { effort: startingEffort } : {}),
       ...(options.resume ? { resume: options.resume } : {}),
+      ...(resumeAt ? { resumeSessionAt: resumeAt } : {}),
+      ...(builder || toolless ? {} : { enableFileCheckpointing: true }),
       ...(backendOptions.pathToClaudeCodeExecutable
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
         : {}),
@@ -474,7 +485,14 @@ class ClaudeSession implements BackendSession {
     return this.sdkSessionId || undefined;
   }
 
-  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
+  async rewindFiles(messageId: string): Promise<void> {
+    const preview = await this.stream.rewindFiles(messageId, { dryRun: true });
+    if (!preview.canRewind) throw new Error(preview.error ?? "No file checkpoint exists for this message");
+    const result = await this.stream.rewindFiles(messageId);
+    if (!result.canRewind) throw new Error(result.error ?? "Files could not be rewound");
+  }
+
+  async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
     if (this.disposed) throw new Error("Backend Session disposed");
     this.turnId = randomUUID();
     this.emit({ type: "turn_started", turnId: this.turnId });
@@ -483,6 +501,7 @@ class ClaudeSession implements BackendSession {
       message: { role: "user", content: userContent(text, attachments) },
       parent_tool_use_id: null,
       session_id: this.sdkSessionId,
+      ...(messageId ? { uuid: messageId } : {}),
     } as SDKUserMessage);
   }
 
@@ -780,6 +799,7 @@ class ClaudeSession implements BackendSession {
     // Detached Subagents die with the CLI process, so nothing will ever notify them closed. The
     // Session Host records that from the transcript, the way it does a torn turn.
     this.subagents.abandon();
+    this.briefs.clear();
     // Background Calls are children of that process too, and go the same way for the same reason.
     this.calls.abandon();
     this.inbox.close();
@@ -904,14 +924,19 @@ class ClaudeSession implements BackendSession {
           this.calls.called(block.id, { tool: block.name, ...attribution(producer) });
           if (block.name !== SUBAGENT_TOOL) continue;
           const brief = briefOf(block.input);
-          this.subagents.spawn(block.id, brief);
-          this.emit({ type: "subagent", subagentId: block.id, ...brief, state: "running" });
+          this.subagents.spawn(block.id, brief, producer);
+          this.emit({ type: "subagent", subagentId: block.id, ...brief, ...attribution(producer), state: "running" });
+          const prompt = promptOf(block.input);
+          if (prompt === undefined) continue;
+          this.briefs.set(block.id, prompt);
+          this.emit({ type: "subagent_instruction", id: `${block.id}:brief`, text: prompt, producer: { subagentId: block.id } });
         }
         return;
       }
 
       case "user": {
         const content = sdkMessage.message.content;
+        this.instructSubagent(sdkMessage);
         if (typeof content === "string") return;
         for (const block of content) {
           if (block.type === "tool_result") {
@@ -938,6 +963,7 @@ class ClaudeSession implements BackendSession {
                 type: "subagent",
                 subagentId: block.tool_use_id,
                 ...brief,
+                ...attribution(this.subagents.parentOf(block.tool_use_id)),
                 state: isError ? "error" : "complete",
               });
             }
@@ -1022,6 +1048,7 @@ class ClaudeSession implements BackendSession {
   }
 
   private closeSubagent(callId: string): void {
+    this.briefs.delete(callId);
     this.abandonPermissions("the Subagent stopped", (producer) => producer === callId);
     this.permissions.clearRefusals((producer) => producer === callId);
     const released = this.subagents.returned(callId);
@@ -1074,7 +1101,7 @@ class ClaudeSession implements BackendSession {
     if (callId === undefined) return;
     const brief = this.subagents.describe(callId);
     if (brief !== undefined) {
-      this.emit({ type: "subagent", subagentId: callId, ...brief, state: outcome });
+      this.emit({ type: "subagent", subagentId: callId, ...brief, ...attribution(this.subagents.parentOf(callId)), state: outcome });
       this.closeSubagent(callId);
       return;
     }
@@ -1101,6 +1128,22 @@ class ClaudeSession implements BackendSession {
     this.emit({ type: "turn_started", turnId: this.turnId });
   }
 
+  /** Report text the spawning model sent into a Subagent. The Agent Session's own user text is the host's to record. */
+  private instructSubagent(sdkMessage: SDKUserMessage): void {
+    const subagentId = producerOf(sdkMessage);
+    if (subagentId === "") return;
+    const content = sdkMessage.message.content;
+    const text = typeof content === "string"
+      ? content
+      : content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
+    if (text === "") return;
+    if (this.briefs.get(subagentId) === text) {
+      this.briefs.delete(subagentId);
+      return;
+    }
+    this.emit({ type: "subagent_instruction", id: sdkMessage.uuid ?? randomUUID(), text, producer: { subagentId } });
+  }
+
   private endTurn(reason: TurnEndReason): void {
     const turnId = this.turnId;
     /*
@@ -1115,8 +1158,8 @@ class ClaudeSession implements BackendSession {
     // Cleared whatever the outcome, so a held end cannot reach the turn after this one.
     this.subagents.clear();
     // Drops the calls this turn announced. Open Background Calls survive — one outlives the turn
-    // that made it, which is the whole of ADR 0021.
-    this.calls.clear();
+    // that made it, which is the whole of ADR 0021 — and so do calls detached work announced.
+    this.calls.clear((brief) => brief.producer !== undefined && !ended(brief.producer.subagentId));
     this.enquiries.clear();
     if (!turnId) return;
     this.turnId = undefined;
@@ -1140,7 +1183,13 @@ export class ClaudeBackend implements AgentBackend {
     // is still in flight lets the first send race the empty provisional capabilities.
     const claudeState = prepareClaudeState(options.stateDir, process.env, options.scope, options.resume);
     let session: ClaudeSession;
-    try { session = new ClaudeSession(options, this.options, claudeState); }
+    try {
+      const resumeAt = options.resume && options.resumeBefore ? resumePoint(claudeState.env, options.scope, options.resume, options.resumeBefore) : undefined;
+      // A Rewind to the first message keeps nothing, so it starts a new conversation.
+      const { resume: _discarded, ...fresh } = options;
+      session = resumeAt === null ? new ClaudeSession(fresh, this.options, claudeState)
+        : new ClaudeSession(options, this.options, claudeState, resumeAt);
+    }
     catch (error) { claudeState.cleanup(); throw error; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1165,6 +1214,18 @@ export class ClaudeBackend implements AgentBackend {
       if (timer) clearTimeout(timer);
     }
   }
+}
+
+/** The chain entry just before user message `before`, or null when `before` starts the conversation. */
+function resumePoint(env: NodeJS.ProcessEnv, scope: string, resume: string, before: string): string | null {
+  const record = join(env.CLAUDE_CONFIG_DIR ?? "", "projects", projectKey(scope), `${resume}.jsonl`);
+  const lines = existsSync(record) ? readFileSync(record, "utf8").split("\n") : [];
+  for (const line of lines) {
+    if (!line.includes(before)) continue;
+    const entry = JSON.parse(line) as { uuid?: string; parentUuid?: string | null };
+    if (entry.uuid === before) return entry.parentUuid ?? null;
+  }
+  throw new Error("This message cannot be rewound: Claude has no record of it");
 }
 
 /** Claude reports one Provider, and per-model effort: haiku carries no supportedEffortLevels. */

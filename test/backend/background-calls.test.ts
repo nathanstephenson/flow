@@ -134,3 +134,15 @@ describe("BackgroundCalls", () => {
     assert.equal(calls.callIdOf("crossed"), undefined);
   });
 });
+
+describe("BackgroundCalls under detached work", () => {
+  it("keeps an announced call through clear when its producer is detached", () => {
+    const calls = new BackgroundCalls();
+    calls.called("call-1", { tool: "Bash", producer: { subagentId: "agent-7" } });
+    calls.called("call-2", { tool: "Bash" });
+    calls.clear((brief) => brief.producer?.subagentId === "agent-7");
+
+    assert.deepEqual(calls.launch("call-1"), { tool: "Bash", producer: { subagentId: "agent-7" } });
+    assert.equal(calls.launch("call-2"), undefined);
+  });
+});
