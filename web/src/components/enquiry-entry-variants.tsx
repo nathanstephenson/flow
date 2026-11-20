@@ -17,14 +17,18 @@ function pending(entry: Enquiry): string {
 }
 
 export function EnquiryToolRow({ entry, query }: Props) {
-  const single = entry.questions.length === 1;
   return (
     <details className="group/tool text-foreground">
       <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 select-none hover:bg-muted/50">
         <MessageCircleQuestionMark aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 text-sm text-muted-foreground">{single ? entry.questions[0]!.header : `${entry.questions.length} questions`}</span>
-        <span className={cn("min-w-0 truncate text-sm", entry.status !== "answered" && "text-muted-foreground italic")}>
-          {entry.status === "answered" ? entry.questions.map((_, index) => answerOf(entry, index) ?? "—").join(" · ") : pending(entry)}
+        <span className="min-w-0 truncate text-sm">
+          {entry.questions.map((question, index) => (
+            <span key={question.question}>
+              {index > 0 ? <span className="text-muted-foreground"> · </span> : null}
+              <span className="text-muted-foreground">{question.header} </span>
+              {entry.status === "answered" ? answerOf(entry, index) ?? "—" : <span className="text-muted-foreground italic">{pending(entry)}</span>}
+            </span>
+          ))}
         </span>
         <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90" />
       </summary>
