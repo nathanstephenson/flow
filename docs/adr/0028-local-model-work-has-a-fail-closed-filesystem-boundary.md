@@ -92,6 +92,11 @@ provider-specific values are resolved only for the requested Provider. The auth 
 host command or arbitrary file-read capability. Provider error response bodies do not cross this
 channel. Native Radius gateways and aliases come only from
 the canonical `models.json`, read as data. The host does not execute its commands or headers.
+Pi 1.6 removes the legacy Radius account catalog from `auth.json` when it rotates a token. Before
+the first such refresh, the host writes that catalog, without headers or credentials, to the
+canonical `models-store.json` under the SDK lock. If it cannot write, it does not send the refresh.
+Availability metadata gives workers this stored catalog in preference to legacy metadata, so fresh
+Backend Sessions keep the account's models after rotation or host restart. Worker caches stay private.
 A separately configured Claude
 auth root is masked too and only its credential file is staged. Nonempty `CLAUDE_CONFIG_DIR` and
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` must be absolute for restricted launches: relative roots use the

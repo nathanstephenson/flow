@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { WorkerBackend } from '../../src/backend/worker/index.ts';
 import type { BackendEvent } from '../../src/protocol/events.ts';
-import type { PiModelAuth } from '../../src/backend/pi/model-auth.ts';
+import { createPiModelAuth, type PiModelAuth } from '../../src/backend/pi/model-auth.ts';
 import { isolationIntegration, privateWorkerState } from '../isolation-fixture.ts';
 import { piFixture } from './pi-fixture.ts';
 import { fakeProvider } from './sandbox-fixture.ts';
@@ -135,6 +135,45 @@ test('Agent and Summary Model workers share one OAuth rotation and retain it on 
   await revived.prompt('revived request');
   assert.equal(refreshes, 1);
   assert.equal(f.requests.length, 3);
+});
+
+test('fresh Pi workers keep the legacy Radius account catalog after token rotation', {
+  ...isolationIntegration, timeout: 20_000,
+}, async t => {
+  const f = await piFixture(t, () => ({ text: 'must not request inference' }));
+  const gateway = 'https://legacy-radius.invalid/v1';
+  writeFileSync(join(f.scope, 'models.json'), JSON.stringify({ providers: { 'custom-radius': { oauth: 'radius', baseUrl: gateway } } }));
+  const model = { id: 'legacy-only', name: 'Legacy only', reasoning: false, input: ['text'],
+    cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 2048 };
+  const authPath = join(f.scope, 'auth.json');
+  writeFileSync(authPath, JSON.stringify({ 'custom-radius': { type: 'oauth', access: 'expired', refresh: 'synthetic-refresh', expires: 0,
+    gatewayConfig: { baseUrl: gateway, models: [model] } } }));
+  t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0]) => {
+    assert.equal(String(input), `${gateway}/oauth/token`);
+    return Response.json({ access_token: 'synthetic-access', refresh_token: 'rotated-refresh', expires_in: 3600 });
+  });
+  const catalog = async (backend: WorkerBackend) => {
+    const { scope, stateDir } = privateWorkerState(t);
+    const session = await backend.create({ scope, stateDir, emit: () => {} });
+    t.after(() => session.dispose());
+    const models = session.capabilities.models.filter(entry => entry.provider === 'custom-radius').map(entry => entry.id);
+    await session.dispose();
+    return models;
+  };
+  const env = { PI_CODING_AGENT_DIR: f.scope, PI_OFFLINE: '1' };
+  const first = new WorkerBackend({ entry, env });
+  t.after(() => first.shutdown());
+  const before = await catalog(first);
+  assert.equal(before.length, 1);
+  assert.equal((await createPiModelAuth({ authPath }).resolve('custom-radius'))?.auth.apiKey, 'synthetic-access');
+  assert.equal(JSON.parse(readFileSync(authPath, 'utf8'))['custom-radius'].gatewayConfig, undefined);
+  assert.deepEqual(await catalog(first), before);
+  await first.shutdown();
+  const restarted = new WorkerBackend({ entry, env });
+  t.after(() => restarted.shutdown());
+  assert.deepEqual(await catalog(restarted), before);
+  assert.doesNotMatch(readFileSync(join(f.scope, 'models-store.json'), 'utf8'), /synthetic-access|refresh/);
+  assert.deepEqual(f.requests, []);
 });
 
 test('non-Pi workers cannot resolve Pi credentials', { timeout: 15_000 }, async t => {

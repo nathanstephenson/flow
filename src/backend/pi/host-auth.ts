@@ -1,14 +1,13 @@
-import { constants, closeSync, fstatSync, ftruncateSync, lstatSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
-import type { AuthResult, CredentialStore, OAuthCredential } from "@earendil-works/pi-ai";
+import type { Api, AuthResult, CredentialStore, Model, OAuthCredential } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import lockfile from "proper-lockfile";
 import { waitForAbort } from "../worker/rpc.ts";
 import type { PiModelAuth, PiProviderAuth } from "./model-auth.ts";
-import { projectPi099RadiusCatalog, registerPiNativeProvider } from "./model-catalog.ts";
+import { projectPi099RadiusCatalog, projectPiStoredRadiusCatalog, registerPiNativeProvider } from "./model-catalog.ts";
 import { parsePiModelConfig } from "./model-config.ts";
+import { PiCanonicalJson } from "./canonical-json.ts";
 
 type RawCredentials = Record<string, unknown>;
 
@@ -85,81 +84,25 @@ function metadata(raw: RawCredentials, gateways = new Map<string, string>()): Pi
   return entries;
 }
 
-class CanonicalCredentials implements CredentialStore {
-  private readonly authPath: string;
-  constructor(authPath: string) { this.authPath = authPath; }
+class CanonicalCatalogs extends PiCanonicalJson {
+  constructor(path: string) { super(path, "models-store.json"); }
 
-  private exists(): boolean {
-    try {
-      if (!lstatSync(this.authPath).isFile()) throw new Error("Pi auth.json must be a regular file, not a symbolic link");
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-      throw error;
-    }
-  }
-
-  private open(flags: number): number {
-    this.exists();
-    const fd = openSync(this.authPath, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
-    if (!fstatSync(fd).isFile()) {
-      closeSync(fd);
-      throw new Error("Pi auth.json must be a regular file");
-    }
-    return fd;
-  }
-
-  private readRaw(): RawCredentials {
-    if (!this.exists()) return {};
-    const fd = this.open(constants.O_RDONLY);
-    try {
-      let raw: unknown;
-      try { raw = JSON.parse(readFileSync(fd, "utf8").replace(/^\uFEFF/, "")); }
-      catch { throw new Error("Invalid Pi auth.json: expected valid JSON"); }
-      if (!object(raw)) throw new Error("Invalid Pi auth.json: expected an object");
-      return raw;
-    } finally { closeSync(fd); }
-  }
-
-  private writeRaw(raw: RawCredentials): void {
-    const fd = this.open(constants.O_WRONLY);
-    try {
-      ftruncateSync(fd, 0);
-      writeFileSync(fd, JSON.stringify(raw, null, 2), { encoding: "utf8", mode: 0o600 });
-    } finally { closeSync(fd); }
-  }
-
-  private async locked<T>(fn: (raw: RawCredentials, assertLock: () => void) => Promise<T> | T, signal?: AbortSignal): Promise<T> {
-    signal?.throwIfAborted();
-    if (!this.exists()) return fn({}, () => {});
-    const deadline = Date.now() + 30_000;
-    let compromised: Error | undefined;
-    let release: (() => Promise<void>) | undefined;
-    const assertLock = () => { if (compromised) throw compromised; };
-    for (let attempt = 0; !release; attempt++) {
-      signal?.throwIfAborted();
-      try {
-        release = await lockfile.lock(this.authPath, {
-          realpath: false, stale: 30_000, retries: 0,
-          onCompromised: (error) => { compromised = error; },
-        });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || Date.now() >= deadline) throw error;
-        await sleep(Math.min(10 * 2 ** Math.min(attempt, 7), 1000, deadline - Date.now()), undefined, signal ? { signal } : {});
+  async importLegacy(providerId: string, models: readonly Model<Api>[], signal?: AbortSignal): Promise<void> {
+    await this.locked((raw, assertLock) => {
+      if (Object.hasOwn(raw, providerId)) {
+        if (!object(raw[providerId]) || !Array.isArray(raw[providerId].models)) throw new Error("Invalid Pi models-store.json: expected a catalog");
+        return;
       }
-    }
-    try {
       assertLock();
-      signal?.throwIfAborted();
-      return await fn(this.readRaw(), assertLock);
-    } finally {
-      try { await release(); } catch (error) { if (!compromised) throw error; }
-    }
+      this.writeRaw({ ...raw, [providerId]: { models, checkedAt: Date.now() } });
+      assertLock();
+    }, signal, true);
   }
+}
 
-  raw(signal?: AbortSignal): Promise<RawCredentials> {
-    return this.locked((raw) => raw, signal);
-  }
+class CanonicalCredentials extends PiCanonicalJson implements CredentialStore {
+  private readonly catalogs: CanonicalCatalogs;
+  constructor(authPath: string, catalogs: CanonicalCatalogs) { super(authPath, "auth.json"); this.catalogs = catalogs; }
 
   async read(providerId: string, options?: { signal?: AbortSignal }): Promise<OAuthCredential | undefined> {
     const raw = await this.raw(options?.signal);
@@ -175,6 +118,9 @@ class CanonicalCredentials implements CredentialStore {
     return this.locked(async (raw, assertLock) => {
       const current = Object.hasOwn(raw, providerId) ? raw[providerId] : undefined;
       if (!oauth(current)) return undefined;
+      const legacy = projectPi099RadiusCatalog(providerId, current.gatewayConfig);
+      if (legacy) await this.catalogs.importLegacy(providerId, legacy, options?.signal);
+      assertLock();
       const next = await fn(structuredClone(current));
       assertLock();
       options?.signal?.throwIfAborted();
@@ -196,7 +142,8 @@ class CanonicalCredentials implements CredentialStore {
 export function createPiModelAuth(options: { authPath?: string } = {}): PiModelAuth {
   const path = options.authPath ?? join(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent'), 'auth.json');
   const authPath = resolve(/^~[\\/\\\\]/.test(path) ? join(homedir(), path.slice(2)) : path);
-  const store = new CanonicalCredentials(authPath);
+  const catalogs = new CanonicalCatalogs(join(dirname(authPath), "models-store.json"));
+  const store = new CanonicalCredentials(authPath, catalogs);
   const modelsPath = join(dirname(authPath), "models.json");
   const registeredGateways = new Map<string, string>();
   let runtime: Promise<ModelRuntime> | undefined;
@@ -224,7 +171,17 @@ export function createPiModelAuth(options: { authPath?: string } = {}): PiModelA
       return admit(async () => {
         const raw = await store.raw(signal);
         signal?.throwIfAborted();
-        return metadata(raw, radiusGateways(modelsPath));
+        const entries = metadata(raw, radiusGateways(modelsPath));
+        const radius = entries.filter(entry => entry.check && (entry.providerId === "radius" || entry.radiusGateway !== undefined || entry.cachedModels !== undefined));
+        if (radius.length) {
+          const stored = await catalogs.raw(signal);
+          signal?.throwIfAborted();
+          for (const entry of radius) {
+            const models = projectPiStoredRadiusCatalog(entry.providerId, stored[entry.providerId]);
+            if (models) entry.cachedModels = models;
+          }
+        }
+        return entries;
       });
     },
     resolve(providerId, signal) {
