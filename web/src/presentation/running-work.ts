@@ -1,5 +1,6 @@
 import type { Entry } from "../../../src/client/reduce.ts";
 import { toolSummary } from "../../../src/client/tool-summary.ts";
+import type { EffortLevel } from "../../../src/protocol/events.ts";
 
 /**
  * One piece of work running beside the turn, as the Composer's card stack shows it.
@@ -8,7 +9,7 @@ import { toolSummary } from "../../../src/client/tool-summary.ts";
  * the tool row that launched a Background Call, which the transcript scrolls to.
  */
 export type RunningWork =
-  | { kind: "agent"; key: string; name: string; detail?: string }
+  | { kind: "agent"; key: string; name: string; detail?: string; model?: string; effort?: EffortLevel }
   | { kind: "call"; key: string; tool: string; detail?: string };
 
 /**
@@ -25,7 +26,14 @@ export function runningWork(keys: readonly string[], getEntry: (key: string) => 
   for (const key of keys) {
     const entry = getEntry(key);
     if (entry?.kind === "subagent" && (entry.status === "running" || entry.status === "waiting")) {
-      work.push({ kind: "agent", key, name: entry.name, ...(entry.description ? { detail: entry.description } : {}) });
+      work.push({
+        kind: "agent",
+        key,
+        name: entry.name,
+        ...(entry.description ? { detail: entry.description } : {}),
+        ...(entry.model ? { model: entry.model } : {}),
+        ...(entry.effort ? { effort: entry.effort } : {}),
+      });
     } else if (
       entry?.kind === "background_call" && entry.status === "running" && !entry.producer &&
       keys.indexOf(`tool:${entry.id}`) < lastMessage

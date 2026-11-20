@@ -121,7 +121,11 @@ export function timing(
  * where the list has one, then the effort.
  */
 export function subtitle(entry: Extract<Entry, { kind: "subagent" }>, models: readonly ModelInfo[]): string | undefined {
-  const model = entry.model === undefined ? undefined : (models.find((known) => known.id === entry.model)?.label ?? entry.model);
+  const model = entry.model === undefined ? undefined : modelLabel(entry.model, models);
   const parts = [entry.description === undefined ? undefined : entry.name, model, entry.effort].filter((part) => part !== undefined);
   return parts.length === 0 ? undefined : parts.join(" · ");
+}
+
+export function modelLabel(id: string, models: readonly ModelInfo[]): string {
+  return models.find((known) => known.id === id)?.label ?? id;
 }
