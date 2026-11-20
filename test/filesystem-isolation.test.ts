@@ -390,7 +390,7 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     assert.ok(existsSync(f.backend));
   });
 
-  it("stages narrow Pi credentials from an explicit agent directory, with read-only resources and no host transcripts", async (t) => {
+  it("stages Pi configuration without credentials or host transcripts, and keeps resources read-only", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const customPi = join(f.root, "configured-agent");
     mkdirSync(join(customPi, "skills"), { recursive: true });
@@ -401,7 +401,8 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     writeFileSync(join(customPi, "skills/skill.md"), "readonly-skill");
     await node(f.options({ credentials: "pi", env: { ...f.env, PI_CODING_AGENT_DIR: customPi } }), String.raw`
       const f=require('fs'),a=require('assert/strict'),p=JSON.parse(process.argv[1]),d=process.env.PI_CODING_AGENT_DIR;
-      for(const [file,value]of [['auth.json','custom-auth'],['models.json','custom-models'],['settings.json','custom-settings']]) {
+      a.equal(f.existsSync(d+'/auth.json'),false);
+      for(const [file,value]of [['models.json','custom-models'],['settings.json','custom-settings']]) {
         a.equal(f.readFileSync(d+'/'+file,'utf8'),value);
         f.writeFileSync(d+'/'+file+'.new','refreshed');
         f.renameSync(d+'/'+file+'.new',d+'/'+file);
@@ -432,7 +433,8 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
         a.equal(f.existsSync(d+'/'+p.instruction),false);
         a.equal(f.existsSync(d+'/skills'),false);
         const auth=p.backend==='pi'?'auth.json':'.credentials.json';
-        a.equal(f.readFileSync(d+'/'+auth,'utf8'),p.auth);
+        if(p.backend==='pi') a.equal(f.existsSync(d+'/'+auth),false);
+        else a.equal(f.readFileSync(d+'/'+auth,'utf8'),p.auth);
         if(p.backend==='pi') {
           a.equal(f.readFileSync(d+'/models.json','utf8'),'{'+'"models":[]}');
           a.equal(f.readFileSync(d+'/settings.json','utf8'),'{'+'"theme":"dark"}');

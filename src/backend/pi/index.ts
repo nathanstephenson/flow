@@ -31,6 +31,7 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
+import { createWorkerPiModelRuntime } from "./model-auth.ts";
 import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
@@ -514,6 +515,9 @@ export class PiBackend implements AgentBackend {
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const agentDir = getAgentDir();
+    const modelRuntime = options.piAuth
+      ? await createWorkerPiModelRuntime(options.piAuth, join(agentDir, "models.json"))
+      : undefined;
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.
     const builder = options.workflowBuilder;
@@ -576,6 +580,7 @@ export class PiBackend implements AgentBackend {
         agentDir,
         resourceLoader,
         settingsManager,
+        ...(modelRuntime ? { modelRuntime } : {}),
         customTools: [...customTools, ...mcpTools],
         tools: [...tools, ...mcpTools.map((tool) => tool.name)],
         ...(current ? { sessionManager: current.sessionManager, modelRuntime: current.modelRuntime, thinkingLevel: current.thinkingLevel, ...(current.model ? { model: current.model } : {}) }

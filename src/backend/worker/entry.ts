@@ -53,7 +53,7 @@ export function runWorker(): void {
       const ready = performance.now();
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, sessionToolsEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, sessionToolsEnabled, workflowBuilderInstructions, piAuth, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
         instructions: workflowBuilderInstructions,
         read: (path) => rpc.call("workflowBuilder.read", [path]),
@@ -93,8 +93,19 @@ export function runWorker(): void {
         throw new Error(`Backend "${backendName}" is not available in this build: ${errorText(error)}`);
       }
       const imported = performance.now();
+      let initialAuth = piAuth;
       session = await backend.create({
         ...options,
+        ...(piAuth ? { piAuth: {
+          snapshot: async (signal?: AbortSignal) => {
+            signal?.throwIfAborted();
+            if (!initialAuth) return rpc.call('pi.auth.snapshot', [], signal);
+            const metadata = initialAuth;
+            initialAuth = undefined;
+            return metadata;
+          },
+          resolve: (providerId: string, signal?: AbortSignal) => rpc.call('pi.auth.resolve', [providerId], signal),
+        } } : {}),
         ...(workflowBuilder ? { workflowBuilder } : {
           ...(localMcp ? { mcp: localMcp }
             : mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),

@@ -2397,6 +2397,9 @@ export class SessionHost {
       this.persist(record);
     }
     await this.shared?.close().catch((error: unknown) => console.error(`Shared sandbox removal failed: ${(error as Error).message}`));
+    const stopped = await Promise.allSettled([...this.backends.values()].map(async backend => backend.shutdown?.()));
+    const failures = stopped.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Backend Adapter shutdown failed");
   }
 
   async execute(command: Command): Promise<unknown> {

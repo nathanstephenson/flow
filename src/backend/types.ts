@@ -35,6 +35,7 @@ export type BackendCreateOptions = {
   workflow?: import("./workflow-tools.ts").WorkflowParent;
   /** Host-mediated communication between independent Agent Sessions; parent tools only. */
   sessionTools?: import("./session-tools.ts").SessionTools;
+  piAuth?: import("./pi/model-auth.ts").PiModelAuth;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: AutoCompaction;
@@ -212,6 +213,7 @@ export interface AgentBackend {
   /** Mounts needed for later attachment to a non-evictable Shared Sandbox. */
   scheduledSandboxMounts?(scope: string): { writable: string[]; readable: string[] };
   create(options: BackendCreateOptions): Promise<BackendSession>;
+  shutdown?(): Promise<void>;
   /** Move this backend's records in `stateDir` from Scope `from` to Scope `to`, with no Backend Session running. */
   relocate?(stateDir: string, from: string, to: string): void;
   /** Copy a Conversation Context for a Fork. Returns the resume token for `to`. */

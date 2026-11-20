@@ -64,13 +64,26 @@ A separate container or virtual machine per Subagent is unnecessary.
 
 The Session Host's state, including transcripts, tokens, Workflow Definitions, execution history
 and secrets, is not writable or directly exposed to workers. Only the selected backend's state
-is mounted at a worker-private path for Revive. Credential files needed by the selected SDK are
-staged narrowly into a private home, never by mounting the real home writable. Known host SSH,
+is mounted at a worker-private path for Revive. Claude credential files are staged narrowly into a private home, never by mounting the real home
+writable. Pi credential refresh belongs to the Session Host. It uses the canonical Pi credential
+file and SDK locks, shared with other Pi processes. Pi workers receive non-secret availability
+metadata and request auth for an allowed Provider through private IPC, never OAuth refresh tokens
+or a copy of the credential file. Agent Sessions, Summary Model requests, Subagents, compaction and
+Revive use this same owner. Availability metadata does not refresh tokens. Network catalog requests
+can resolve request auth. Worker cancellation does not cancel an issued refresh. Host shutdown stops
+new auth requests and waits for issued refreshes to store their replacement credentials. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
 without admitting symlinks or parents that contain protected host state. Restricted Workflow Builders
-and their model-discovery probes omit unused ambient resources while retaining credential staging
-(ADR 0030). Adapter-local credential
-refresh does not write back to the user's global credential files. A separately configured Claude
+and their model-discovery probes omit unused ambient resources while retaining backend request auth
+(ADR 0030). Claude adapter-local credential refresh does not write back to the user's global credential files.
+Pi host-owned refresh updates the canonical credential file before releasing the SDK lock. Pi API-key commands in `auth.json` are refused with instructions to move the command to
+`models.json`. Commands in `models.json`, provider and model headers, and ordinary ambient
+credential discovery retain the worker's captured filesystem boundary. Plain stored API keys and
+provider-specific values are resolved only for the requested Provider. The auth channel is not a
+host command or arbitrary file-read capability. Provider error response bodies do not cross this
+channel. Native Radius gateways and aliases come only from
+the canonical `models.json`, read as data. The host does not execute its commands or headers.
+A separately configured Claude
 auth root is masked too and only its credential file is staged. Nonempty `CLAUDE_CONFIG_DIR` and
 `CLAUDE_SECURESTORAGE_CONFIG_DIR` must be absolute for restricted launches: relative roots use the
 CLI's Scope, and literal `~` is not expanded, so host-cwd resolution could select the wrong store.
