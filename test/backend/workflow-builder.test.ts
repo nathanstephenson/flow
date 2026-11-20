@@ -175,6 +175,7 @@ it("Claude builder excludes native and external tools and cannot relax its permi
     tools: "none", permissionMode: "auto", standingAuthorisations: ["Bash", "Agent"], emit: () => {} });
   t.after(() => session.dispose());
   assert.equal(launch.systemPrompt, builder.instructions);
+  assert.equal(launch.env?.ENABLE_TOOL_SEARCH, "false");
   assert.deepEqual(launch.tools, []);
   assert.deepEqual(launch.settingSources, []);
   assert.deepEqual(launch.skills, []);

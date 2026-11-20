@@ -329,7 +329,7 @@ class ClaudeSession implements BackendSession {
     const env = claudeAutoCompactionEnv(this.workflowAutoCompaction, claudeState.env) ?? claudeState.env;
     const queryOptions: Options = {
       cwd: options.scope,
-      env,
+      env: builder ? { ...env, ENABLE_TOOL_SEARCH: "false" } : env,
       includePartialMessages: true,
       mcpServers: builder ? this.parentWorkflow : toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow, ...this.parentSessions },
       // Pre-approval and native Auto can bypass canUseTool. Hooks run before either, so even
