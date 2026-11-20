@@ -9,7 +9,7 @@ import { parseValue } from '../src/workflows/schema.ts';
 import { invocationTrail } from '../web/src/presentation/workflow-calls.ts';
 import type { WorkflowDefinition } from '../src/protocol/workflows.ts';
 
-type Element = { type: string; key?: string | null; props: Record<string, any> };
+type Element = { type: string | ((props: any) => Element); key?: string | null; props: Record<string, any> };
 const definition: WorkflowDefinition = { version: 1, id: 'sample', name: 'Sample', backend: 'fake', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'join', name: 'Join', kind: 'join' }], edges: [] };
 
 function pane(status: string) {
@@ -19,41 +19,62 @@ function pane(status: string) {
   const detail: { data?: any } = {};
   const nestedDetail: { data?: any } = {};
   const calls: unknown[] = [];
-  const states: any[] = [];
+  const paneStates: any[] = [];
+  let states = paneStates;
+  let inspectorStates: any[] = [];
+  let inspectorKey: string | null | undefined;
   let index = 0;
-  const module = { exports: {} as { default: (props: unknown) => Element } };
+  const resources: (string | undefined)[] = [];
   const require = createRequire(import.meta.url);
-  const code = transformSync(readFileSync(new URL('../web/src/components/workflows-pane.tsx', import.meta.url), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
-  runInNewContext(code, { module, exports: module.exports, require: (name: string) => {
-    if (name === 'react') return {
-      useState: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = typeof initial === 'function' ? initial() : initial; return [states[slot], (value: any) => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }]; },
-      useEffect: () => {},
-    };
-    if (name === 'react/jsx-runtime') return require(name);
-    if (name === '../agent-sessions.tsx') return { useAgentSessions: () => ({ sessions: [session] }) };
-    if (name === './workflow-api.ts') return {
-      useWorkflowResource: (path: string) => path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : path?.endsWith('/execution') ? detail : path?.includes('/execution?invocationId=') ? nestedDetail : {},
-      workflowApi: async (...args: unknown[]) => { calls.push(args); return {}; },
-    };
-    if (name === '../../../src/workflows/graph.ts') return { validateDefinition };
-    if (name === '../../../src/workflows/schema.ts') return { parseValue };
-    if (name === '../presentation/workflows.ts') return { workflowIssue: (error: Error) => error.message };
-    if (name === '../presentation/workflow-execution.ts') return { attemptDuration: () => '1s' };
-    if (name === '../presentation/workflow-calls.ts') return { invocationTrail };
-    if (name === '../workflow-launch.ts') return {
-      retainedWorkflowLaunch: () => undefined,
-      clearRetainedWorkflowLaunch: () => {},
-    };
-    if (name === './workflow-editors.tsx') return { initialValue: () => ({}), ValueEditor: 'ValueEditor' };
-    return new Proxy({}, { get: (_target, key) => key });
-  } });
-  const render = (props: Record<string, unknown> = {}) => { index = 0; return module.exports.default({ sessionId: 'session', ...props }); };
+  function load(file: string): any {
+    const module = { exports: {} };
+    const code = transformSync(readFileSync(new URL(`../web/src/components/${file}`, import.meta.url), 'utf8'), { loader: 'tsx', format: 'cjs', jsx: 'automatic' }).code;
+    runInNewContext(code, { module, exports: module.exports, require: (name: string) => {
+      if (name === 'react') return {
+        useState: (initial: any) => { const store = states; const slot = index++; if (!(slot in store)) store[slot] = typeof initial === 'function' ? initial() : initial; return [store[slot], (value: any) => { store[slot] = typeof value === 'function' ? value(store[slot]) : value; }]; },
+        useEffect: () => {},
+      };
+      if (name === 'react/jsx-runtime') return require(name);
+      if (name === '../agent-sessions.tsx') return { useAgentSessions: () => ({ sessions: [session] }) };
+      if (name === './workflow-api.ts') return {
+        useWorkflowResource: (path: string | undefined) => { resources.push(path); return path === '/api/workflows' ? { data: { workflows: [workflow] } } : path === '/api/sessions/session/workflows' ? history : path?.endsWith('/execution') ? detail : path?.includes('/execution?invocationId=') ? nestedDetail : {}; },
+        workflowApi: async (...args: unknown[]) => { calls.push(args); return {}; },
+      };
+      if (name === '../../../src/workflows/graph.ts') return { validateDefinition };
+      if (name === '../../../src/workflows/schema.ts') return { parseValue };
+      if (name === '../presentation/workflows.ts') return { workflowIssue: (error: Error) => error.message };
+      if (name === '../presentation/workflow-execution.ts') return { attemptDuration: () => '1s' };
+      if (name === '../presentation/workflow-calls.ts') return { invocationTrail };
+      if (name === '../workflow-launch.ts') return {
+        retainedWorkflowLaunch: () => undefined,
+        clearRetainedWorkflowLaunch: () => {},
+      };
+      if (name === './workflow-editors.tsx') return { initialValue: () => ({}), ValueEditor: 'ValueEditor' };
+      if (name === './workflow-execution-inspector.tsx') return { WorkflowExecutionInspector: Inspector };
+      return new Proxy({}, { get: (_target, key) => key });
+    } });
+    return module.exports;
+  }
+  const { WorkflowExecutionInspector: Inspector } = load('workflow-execution-inspector.tsx');
+  const { default: WorkflowsPane } = load('workflows-pane.tsx');
+  const expand = (node: any): any => {
+    if (Array.isArray(node)) return node.map(expand);
+    if (!node || typeof node !== 'object' || !node.props) return node;
+    if (node.type === Inspector) {
+      if (node.key !== inspectorKey) { inspectorStates = []; inspectorKey = node.key; }
+      states = inspectorStates;
+      index = 0;
+      return { ...node, props: { ...node.props, children: Inspector(node.props) } };
+    }
+    return { ...node, props: { ...node.props, children: expand(node.props.children) } };
+  };
+  const render = (props: Record<string, unknown> = {}) => { states = paneStates; index = 0; return expand(WorkflowsPane({ sessionId: 'session', ...props })); };
   const button = (label: string) => find(render(), 'Button', node => node.props.children === label);
   const select = () => find(render(), 'Select', node => !!node.props.onValueChange).props.onValueChange('sample');
-  return { session, history, workflow, detail, nestedDetail, calls, render, button, select };
+  return { session, history, workflow, detail, nestedDetail, calls, resources, Inspector, render, button, select };
 }
 
-function find(element: any, type: string, matches: (element: Element) => boolean = () => true): Element {
+function find(element: any, type: Element['type'], matches: (element: Element) => boolean = () => true): Element {
   if (element?.type === type && matches(element)) return element;
   for (const child of [element?.props?.children].flat(Infinity)) {
     if (!child || typeof child !== 'object') continue;
@@ -96,6 +117,29 @@ it('keeps occupied-slot, Ended, input and Backend Adapter guards', () => {
   assert.equal(p.button('Close').props.disabled, true);
   assert.throws(() => p.button('Start workflow'), /Missing Button/);
   assert.equal(p.calls.length, 0);
+});
+
+it('passes the selected execution and navigation props to the canonical inspector', () => {
+  const p = pane('idle');
+  p.history.data.executions = [{ id: 'execution', name: 'Sample', status: 'completed', startedAt: 1 }];
+  p.detail.data = { execution: { id: 'execution', sessionId: 'session', definition, input: {}, startedAt: 1, status: 'completed', steps: {} }, enquiries: [], permissions: [], stepSpend: {}, historyComplete: true };
+  let backs = 0;
+  let selected = '';
+  const mobileNavigation = { stepId: '', onSelect: (id: string) => { selected = id; }, onBack: () => { backs++; } };
+  find(p.render({ mobileNavigation }), 'Select', node => Array.isArray(node.props.items)).props.onValueChange('execution');
+  assert.equal(backs, 1);
+  const inspector = find(p.render({ placement: 'bottom', mobileNavigation }), p.Inspector);
+  assert.equal(inspector.key, 'session/execution');
+  assert.equal(inspector.props.view, p.detail.data);
+  assert.equal(inspector.props.detailBase, '/api/sessions/session/workflows/execution');
+  assert.equal(inspector.props.transcriptBase, '/api/sessions/session/workflows/execution');
+  assert.equal(inspector.props.placement, 'bottom');
+  assert.equal(inspector.props.mobileNavigation, mobileNavigation);
+  find(inspector, 'WorkflowGraph').props.onSelect('join');
+  assert.equal(selected, 'join');
+  mobileNavigation.stepId = selected;
+  find(p.render({ mobileNavigation }), 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
+  assert.equal(backs, 2);
 });
 
 it('uses shared lifecycle-preserving tabs for execution overview, graph and step navigation', () => {
@@ -141,17 +185,28 @@ it('uses shared lifecycle-preserving tabs for execution overview, graph and step
   find(flow, 'WorkflowGraph').props.onSelect('join');
   const step = p.render();
   assert.equal(find(step, 'Tabs').props.value, 'Flow');
-  assert.ok(find(step, 'WorkflowGraph'));
+  assert.equal(find(step, 'WorkflowGraph').key, rightGraph.key);
+  assert.equal(find(step, 'WorkflowGraph').props.selectedStepId, 'join');
   assert.ok(find(step, 'Select', node => node.props.value === 1));
-  find(step, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
-  assert.ok(find(p.render(), 'WorkflowGraph'));
+  find(step, 'Tabs').props.onValueChange('Overview');
+  const revisitedOverview = p.render();
+  assert.equal(find(revisitedOverview, 'Tabs').props.value, 'Overview');
+  assert.equal(find(revisitedOverview, 'WorkflowGraph').key, rightGraph.key);
+  find(revisitedOverview, 'Tabs').props.onValueChange('Flow');
+  const revisitedFlow = p.render();
+  assert.equal(find(revisitedFlow, 'Tabs').props.value, 'Flow');
+  assert.equal(find(revisitedFlow, 'WorkflowGraph').props.selectedStepId, 'join');
+  find(revisitedFlow, 'Button', node => [node.props.children].flat(Infinity).includes('Back to flow')).props.onClick();
+  const returnedGraph = find(p.render(), 'WorkflowGraph');
+  assert.equal(returnedGraph.key, rightGraph.key);
+  assert.equal(returnedGraph.props.selectedStepId, '');
 });
 
 it('changes graph identity for an invocation and restores it at root while keeping routes rooted', async () => {
   const p = pane('idle');
   const child = { id: 'execution', definition: structuredClone(definition), input: {}, startedAt: 1, finishedAt: 2, status: 'completed', steps: { join: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } }, result: {} };
   const call = { id: 'call', name: 'Call', kind: 'workflow', workflowId: definition.id, contract: { inputSchema: definition.inputSchema, outputSchema: definition.inputSchema } };
-  const root = { ...child, id: 'execution', finishedAt: undefined, status: 'running', definition: { ...definition, id: 'parent', name: 'Parent', steps: [call] }, retainedDefinitions: { sample: definition }, invocations: { inner: { ...child, id: 'inner', definitionId: 'sample', callStepId: 'call', callAttempt: 1 } }, steps: { call: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } } };
+  const root = { ...child, id: 'execution', sessionId: 'session', finishedAt: undefined, status: 'running', definition: { ...definition, id: 'parent', name: 'Parent', steps: [call] }, retainedDefinitions: { sample: definition }, invocations: { inner: { ...child, id: 'inner', definitionId: 'sample', callStepId: 'call', callAttempt: 1 } }, steps: { call: { status: 'completed', attempts: [{ number: 1, action: 'run', startedAt: 1, finishedAt: 2, input: {}, output: {} }] } } };
   p.history.data.executions = [{ id: 'execution', name: 'Parent', status: 'running', startedAt: 1 }];
   p.detail.data = { execution: root, enquiries: [], permissions: [], stepSpend: {}, historyComplete: true };
   p.nestedDetail.data = { ...p.detail.data, execution: child };
@@ -161,6 +216,9 @@ it('changes graph identity for an invocation and restores it at root while keepi
   find(p.render(), 'Button', node => JSON.stringify(node.props.children)?.includes('Open called workflow') === true).props.onClick();
   const nested = p.render();
   const nestedGraph = find(nested, 'WorkflowGraph');
+  assert.ok(p.resources.includes('/api/sessions/session/workflows/execution?invocationId=inner'));
+  assert.equal(rootGraph.key, 'execution//right');
+  assert.equal(nestedGraph.key, 'execution/inner/right');
   assert.equal(nestedGraph.props.execution.id, rootGraph.props.execution.id);
   assert.equal(nestedGraph.props.definition.id, 'sample');
   assert.notEqual(nestedGraph.key, rootGraph.key);

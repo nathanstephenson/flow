@@ -35,6 +35,9 @@ export type Route = {
   /** Undefined when the URL names no Agent Session. */
   sessionId: string | undefined;
   backend?: string;
+  schedules?: true;
+  scheduleId?: string;
+  occurrenceId?: string;
   /** The open section of the Settings Dialog. Undefined when the Dialog is closed. */
   settings?: SettingsSection;
 };
@@ -54,6 +57,15 @@ export function parseRoute(hash: string): Route {
 }
 
 function sessionPart(parts: string[]): Route {
+  if (parts[0] === 'schedules') {
+    const route: Route = { sessionId: undefined, schedules: true };
+    if (parts[1] === 'occurrences') {
+      const id = decode(parts[2] ?? '');
+      return id ? { ...route, occurrenceId: id } : route;
+    }
+    const id = decode(parts[1] ?? '');
+    return id ? { ...route, scheduleId: id } : route;
+  }
   if (parts[0] === "new" && parts[1]) return { sessionId: undefined, backend: decode(parts[1]) };
   if (parts[0] !== "s" || parts[1] === undefined) return DEFAULT_ROUTE;
 
@@ -66,7 +78,7 @@ function sessionPart(parts: string[]): Route {
 
 export function formatRoute(route: Route): string {
   const path =
-    route.sessionId !== undefined
+    route.schedules ? `#/schedules${route.occurrenceId ? `/occurrences/${encodeURIComponent(route.occurrenceId)}` : route.scheduleId ? `/${encodeURIComponent(route.scheduleId)}` : ''}` : route.sessionId !== undefined
       ? `#/s/${encodeURIComponent(route.sessionId)}`
       : route.backend
         ? `#/new/${encodeURIComponent(route.backend)}`

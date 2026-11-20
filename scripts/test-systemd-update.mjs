@@ -42,6 +42,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createSystemdTestRegistry } from './systemd-update-registry.mjs';
 
 // These checks MUST precede even mkdir/build/user creation. An opt-in alone is insufficient.
 if (process.env.FLOW_SYSTEMD_VM_TEST !== '1' || process.env.GITHUB_ACTIONS !== 'true' ||
@@ -308,7 +309,7 @@ try {
   writeFileSync(join(state, 'config.json'), JSON.stringify({ workflowRuntime: { nodePath: node } }), { mode: 0o600 });
 
   // Only the Flow scope is private. Normal dependencies go directly to npm, just like npm ci.
-  registry = createServer(async (request, response) => {
+  registry = createSystemdTestRegistry(async (request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
     const record = { at: new Date().toISOString(), method: request.method, pathname };
     requests.push(record);

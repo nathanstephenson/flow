@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { VisualSchema, WorkflowDefinition, WorkflowExecution, WorkflowInvocation, WorkflowStep } from '../src/protocol/workflows.ts';
 import { deriveResultSchema, resolveWorkflowCalls } from '../src/workflows/calls.ts';
+import { WorkflowValidationError } from '../src/workflows/errors.ts';
 import { validateDefinition } from '../src/workflows/graph.ts';
 import { parseExecution } from '../src/workflows/records.ts';
 import { parseValue } from '../src/workflows/schema.ts';
@@ -59,7 +60,7 @@ test('captures the root and transitive targets once without sharing mutable defi
 test('rejects missing targets, contract drift and direct or indirect recursion', () => {
   const target = child();
   const root = definition('root', [call('call', target)]);
-  assert.throws(() => resolveWorkflowCalls(root, () => { throw new Error('gone'); }), /Missing/);
+  assert.throws(() => resolveWorkflowCalls(root, () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); }), /Missing/);
   assert.throws(() => resolveWorkflowCalls(root, () => definition('wrong', [leaf('inner')])), /Missing/);
   assert.throws(() => resolveWorkflowCalls(root, () => definition('child', [leaf('inner', { type: 'string' })])), /contract/);
   const changed = structuredClone(target);
@@ -69,6 +70,14 @@ test('rejects missing targets, contract drift and direct or indirect recursion',
   assert.throws(() => resolveWorkflowCalls(self, () => self), /Recursive/);
   const recursive = definition('child', [{ ...call('call', target), workflowId: 'root' }]);
   assert.throws(() => resolveWorkflowCalls(root, () => recursive), /Recursive/);
+});
+
+test('call validation preserves missing-target types and unexpected storage failures', () => {
+  const root = definition('root', [call('call', child())]);
+  assert.throws(() => resolveWorkflowCalls(root, () => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); }), WorkflowValidationError);
+  for (const failure of [Object.assign(new Error('synthetic-private-detail'), { code: 'EIO' }), new SyntaxError('synthetic-private-detail')]) {
+    assert.throws(() => resolveWorkflowCalls(root, () => { throw failure; }), error => error === failure);
+  }
 });
 
 test('compares contracts independent of object key order and accepts implementation edits', () => {

@@ -36,3 +36,6 @@ export function snapshot(session: BackendSession): SessionSnapshot {
 export function mcpMetadata(mcp: BackendCreateOptions["mcp"]): McpToolMetadata[] {
   return (mcp?.tools() ?? []).map(({ name, connectionId, definition, serverIdentity }) => ({ name, connectionId, definition, serverIdentity }));
 }
+
+/** Backend-free worker initialization for occurrence-owned Sandbox MCP. */
+export interface McpOnlyMetadata { scope: string; connections: import('../../protocol/mcp.ts').McpConnection[] }

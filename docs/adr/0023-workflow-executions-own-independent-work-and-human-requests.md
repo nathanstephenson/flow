@@ -57,3 +57,13 @@ executions contribute independent working activity to the rail without changing 
 until an actual relay turn starts. A restarted host retains private activity, Spend and notification
 markers, but no request callback survives. Failed tests and interrupted executions require an
 explicit Retry, Supply output, Continue or Cancel before the slot is free.
+
+## Scheduled ownership amendment
+
+[ADR 0041](0041-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
+occurrence-owned execution checkpoints, backend-free code/MCP environments and lazy Agent Session
+attachment. Scheduled code/MCP keep their captured environment after attachment rather than moving
+to the Backend Session VM. Shared Sandbox additionally mounts private scheduled execution state.
+Scheduled Worktrees are journaled before provisioning and adopted, not recreated, on attachment.
+Sessionless terminal history expires after seven days with safe Worktree cleanup; Agent Session
+Reap and transcript/Spend retention remain independent. Existing manual execution rules still apply.

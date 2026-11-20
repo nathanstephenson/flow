@@ -24,6 +24,8 @@ export type PromptAttachment = {
 };
 
 export type BackendCreateOptions = {
+  /** Captured policy for scheduled ownership; trusted host use only. */
+  isolationMode?: import("../protocol/settings.ts").FilesystemIsolationMode;
   /** Host-owned startup cancellation; never serialized into a worker or exposed to the model. */
   signal?: AbortSignal;
   /** Host-only: asks the holder to dispose this session so a Shared Sandbox can be re-created. Never serialized into a worker. */
@@ -207,6 +209,8 @@ export interface BackendSession {
 
 export interface AgentBackend {
   readonly name: string;
+  /** Mounts needed for later attachment to a non-evictable Shared Sandbox. */
+  scheduledSandboxMounts?(scope: string): { writable: string[]; readable: string[] };
   create(options: BackendCreateOptions): Promise<BackendSession>;
   /** Move this backend's records in `stateDir` from Scope `from` to Scope `to`, with no Backend Session running. */
   relocate?(stateDir: string, from: string, to: string): void;

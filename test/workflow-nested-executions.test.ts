@@ -177,6 +177,7 @@ test('restart reconciles running descendants even when the root already requires
 });
 
 test('recovery does not launch effects after an enclosing call deadline has expired', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
   let effects = 0;
   const f = fixture(t, async context => { if (context.step.id === 'handler') return 9; effects++; throw new Error('stop'); });
   const child = definition('child', [leaf('inner')]);
@@ -185,10 +186,11 @@ test('recovery does not launch effects after an enclosing call deadline has expi
   const started = f.scheduler.start(parent, session, {});
   await f.scheduler.wait(session.sessionId, started.id);
   const snapshot = await f.scheduler.interrupt(session.sessionId, started.id);
-  await new Promise(resolve => setTimeout(resolve, 50));
+  t.mock.timers.tick(50);
   const restored = new WorkflowScheduler(f.store, f.executors);
   const invocationId = Object.keys(snapshot.invocations!)[0]!;
   restored.recover(session, started.id, { kind: 'retry', stepId: 'inner', invocationId });
+  t.mock.timers.tick(0);
   assert.equal((await restored.wait(session.sessionId, started.id)).result, 9);
   assert.equal(effects, 1);
 });
@@ -450,17 +452,32 @@ test('explicit caller ask cannot be weakened by child settings', async t => {
   assert.deepEqual(permissions, ['ask']);
 });
 
-test('call timeout stops descendant work before its timeout handler', async t => {
-  let cleaned = false;
+test('call timeout stops descendant work before its timeout handler', { timeout: 5_000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  let cleaned = false, begin!: () => void, abort!: () => void;
+  const began = new Promise<void>(resolve => { begin = resolve; });
+  const aborted = new Promise<void>(resolve => { abort = resolve; });
   const f = fixture(t, async context => {
     if (context.step.id === 'handler') { assert.equal(cleaned, true); return 9; }
-    await new Promise<void>(resolve => context.signal.addEventListener('abort', () => setTimeout(() => { cleaned = true; resolve(); }, 10), { once: true }));
+    await new Promise<void>(resolve => {
+      context.signal.addEventListener('abort', () => {
+        abort();
+        setTimeout(() => { cleaned = true; resolve(); }, 10);
+      }, { once: true });
+      begin();
+    });
     return 1;
   });
   const child = definition('child', [leaf('inner')]);
   f.store.saveDefinition(child);
   const parent = definition('parent', [{ ...call('call', child), timeoutMs: 20 }, leaf('handler')], [{ id: 'timeout', from: 'call', to: 'handler', outcome: 'timeout' }]);
   const started = f.scheduler.start(parent, session, {});
+  await began;
+  t.mock.timers.tick(20);
+  await aborted;
+  assert.equal(cleaned, false);
+  assert.equal(f.scheduler.get(session.sessionId, started.id).steps.handler!.status, 'pending');
+  t.mock.timers.tick(10);
   const done = await f.scheduler.wait(session.sessionId, started.id);
   assert.equal(done.status, 'completed-with-recovery');
   assert.equal(done.result, 9);

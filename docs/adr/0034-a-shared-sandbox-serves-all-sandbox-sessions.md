@@ -52,3 +52,13 @@ A hold can be evictable. Warm Skills sessions (ADR 0035) take evictable holds. I
 mount that the VM does not have, and all holds are evictable, Flow asks each holder to release. Flow
 then waits for the releases and creates the VM again. If one hold is not evictable, Flow refuses the
 session, as before.
+
+## Scheduled ownership amendment
+
+[ADR 0041](0041-scheduled-work-has-occurrence-ownership-and-lazy-agent-sessions.md) adds
+occurrence-owned execution checkpoints, backend-free code/MCP environments and lazy Agent Session
+attachment. Scheduled code/MCP keep their captured environment after attachment rather than moving
+to the Backend Session VM. Shared Sandbox additionally mounts private scheduled execution state.
+Scheduled Worktrees are journaled before provisioning and adopted, not recreated, on attachment.
+Sessionless terminal history expires after seven days with safe Worktree cleanup; Agent Session
+Reap and transcript/Spend retention remain independent. Existing manual execution rules still apply.

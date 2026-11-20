@@ -27,7 +27,7 @@ _Avoid_: child session, task, sidechain, agent
 **Background Call**: A tool call continuing past its turn, owned by its Backend Session and identified by the call. Unlike a Subagent, it has no conversation; it does not occupy the Agent Session.
 _Avoid_: background task, async tool, Subagent
 
-**Session Host**: The daemon owning Agent Sessions and the Steering Queue.
+**Session Host**: The daemon owning Agent Sessions, scheduled work and the Steering Queue.
 _Avoid_: server, manager, supervisor
 
 **Backend Adapter**: The translation of an agent SDK into Agent Events and session commands.
@@ -36,8 +36,14 @@ _Avoid_: driver, provider, runtime, plugin
 **Workflow Definition**: A saved graph of typed Workflow Steps, copied when a Workflow Execution starts.
 _Avoid_: script, pipeline
 
-**Workflow Execution**: Work owned by one Agent Session, with a retained Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
+**Workflow Execution**: Work owned by an Agent Session or a scheduled Workflow Occurrence, with a retained Workflow Definition and an independent execution slot. Scheduled work acquires an Agent Session only for agent work, human input or recovery. Its requests do not occupy the parent turn.
 _Avoid_: parent turn, Background Call
+
+**Workflow Schedule**: A saved recurrence and launch configuration for a Workflow Definition, admitted while the Session Host runs.
+_Avoid_: cron, timer, job
+
+**Workflow Occurrence**: One due time of a Workflow Schedule, retaining its launch configuration and outcome independently of any Agent Session.
+_Avoid_: Agent Session, job
 
 **Workflow Invocation**: One awaited call of a Workflow Definition, owned by a calling Workflow Step within its Workflow Execution. It has its own inputs, attempts, results and recovery checkpoint.
 _Avoid_: child Agent Session, detached execution
@@ -135,7 +141,7 @@ _Avoid_: scope, workspace, repo
 **Candidate**: A discovered repository beneath the Project Root that is not yet a Project or offered as a Scope.
 _Avoid_: project, suggestion
 
-**Worktree**: A Scope created and owned by the Session Host from a Project. Bound at Agent Session creation and removed on Reap only when clean.
+**Worktree**: A Scope created and owned by the Session Host from a Project for an Agent Session or scheduled Workflow Occurrence. Removed only when safe; scheduled work can transfer its existing Worktree to an Agent Session.
 _Avoid_: checkout, clone, workspace
 
 **Project Root**: The configured directory beneath which Candidates are discovered; does not restrict Project locations.
@@ -158,7 +164,7 @@ _Avoid_: config, preferences, profile
 **Isolation Mode**: The machine-wide filesystem policy for new work: none (unrestricted), Bubblewrap, or Sandbox. Automatic selection never chooses Sandbox.
 _Avoid_: isolation on/off, enabled
 
-**Sandbox**: The Docker Sandboxes (sbx) microVM serving one Agent Session in Sandbox mode, or all of them when it is the Shared Sandbox. Its Backend Sessions, MCP clients and Workflow code run in it. Never restarted: a per-session Sandbox is removed when its owned work stops, and replaced on Revive.
+**Sandbox**: The Docker Sandboxes (sbx) microVM serving an Agent Session or scheduled Workflow Execution in Sandbox mode, or shared work when it is the Shared Sandbox. Its Backend Sessions, MCP clients and Workflow code run in it. Never restarted: a per-session Sandbox is removed when its owned work stops, and replaced on Revive.
 _Avoid_: container, VM (alone)
 
 **Sandbox Sharing**: The setting that selects one Sandbox for each Agent Session, or one Shared Sandbox for all of them.

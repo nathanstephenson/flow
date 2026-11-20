@@ -45,6 +45,21 @@ export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const readable = [packageRoot, ...(this.options.readablePaths ?? [])];
+    if (this.options.entry) readable.push(this.options.entry);
+    if (this.options.backendModule) readable.push(fileURLToPath(this.options.backendModule));
+    readable.push(...nodeExecutionAssets(readable));
+    const env = { ...process.env, ...this.options.env };
+    const source = this.name === 'pi' ? env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent')
+      : resolve(scope, env.CLAUDE_CONFIG_DIR || join(env.HOME ?? homedir(), '.claude'));
+    const resources = this.name === 'pi' ? ['AGENTS.md', 'skills', 'prompts']
+      : ['CLAUDE.md', 'settings.json', 'commands', 'skills', 'agents', 'rules', 'plugins'];
+    for (const name of resources) if (existsSync(join(source, name))) readable.push(realpathSync(join(source, name)));
+    const support = this.options.sandbox?.();
+    return { readable, writable: support?.supported && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [] };
+  }
   private async opened(proxy: WorkerSession, signal: AbortSignal | undefined, isolation: FilesystemIsolationMode, begin: number,
     sandbox?: { sharing: "shared" | "own"; remove: number; create: number }): Promise<void> {
     const opening = performance.now();
@@ -152,7 +167,7 @@ export class WorkerBackend implements AgentBackend {
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const begin = performance.now();
     options.signal?.throwIfAborted();
-    const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
+    const isolationMode = options.isolationMode ?? this.options.isolationMode?.() ?? "bubblewrap";
     if (isolationMode === "sandbox") return this.createSandboxed(options);
     if (isolationMode === "none") {
       const scope = realpathSync(options.scope);

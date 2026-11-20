@@ -1,6 +1,7 @@
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { McpConnection, McpStatus } from "../../protocol/mcp.ts";
 import { McpSession, type McpTool } from "../mcp.ts";
+import { waitForAbort } from "./rpc.ts";
 
 type WorkerCall = (method: string, args: unknown[], signal?: AbortSignal) => Promise<unknown>;
 
@@ -59,11 +60,13 @@ export class SandboxMcpSession extends McpSession {
     this.cached = await this.worker!("mcp.retry", [id]) as McpStatus[];
   }
 
-  async directView(connectionId: string): Promise<McpSession> {
+  async directView(connectionId: string, signal?: AbortSignal): Promise<McpSession> {
+    signal?.throwIfAborted();
     const connection = this.connections.find((entry) => entry.id === connectionId);
     if (!connection) throw new Error("MCP connection is not selected for this Agent Session");
-    await this.attached;
-    return new SandboxDirectMcpSession(connection, this.root, this.worker!);
+    await waitForAbort(this.attached, signal);
+    signal?.throwIfAborted();
+    return new SandboxDirectMcpSession(connection, this.root, this.worker!, signal);
   }
 
   override status(): McpStatus[] { return this.cached.map((state) => ({ ...state })); }
@@ -78,23 +81,32 @@ class SandboxDirectMcpSession extends McpSession {
   private readonly connectionId: string;
   private state: McpStatus;
   private listed: McpTool[] = [];
+  private readonly lifetime = new AbortController();
+  private readonly signal: AbortSignal;
 
-  constructor(connection: McpConnection, scope: string, worker: WorkerCall) {
+  constructor(connection: McpConnection, scope: string, worker: WorkerCall, signal?: AbortSignal) {
     super([connection], scope);
     this.worker = worker;
+    this.signal = signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal;
     this.connectionId = connection.id;
     this.state = { id: connection.id, state: "connecting", tools: 0 };
   }
 
   override async open(): Promise<void> {
-    const result = await this.worker("mcp.direct", [this.connectionId]) as { status: McpStatus; tools: Omit<McpTool, "call">[] };
+    this.signal.throwIfAborted();
+    const result = await this.worker("mcp.direct", [this.connectionId], this.signal) as { status: McpStatus; tools: Omit<McpTool, "call">[] };
+    this.signal.throwIfAborted();
     this.state = result.status;
     this.listed = result.tools.map((tool) => ({ ...tool,
-      call: (input, signal, timeoutMs) => this.worker("mcp.callTool", [tool.name, input, timeoutMs], signal) }) as McpTool);
+      call: (input, signal, timeoutMs) => this.worker("mcp.callTool", [tool.name, input, timeoutMs],
+        signal ? AbortSignal.any([signal, this.signal]) : this.signal) }) as McpTool);
   }
 
   override async retry(): Promise<void> { await this.open(); }
   override status(): McpStatus[] { return [{ ...this.state }]; }
   override tools(): McpTool[] { return this.listed; }
-  override async dispose(): Promise<void> {}
+  override async dispose(): Promise<void> {
+    this.lifetime.abort(new Error("MCP view stopped"));
+    this.listed = [];
+  }
 }

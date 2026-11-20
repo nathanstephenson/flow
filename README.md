@@ -182,3 +182,21 @@ requirements, the browser update, systemd setup and the repair procedure.
 | [docs/workflow-builder-scope.md](docs/workflow-builder-scope.md) | Workflows, including direct MCP steps |
 | [docs/development.md](docs/development.md) | Build, test, web development, releases |
 | [docs/milestones.md](docs/milestones.md) | Project status and design notes from each milestone |
+
+### Repeating workflows
+
+Open **Schedules** to run a saved workflow every N minutes/hours/days, or daily at a local time in
+an explicitly saved IANA timezone. Enabling never runs immediately. The Session Host must remain
+running; missed times are recorded without catch-up. Daily clock gaps are skipped and repeated times
+run only once, at the first occurrence.
+
+Choose fixed typed inputs, an opted-in Project, MCP connections and an overlap limit (default 3).
+Shared-directory runs can conflict. Optional fresh worktrees use the current local base branch commit
+without fetching or copying uncommitted changes. Each occurrence uses the latest saved root/called
+workflows and retains its own snapshot. Pause or delete stops future runs, not already admitted work.
+
+Code/MCP-only success creates no Agent Session or model summary. An actual agent step, human input
+or recovery attaches one Agent Session with the normal controls. Inspect execution graphs, attempts,
+activity and results in occurrence history, and follow its Agent Session link when input is needed.
+Terminal history lasts seven days; active/input/recovery work and associated transcripts are not
+pruned by that window. Unsafe worktree cleanup preserves dirty files and unmerged commits.
