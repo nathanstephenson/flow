@@ -135,7 +135,7 @@ test('timer admission errors are visible, do not block other schedules and retry
   let failures = 1;
   f.store.advanceCursor = (...args) => { if (args[0] === failed.id && failures-- > 0) throw new Error('disk full'); advance(...args); };
   f.time(60_000); t.mock.timers.tick(30_000); await flush();
-  assert.equal(warning.mock.callCount(), 1);
+  assert.equal(warning.mock.calls.filter(call => call.arguments[0] === 'Workflow Schedule admission failed. The Session Host will retry.').length, 1);
   assert.equal(f.launches.length, 1);
   assert.equal(f.store.page({ scheduleId: failed.id }).occurrences[0]!.status, 'interrupted');
   t.mock.timers.tick(1000); await flush(); assert.equal(f.launches.length, 1);

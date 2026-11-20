@@ -1,9 +1,11 @@
 import type { WorkflowExecution, WorkflowInvocation } from '../protocol/workflows.ts';
 import { executionIdentity } from './owner.ts';
 
+export class WorkflowInvocationNotFound extends Error {}
+
 export function invocationExecution(root: WorkflowExecution, invocationId: string): WorkflowExecution {
-  const invocation = root.invocations?.[invocationId];
-  if (!invocation) throw new Error('Unknown workflow invocation');
+  if (!root.invocations || !Object.hasOwn(root.invocations, invocationId)) throw new WorkflowInvocationNotFound('Unknown workflow invocation');
+  const invocation = root.invocations[invocationId]!;
   const retained = root.retainedDefinitions?.[invocation.definitionId];
   if (!retained) throw new Error('Missing retained Workflow Definition');
   const definition = structuredClone(retained);

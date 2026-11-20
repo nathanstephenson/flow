@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { scheduleSettingsValidator, occurrenceSettings, storageId, timingValidator, nextOccurrence } from '../workflows/schedules.ts';
 import { ScheduleRecordNotFound, ScheduleRevisionConflict } from '../workflows/schedule-store.ts';
 import { ScheduleValidationError } from '../workflows/schedule-errors.ts';
+import { WorkflowInvocationNotFound } from '../workflows/invocations.ts';
 import type { WorkflowScheduleService } from './workflow-schedules.ts';
 import type { WorkflowExecutionService } from './workflow-executions.ts';
 import { WorkflowConflict, WorkflowValidationError } from './workflow-execution-values.ts';
@@ -77,7 +78,7 @@ export async function workflowScheduleRoutes(request: IncomingMessage, response:
     } else reply(405, { error: 'Method not allowed' });
   } catch (error) {
     const status = error instanceof ScheduleRevisionConflict || error instanceof WorkflowConflict ? 409
-      : error instanceof ScheduleRecordNotFound ? 404
+      : error instanceof ScheduleRecordNotFound || error instanceof WorkflowInvocationNotFound ? 404
       : error instanceof BodyTooLarge ? 413
       : error instanceof ScheduleValidationError || error instanceof WorkflowValidationError ? 400 : 500;
     if (status === 500) console.error('Workflow Schedule request failed. An internal operation is unavailable.');

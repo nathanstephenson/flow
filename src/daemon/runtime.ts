@@ -106,11 +106,16 @@ export async function startRuntime(options: {
       mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
       mcpTool: (scope, projectId, scopeIdentity, connectionId, toolName) => workflowMcpAuthoring!.tool(projectId, connectionId, toolName, { scope, scopeIdentity }),
     });
+    try {
+      const schedules = new WorkflowScheduleStore(root);
+      workflowSchedules = new WorkflowScheduleService(schedules, scheduleDriver({ host, config, workflows, executions: workflowExecutions, schedules, transcripts: store }));
+      workflowExecutions.onScheduledResult = async record => { workflowSchedules!.result(record); };
+    } catch {
+      workflowExecutions.scheduledOwnershipAvailable = false;
+      console.error('Workflow Schedule initialization failed. Scheduling is disabled. Other Session Host services will continue.');
+    }
     await host.load();
-    const schedules = new WorkflowScheduleStore(root);
-    workflowSchedules = new WorkflowScheduleService(schedules, scheduleDriver({ host, config, workflows, executions: workflowExecutions, schedules, transcripts: store }));
-    workflowExecutions.onScheduledResult = async record => { workflowSchedules!.result(record); };
-    try { await workflowSchedules.start(); }
+    try { await workflowSchedules?.start(); }
     catch { console.error('Workflow Schedule reconciliation failed. Other Session Host services will continue.'); }
     workflowExecutions.reconcile();
     reaping = reaping.then(async () => {
@@ -146,7 +151,8 @@ export async function startRuntime(options: {
     running = await serve({
       control: { identity, stop, hasActiveWork },
       updates,
-      host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions, workflowSchedules, workflowBuilders, workflowMcpAuthoring,
+      host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions, workflowBuilders, workflowMcpAuthoring,
+      ...(workflowSchedules === undefined ? {} : { workflowSchedules }),
       assets: options.assets(), scope: process.cwd(),
       ...(oidc === undefined ? {} : { oidc }),
       ...(options.port === undefined ? {} : { port: options.port }),

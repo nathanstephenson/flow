@@ -71,6 +71,7 @@ export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
   private readonly resources: WorkflowExecutionResources;
   onScheduledResult?: (record: WorkflowExecution) => Promise<void>;
+  scheduledOwnershipAvailable = true;
 
   private readonly host: SessionHost;
   private readonly store: WorkflowStore;
@@ -673,7 +674,11 @@ export class WorkflowExecutionService {
     // Consult durable records: host.load() may reap before scheduler reconciliation.
     const records = this.store.listExecutions(sessionId);
     // Session metadata can precede the checkpoint's association write during attachment.
-    if (occurrenceId) records.push(...this.store.listExecutions({ kind: 'occurrence', occurrenceId }));
+    if (occurrenceId) {
+      const owned = this.store.listExecutions({ kind: 'occurrence', occurrenceId });
+      if (!owned.length && !this.scheduledOwnershipAvailable) return false;
+      records.push(...owned);
+    }
     return !records.some(record => record.occurrenceId &&
       (record.status === 'running' || record.status === 'recovery-required'));
   }

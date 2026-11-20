@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { z } from 'zod';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionHost } from '../src/daemon/host.ts';
@@ -19,8 +19,47 @@ import { WorkflowConflict } from '../src/daemon/workflow-execution-values.ts';
 import { occurrenceId, occurrenceSettings } from '../src/workflows/schedules.ts';
 import { serve } from '../src/daemon/server.ts';
 import type { WorkflowSchedule, WorkflowOccurrencePage, WorkflowScheduleSettings } from '../src/protocol/workflow-schedules.ts';
+import type { WorkflowDefinition, WorkflowExecution } from '../src/protocol/workflows.ts';
 
 const settings: WorkflowScheduleSettings = { name: 'Check', workflowId: 'check', input: {}, projectId: '/tmp', mcpConnectionIds: [], timing: { kind: 'interval', value: 1, unit: 'minutes' }, concurrency: 3 };
+
+test('scheduled execution and activity return 404 only for unknown invocations, not corrupt retained records', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-schedule-invocation-api-'));
+  const host = new SessionHost({ store: new TranscriptStore(root) });
+  const workflows = new WorkflowStore(root);
+  const executions = new WorkflowExecutionService(host, workflows, new SecretStore(root), new ConfigStore(root), '/unused');
+  const store = new WorkflowScheduleStore(root);
+  const schedules = new WorkflowScheduleService(store, { validate: async () => {}, launch: async () => {}, reconcile: async () => {}, cancel: async () => {}, cleanup: async () => {} }, () => 1000);
+  const schedule = await schedules.create(settings, true);
+  const id = occurrenceId(schedule.id, 1, 61_000);
+  store.claimOccurrence({ version: 1, id, scheduleId: schedule.id, activation: 1, revision: 1, scheduledAt: 61_000, createdAt: 61_000,
+    finishedAt: 61_000, settings: occurrenceSettings(schedule), status: 'completed', executionId: 'execution' });
+  const child: WorkflowDefinition = { version: 1, id: 'child', name: 'Child', backend: 'fake', inputSchema: { type: 'object', fields: {} },
+    steps: [{ id: 'inner', name: 'Inner', kind: 'typescript', code: 'return 1', outputSchema: { type: 'number' } }], edges: [] };
+  const definition: WorkflowDefinition = { ...child, id: 'root', name: 'Root', steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: child.id,
+    contract: { inputSchema: child.inputSchema, outputSchema: { type: 'number' } } }] };
+  const completed = { status: 'completed' as const, attempts: [{ number: 1, action: 'execute' as const, startedAt: 1, finishedAt: 2, input: {}, output: 1 }], output: 1, outcome: 'success' as const };
+  const record: WorkflowExecution = { version: 2, occurrenceId: id, id: 'execution', scope: root, definition, retainedDefinitions: { root: definition, child },
+    input: {}, status: 'completed', startedAt: 1, finishedAt: 2, result: 1, steps: { call: completed },
+    invocations: { invocation: { id: 'invocation', callStepId: 'call', callAttempt: 1, definitionId: 'child', input: {}, status: 'completed', startedAt: 1, finishedAt: 2, result: 1, steps: { inner: completed } } } };
+  workflows.saveExecution(record);
+  const server = await serve({ host, token: 'test', assets: {}, workflowExecutions: executions, workflowSchedules: schedules });
+  t.after(async () => { await server.close(); await host.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  t.mock.method(console, 'error', () => {});
+  const request = (action: string, invocationId: string) => fetch(`${server.url}/api/workflow-occurrences/${id}/${action}?invocationId=${invocationId}`, { headers: { authorization: 'Bearer test' } });
+  for (const action of ['execution', 'activity']) {
+    assert.equal((await request(action, 'invocation')).status, 200);
+    for (const unknown of ['unknown', 'constructor', '__proto__']) assert.equal((await request(action, unknown)).status, 404);
+  }
+  delete record.retainedDefinitions!.child;
+  workflows.saveExecution(record);
+  for (const action of ['execution', 'activity']) {
+    for (const invocationId of ['invocation', 'unknown']) assert.equal((await request(action, invocationId)).status, 500);
+  }
+  writeFileSync(join(workflows.ownerPath(`occurrence-${id}`), 'workflows', 'execution.json'), 'synthetic-corrupt-storage');
+  for (const action of ['execution', 'activity']) assert.equal((await request(action, 'unknown')).status, 500);
+});
+
 test('schedule HTTP routes preserve auth/origin gates, strict validation, revision conflicts and deleted history', async t => {
   const root = mkdtempSync(join(tmpdir(), 'flow-schedule-api-'));
   const host = new SessionHost({ store: new TranscriptStore(root) });

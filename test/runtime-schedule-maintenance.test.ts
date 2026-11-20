@@ -7,11 +7,14 @@ import { FakeBackend } from '../src/backend/fake/index.ts';
 import { SessionHost } from '../src/daemon/host.ts';
 import { WorkflowScheduleService } from '../src/daemon/workflow-schedules.ts';
 import { startRuntime } from '../src/daemon/runtime.ts';
+import { TranscriptStore } from '../src/daemon/store.ts';
 import { WorkflowScheduleStore } from '../src/workflows/schedule-store.ts';
 import { WorkflowStore } from '../src/workflows/store.ts';
 import { createSchedule, occurrenceId, occurrenceSettings } from '../src/workflows/schedules.ts';
 
 function fixture(t: TestContext) {
+  const oidc = Object.entries(process.env).filter(([key]) => key.startsWith('FLOW_OIDC_'));
+  for (const [key] of oidc) delete process.env[key];
   const root = mkdtempSync(join(tmpdir(), 'flow-schedule-maintenance-'));
   const register = SessionHost.prototype.registerBackend;
   t.mock.method(SessionHost.prototype, 'registerBackend', function (this: SessionHost, candidate: { name: string }) {
@@ -21,7 +24,13 @@ function fixture(t: TestContext) {
   const logs: string[] = [];
   t.mock.method(console, 'error', (...values: unknown[]) => { logs.push(values.map(String).join(' ')); });
   let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
-  t.after(async () => { await runtime?.stop(); rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    try { await runtime?.stop(); }
+    finally {
+      for (const [key, value] of oidc) process.env[key] = value;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   return {
     root, logs,
     async start() {
@@ -30,6 +39,57 @@ function fixture(t: TestContext) {
     },
   };
 }
+
+test('the fixture clears inherited OIDC settings and restores them after shutdown', async t => {
+  const previous = process.env.FLOW_OIDC_ISSUER;
+  process.env.FLOW_OIDC_ISSUER = 'https://synthetic-oidc.invalid';
+  const fetchLocal = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (input: string | URL | Request, init?: RequestInit) => {
+    assert.equal(new URL(input instanceof Request ? input.url : input).hostname, '127.0.0.1');
+    return fetchLocal(input, init);
+  });
+  try {
+    await t.test('startup uses no inherited OIDC configuration', async child => {
+      const f = fixture(child);
+      assert.equal(Object.keys(process.env).some(key => key.startsWith('FLOW_OIDC_')), false);
+      await f.start();
+    });
+    assert.equal(process.env.FLOW_OIDC_ISSUER, 'https://synthetic-oidc.invalid');
+  } finally {
+    if (previous === undefined) delete process.env.FLOW_OIDC_ISSUER;
+    else process.env.FLOW_OIDC_ISSUER = previous;
+  }
+});
+
+test('schedule store initialization failure disables scheduling without losing unknown scheduled ownership', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.root, 'config.json'), JSON.stringify({ filesystemIsolation: 'none', retention: { settled: '1s' } }));
+  mkdirSync(join(f.root, 'workflow-schedules'));
+  writeFileSync(join(f.root, 'workflow-schedules', 'definitions'), 'synthetic-private-storage-detail');
+  const transcripts = new TranscriptStore(f.root);
+  for (const [id, scheduledOccurrenceId] of [['scheduled', 'unknown-occurrence'], ['ordinary', undefined]] as const) {
+    transcripts.writeMeta({ id, scope: f.root, backend: 'fake', title: id, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+      lifecycle: 'settled', settledAt: new Date(0).toISOString(), ...(scheduledOccurrenceId ? { scheduledOccurrenceId } : {}) });
+  }
+  const runtime = await f.start();
+  const request = (path: string) => fetch(`${runtime.daemon.url}${path}`, { headers: { authorization: `Bearer ${runtime.daemon.token}` } });
+  const response = await request('/api/sessions');
+  assert.equal(response.status, 200);
+  assert.equal((await request('/api/workflow-schedules')).status, 404);
+  assert.equal(existsSync(join(f.root, 'sessions', 'scheduled')), true);
+  assert.equal(existsSync(join(f.root, 'sessions', 'ordinary')), false);
+  assert.ok(f.logs.some(line => line.includes('Workflow Schedule initialization failed')));
+  assert.doesNotMatch(f.logs.join('\n'), /synthetic-private-storage-detail|ENOTDIR|flow-schedule-maintenance-/);
+});
+
+test('available schedule storage allows ordinary Reap after scheduled history expires', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  const transcripts = new TranscriptStore(f.root);
+  transcripts.writeMeta({ id: 'expired', scope: f.root, backend: 'fake', title: 'Expired', createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString(),
+    lifecycle: 'settled', settledAt: new Date(0).toISOString(), scheduledOccurrenceId: 'expired-occurrence' });
+  await f.start();
+  assert.equal(existsSync(join(f.root, 'sessions', 'expired')), false);
+});
 
 for (const method of ['start', 'prune'] as const) {
   test(`schedule ${method} failure does not prevent Session Host startup`, { timeout: 5000 }, async t => {
