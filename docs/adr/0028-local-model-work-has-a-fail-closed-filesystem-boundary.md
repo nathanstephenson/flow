@@ -75,7 +75,10 @@ can refresh configured Provider catalogs, including authenticated ones, through 
 Catalog checks have a five-second deadline and use the SDK cache fallback. Each Backend Session keeps
 its catalog cache in its private state for Revive. The Session Host retains only catalog data between
 model probes; each probe still owns separate private state. Failed checks therefore retain discovered
-models without sharing Agent Session state. Offline mode prevents network catalog checks.
+models without sharing Agent Session state. The host reads a bounded catalog through a file descriptor
+opened exclusively before worker startup; worker-replaced paths cannot redirect that read. Private
+probe state is removed after disposal succeeds and retained if the worker might still be running.
+Offline mode prevents network catalog checks.
 Worker cancellation does not cancel an issued credential refresh. Host shutdown stops
 new auth requests and waits for issued refreshes to store their replacement credentials. Known host SSH,
 cloud and package credential stores are masked too. SDK resource folders are mounted read-only,
