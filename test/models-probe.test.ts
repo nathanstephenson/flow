@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { it } from "node:test";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { BackendCreateOptions } from "../src/backend/types.ts";
@@ -49,6 +51,37 @@ it("Check again requests catalog refresh while ordinary model discovery stays ca
   await host.models("/tmp", true);
   await host.models("/tmp");
   assert.deepEqual(opened.map(options => options.refreshModels), [undefined, true]);
+});
+
+it("late Pi model probes cannot replace a newer catalog and failed startup retains the cache", async t => {
+  const host = new SessionHost();
+  t.after(() => host.shutdown());
+  const fake = new FakeBackend();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const states: string[] = [];
+  host.registerBackend({ name: "pi", async create(options) {
+    assert.ok(options.stateDir);
+    const path = join(options.stateDir, "models-store.json");
+    states.push(options.stateDir);
+    const attempt = states.length;
+    if (attempt === 1) await gate;
+    if (attempt === 2) assert.equal(existsSync(path), false);
+    if (attempt >= 3) assert.equal(readFileSync(path, "utf8"), '{"catalog":"new"}');
+    writeFileSync(path, attempt === 2 ? '{"catalog":"new"}' : '{"catalog":"old"}');
+    if (attempt === 3) throw new Error("Probe failed after writing its private catalog");
+    return fake.create(options);
+  } });
+  const first = host.models("/tmp");
+  await host.models("/tmp", true);
+  release();
+  await first;
+  assert.match((await host.models("/tmp", true))[0]!.problem!, /Probe failed/);
+  assert.equal(existsSync(states[2]!), false);
+  await host.models("/tmp", true);
+  assert.equal(new Set(states).size, 4);
+  await host.shutdown();
+  assert.ok(states.every(path => !existsSync(path)));
 });
 
 it("builder model probes never prompt and report startup failures without an ordinary retry", async () => {

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { PiBackend } from '../../src/backend/pi/index.ts';
+import { SessionHost } from '../../src/daemon/host.ts';
 import { createWorkerPiModelRuntime, type PiModelAuth } from '../../src/backend/pi/model-auth.ts';
 
 function fixture(t: TestContext, radius = false) {
@@ -123,6 +124,38 @@ test('Pi failed catalog refresh preserves the last usable models', async t => {
   });
   assert.ok(runtime.getAvailableSnapshot().some(model => model.id === f.model.id));
   assert.equal(f.requests.length, 1);
+});
+
+test('Check again preserves discovered Pi models across separate probes when catalog refresh fails', async t => {
+  const f = fixture(t);
+  const saved = process.env['PI_CODING_AGENT_DIR'];
+  process.env['PI_CODING_AGENT_DIR'] = f.root;
+  t.after(() => {
+    if (saved === undefined) delete process.env['PI_CODING_AGENT_DIR'];
+    else process.env['PI_CODING_AGENT_DIR'] = saved;
+  });
+  const host = new SessionHost();
+  const backend = new PiBackend();
+  const states: string[] = [];
+  host.registerBackend({ name: 'pi', async create(options) {
+    const stateDir = options.stateDir ?? join(f.root, `probe-${states.length}`);
+    states.push(stateDir);
+    assert.equal(existsSync(join(stateDir, 'private-marker')), false);
+    const session = await backend.create({ ...options, stateDir, piAuth: f.auth });
+    writeFileSync(join(stateDir, 'private-marker'), 'Never copy probe state');
+    session.prompt = async () => assert.fail('Model discovery must not prompt');
+    return session;
+  } });
+  try {
+    assert.ok((await host.models(f.root))[0]!.models.some(model => model.id === `anthropic/${f.model.id}`));
+    f.fail();
+    assert.ok((await host.models(f.root, true))[0]!.models.some(model => model.id === `anthropic/${f.model.id}`));
+    assert.equal(f.requests.length, 2);
+    assert.equal(states.length, 2);
+    assert.notEqual(states[0], states[1]);
+    assert.equal(existsSync(join(f.root, 'models-store.json')), false);
+  } finally { await host.shutdown(); }
+  assert.ok(states.every(path => !existsSync(path)));
 });
 
 test('Pi catalog deadline stops a stalled refresh and keeps cached models available', async t => {
