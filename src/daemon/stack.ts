@@ -83,11 +83,12 @@ async function readTitles(scope: string, branch: string, numbers: number[], gith
 }
 
 export async function stackTitles(scope: string, view: StackView, github: Gh = gh): Promise<boolean> {
+  for (const [cachedScope, entry] of titles) if (entry.expires <= Date.now()) titles.delete(cachedScope);
   const numbers = view.branches.flatMap(branch => branch.pr ? [branch.pr.number] : []);
   if (!numbers.length) return true;
   const key = JSON.stringify(view.branches.map(branch => branch.pr && [branch.pr.number, branch.pr.state]));
   const cached = titles.get(scope);
-  let found = cached && cached.key === key && cached.expires > Date.now() ? cached.found : undefined;
+  let found = cached?.key === key ? cached.found : undefined;
   if (!found) {
     found = await readTitles(scope, view.currentBranch, numbers, github).catch(() => new Map<number, string>());
     titles.set(scope, { key, expires: Date.now() + 5 * 60_000, found });
