@@ -54,7 +54,7 @@ export function GitCommitForm({ sessionId, paths, fingerprint, branch, defaultBr
             <label htmlFor={`${sessionId}-branch`}>{newBranch ? "New branch name" : "Rename branch (optional)"}</label>
             <Button type="button" size="xs" variant="ghost" aria-label="Suggest branch name" disabled={busy || paths.length === 0} onClick={() => void suggest("branch")}>Suggest</Button>
           </div>
-          <Input id={`${sessionId}-branch`} required={newBranch} value={name} placeholder={branch} onChange={(event) => setName(event.target.value)} disabled={busy} />
+          <Input id={`${sessionId}-branch`} required={newBranch} value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
           {newBranch ? <p className="text-xs text-muted-foreground">{branch ? `${branch} is the default branch.` : "HEAD is detached."} The commit goes on a new branch.</p> : null}
         </div>
       ) : null}
