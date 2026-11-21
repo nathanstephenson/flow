@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile } from "node:fs/promises";
-import { readlinkSync } from "node:fs";
+import { closeSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -29,6 +29,17 @@ const backend: AgentBackend = {
       async prompt(text) {
         options.emit({ type: "turn_started", turnId: "fixture-turn" });
         if (text === "crash") { process.exit(23); }
+        if (text === "sandbox-lost") {
+          process.emitWarning("canUseTool will not be invoked for: Read", { code: "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED" });
+          setTimeout(() => closeSync(1), 50);
+          setTimeout(() => { process.stderr.write("error: context canceled\n"); process.exit(1); }, 150);
+          return;
+        }
+        if (text === "stale-stderr") {
+          process.stderr.write("stale output\n");
+          setTimeout(() => { process.stderr.write("recent output\n"); process.exit(1); }, 500);
+          return;
+        }
         if (text === "entry") options.emit({ type: "message", id: "entry", text: process.argv[1]!, final: true });
         if (text === "permission-mode") options.emit({ type: "message", id: "permission-mode", text: permissionMode, final: true });
         if (text === "late-crash") {
