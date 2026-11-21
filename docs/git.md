@@ -22,8 +22,8 @@ Resolved threads are collapsed.
 
 - Merge, Rebase, Edit, and Ready for review or Convert to draft are at the top. Merge and Rebase
   ask first.
-- Refresh in the Git pane header reads the local Git State, the pull request, and the Changes and
-  Pull request tabs again. The Stack tab has its own Refresh stack.
+- Refresh in the Git pane header reads the local Git State, the pull request and the open tab
+  again.
 - Rebase changes only the local branch. It requires a clean Scope, aborts on a conflict and pushes
   nothing.
 - Re-run failed jobs runs the failed jobs of one GitHub Actions run again. It shows once for each
@@ -57,9 +57,15 @@ that is only on GitHub or only in another clone. To show a Stack from GitHub, ru
 - On a branch in a Stack, the tab lists the branches from top to bottom, then the trunk. Each row
   shows the PR number, state and title, and "Needs rebase", "Merged" or "Queued" when they apply.
 - On a branch that is not in a Stack, the tab shows the Create stack form.
-- On a trunk or a detached HEAD, the tab shows one line of text.
-- The tab reads the Stack again when the branch, the head commit or the pull request changes.
-  The tab can load while an agent turn runs. Stack actions cannot.
+- On the trunk of a registered Stack or the default branch, on a detached HEAD, or on a branch
+  with no commits, the tab shows one line of text.
+- The tab reads the Stack again when the branch, the head commit, or the number or state of the
+  pull request changes, and on Refresh. It keeps the shown list until the new one arrives.
+- The tab can load while an agent turn runs. Stack actions cannot.
+- Flow runs one `gh stack` command at a time for each repository, also across its worktrees.
+  `gh stack view` writes the stack metadata, so a read waits for a running Stack action, and an
+  action waits for a running read. A `gh stack` command that you run in a terminal at the same
+  time is not in this queue.
 
 Stack supports Create, Add, Switch, Submit, Sync and Rebase. Merge and stack restructuring are not
 available.
@@ -110,12 +116,16 @@ asks the agent to resolve and stage the conflicts, then to run `gh stack rebase 
 they are resolved.
 
 - This does not give permission to push, sync or merge.
-- Examine the result, then refresh Stack.
+- Examine the result, then click Refresh.
+- `gh stack` keeps one rebase state for all worktrees of a repository. Continue, Abort and Ask agent
+  are available only in the worktree where the rebase stopped. Other worktrees show "A stack rebase
+  is in progress in another worktree." and refuse Stack actions until it ends.
 
 ### Copy
 
 - **Copy stack** copies the PR titles as formatted links, from top to bottom.
 - **Copy PR link** copies one PR.
 - A plain-text paste contains only the titles.
+- If a title cannot be read, the tab says so, and Copy uses the link in place of the title.
 - Flow reads the titles with one GitHub query for all PRs of the Stack. It reads them again when a
   PR number or state changes, and otherwise after 5 minutes.

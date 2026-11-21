@@ -19,8 +19,17 @@ no branch is the trunk or is listed twice, and that no branch is already in a St
 The PR titles for the copy action come from one GraphQL query for all PR numbers of the view. The
 daemon reads them again when a PR number or state changes, and otherwise after 5 minutes.
 
-`stack_status` is a read. It does not run under the Git operation lock, so the tab loads during an
-agent turn and does not block a Git write. Stack writes stay under the lock.
+On the trunk of a registered Stack, the tab shows one line and does not run `gh stack view`, which
+fails or shows no current branch there. So every shown Stack permits every Stack action.
+
+`stack_status` does not run under the Git operation lock, so the tab loads during an agent turn.
+Stack writes stay under the lock. `gh stack view` rewrites the stack metadata file with no lock of
+its own, so Flow runs every `gh stack` command one at a time for each repository, keyed by the
+common Git directory: a read waits for a running write and a write waits for a running read.
+
+`gh stack` keeps one rebase state for all worktrees of a repository. Flow offers Continue, Abort
+and Ask agent only in the worktree that has the Git rebase in progress. Other worktrees show one
+line and refuse Stack writes.
 
 ## Considered options
 
@@ -38,8 +47,11 @@ is registered only on GitHub or in another clone. The owner runs `gh stack check
 register such a Stack in the Scope.
 
 Gained: one source for each shown Stack, and every shown Stack permits every Stack action. The
-daemon code for stacks is much smaller. A status read makes no GitHub calls other than those of
-`gh stack view` and, at most each 5 minutes or when the PRs change, one title query.
+daemon code for stacks is much smaller. A status read calls GitHub through `gh stack view`, and for
+titles through one repository lookup (once for each Scope and remote) and one title query at most
+each 5 minutes or when the PRs change. A PR that cannot be found costs one more query.
 
-`gh stack view` rewrites its own metadata file in the common Git directory. It changes no refs,
-index or working tree.
+The queue covers only the `gh stack` commands that Flow runs. A `gh stack` command run in a terminal
+at the same time can still lose a metadata write. A Stack read waits for a running Stack write, so
+the tab can show its last list for the length of a Submit or Sync. A rebase stopped in one worktree
+blocks Stack writes in all worktrees of the repository until it is continued or aborted there.
