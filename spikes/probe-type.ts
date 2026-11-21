@@ -12,7 +12,7 @@
  *   … 'claude.Query'
  *   … 'Extract<claude.SDKMessage, {subtype:"compact_boundary"}>'
  */
-import ts from "typescript";
+import ts from "typescript-api";
 import { writeFileSync } from "node:fs";
 
 const entry = new URL("./.union-probe.ts", import.meta.url).pathname;
