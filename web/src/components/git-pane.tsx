@@ -26,15 +26,12 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<Notice>();
-  const [tabs, setTabs] = useState<Tab[]>(["Changes"]);
+  const [available, setAvailable] = useState({ pullRequest: false, stack: false, read: false });
   const [tab, setTab] = useState<Tab>("Changes");
+  const tabs: Tab[] = ["Changes", ...(available.pullRequest ? ["Pull request" as const] : []), ...(available.stack && available.read ? ["Stack" as const] : [])];
   const selected = tabs.includes(tab) ? tab : "Changes";
   const steps = gitSteps(git);
   const pullOffer = pullStep(git);
-
-  function available(value: Tab) {
-    return (shown: boolean) => setTabs(current => current.includes(value) === shown ? current : shown ? [...current, value] : current.filter(item => item !== value));
-  }
 
   function reread(...keys: (keyof Reads)[]) {
     setReads(current => ({ ...current, ...Object.fromEntries(keys.map(key => [key, current[key] + 1])) }));
@@ -82,6 +79,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
     });
   }
 
+  if (repository === undefined) return null;
   if (!repository) return <p className="px-4 pt-2 text-sm">This Scope is not a Git repository.</p>;
 
   return (
@@ -151,10 +149,10 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>
-        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={available("Stack")} onChange={() => reread("mount")} />
+        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={(stack: boolean) => setAvailable(current => current.stack === stack ? current : { ...current, stack })} onChange={() => reread("mount")} />
       </TabsContent>
       <TabsContent value="Pull request" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={available("Pull request")} onAddToDraft={onAddToDraft} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest && current.read ? current : { ...current, pullRequest, read: true })} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );
