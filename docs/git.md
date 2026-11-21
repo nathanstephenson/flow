@@ -117,5 +117,5 @@ they are resolved.
 - **Copy stack** copies the PR titles as formatted links, from top to bottom.
 - **Copy PR link** copies one PR.
 - A plain-text paste contains only the titles.
-- Flow reads the titles with one GitHub query for all PRs of the Stack. It reads them again only
-  when a PR number or state changes.
+- Flow reads the titles with one GitHub query for all PRs of the Stack. It reads them again when a
+  PR number or state changes, and otherwise after 5 minutes.
