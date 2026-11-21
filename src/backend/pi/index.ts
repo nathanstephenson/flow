@@ -39,7 +39,8 @@ import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
 import { PiAgentPermissions } from "./agent-permissions.ts";
-import type { AgentPermissionMode, PermissionDecision } from "../../protocol/events.ts";
+import type { AgentPermissionMode, PermissionDecision, Spend } from "../../protocol/events.ts";
+import type { SpendTotal } from "../../protocol/spend.ts";
 import { PiWork, callIdFor, resultText, textResult, type Completion, type ToolResult } from "./work.ts";
 
 /**
@@ -79,6 +80,8 @@ export type PiBackendOptions = {
 
 export class PiSession implements BackendSession {
   capabilities: Capabilities;
+  spend: Spend | undefined;
+  private counted: SpendTotal;
   readonly answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
 
   private readonly enquiries: PiEnquiries | undefined;
@@ -128,7 +131,7 @@ export class PiSession implements BackendSession {
   private readonly unmappedMessageIds: string[] = [];
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { workflowBuilder?: boolean; mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
+    support: { workflowBuilder?: boolean; mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; priorSpend?: Spend; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
     this.workflowBuilder = support.workflowBuilder ?? false;
     this.mcp = support.mcp;
     this.recreate = support.recreate;
@@ -136,6 +139,8 @@ export class PiSession implements BackendSession {
     this.agentPermissions = support.agentPermissions;
     if (support.permissionProducer) this.permissionProducer = support.permissionProducer;
     this.session = session;
+    this.spend = support.priorSpend;
+    this.counted = statsOf(session);
     this.applyAutoCompaction = support.autoCompaction;
     this.workflowAutoCompaction = support.workflowAutoCompaction;
     this.workflowCompactionModelId = support.workflowCompactionModelId;
@@ -507,10 +512,25 @@ export class PiSession implements BackendSession {
   }
 
   private reportContextUsage(): void {
+    this.countSpend();
     const usage = this.session.getContextUsage();
     if (usage && typeof usage.tokens === "number") {
-      this.emit({ type: "context_usage", used: usage.tokens, window: usage.contextWindow });
+      this.emit({ type: "context_usage", used: usage.tokens, window: usage.contextWindow, ...(this.spend ? { spend: this.spend } : {}) });
     }
+  }
+
+  private countSpend(): void {
+    const now = statsOf(this.session);
+    const added = { tokens: now.tokens - this.counted.tokens, cached: now.cached - this.counted.cached, costUSD: now.costUSD - this.counted.costUSD };
+    this.counted = now;
+    if (added.tokens <= 0 && added.costUSD <= 0) return;
+    const id = this.session.model ? describeModel(this.session.model).id : "unknown";
+    const spend = this.spend ?? { tokens: 0, cached: 0, costUSD: 0, models: [] };
+    const model = spend.models.find((item) => item.id === id) ?? { id, tokens: 0, cached: 0, costUSD: 0 };
+    this.spend = {
+      tokens: spend.tokens + added.tokens, cached: spend.cached + added.cached, costUSD: spend.costUSD + added.costUSD,
+      models: [...spend.models.filter((item) => item.id !== id), { id, tokens: model.tokens + added.tokens, cached: model.cached + added.cached, costUSD: model.costUSD + added.costUSD }],
+    };
   }
 }
 
@@ -616,7 +636,7 @@ export class PiBackend implements AgentBackend {
     }
 
     const autoCompaction = structuredClone(options.autoCompaction);
-    const piSession = new PiSession(session, options.emit, sessionDir, { workflowBuilder: !!builder, ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
+    const piSession = new PiSession(session, options.emit, sessionDir, { workflowBuilder: !!builder, ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), ...(options.priorSpend ? { priorSpend: options.priorSpend } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
     const modelId = options.modelId ?? (settingsManager.getDefaultProvider() === "azure-openai-responses" && settingsManager.getDefaultModel()
       ? `azure-openai-responses/${settingsManager.getDefaultModel()}` : undefined);
     if (modelId) {
@@ -781,4 +801,9 @@ function joinBlocks(content: unknown, kind: "text" | "thinking"): string {
 
 function isString(value: string | undefined): value is string {
   return typeof value === "string";
+}
+
+function statsOf(session: AgentSession): SpendTotal {
+  const stats = session.getSessionStats();
+  return { tokens: stats.tokens.total, cached: stats.tokens.cacheRead, costUSD: stats.cost };
 }

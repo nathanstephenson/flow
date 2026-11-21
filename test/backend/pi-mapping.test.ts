@@ -21,6 +21,7 @@ type Stub = {
   failCompaction: (reason: string) => void;
   aborted: number;
   thinkingLevel: string | undefined;
+  stats: { tokens: { total: number; cacheRead: number }; cost: number };
 };
 
 function stubSession(): Stub {
@@ -28,6 +29,7 @@ function stubSession(): Stub {
   const prompts: Array<{ text: string; options: unknown }> = [];
   const compactions: Array<string | undefined> = [];
   const state = { aborted: 0, compactFails: undefined as string | undefined };
+  const stats = { tokens: { total: 0, cacheRead: 0 }, cost: 0 };
   // m1 reasons across three levels and can be shown an image, m2 does neither — the split every
   // real registry has, on both axes.
   const models = [
@@ -80,6 +82,7 @@ function stubSession(): Stub {
       if (current?.reasoning !== true) thinkingLevel = undefined;
     },
     getContextUsage: () => ({ tokens: 42, contextWindow: 200_000, percent: 0.02 }),
+    getSessionStats: () => stats,
     modelRuntime: {
       getModels: () => [...models, { id: "locked", provider: "unauthenticated" }],
       getAvailable: async () => models,
@@ -112,6 +115,7 @@ function stubSession(): Stub {
     get thinkingLevel() {
       return thinkingLevel;
     },
+    stats,
   };
 }
 
@@ -290,6 +294,24 @@ describe("pi adapter mapping", () => {
 
     const usage = events.find((event) => event.type === "context_usage");
     assert.deepEqual(usage?.type === "context_usage" ? [usage.used, usage.window] : [], [42, 200_000]);
+  });
+
+  it("reports Spend added since the session opened, on top of the prior Spend", async () => {
+    stub.stats.tokens.total = 500;
+    stub.stats.cost = 5;
+    const prior = { tokens: 500, cached: 0, costUSD: 5, models: [{ id: "anthropic/m1", tokens: 500, cached: 0, costUSD: 5 }] };
+    const revived = new PiSession(stub.session, (event) => events.push(event), undefined, { priorSpend: prior });
+    stub.stats.tokens.total = 700;
+    stub.stats.tokens.cacheRead = 100;
+    stub.stats.cost = 7;
+    await revived.prompt("hello");
+    stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    stub.fire({ type: "agent_settled", aborted: false });
+
+    const expected = { tokens: 700, cached: 100, costUSD: 7, models: [{ id: "anthropic/m1", tokens: 700, cached: 100, costUSD: 7 }] };
+    assert.deepEqual(revived.spend, expected);
+    const usage = events.findLast((event) => event.type === "context_usage");
+    assert.deepEqual(usage?.type === "context_usage" ? usage.spend : undefined, expected);
   });
 
   it("declares every provider pi can reach", () => {

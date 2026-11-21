@@ -305,7 +305,7 @@ class ClaudeSession implements BackendSession {
    * `query()` run: on a Revive its counters start at zero, and reporting that alone would read as
    * the bill resetting itself.
    */
-  private spend: Spend | undefined;
+  spend: Spend | undefined;
   private readonly priorSpend: Spend | undefined;
 
   private readonly options: BackendCreateOptions;

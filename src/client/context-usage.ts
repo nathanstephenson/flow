@@ -62,7 +62,7 @@ export function contextUsageDetail(usage: ViewState["contextUsage"]): UsageRow[]
  * cent, and rounding that to `$0.00` would report free work. Anything at or above a cent reads in
  * the two places money is normally written.
  */
-function money(usd: number): string {
+export function money(usd: number): string {
   if (usd >= 0.01) return `$${usd.toFixed(2)}`;
   if (usd === 0) return "$0.00";
   return `$${usd.toFixed(4)}`;

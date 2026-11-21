@@ -68,6 +68,8 @@ import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { SharedSandbox } from "../isolation/shared-sandbox.ts";
 import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
+import { SpendLedger } from "./spend-ledger.ts";
+import type { SpendSource, SpendSummary } from "../protocol/spend.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -339,6 +341,7 @@ export class SessionHost {
    * `settle` — it is a throwaway that outlives any one of them, in the same way `modelProbes` is.
    */
   private readonly summarySpare = new SummaryModelSpare();
+  private readonly spendLedger: SpendLedger | undefined;
   private readonly stackReviews = new Map<string, { review: StackReview; fingerprint: string; expires: number }>();
   private readonly gitOperations = new Set<string>();
   private readonly closingScopes = new Set<string>();
@@ -445,7 +448,8 @@ export class SessionHost {
       const model = this.summaryModel?.(record.backendName);
       try {
         if (!model) throw new Error("No Summary Model is configured. Choose one in Settings, or enter publish text below.");
-        text = await summarisePublish({ backend: this.backendFor(model.backend), modelId: model.modelId, text: `${changes}\nCommitted branch changes:\n${committed.input}` });
+        text = await summarisePublish({ backend: this.backendFor(model.backend), modelId: model.modelId, text: `${changes}\nCommitted branch changes:\n${committed.input}`,
+          spent: (spend) => this.recordSpend("publish", randomUUID(), this.spendScope(record), spend) });
       } catch (error) {
         warning = `Enter publish text manually. ${error instanceof Error ? error.message : String(error)}`;
       }
@@ -512,6 +516,7 @@ export class SessionHost {
     this.mcpAuth = options.mcpAuth;
     this.resolveSecret = options.resolveSecret;
     this.store = options.store;
+    this.spendLedger = options.store ? new SpendLedger(options.store.root) : undefined;
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
     this.allowTool = options.allowTool;
@@ -819,6 +824,7 @@ export class SessionHost {
       if (!meta || this.sessions.has(id)) continue;
 
       const entries = this.store.readEntries(id);
+      if (this.spendLedger?.needsBackfill) this.backfillSpend(id, scopeKey(meta.worktree?.repo ?? meta.scope), entries);
       const record: SessionRecord = {
         id: meta.id,
         scope: meta.scope,
@@ -884,7 +890,31 @@ export class SessionHost {
       }
       this.persist(record);
     }
+    this.spendLedger?.finishBackfill();
     await this.reap();
+  }
+
+  private backfillSpend(sessionId: string, scope: string, entries: LoggedEvent[]): void {
+    for (const { event, at } of entries.slice(entries.findLastIndex(({ event }) => event.type === "forked") + 1)) {
+      if (event.type === "context_usage" && event.spend) this.spendLedger!.record("session", sessionId, scope, event.spend, at);
+      if (event.type === "workflow_spend") this.spendLedger!.record("workflow", JSON.stringify([sessionId, event.executionId]), scope, event.spend, at);
+    }
+  }
+
+  recordSpend(source: SpendSource, key: string, scope: string | undefined, spend: Spend): void {
+    this.spendLedger?.record(source, key, scope, spend);
+  }
+
+  spendSummary(): SpendSummary | undefined {
+    return this.spendLedger?.summary();
+  }
+
+  private namingSpent(record: SessionRecord): (spend: Spend) => void {
+    return (spend) => this.recordSpend("naming", randomUUID(), this.spendScope(record), spend);
+  }
+
+  private spendScope(record: SessionRecord): string {
+    return scopeKey(record.worktree?.repo ?? record.scope);
   }
 
   private readonly scheduledAttachments = new Map<string, Promise<string>>();
@@ -1703,7 +1733,8 @@ export class SessionHost {
   /** Copy what the human saw before the Fork point. The source's session start, scope and queue are not this session's. */
   private appendForkPrefix(record: SessionRecord, sourceId: string, userMessageId: string, prefix: LoggedEvent[]): void {
     for (const { event, at } of prefix) {
-      if (event.type === "session_started" || event.type === "queue_changed") continue;
+      if (event.type === "session_started" || event.type === "queue_changed" || event.type === "workflow_spend") continue;
+      if (event.type === "context_usage" && event.spend) { const { spend: _, ...rest } = event; record.log.append(rest, at); continue; }
       if (event.type === "revived") { record.log.append({ type: "revived", fromSeq: event.fromSeq }, at); continue; }
       if (event.type === "user_message" && event.attachments && this.store) {
         const to = this.store.attachmentsDir(record.id);
@@ -2130,6 +2161,7 @@ export class SessionHost {
     const previous = record.log.since(0).findLast(({ event }) => event.type === 'workflow_spend' && event.executionId === executionId);
     if (previous?.event.type === 'workflow_spend' && JSON.stringify(previous.event.spend) === JSON.stringify(spend)) return;
     record.log.append({ type: 'workflow_spend', executionId, spend });
+    this.recordSpend("workflow", JSON.stringify([sessionId, executionId]), this.spendScope(record), spend);
   }
 
   authoriseWorkflowTool(tool: string): void { this.allowTool?.(tool); }
@@ -2313,7 +2345,7 @@ export class SessionHost {
 
     const generation = (record.titleGeneration += 1);
     let reason: string | undefined;
-    const name = await this.summarySpare.name(backend, summary, nameInput(entries), undefined, (problem) => { reason = problem; });
+    const name = await this.summarySpare.name(backend, summary, nameInput(entries), undefined, (problem) => { reason = problem; }, this.namingSpent(record));
     if (name === undefined) throw new CommandRefused(`Could not name this Agent Session${reason ? `: ${reason}` : ""}`);
     // Refused rather than applied when something newer has already been asked for. A human who
     // clicked twice wants the second answer, and the first arriving afterwards must not undo it.
@@ -2350,7 +2382,7 @@ export class SessionHost {
     const generation = (record.titleGeneration += 1);
     let name: string | undefined;
     try {
-      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input);
+      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input, undefined, undefined, this.namingSpent(record));
     } catch {
       return;
     }
@@ -3079,7 +3111,10 @@ export class SessionHost {
 
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
     // counts only its own run.
-    if (event.type === "context_usage" && event.spend) record.spend = event.spend;
+    if (event.type === "context_usage" && event.spend) {
+      record.spend = event.spend;
+      this.recordSpend("session", sessionId, this.spendScope(record), event.spend);
+    }
 
     /*
      * Ordinarily redundant — `dispatch` and `compact` both set this before the adapter acknowledges,
@@ -3518,6 +3553,7 @@ function spendFrom(entries: LoggedEvent[]): Spend | undefined {
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type === "context_usage" && event.spend) spend = event.spend;
+    if (event.type === "forked") spend = undefined;
   }
   return spend;
 }

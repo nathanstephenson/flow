@@ -61,6 +61,7 @@ export class FakeSession implements BackendSession {
   rewindFiles?: (messageId: string) => Promise<void>;
   /** What this session was told the Agent Session had already spent, for asserting a Revive. */
   readonly priorSpend: Spend | undefined;
+  spend: Spend | undefined;
   /** What this session was told the machine already authorises, for asserting the read-at-create. */
   readonly standingAuthorisations: readonly string[];
   /** Parent Workflow tools, exposed so relay orchestration can be driven without a model in tests. */
@@ -281,6 +282,7 @@ export class FakeSession implements BackendSession {
 
   /** Test affordance: report Spend, which is how a Revive gets something to carry forward. */
   reportSpend(spend: Spend): void {
+    this.spend = spend;
     this.emit({ type: "context_usage", used: 10, window: 100, spend });
   }
 

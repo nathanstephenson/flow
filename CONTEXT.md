@@ -18,8 +18,14 @@ _Avoid_: history, log, messages
 **Conversation Context**: What the model can currently see, owned and compacted by the backend.
 _Avoid_: history, transcript, memory
 
-**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
+**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded. A Fork's Spend counts only its own work.
 _Avoid_: usage, cost, tokens, context
+
+**Spend Ledger**: The durable record of all billed model use on the Session Host, by Spend Source and model. It outlives Reaping.
+_Avoid_: usage log, cost history
+
+**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, Git publish text or Workflow Builder.
+_Avoid_: category, kind
 
 **Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session. Work started by backgrounded work is backgrounded too.
 _Avoid_: child session, task, sidechain, agent

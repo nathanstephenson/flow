@@ -97,3 +97,10 @@ describe("deep links to the Settings", () => {
     assert.equal(formatRoute({ sessionId: undefined, settings: "keyboard" }), "#/?settings=keyboard");
   });
 });
+
+describe("the Spend page", () => {
+  it("round-trips its hash", () => {
+    assert.deepEqual(parseRoute("#/spend"), { sessionId: undefined, spend: true });
+    assert.equal(formatRoute({ sessionId: undefined, spend: true }), "#/spend");
+  });
+});

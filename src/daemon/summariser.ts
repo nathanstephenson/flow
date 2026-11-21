@@ -3,7 +3,7 @@ import { credentialJsonSerializer } from "./credential-redaction.ts";
 import type { PublishText } from "../protocol/publish.ts";
 
 import type { AgentBackend, BackendSession } from "../backend/types.ts";
-import type { AgentEvent, BackendEvent, LoggedEvent } from "../protocol/events.ts";
+import type { AgentEvent, BackendEvent, LoggedEvent, Spend } from "../protocol/events.ts";
 
 /**
  * Naming an Agent Session with the Summary Model (ADR 0020).
@@ -93,6 +93,7 @@ export async function summarisePublish(request: SummaryRequest): Promise<Publish
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    if (session?.spend) request.spent?.(session.spend);
     if (session) await session.dispose().catch(() => {});
   }
 }
@@ -181,6 +182,8 @@ export type SummaryRequest = {
   timeoutMs?: number;
   /** Told why no name came back, so a refusal somebody reads can say it. */
   problem?: (reason: string) => void;
+  /** Told what the call cost, so the Spend Ledger can count it. */
+  spent?: (spend: Spend) => void;
 };
 
 /**
@@ -306,13 +309,14 @@ export class SummaryModelSpare {
     text: string,
     timeoutMs?: number,
     problem?: (reason: string) => void,
+    spent?: (spend: Spend) => void,
   ): Promise<string | undefined> {
     const claimed = this.claim(model);
     try {
       const spare = claimed ? await claimed.session : undefined;
       if (claimed && spare && !claimed.sink.dead) {
         try {
-          return await nameWith(spare, claimed.sink, text, timeoutMs ?? SUMMARY_TIMEOUT_MS, problem);
+          return await nameWith(spare, claimed.sink, text, timeoutMs ?? SUMMARY_TIMEOUT_MS, problem, spent);
         } finally {
           await spare.dispose().catch(() => {});
         }
@@ -326,6 +330,7 @@ export class SummaryModelSpare {
         text,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(problem === undefined ? {} : { problem }),
+        ...(spent === undefined ? {} : { spent }),
       });
     } finally {
       // Whatever happened, the next naming should not have to wait for a boot.
@@ -437,7 +442,7 @@ export async function summariseToName(request: SummaryRequest): Promise<string |
   }
 
   try {
-    return await nameWith(session, sink, text, request.timeoutMs ?? SUMMARY_TIMEOUT_MS, request.problem);
+    return await nameWith(session, sink, text, request.timeoutMs ?? SUMMARY_TIMEOUT_MS, request.problem, request.spent);
   } finally {
     // Every path: answered, junk, timed out, or the prompt itself throwing. A leaked adapter is a
     // leaked child process.
@@ -460,6 +465,7 @@ async function nameWith(
   text: string,
   timeoutMs: number,
   problem?: (reason: string) => void,
+  spent?: (spend: Spend) => void,
 ): Promise<string | undefined> {
   /*
    * Latest-wins per id, because `message` events are snapshots of one message as it streams rather
@@ -491,6 +497,8 @@ async function nameWith(
   } catch (error) {
     problem?.(message(error));
     return undefined;
+  } finally {
+    if (session.spend) spent?.(session.spend);
   }
   const answer = [...said.values()].join("\n").trim();
   const name = nameFrom(answer);
