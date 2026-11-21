@@ -3,7 +3,7 @@ import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { forgetRepository, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
+import { releaseRepositories, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
 import type { GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
 
@@ -84,12 +84,6 @@ export class GitStates {
     entry.trailing.unref();
   }
 
-  forget(scope: string): void {
-    clearTimeout(this.entries.get(scope)?.trailing);
-    this.entries.delete(scope);
-    forgetRepository(scope);
-  }
-
   summary(scope: string): GitState | undefined {
     const entry = this.entries.get(scope);
     if (!entry?.local) return undefined;
@@ -134,5 +128,15 @@ export class GitStates {
       if (!this.results.has(key)) continue;
       for (const scope of group.scopes) Object.assign(this.entry(scope), { pr: this.results.get(key), prBranch: group.branch });
     }
+    this.release(new Set(sessions.map(session => session.scope)));
+  }
+
+  private release(kept: Set<string>): void {
+    for (const [scope, entry] of this.entries) {
+      if (kept.has(scope)) continue;
+      clearTimeout(entry.trailing);
+      this.entries.delete(scope);
+    }
+    releaseRepositories(kept);
   }
 }

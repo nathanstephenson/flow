@@ -190,17 +190,53 @@ describe("GitStates", () => {
     assert.deepEqual(states.summary(second)?.pr, summary);
   });
 
-  it("releases the state and repository identity of a forgotten Scope", async () => {
+  it("releases a Scope and its repository identity at the next poll without an Agent Session on it", async () => {
     const fake = github();
     const states = new GitStates(fake.run);
     const path = scope("repo");
     await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
     await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
     assert.equal(fake.views.length, 1);
-    states.forget(path);
+    await states.poll([]);
     assert.equal(states.summary(path), undefined);
     await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
     assert.equal(fake.views.length, 2);
+  });
+
+  it("releases a Scope that a poll in flight at its removal put back", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const inFlight = states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    await states.poll([]);
+    await inFlight;
+    await states.poll([]);
+    assert.equal(states.summary(path), undefined);
+  });
+
+  it("releases the old Scope of a relocated Agent Session", async () => {
+    const states = new GitStates(github().run);
+    const from = scope("from");
+    const to = scope("to");
+    await states.poll([{ scope: from, lifecycle: "live", watched: false }]);
+    await states.poll([{ scope: to, lifecycle: "live", watched: false }]);
+    assert.equal(states.summary(from), undefined);
+    assert.deepEqual(states.summary(to)?.pr, summary);
+  });
+
+  it("keeps a Scope while one Agent Session, Settled or not, is on it", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    const other = scope("other");
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }, { scope: path, lifecycle: "live", watched: true }]);
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.deepEqual(states.summary(path)?.pr, summary);
+    await states.poll([{ scope: path, lifecycle: "settled", watched: false }, { scope: other, lifecycle: "ended", watched: false }]);
+    assert.deepEqual(states.summary(path)?.pr, summary);
+    await states.refresh(other);
+    await states.poll([{ scope: path, lifecycle: "settled", watched: false }, { scope: other, lifecycle: "ended", watched: false }]);
+    assert.notEqual(states.summary(other), undefined);
+    assert.equal(fake.views.length, 1);
   });
 
   it("releases the poll time and result of a group that has no Scope", async () => {
