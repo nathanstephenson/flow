@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { toolSummary } from "../src/client/tool-summary.ts";
+import { fullToolSummary, toolSummary } from "../src/client/tool-summary.ts";
 
 describe("a tool call's argument précis", () => {
   it("names the file an edit or a write touched", () => {
@@ -49,5 +49,15 @@ describe("a tool call's argument précis", () => {
     assert.equal(toolSummary({ limit: 20, offset: 0 }), undefined);
     assert.equal(toolSummary({ left: "one", right: "two" }), undefined, "two strings, no way to choose");
     assert.equal(toolSummary({ file_path: "   " }), undefined);
+  });
+
+  it("gives the same argument in full when asked to", () => {
+    const command = `git log --oneline ${"--author=someone ".repeat(10)}`.trim();
+    assert.equal(fullToolSummary({ command, description: "show the log" }), command);
+    assert.equal(fullToolSummary({ command: "cd /repo &&\n  npm test" }), "cd /repo && npm test");
+
+    const path = `/repo/${"nested/".repeat(20)}deep.ts`;
+    assert.equal(fullToolSummary({ file_path: path }), path);
+    assert.equal(fullToolSummary({ limit: 20 }), undefined);
   });
 });
