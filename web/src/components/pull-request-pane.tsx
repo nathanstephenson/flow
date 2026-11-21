@@ -21,9 +21,8 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
     loader.current = current;
     const refresh = () => { if (document.visibilityState === "visible") void current.refresh(); };
     refresh();
-    const timer = window.setInterval(refresh, 30_000);
     document.addEventListener("visibilitychange", refresh);
-    return () => { current.dispose(); loader.current = null; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+    return () => { current.dispose(); loader.current = null; document.removeEventListener("visibilitychange", refresh); };
   }, [connection, sessionId]);
 
   useEffect(() => { void loader.current?.refresh(); }, [revision]);

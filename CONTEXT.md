@@ -156,6 +156,17 @@ _Avoid_: terminal, pty, console, session
 **Scrollback**: Bounded recent Shell output retained for reconnecting clients; lossy and never written to disk.
 _Avoid_: transcript, history, log
 
+### Git
+
+**Pull Request**: The GitHub pull request from the branch of a Scope, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
+_Avoid_: merge request, review, change
+
+**Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a stack, otherwise the default branch of the base repository.
+_Avoid_: target branch, trunk, upstream
+
+**Git State**: The summary of a Scope that the Session Host holds and shows with each Agent Session in it: changed files, commits ahead of and behind the upstream, and the status of its Pull Request. It is derived again when needed. It is not stored and is not part of the Presentation Transcript.
+_Avoid_: git status, branch state, repository state
+
 ### Settings and models
 
 **Settings**: Session Host values governing all Agent Sessions on the machine, not one Scope.
