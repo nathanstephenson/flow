@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { repository } from "./git-fixture.ts";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
-import { SessionHost } from "../src/daemon/host.ts";
+import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { AgentEvent } from "../src/protocol/events.ts";
 
 function events(host: SessionHost, id: string): AgentEvent[] {
@@ -1757,5 +1757,16 @@ describe("SessionHost Git State", () => {
       backend.latest.completeTurn();
       await settled(2);
     } finally { mock.timers.reset(); await cleanup(); }
+  });
+
+  it("reads changes and diffs during a turn and refuses an unknown path", async () => {
+    const { scope, host, first, second, cleanup } = await gitHost();
+    try {
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      await host.send(second, "work", "now");
+      assert.deepEqual(await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }), { files: [{ status: "??", path: "new.txt" }], commits: [] });
+      assert.deepEqual(await host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "new.txt" }), { text: "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+new\n" });
+      await assert.rejects(host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "README.md" }), (error: Error) => error instanceof CommandRefused && /not in the list/.test(error.message));
+    } finally { await cleanup(); }
   });
 });

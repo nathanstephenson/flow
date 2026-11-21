@@ -17,7 +17,7 @@ function scope(name: string): string {
   return path;
 }
 
-const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
+const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", baseRefName: "parent", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
 const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
 
 function github() {
@@ -138,6 +138,19 @@ describe("GitStates", () => {
     assert.deepEqual(states.summary(path)?.pr, summary);
   });
 
+  it("keeps the base branch of an open pull request only", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    assert.equal(states.pullRequestBase(path, "main"), undefined);
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
+    assert.equal(states.pullRequestBase(path, "main"), "parent");
+    assert.equal(states.pullRequestBase(path, "other"), undefined);
+    fake.state.pulls = [{ ...pull, state: "MERGED" }];
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
+    assert.equal(states.pullRequestBase(path, "main"), undefined);
+  });
+
   it("keeps the last value when a poll fails and clears it when the pull request is gone", async () => {
     mock.timers.enable({ apis: ["Date"], now: 0 });
     const fake = github();
@@ -247,6 +260,16 @@ describe("GitStates", () => {
     await states.poll([]);
     await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
     assert.equal(fake.queries.length, 2);
+  });
+
+  it("releases the base branch of a group that has no Scope", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const bases = (states as unknown as { bases: Map<string, string | undefined> }).bases;
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(bases.size, 1);
+    await states.poll([]);
+    assert.equal(bases.size, 0);
   });
 
   it("queries a forced Scope at once, ignoring the interval", async () => {

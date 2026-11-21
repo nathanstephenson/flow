@@ -1,3 +1,5 @@
+import type { GitFile } from "./publish.ts";
+
 /**
  * Git, as it crosses the wire.
  *
@@ -46,6 +48,10 @@ export type BranchList = {
   /** Set when the list was cut short, the same courtesy `DirectoryMatches` extends. */
   truncated?: true;
 };
+
+export type ChangesView = "uncommitted" | "branch";
+export type GitChanges = { files: GitFile[]; commits: string[]; base?: string };
+export type GitDiff = { text: string } | { binary: true } | { tooLarge: true };
 
 export type CheckStatus = "passing" | "failing" | "pending" | "none";
 
