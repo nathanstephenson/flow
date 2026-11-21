@@ -191,7 +191,7 @@ describe("Agent Session rail DOM focus and material", () => {
     const pr = { number: 178, url: 'https://github.com/test/repo/pull/178', state: 'OPEN', isDraft: true, checks: 'failing', reviewDecision: null, unresolvedThreads: 0, updatedAt: '' };
     await page.evaluate(pr => {
       const git = { revision: 'r', changed: 0, ahead: 0, behind: 0, upstream: true, pr };
-      const sessions = [{ ...window.summary('a'), branch: { name: 'feature/a-very-long-branch-name-that-must-truncate-in-the-rail' }, git }, { ...window.summary('b'), branch: { name: 'main' } }];
+      const sessions = [{ ...window.summary('a'), branch: { name: 'feature/a-very-long-branch-name-that-must-truncate-in-the-rail' }, git }, { ...window.summary('b'), branch: { name: 'short' }, git }, { ...window.summary('c'), branch: { name: 'main' } }];
       window.renderRail({ withTranscriptHeader: true, sessions });
       window.mountTranscriptHeader(sessions);
     }, pr);
@@ -204,16 +204,20 @@ describe("Agent Session rail DOM focus and material", () => {
     assert.equal(await indicators.count(), 1);
     assert.equal(await line.evaluate(node => node.lastElementChild?.getAttribute('data-slot')), 'tooltip-trigger');
     assert.equal(await cursor().locator('a, button, [tabindex]').count(), 0);
-    assert.doesNotMatch(await cursor().textContent(), /#178/);
+    assert.doesNotMatch(await cursor().evaluate(node => { const copy = node.cloneNode(true); copy.querySelectorAll('.sr-only').forEach(hidden => hidden.remove()); return copy.textContent; }), /#178/);
     const [branchBox, indicatorBox, lineBox] = await Promise.all([branch.boundingBox(), indicators.boundingBox(), line.boundingBox()]);
     assert.ok(branchBox.width < lineBox.width - indicatorBox.width, 'the branch name truncates');
     assert.ok(Math.abs(indicatorBox.y + indicatorBox.height / 2 - (branchBox.y + branchBox.height / 2)) < 1, 'the icons stay on the branch line');
+    const rights = await page.locator('[data-sidebar="menu-button"] [data-slot="tooltip-trigger"]').evaluateAll(nodes => nodes.map(node => [node.getBoundingClientRect().right, node.parentElement.getBoundingClientRect().right]));
+    assert.equal(rights.length, 2);
+    for (const [right, lineRight] of rights) assert.equal(right, lineRight, 'the icons end at the right of the branch line');
     const glyph = await line.locator('svg').first().boundingBox();
     for (const icon of await indicators.locator('svg').all()) assert.deepEqual([(await icon.boundingBox()).width, (await icon.boundingBox()).height], [glyph.width, glyph.height]);
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
       for (const scope of [cursor(), header]) {
-        assert.deepEqual(await scope.locator('[data-slot="tooltip-trigger"] .sr-only').allTextContents(), ['Draft', 'Checks failing']);
+        assert.deepEqual(await scope.locator('[data-slot="tooltip-trigger"] .sr-only').allTextContents(), ['Pull Request #178. Draft. Checks failing.']);
+        assert.equal(await scope.locator('[data-slot="tooltip-trigger"] [title], [data-slot="tooltip-trigger"][title], [data-slot="tooltip-trigger"] [aria-label], [data-slot="tooltip-trigger"][aria-label]').count(), 0);
         for (const icon of ['git-pull-request-draft', 'x']) {
           const svg = scope.locator(`[data-slot="tooltip-trigger"] svg.lucide-${icon}`);
           assert.equal(await svg.count(), 1, `${theme}: ${icon}`);
@@ -223,7 +227,7 @@ describe("Agent Session rail DOM focus and material", () => {
       }
     }
     await header.locator('[data-slot="tooltip-trigger"]').hover();
-    await page.getByText('Pull Request #178. Draft. Checks failing.', { exact: true }).waitFor();
+    await page.locator('[data-slot="tooltip-content"]', { hasText: 'Pull Request #178. Draft. Checks failing.' }).waitFor();
   });
 
   it("shows no pull request icons on a row and a header without a pull request", async () => {

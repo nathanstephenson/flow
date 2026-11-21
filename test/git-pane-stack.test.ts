@@ -361,6 +361,10 @@ it("sends one pull_request read after a comment, an edit and a manual Refresh", 
   assert.equal(reads(), 4);
   await summarize({ checks: "passing" });
   assert.equal(reads(), 5);
+  await summarize({ unresolvedThreads: 0 });
+  assert.equal(reads(), 6);
+  await summarize({ reviewDecision: "APPROVED" });
+  assert.equal(reads(), 7);
 });
 
 it("reads again when the document becomes visible", async () => {

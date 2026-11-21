@@ -83,6 +83,8 @@ test("reads a pull request with 3 threads and 5 checks in one gh call", async ()
     assert.equal(pr?.headRefOid, "a".repeat(40));
     assert.equal(pr?.headRepository, "fork/repo");
     assert.equal(pr?.body, entry.body);
+    assert.equal(pr?.updatedAt, "2025-01-02");
+    assert.match(calls[0]!.find(arg => arg.startsWith("query="))!, /reviewDecision updatedAt /);
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
@@ -470,7 +472,7 @@ function mock(options: Options = {}) {
   const threads = Array.from({ length: options.threads ?? 1 }, (_, index) => ({ id: `PRRT_${index}`, path: "a.ts", line: index + 1, isOutdated: false, isResolved: index > 0, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true, comments: connection([entry], options.more === "thread" && index === 1) }));
   const checks = options.checkNodes ?? Array.from({ length: options.checks ?? 1 }, (_, index) => ({ name: `check ${index}`, status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: `https://github.com/base/repo/actions/runs/9/job/${index}` }));
   const details = {
-    ...ref, url: open.url, title: "Change", body: entry.body, state: options.state ?? "OPEN", isDraft: options.draft ?? false, reviewDecision: null, author: { login: "user" },
+    ...ref, url: open.url, title: "Change", body: entry.body, state: options.state ?? "OPEN", isDraft: options.draft ?? false, reviewDecision: null, updatedAt: "2025-01-02", author: { login: "user" },
     headRefName: "feature", headRefOid: "a".repeat(40), headRepository: { id: options.headRepositoryId ?? "R_source", nameWithOwner: "fork/repo" }, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", locked: options.locked ?? false,
     repository: { isArchived: options.archived ?? false, viewerPermission: options.permission ?? "READ", mergeCommitAllowed: options.methods?.includes("MERGE") ?? false, squashMergeAllowed: options.methods?.includes("SQUASH") ?? false, rebaseMergeAllowed: options.methods?.includes("REBASE") ?? false },
     comments: connection([entry], options.more === "comments"),

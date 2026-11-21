@@ -28,10 +28,11 @@ export function checksSummary(checks: PullRequestCheck[]): string {
   return [`${count("passed")} passed`, `${count("failed")} failed`, `${count("pending")} pending`, ...(count("unknown") ? [`${count("unknown")} unknown`] : [])].join(" · ");
 }
 
-export function matchesSummary(pr: Pick<PullRequestDetails, "number" | "updatedAt" | "state" | "isDraft" | "checks">, summary: PullRequestSummary | undefined): boolean {
+export function matchesSummary(pr: Pick<PullRequestDetails, "number" | "updatedAt" | "state" | "isDraft" | "reviewDecision" | "threads" | "checks">, summary: PullRequestSummary | undefined): boolean {
   const outcomes = pr.checks.map(outcome);
   const checks = !outcomes.length ? "none" : outcomes.includes("failed") ? "failing" : outcomes.includes("pending") ? "pending" : "passing";
   return pr.number === summary?.number && pr.updatedAt === summary.updatedAt && pr.state === summary.state && pr.isDraft === summary.isDraft
+    && pr.reviewDecision === summary.reviewDecision && pr.threads.filter(thread => !thread.isResolved).length === summary.unresolvedThreads
     && checks === summary.checks && outcomes.filter(value => value !== "pending").length === summary.checksCompleted;
 }
 

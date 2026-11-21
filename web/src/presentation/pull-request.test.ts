@@ -6,11 +6,12 @@ const check = (name: string, status: string, runId?: number) => ({ name, status,
 
 describe("pull request presentation", () => {
   it("matches a loaded pull request to a summary by update time, state and checks", () => {
-    const loaded = { number: 4, updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: [check("a", "SUCCESS"), check("b", "IN_PROGRESS")] };
-    const summary = { number: 4, url: "", updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 1, reviewDecision: null, unresolvedThreads: 0 };
+    const thread = (isResolved: boolean) => ({ id: "T", path: "a.ts", line: 1, isOutdated: false, isResolved, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true, diffHunk: "", comments: [] });
+    const loaded = { number: 4, updatedAt: "u1", state: "OPEN" as const, isDraft: false, reviewDecision: null, threads: [thread(false), thread(true)], checks: [check("a", "SUCCESS"), check("b", "IN_PROGRESS")] };
+    const summary = { number: 4, url: "", updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 1, reviewDecision: null, unresolvedThreads: 1 };
     assert.equal(matchesSummary(loaded, summary), true);
     assert.equal(matchesSummary(loaded, undefined), false);
-    for (const change of [{ number: 5 }, { updatedAt: "u2" }, { state: "MERGED" as const }, { isDraft: true }, { checks: "failing" as const }, { checksCompleted: 2 }]) assert.equal(matchesSummary(loaded, { ...summary, ...change }), false);
+    for (const change of [{ number: 5 }, { updatedAt: "u2" }, { state: "MERGED" as const }, { isDraft: true }, { checks: "failing" as const }, { checksCompleted: 2 }, { unresolvedThreads: 0 }, { reviewDecision: "APPROVED" }]) assert.equal(matchesSummary(loaded, { ...summary, ...change }), false);
     assert.equal(matchesSummary({ ...loaded, checks: [] }, { ...summary, checks: "none", checksCompleted: 0 }), true);
     assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "FAILURE")] }, { ...summary, checks: "failing", checksCompleted: 2 }), true);
     assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "SKIPPED")] }, { ...summary, checks: "passing", checksCompleted: 2 }), true);

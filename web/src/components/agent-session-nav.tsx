@@ -454,7 +454,7 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
         {scopeKindLabel(summary)}
         {summary.branch.detached ? ", detached at" : ""}
       </span>
-      <span className="truncate font-mono">{summary.branch.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono">{summary.branch.name}</span>
       {summary.git?.pr ? <PullRequestIndicators pr={summary.git.pr} /> : null}
     </span>
   );
