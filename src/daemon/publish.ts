@@ -2,20 +2,12 @@ import { createHash } from "node:crypto";
 import { lstat, readlink, access } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { resolve } from "node:path";
-import { head, isRepository, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
+import { head, isRepository, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
+import { baseRef, files, git, rangeCommits, rangeFiles } from "./changes.ts";
 import type { GitFile, GitStatus, PublishInput, PublishResult } from "../protocol/publish.ts";
 import { gh, type Gh } from "./github.ts";
 import { resolvePullRequest, resolveRepository, type ResolvedPullRequest } from "./repository.ts";
-import { localStack, localStacks } from "./stack-metadata.ts";
-
-async function git(scope: string, args: string[], write = false): Promise<string> {
-  const result = await run(scope, args, write ? GIT_WRITE_TIMEOUT_MS : GIT_READ_TIMEOUT_MS);
-  if (!result.ok) {
-    if (result.failure.message.includes("ENOENT")) throw new Error("Git is missing. Install git on the Session Host.");
-    throw new Error(`Git ${result.failure.attempted} failed: ${result.failure.message}`);
-  }
-  return result.value;
-}
+import { localStack, localStacks, stackParent } from "./stack-metadata.ts";
 
 export type PublishSnapshot = {
   fingerprint: string;
@@ -26,11 +18,6 @@ export type PublishSnapshot = {
   commit: string;
 };
 export type PublishTarget = { remote: string; url: string; repo: string; head: string; defaultBranch: string; baseBranch?: string; pr?: ResolvedPullRequest };
-
-async function files(scope: string): Promise<GitFile[]> {
-  const raw = await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
-  return raw.split("\0").filter(Boolean).map((line) => ({ status: line.slice(0, 2), path: line.slice(3) }));
-}
 
 export async function snapshot(scope: string): Promise<PublishSnapshot & { input: string }> {
   if (!isRepository(scope)) throw new Error("This Scope is not a Git repository.");
@@ -106,8 +93,7 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
   if (stack) {
     try { await github(scope, ["stack", "--help"]); }
     catch (error) { throw new Error(`This branch belongs to a stack. Install gh stack on the Session Host before publishing. ${error instanceof Error ? error.message : String(error)}`); }
-    const index = stack.branches.findIndex(b => b.branch === branch);
-    baseBranch = stack.branches.slice(0, index).filter(b => !b.pullRequest?.merged).at(-1)?.branch ?? stack.trunk.branch;
+    baseBranch = stackParent(stack, branch);
   }
   return { remote, url, repo, head, defaultBranch, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
 }
@@ -127,17 +113,11 @@ export async function canNameBranch(scope: string, branch: string, destination: 
 }
 
 export async function branchChanges(scope: string, destination: PublishTarget): Promise<{ files: GitFile[]; commits: string[]; input: string }> {
-  let base = destination.baseBranch ? `refs/heads/${destination.baseBranch}` : `refs/remotes/${destination.remote}/${destination.defaultBranch}`;
-  const remote = await run(scope, ["rev-parse", "--verify", base], GIT_READ_TIMEOUT_MS);
-  if (!remote.ok) base = destination.baseBranch ? `refs/remotes/${destination.remote}/${destination.baseBranch}` : `refs/heads/${destination.defaultBranch}`;
-  const known = await run(scope, ["rev-parse", "--verify", base], GIT_READ_TIMEOUT_MS);
-  if (!known.ok) throw new Error(`Fetch the ${destination.baseBranch ? "stack parent" : "default"} branch before publishing so its changes can be reviewed.`);
-  const range = `${base}...HEAD`;
-  const raw = (await git(scope, ["diff", "--name-status", "-z", "--no-renames", range, "--"])).split("\0").filter(Boolean);
-  const files: GitFile[] = [];
-  for (let index = 0; index < raw.length; index += 2) files.push({ status: raw[index]!, path: raw[index + 1]! });
-  const commits = (await git(scope, ["log", "--format=%h %s", `${base}..HEAD`, "--"])).trim().split("\n").filter(Boolean);
-  const diff = await git(scope, ["diff", "--binary", "--no-ext-diff", "--no-textconv", range, "--"]);
+  const base = await baseRef(scope, destination.remote, destination.baseBranch ?? destination.defaultBranch, destination.baseBranch !== undefined);
+  if (!base) throw new Error(`Fetch the ${destination.baseBranch ? "stack parent" : "default"} branch before publishing so its changes can be reviewed.`);
+  const files = await rangeFiles(scope, base);
+  const commits = await rangeCommits(scope, base);
+  const diff = await git(scope, ["diff", "--binary", "--no-ext-diff", "--no-textconv", `${base}...HEAD`, "--"]);
   return { files, commits, input: `${commits.join("\n")}\n${diff}` };
 }
 

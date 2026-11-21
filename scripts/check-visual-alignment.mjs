@@ -57,7 +57,7 @@ let page = await context.newPage(); observePage(page);
 
 // A deny-by-default write guard is installed BEFORE authentication or UI mounts.
 // Even an accidental autosave/acknowledgement is a failure, not a mock success.
-const readOnlyCommands = new Set(['list', 'git_status', 'stack_status', 'pull_request', 'list_skills']);
+const readOnlyCommands = new Set(['list', 'git_status', 'git_changes', 'git_diff', 'stack_status', 'pull_request', 'list_skills']);
 await context.route('**/*', async route => {
   const request = route.request(), address = new URL(request.url()), method = request.method();
   const safeOrigin = address.origin === url.origin;
@@ -306,7 +306,7 @@ async function dockAndGit(mode) {
   assert.ok(await git.evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).boxShadow !== 'none'));
   const views = page.getByRole('tablist', { name: 'Git views', exact: true });
   await views.getByRole('tab', { name: 'PR', exact: true }).waitFor();
-  await views.getByRole('tab', { name: 'Diff', exact: true }).click();
+  await views.getByRole('tab', { name: 'Changes', exact: true }).click();
   // Refresh is a read-only handler, unlike Publish/Pull. Wait for both optional
   // views' discovery before measuring a three-way strip.
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
@@ -316,7 +316,7 @@ async function dockAndGit(mode) {
   const tabs = await views.getByRole('tab').evaluateAll(nodes => nodes.map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height, radius: getComputedStyle(node).borderRadius })));
   assert.equal(tabs.length, 3); assert.ok(tabs.every(tab => tab.radius === '0px' && tab.height === 36));
   assert.ok(tabs.every(tab => Math.abs(tab.width - viewBox.width / 3) < 1));
-  await views.getByRole('tab', { name: 'Diff', exact: true }).click();
+  await views.getByRole('tab', { name: 'Changes', exact: true }).click();
   const publish = page.getByRole('button', { name: 'Publish', exact: true }), actions = publish.locator('..');
   const actionBox = await surface(actions), actionFaces = await actions.getByRole('button').evaluateAll(nodes => nodes.map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height, radius: getComputedStyle(node).borderRadius })));
   assert.equal(actionFaces.length, 3); assert.ok(actionFaces.every(face => face.height === 34 && face.radius === '0px'));

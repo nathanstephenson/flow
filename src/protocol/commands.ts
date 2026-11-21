@@ -1,7 +1,7 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
-import type { Branch, GitState } from "./git.ts";
+import type { Branch, ChangesView, GitState } from "./git.ts";
 import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
 import type { PublishInput } from "./publish.ts";
@@ -213,6 +213,8 @@ export type Command =
   | { type: "assist_stack"; sessionId: string }
   | { type: "git_status"; sessionId: string }
   | { type: "refresh_git"; sessionId: string }
+  | { type: "git_changes"; sessionId: string; view: ChangesView }
+  | { type: "git_diff"; sessionId: string; view: ChangesView; path: string }
   | { type: "prepare_publish"; sessionId: string }
   | { type: "publish"; sessionId: string; input: PublishInput }
   | { type: "switch_branch"; sessionId: string; branch: string }

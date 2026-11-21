@@ -11,6 +11,7 @@ import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, 
 import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
+import { changes, diff } from "./changes.ts";
 import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
 import { GitStates } from "./git-state.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
@@ -47,7 +48,7 @@ import type {
   Skill,
   Spend,
 } from "../protocol/events.ts";
-import type { Branch } from "../protocol/git.ts";
+import type { Branch, GitChanges, GitDiff } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
 import {
@@ -446,6 +447,16 @@ export class SessionHost {
     const scope = this.record(sessionId).scope;
     const pr = this.gitStates.summary(scope)?.pr;
     return { ...await gitStatus(scope), ...(pr ? { pr } : {}) };
+  }
+
+  private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
+    const scope = this.record(command.sessionId).scope;
+    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
+    try {
+      return command.type === "git_changes" ? await changes(scope, command.view, base) : await diff(scope, command.view, command.path, base);
+    } catch (error) {
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async preparePublish(sessionId: string): Promise<PublishReview> {
@@ -2482,6 +2493,9 @@ export class SessionHost {
         return await this.gitStatus(command.sessionId);
       case "refresh_git":
         return await this.gitStates.refresh(this.record(command.sessionId).scope);
+      case "git_changes":
+      case "git_diff":
+        return await this.readChanges(command);
       case "prepare_publish":
         return await this.preparePublish(command.sessionId);
       case "publish":

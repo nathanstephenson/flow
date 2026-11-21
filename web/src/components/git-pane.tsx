@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
 import { StackPane } from "@/components/stack-pane.tsx";
+import { GitChanges } from "@/components/git-changes.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 import { gitStateLine } from "@/presentation/git.ts";
@@ -29,9 +30,9 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const [stackRevision, setStackRevision] = useState(0);
   const [hasPr, setHasPr] = useState(false);
   const [hasStack, setHasStack] = useState(false);
-  const [tab, setTab] = useState<"Diff" | "Stack" | "PR">();
-  const tabs: ("Diff" | "Stack" | "PR")[] = ["Diff", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
-  const selected = tab === "Diff" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Diff";
+  const [tab, setTab] = useState<"Changes" | "Stack" | "PR">();
+  const tabs: ("Changes" | "Stack" | "PR")[] = ["Changes", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
+  const selected = tab === "Changes" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Changes";
 
   function changed() {
     setReview(undefined);
@@ -82,7 +83,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   }
 
   async function openPublish() {
-    setTab("Diff");
+    setTab("Changes");
     setBusy(true);
     setOpening(true);
     setError("");
@@ -122,7 +123,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
     <Tabs
       value={selected}
       onValueChange={(value) => {
-        if (!busy && review === undefined && (value === "Diff" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
+        if (!busy && review === undefined && (value === "Changes" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
       }}
       className="min-h-0 min-w-0 space-y-4 overflow-auto px-4 pb-4 text-sm"
     >
@@ -141,7 +142,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
         </TabsList>
       </div>
       {error ? <p role="alert">{error}</p> : null}
-      <TabsContent value="Diff" keepMounted className="space-y-4">
+      <TabsContent value="Changes" keepMounted className="space-y-4">
       <div className="grid grid-cols-3 gap-0">
         <strong className="col-span-3 min-w-0 truncate">{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
         <p className="col-span-3 min-w-0 truncate pb-2.5 text-xs text-muted-foreground">{git ? gitStateLine(git) : null}</p>
@@ -150,8 +151,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
         <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>
       </div>
       <p className="text-xs text-muted-foreground">Pull fast-forwards from the upstream branch. Local changes are never stashed.</p>
-      <h2 className="font-medium">Changed files</h2>
-      {!status ? <p>Reading Git status…</p> : !status.repository ? <p>This Scope is not a Git repository.</p> : <FileList files={status.files} />}
+      {!status ? <p>Reading Git status…</p> : !status.repository ? <p>This Scope is not a Git repository.</p> : <GitChanges sessionId={sessionId} revision={git?.revision} />}
       {status?.problem ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
       {result ? <div role="status" className="space-y-2">
         {result.branch ? <p>Branch: {result.branch}.</p> : null}
