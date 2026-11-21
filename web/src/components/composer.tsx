@@ -1043,8 +1043,8 @@ function WorkStack({ running, models, onOpen }: {
               aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
               className={cn(
                 "group/card cursor-tilt absolute inset-x-0 bottom-0 h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 pt-1.5 pb-3",
-                "text-left text-xs leading-4 text-muted-foreground shadow-sm outline-none hover:h-auto hover:text-foreground",
-                "focus-visible:h-auto focus-visible:border-ring focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30",
+                "text-left text-xs leading-4 text-muted-foreground shadow-sm outline-none hover:h-auto hover:pb-4.5 hover:text-foreground",
+                "focus-visible:h-auto focus-visible:pb-4.5 focus-visible:border-ring focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30",
                 "[--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]",
               )}
             >
