@@ -6,6 +6,7 @@ import { gh, type Gh } from "./github.ts";
 import { localRepository, releaseRepositories, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
 import type { GitFile, GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
+import type { PullRequestRef } from "../protocol/pull-request.ts";
 
 export type LocalGitState = Omit<GitState, "pr">;
 export type PolledSession = { scope: string; lifecycle: SessionLifecycle; watched: boolean };
@@ -53,7 +54,7 @@ export async function readLocal(scope: string): Promise<LocalGitState | undefine
   return { ...read.local, ...(defaultBranch ? { defaultBranch } : {}) };
 }
 
-type Entry = { local: LocalGitState | undefined; pr: PullRequestSummary | undefined; prBase: string | undefined; prBranch: string | undefined; lastRead: number; generation: number; trailing: ReturnType<typeof setTimeout> | undefined };
+type Entry = { local: LocalGitState | undefined; pr: PullRequestSummary | undefined; prRef: PullRequestRef | undefined; prBase: string | undefined; prBranch: string | undefined; lastRead: number; generation: number; trailing: ReturnType<typeof setTimeout> | undefined };
 type Group = { scopes: string[]; repository: Repository; branch: string; watched: boolean; forced: boolean };
 
 export class GitStates {
@@ -61,6 +62,7 @@ export class GitStates {
   private readonly polledAt = new Map<string, number>();
   private readonly results = new Map<string, PullRequestSummary | undefined>();
   private readonly bases = new Map<string, string | undefined>();
+  private readonly refs = new Map<string, PullRequestRef | undefined>();
 
   private readonly github: Gh;
   private readonly read: (scope: string) => Promise<LocalGitState | undefined>;
@@ -72,7 +74,7 @@ export class GitStates {
 
   private entry(scope: string): Entry {
     let entry = this.entries.get(scope);
-    if (!entry) this.entries.set(scope, entry = { local: undefined, pr: undefined, prBase: undefined, prBranch: undefined, lastRead: -Infinity, generation: 0, trailing: undefined });
+    if (!entry) this.entries.set(scope, entry = { local: undefined, pr: undefined, prRef: undefined, prBase: undefined, prBranch: undefined, lastRead: -Infinity, generation: 0, trailing: undefined });
     return entry;
   }
 
@@ -110,6 +112,10 @@ export class GitStates {
   hasPullRequest(scope: string, branch: string): boolean {
     const entry = this.entries.get(scope);
     return Boolean(entry?.pr && entry.prBranch === branch);
+  }
+
+  pullRequestRef(scope: string): PullRequestRef | undefined {
+    return this.entries.get(scope)?.prRef;
   }
 
   pullRequestBase(scope: string, branch: string): string | undefined {
@@ -152,11 +158,12 @@ export class GitStates {
         const found = await resolvePullRequest(group.scopes[0]!, group.repository, group.branch, this.github).then(pr => ({ pr }), () => undefined);
         if (found) {
           this.bases.set(key, found.pr?.state === "OPEN" ? found.pr.baseBranch : undefined);
+          this.refs.set(key, found.pr && { repo: found.pr.repo, number: found.pr.number, id: found.pr.id });
           this.results.set(key, found.pr && { number: found.pr.number, url: found.pr.url, state: found.pr.state, isDraft: found.pr.isDraft, checks: found.pr.checks, reviewDecision: found.pr.reviewDecision, unresolvedThreads: found.pr.unresolvedThreads, updatedAt: found.pr.updatedAt });
         }
       }
       if (!this.results.has(key)) continue;
-      for (const scope of group.scopes) Object.assign(this.entry(scope), { pr: this.results.get(key), prBase: this.bases.get(key), prBranch: group.branch });
+      for (const scope of group.scopes) Object.assign(this.entry(scope), { pr: this.results.get(key), prRef: this.refs.get(key), prBase: this.bases.get(key), prBranch: group.branch });
     }
     this.release(new Set(sessions.map(session => session.scope)));
   }

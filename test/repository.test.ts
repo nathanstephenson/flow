@@ -27,7 +27,7 @@ function github(pulls: unknown[] = []): { calls: string[][]; run: Gh } {
 }
 
 const pull = (values: Record<string, unknown>) => ({
-  id: "PR_open", number: 7, url: "https://github.com/base/repo/pull/7", title: "Change", baseRefName: "main", state: "OPEN", isDraft: false, reviewDecision: null,
+  id: "PR_open", number: 7, url: "https://github.com/base/repo/pull/7", title: "Change", baseRefName: "main", headRefOid: "a".repeat(40), state: "OPEN", isDraft: false, reviewDecision: null,
   updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_fork" },
   commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] }, reviewThreads: { nodes: [] }, ...values,
 });
@@ -127,7 +127,7 @@ describe("resolvePullRequest", () => {
   it("summarises checks, review and unresolved threads", async () => {
     const threads = { nodes: [{ isResolved: false }, { isResolved: true }, { isResolved: false }] };
     assert.deepEqual(await resolvePullRequest(repo, resolved, "feature", github([pull({ isDraft: true, reviewDecision: "CHANGES_REQUESTED", reviewThreads: threads })]).run), {
-      repo: "base/repo", id: "PR_open", number: 7, url: "https://github.com/base/repo/pull/7", title: "Change", baseBranch: "main", state: "OPEN",
+      repo: "base/repo", id: "PR_open", number: 7, url: "https://github.com/base/repo/pull/7", title: "Change", baseBranch: "main", headRefOid: "a".repeat(40), state: "OPEN",
       isDraft: true, checks: "passing", reviewDecision: "CHANGES_REQUESTED", unresolvedThreads: 2, updatedAt: "2025-01-01",
     });
     const checks = async (rollup: unknown) => (await resolvePullRequest(repo, resolved, "feature", github([pull({ commits: { nodes: rollup === undefined ? [] : [{ commit: { statusCheckRollup: rollup } }] } })]).run))?.checks;

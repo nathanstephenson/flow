@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { ChevronDown, CircleCheck, FolderGit2, GitBranch, GitPullRequest, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -16,6 +16,7 @@ import {
 } from "@/presentation/rail-sections.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
+import { PullRequestBadges } from "@/components/pull-request-badges.tsx";
 import { statusIndicatorColor } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -324,6 +325,7 @@ function AgentSessionRow({
             <span className="block truncate text-xs text-muted-foreground">{summary.outputPreview}</span>
           ) : null}
           <ScopeLine summary={summary} />
+          <PullRequestLine summary={summary} />
           {summary.attention ? (
             <span className="flex items-center gap-1.5 text-xs font-medium">
               <span aria-hidden>{summary.attention.group === "needs-input" ? "!" : "●"}</span>
@@ -454,6 +456,18 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
         {summary.branch.detached ? ", detached at" : ""}
       </span>
       <span className="truncate font-mono">{summary.branch.name}</span>
+    </span>
+  );
+}
+
+function PullRequestLine({ summary }: { summary: SessionSummary }) {
+  const pr = summary.git?.pr;
+  if (!pr) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <GitPullRequest aria-hidden className="size-3! shrink-0" />
+      <span className="font-mono">#{pr.number}</span>
+      <PullRequestBadges pr={pr} />
     </span>
   );
 }

@@ -164,35 +164,167 @@ it("tells the user to rebase or merge in the Shell when a diverged branch has no
   gitState = undefined;
 });
 
-for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation and sends the displayed PR identity`, () => {
+function findAll(element: any, type: string, matches: (element: Element) => boolean = () => true): Element[] {
+  const found = element?.type === type && matches(element) ? [element] : [];
+  for (const child of [element?.props?.children].flat(Infinity)) if (child && typeof child === "object") found.push(...findAll(child, type, matches));
+  return found;
+}
+const actionsUrl = (run: number, job: number) => `https://github.com/test/repo/actions/runs/${run}/job/${job}`;
+function prDetails(extra: Record<string, unknown> = {}) {
+  return {
+    repo: "test/repo", id: "PR_one", number: 1, url: "https://github.com/test/repo/pull/1", title: "Change", body: "Body", state: "OPEN", isDraft: false, reviewDecision: null,
+    author: "user", headRefName: "feature", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", viewerCanComment: true, mergeMethods: ["SQUASH", "REBASE"],
+    checks: [
+      { name: "lint", status: "SUCCESS", url: actionsUrl(9, 1), runId: 9, jobId: 1 },
+      { name: "test a", status: "FAILURE", url: actionsUrl(7, 2), runId: 7, jobId: 2 },
+      { name: "test b", status: "FAILURE", url: actionsUrl(7, 3), runId: 7, jobId: 3 },
+      { name: "deploy", status: "FAILURE", url: actionsUrl(8, 4), runId: 8, jobId: 4 },
+      { name: "external", status: "ERROR", url: "https://ci.example.com/1" },
+    ],
+    comments: [{ id: "C1", author: "a", body: "first", url: "https://github.com/c1", createdAt: "2025-01-02" }],
+    reviews: [{ id: "R1", author: "b", body: "", url: "https://github.com/r1", createdAt: "2025-01-01", state: "APPROVED" }],
+    threads: [
+      { id: "T_resolved", path: "a.ts", line: 1, isOutdated: false, isResolved: true, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true, diffHunk: "@@ -1 +1 @@", comments: [] },
+      { id: "T_open", path: "b.ts", line: 2, isOutdated: false, isResolved: false, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true, diffHunk: "@@ -2 +2 @@", comments: [] },
+    ],
+    ...extra,
+  };
+}
+const prRef = { repo: "test/repo", number: 1, id: "PR_one" };
+function prPane(details: Record<string, unknown> = prDetails(), read?: () => Promise<unknown>) {
   const calls: any[] = [];
-  const pane = component("pull-request-pane", async () => {});
-  const pr = { repo: "test/repo", id: "PR_one", number: 1, state: "OPEN", headRefOid: "a".repeat(40), headRefName: "feature", baseRefName: "main", mergeMethods: ["SQUASH", "REBASE"] };
-  const props = { pr, busy: false, change: (...args: any[]) => calls.push(args) };
-  const render = () => pane.render("PullRequestActions", props);
-  find(render(), "Button", node => node.props.children === (action === "merge" ? "Merge" : "Rebase")).props.onClick();
-  assert.equal(calls.length, 0);
-  if (action === "merge") {
-    const select = find(render(), "select");
-    assert.equal(select.props.value, "SQUASH");
-    assert.equal(select.props.children.length, 2);
-    select.props.onChange({ target: { value: "REBASE" } });
-  } else assert.match(JSON.stringify(render()), /No push or stack rebase/);
-  find(render(), "form").props.onSubmit({ preventDefault() {} });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], action);
-  assert.equal(calls[0][1].headOid, pr.headRefOid);
-  assert.equal(calls[0][1].baseBranch, "main");
-  assert.equal(calls[0][1].pr.id, "PR_one");
-  assert.equal(calls[0][1].method, action === "merge" ? "REBASE" : undefined);
+  const pane = component("pull-request-pane", async input => {
+    calls.push(input);
+    if (input.type === "pull_request") return read ? read() : details;
+    if (input.type === "suggest_git_text") return { title: "Suggested", body: "Suggested body" };
+  });
+  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {} };
+  const render = () => pane.render("PullRequestPane", props);
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
+  return { calls, render, flush, load, writes: () => calls.filter(call => call.type !== "pull_request") };
+}
+const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
+
+it("shows the pull request in sections with counts, failing checks first and resolved threads collapsed", async () => {
+  const { render, load } = prPane();
+  await load();
+  const sections = find(render(), "Accordion", node => node.props["aria-label"] === "Pull request sections");
+  assert.deepEqual(findAll(sections, "AccordionItem").filter(node => ["overview", "checks", "threads", "discussion"].includes(node.props.value)).map(node => node.props.value), ["overview", "checks", "threads", "discussion"]);
+  assert.equal(textContent(find(section(render(), "checks"), "AccordionTrigger")), "Checks (5)");
+  assert.equal(textContent(find(section(render(), "threads"), "AccordionTrigger")), "Review threads (2)");
+  assert.equal(textContent(find(section(render(), "discussion"), "AccordionTrigger")), "Comments and reviews (2)");
+  const checks = find(section(render(), "checks"), "AccordionContent");
+  assert.equal(textContent(find(checks, "p")), "1 passed · 4 failed · 0 pending");
+  assert.deepEqual(findAll(find(checks, "ul"), "a").map(textContent), ["test a", "test b", "deploy", "external", "lint"]);
+  assert.equal(find(checks, "a", node => textContent(node) === "external").props.href, "https://ci.example.com/1");
+  const threads = find(render(), "Accordion", node => node.props["aria-label"] === "Review threads");
+  assert.deepEqual([...threads.props.value], ["T_open"]);
+  assert.deepEqual(findAll(threads, "AccordionItem").map(node => node.props.value), ["T_open", "T_resolved"]);
+  threads.props.onValueChange(["T_open", "T_resolved"]);
+  assert.deepEqual([...find(render(), "Accordion", node => node.props["aria-label"] === "Review threads").props.value], ["T_open", "T_resolved"]);
 });
 
-it("PR merge is unavailable without a permitted method or for a draft", () => {
-  const pane = component("pull-request-pane", async () => {});
+it("shows one re-run button for each failed GitHub Actions run", async () => {
+  const { render, load, writes } = prPane();
+  await load();
+  const buttons = findAll(render(), "Button", node => textContent(node.props.children) === "Re-run failed jobs");
+  assert.equal(buttons.length, 2);
+  buttons[0]!.props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "rerun_pull_request_checks", sessionId: "session", input: { pr: prRef, runId: 7 } }]);
+});
+
+it("keeps typed reply and comment text across a reload", async () => {
+  const { render, load, flush, calls } = prPane();
+  await load();
+  const reply = () => find(find(render(), "form", node => node.props["aria-label"] === "Reply to thread in b.ts line 2"), "Textarea");
+  const comment = () => find(find(render(), "form", node => node.props["aria-label"] === "Add comment"), "Textarea");
+  reply().props.onChange({ target: { value: "typed reply" } });
+  comment().props.onChange({ target: { value: "typed comment" } });
+  await load(1);
+  assert.equal(calls.filter(call => call.type === "pull_request").length, 2);
+  assert.equal(reply().props.value, "typed reply");
+  assert.equal(comment().props.value, "typed comment");
+  find(render(), "form", node => node.props["aria-label"] === "Reply to thread in b.ts line 2").props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.type === "comment_pull_request"))), { type: "comment_pull_request", sessionId: "session", input: { pr: prRef, body: "typed reply", threadId: "T_open" } });
+  assert.equal(reply().props.value, "");
+  assert.equal(comment().props.value, "typed comment");
+  assert.equal(calls.filter(call => call.type === "pull_request").length, 3);
+});
+
+it("edits the title and body, and fills them from Suggest only on click", async () => {
+  const { render, load, flush, writes } = prPane();
+  await load();
+  findButton(render(), "Edit").props.onClick();
+  const form = () => find(render(), "form", node => node.props["aria-label"] === "Edit pull request");
+  const title = () => find(form(), "Input");
+  const body = () => find(form(), "Textarea");
+  assert.equal(title().props.value, "Change");
+  assert.equal(body().props.value, "Body");
+  await flush();
+  assert.deepEqual(writes(), []);
+  findButton(render(), "Suggest").props.onClick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "suggest_git_text", sessionId: "session", kind: "pull_request" }]);
+  assert.equal(title().props.value, "Suggested");
+  assert.equal(body().props.value, "Suggested body");
+  title().props.onChange({ target: { value: "Final" } });
+  await load(1);
+  assert.equal(title().props.value, "Final");
+  find(render(), "form", node => node.props["aria-label"] === "Edit pull request").props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes().at(-1))), { type: "edit_pull_request", sessionId: "session", input: { pr: prRef, title: "Final", body: "Suggested body" } });
+  assert.throws(() => find(render(), "form", node => node.props["aria-label"] === "Edit pull request"));
+});
+
+for (const draft of [true, false]) it(`${draft ? "marks a draft ready for review" : "converts an open pull request to a draft"}`, async () => {
+  const { render, load, writes } = prPane(prDetails({ isDraft: draft }));
+  await load();
+  findButton(render(), draft ? "Ready for review" : "Convert to draft").props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "set_pull_request_draft", sessionId: "session", input: { pr: prRef, draft: !draft } }]);
+});
+
+for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation and sends the PR identity shown when it opened`, async () => {
+  let details = prDetails();
+  const { render, load, flush, writes } = prPane(undefined, async () => details);
+  await load();
+  findButton(render(), action === "merge" ? "Merge" : "Rebase").props.onClick();
+  assert.deepEqual(writes(), []);
+  assert.throws(() => find(render(), "select"));
+  if (action === "merge") {
+    const select = find(render(), "Select");
+    assert.equal(select.props.value, "SQUASH");
+    assert.equal(findAll(select, "SelectItem").length, 2);
+    select.props.onValueChange("REBASE");
+  } else assert.match(JSON.stringify(render()), /No push or stack rebase/);
+  details = prDetails({ headRefOid: "b".repeat(40) });
+  await load(1);
+  find(render(), "form", node => node.props["aria-label"] === (action === "merge" ? "Confirm merge" : "Confirm rebase")).props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "change_pull_request", sessionId: "session", action, input: { pr: prRef, headOid: "a".repeat(40), baseBranch: "main", ...(action === "merge" ? { method: "REBASE" } : {}) } }]);
+});
+
+it("PR merge is unavailable without a permitted method or for a draft", async () => {
   for (const extra of [{ mergeMethods: [] }, { mergeMethods: ["MERGE"], isDraft: true }]) {
-    const tree = pane.render("PullRequestActions", { pr: { state: "OPEN", headRefOid: "a".repeat(40), ...extra }, busy: false, change() {} });
-    assert.equal(find(tree, "Button", node => node.props.children === "Merge").props.disabled, true);
+    const { render, load } = prPane(prDetails(extra));
+    await load();
+    assert.equal(findButton(render(), "Merge").props.disabled, true);
   }
+});
+
+it("keeps the newest pull request read when an older response arrives last", async () => {
+  const pending: ((value: unknown) => void)[] = [];
+  const { render, load, flush } = prPane(undefined, () => new Promise(resolve => pending.push(resolve)));
+  await load(0);
+  await load(1);
+  pending[1]!(prDetails({ title: "Newest" }));
+  await flush();
+  pending[0]!(prDetails({ title: "Oldest" }));
+  await flush();
+  const overview = textContent(section(render(), "overview"));
+  assert.match(overview, /Newest/);
+  assert.doesNotMatch(overview, /Oldest/);
 });
 
 it("Stack changes immediately replace the PR pane", () => {

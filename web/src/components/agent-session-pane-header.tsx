@@ -17,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
+import { PullRequestBadges } from "@/components/pull-request-badges.tsx";
 import { McpConnectionMenu, useMcpConnectionStatus } from "@/components/mcp-status.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -29,6 +30,7 @@ import {
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
+import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 
 /**
  * What this Agent Session *is*, and what can be done to it as a whole.
@@ -82,6 +84,7 @@ export function AgentSessionPaneHeader({
   chrome,
   docks,
 }: AgentSessionPaneHeaderProps) {
+  const pr = useAgentSessions().sessions.find((session) => session.id === sessionId)?.git?.pr;
   return (
     <div className="relative z-10 mb-[calc(var(--header-overlap,0px)*-1)] text-foreground">
       {/*
@@ -123,6 +126,20 @@ export function AgentSessionPaneHeader({
           )}
           <span className="truncate font-medium">{title}</span>
         </span>
+
+        {pr ? (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs">
+            <a
+              className="rounded-sm font-mono text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
+              href={safePullRequestUrl(pr.url)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              #{pr.number}
+            </a>
+            <PullRequestBadges pr={pr} />
+          </span>
+        ) : null}
 
         <div className="ml-auto flex items-center gap-1.5">
           {docks ? (

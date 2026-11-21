@@ -14,6 +14,23 @@ The Git pane shows the next step above its tabs: Commit, Push, or Create pull re
   pushed.
 - Suggest asks the Summary Model for text, if one is configured. It fills only empty fields.
 
+## Pull request tab
+
+The Pull request tab shows the pull request of the current branch in four sections: Overview,
+Checks, Review threads and Comments and reviews. Failing checks and unresolved threads are first.
+Resolved threads are collapsed.
+
+- Merge, Rebase, Edit, Ready for review or Convert to draft, and Refresh are at the top. Merge and
+  Rebase ask first.
+- Rebase changes only the local branch. It requires a clean Scope, aborts on a conflict and pushes
+  nothing.
+- Re-run failed jobs runs the failed jobs of one GitHub Actions run again. It shows once for each
+  run that has a failed job.
+- Each action first makes sure that the pull request is still the one of the current branch.
+- The tab reads the pull request again when the polled Git State of the pull request changes.
+
+The rail row and the session header show the pull request number, its state and its check status.
+
 ## Stacked pull requests
 
 The Git tab in the browser uses `github/gh-stack` directly. It is tested with v0.1.1.

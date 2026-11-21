@@ -1,12 +1,3 @@
-export type PullRequest = {
-  number: number;
-  url: string;
-  title: string;
-  isDraft: boolean;
-  reviewDecision: string;
-  statusCheckRollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string; detailsUrl?: string; targetUrl?: string }[];
-};
-
 export type MergeMethod = "MERGE" | "SQUASH" | "REBASE";
 export type PullRequestActionInput = { pr: PullRequestRef; headOid: string; baseBranch: string; method?: MergeMethod };
 export type PullRequestRef = { repo: string; number: number; id: string };
@@ -30,23 +21,30 @@ export type PullRequestThread = {
   diffHunk: string;
   comments: PullRequestComment[];
 };
-export type PullRequestDetails = PullRequest & PullRequestRef & {
+export type PullRequestCheck = { name: string; status: string; url: string; runId?: number; jobId?: number };
+export type PullRequestDetails = PullRequestRef & {
+  url: string;
+  title: string;
   body: string;
   state: "OPEN" | "MERGED" | "CLOSED";
+  isDraft: boolean;
+  reviewDecision: string | null;
   author: string;
   headRefName: string;
   headRepository?: string;
+  headRefOid: string;
   baseRefName: string;
-  createdAt: string;
-  updatedAt: string;
   mergeable: string;
   mergeStateStatus: string;
   viewerCanComment: boolean;
-  headRefOid?: string;
-  mergeMethods?: MergeMethod[];
+  mergeMethods: MergeMethod[];
+  checks: PullRequestCheck[];
   comments: PullRequestComment[];
   reviews: PullRequestReview[];
   threads: PullRequestThread[];
 };
 export type PullRequestCommentInput = { pr: PullRequestRef; body: string; threadId?: string };
 export type PullRequestThreadInput = { pr: PullRequestRef; threadId: string; resolved: boolean };
+export type PullRequestEditInput = { pr: PullRequestRef; title: string; body: string };
+export type PullRequestDraftInput = { pr: PullRequestRef; draft: boolean };
+export type PullRequestRerunInput = { pr: PullRequestRef; runId: number };

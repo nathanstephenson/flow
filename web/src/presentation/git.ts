@@ -26,9 +26,20 @@ export function gitStateLine(git: GitState): string {
   return git.upstream ? `${git.ahead} ahead, ${git.behind} behind` : "No upstream branch";
 }
 
+export type PullRequestTone = "muted" | "positive" | "negative" | "pending" | "merged";
+export type PullRequestBadge = { label: string; tone: PullRequestTone };
+
+const states: Record<PullRequestSummary["state"], PullRequestBadge> = { OPEN: { label: "Open", tone: "positive" }, MERGED: { label: "Merged", tone: "merged" }, CLOSED: { label: "Closed", tone: "negative" } };
+const checkTones: Record<Exclude<PullRequestSummary["checks"], "none">, PullRequestTone> = { passing: "positive", failing: "negative", pending: "pending" };
+
+export function pullRequestBadges(pr: Pick<PullRequestSummary, "state" | "isDraft" | "checks">): { state: PullRequestBadge; checks?: PullRequestBadge } {
+  const state = pr.state === "OPEN" && pr.isDraft ? { label: "Draft", tone: "muted" as const } : states[pr.state];
+  return { state, ...(pr.checks === "none" ? {} : { checks: { label: `Checks ${pr.checks}`, tone: checkTones[pr.checks] } }) };
+}
+
 export function pullRequestLine(pr: PullRequestSummary): string {
-  const state = pr.state === "OPEN" ? pr.isDraft ? "Draft" : "Open" : pr.state === "MERGED" ? "Merged" : "Closed";
-  return `PR #${pr.number} · ${state} · ${pr.checks === "none" ? "No checks" : `Checks ${pr.checks}`}`;
+  const { state, checks } = pullRequestBadges(pr);
+  return `PR #${pr.number} · ${state.label} · ${checks?.label ?? "No checks"}`;
 }
 
 export function diffNotice(diff: GitDiff, path: string): string {

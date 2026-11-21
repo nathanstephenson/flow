@@ -51,6 +51,7 @@ const bundle = await build({
         },
         onFocus() {}, onSettle() {}, onNew() {}, onOpenSettings() {},
       };
+      window.summary = summary;
       window.renderRail = (patch = {}) => {
         props = { ...props, ...patch };
         flushSync(() => root.render(<React.StrictMode>
@@ -85,10 +86,10 @@ const bundle = await build({
         }
       });
       window.renderRail();
-      window.mountTranscriptHeader = () => {
+      window.mountTranscriptHeader = (sessions = []) => {
         // The actual header, with only the Session Host boundary mocked.
         window.fetch = async input => new Response(JSON.stringify(
-          String(input).includes('/api/config') ? { scope: '/tmp/project', backends: ['pi'] } : []
+          String(input).includes('/api/config') ? { scope: '/tmp/project', backends: ['pi'] } : String(input).includes('/api/sessions') ? sessions : []
         ), { headers: { 'Content-Type': 'application/json' } });
         const container = document.createElement('div');
         container.dataset.transcriptHeader = '';
@@ -184,6 +185,32 @@ describe("Agent Session rail DOM focus and material", () => {
         }
       }
     }
+  });
+
+  it("shows the pull request number, state and checks on the rail row and in the header", async () => {
+    const pr = { number: 178, url: 'https://github.com/test/repo/pull/178', state: 'OPEN', isDraft: true, checks: 'failing', reviewDecision: null, unresolvedThreads: 0, updatedAt: '' };
+    await page.evaluate(pr => {
+      const git = { revision: 'r', changed: 0, ahead: 0, behind: 0, upstream: true, pr };
+      const sessions = [{ ...window.summary('a'), branch: { name: 'feature' }, git }, { ...window.summary('b'), branch: { name: 'main' } }];
+      window.renderRail({ withTranscriptHeader: true, sessions });
+      window.mountTranscriptHeader(sessions);
+    }, pr);
+    const header = page.locator('[data-transcript-header]');
+    await header.getByRole('link', { name: '#178' }).waitFor();
+    assert.equal(await header.getByRole('link', { name: '#178' }).getAttribute('href'), pr.url);
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
+      for (const scope of [cursor(), header]) {
+        for (const label of ['Draft', 'Checks failing']) {
+          const badge = scope.locator('[data-slot="badge"]', { hasText: label });
+          assert.equal(await badge.count(), 1, `${theme}: ${label}`);
+          const [color, background] = await badge.evaluate(node => [getComputedStyle(node).color, getComputedStyle(node.closest('[data-transcript-header], [data-cursor]')).backgroundColor]);
+          assert.notEqual(color, background);
+        }
+      }
+    }
+    assert.match(await cursor().textContent(), /#178/);
+    assert.equal(await page.locator('[data-sidebar="menu-button"]', { hasText: '#178' }).count(), 1);
   });
 
   it("moves DOM focus with repeated arrow cursor changes", async () => {
