@@ -217,11 +217,12 @@ function prPane(details: Record<string, unknown> = prDetails(), read?: () => Pro
     if (input.type === "suggest_git_text") return { title: "Suggested", body: "Suggested body" };
   }, { document });
   const added: string[] = [];
-  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {}, onAddToDraft(block: string) { added.push(block); } };
+  const draft = { result: "added" };
+  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {}, onAddToDraft(block: string) { added.push(block); return draft.result; } };
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
-  return { calls, render, flush, load, document, listeners, added, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
+  return { calls, render, flush, load, document, listeners, added, draft, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
 }
 const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
 
@@ -298,8 +299,38 @@ it("adds a check that is not a GitHub Actions job with its name and URL only", a
   assert.equal(rowStatus(checkRow(render(), "external")), "Added to Draft without a log. This check is not a GitHub Actions job.");
 });
 
-for (const [name, answer] of [["fails", () => Promise.reject(new Error("GitHub request failed"))], ["gives no log", () => Promise.resolve(null)]] as const) it(`adds a check with its name and URL only when the log read ${name}`, async () => {
-  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? answer() : Promise.resolve());
+it("adds nothing and shows the daemon's message when it refuses the log read", async () => {
+  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.reject(new Error("The branch's pull request has changed. Reload it before continuing.")) : Promise.resolve());
+  await load();
+  findButton(checkRow(render(), "deploy"), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(added, []);
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "Error: The branch's pull request has changed. Reload it before continuing.");
+  assert.equal(findButton(checkRow(render(), "deploy"), "Add to Draft").props.disabled, false);
+});
+
+it("keeps each Add to Draft status element mounted before the first message", async () => {
+  const { render, load } = prPane();
+  await load();
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "");
+  assert.equal(rowStatus(find(render(), "AccordionItem", node => node.props.value === "T_open")), "");
+});
+
+for (const [result, message] of [["question", "Answer the question first. Then add to the Draft."], ["locked", "This Agent Session cannot take a message. Nothing was added."]] as const) it(`says why nothing was added when the composer answers ${result}`, async () => {
+  const { render, load, flush, draft } = prPane();
+  await load();
+  draft.result = result;
+  const item = () => find(render(), "AccordionItem", node => node.props.value === "T_open");
+  findButton(item(), "Add to Draft").props.onClick();
+  await flush();
+  assert.equal(rowStatus(item()), message);
+  findButton(checkRow(render(), "external"), "Add to Draft").props.onClick();
+  await flush();
+  assert.equal(rowStatus(checkRow(render(), "external")), message);
+});
+
+it("adds a check with its name and URL only when the log cannot be read", async () => {
+  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.resolve(null) : Promise.resolve());
   await load();
   findButton(checkRow(render(), "deploy"), "Add to Draft").props.onClick();
   await flush();

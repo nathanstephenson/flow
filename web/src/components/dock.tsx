@@ -6,6 +6,7 @@ import type { MobileDetail } from "@/presentation/mobile-navigation.ts";
 import type { DockAction } from "@/docks.ts";
 import { DockResizeHandle } from "@/components/dock-resize-handle.tsx";
 import { GitPane } from "@/components/git-pane.tsx";
+import type { AppendResult } from "@/components/composer.tsx";
 import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -47,7 +48,7 @@ export function Dock({
   visible?: boolean;
   mobile?: boolean;
   mobileNavigation?: MobileDockNavigation;
-  onAddToDraft: (block: string) => void;
+  onAddToDraft: (block: string) => AppendResult;
 }) {
   const root = useRef<HTMLElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
@@ -209,7 +210,7 @@ function DockTabPanel({
   dispatch: (action: DockAction) => void;
   onStatus: (status: ShellStatus) => void;
   mobileNavigation?: MobileDockNavigation;
-  onAddToDraft: (block: string) => void;
+  onAddToDraft: (block: string) => AppendResult;
 }) {
   const content = tab.content;
   return (

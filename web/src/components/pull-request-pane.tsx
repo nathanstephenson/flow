@@ -3,6 +3,7 @@ import type { Command } from "../../../src/protocol/commands.ts";
 import type { GitText, PullRequestSummary } from "../../../src/protocol/git.ts";
 import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestCheckLog, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
+import type { AppendResult } from "@/components/composer.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
@@ -13,8 +14,13 @@ import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 import { pullRequestIndicators } from "@/presentation/git.ts";
 import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
-type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void; onAddToDraft: (block: string) => void };
+type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void; onAddToDraft: (block: string) => AppendResult };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
+
+const notAdded: Record<Exclude<AppendResult, "added">, string> = {
+  question: "Answer the question first. Then add to the Draft.",
+  locked: "This Agent Session cannot take a message. Nothing was added.",
+};
 
 const methodLabels: Record<MergeMethod, string> = { MERGE: "Merge commit", SQUASH: "Squash and merge", REBASE: "Rebase and merge" };
 
@@ -96,8 +102,8 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
   }
 
   function addToDraft(key: string, block: string, text = "Added to Draft.") {
-    onAddToDraft(block);
-    setAdded({ key, text });
+    const result = onAddToDraft(block);
+    setAdded({ key, text: result === "added" ? text : notAdded[result] });
   }
 
   async function addCheck(key: string, check: PullRequestCheck, pr: PullRequestRef) {
@@ -105,13 +111,15 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     if (readingLogs.current.has(key)) return;
     readingLogs.current.add(key);
     setAdded({ key, text: "Reading the job log…" });
-    const log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", sessionId, pr, jobId: check.jobId }).catch(() => null);
-    readingLogs.current.delete(key);
+    let log: PullRequestCheckLog | null;
+    try { log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", sessionId, pr, jobId: check.jobId }); }
+    catch (failure) { return setAdded({ key, text: String(failure) }); }
+    finally { readingLogs.current.delete(key); }
     if (log) addToDraft(key, checkDraftBlock(check, log));
     else addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. The job log could not be read or is too large.");
   }
 
-  const addedStatus = (key: string, className = "") => added?.key === key ? <span role="status" className={`text-xs text-muted-foreground ${className}`}>{added.text}</span> : null;
+  const addedStatus = (key: string, className = "") => <span role="status" className={`text-xs text-muted-foreground ${className}`}>{added?.key === key ? added.text : ""}</span>;
 
   function commentForm(key: string, label: string, input: Omit<PullRequestCommentInput, "body">) {
     const text = drafts[key] ?? "";

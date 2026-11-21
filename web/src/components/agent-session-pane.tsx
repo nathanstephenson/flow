@@ -25,7 +25,7 @@ import { sessionProject } from "@/presentation/session-project.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
-import { Composer, type ComposerHandle } from "@/components/composer.tsx";
+import { appendToComposer, Composer, type ComposerHandle } from "@/components/composer.tsx";
 import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
@@ -248,9 +248,10 @@ function AttachedPane({
 
   const composer = useRef<ComposerHandle | null>(null);
   const addToDraft = useCallback((block: string) => {
-    composer.current?.append(block);
-    if (mobile && mobileViewRef.current.kind !== "transcript") toast.info("Added to Draft", "Open the transcript to see the Draft.");
-  }, [mobile]);
+    const result = appendToComposer(composer.current, drafts, sessionId, block);
+    if (result === "added" && mobile && mobileViewRef.current.kind !== "transcript") toast.info("Added to Draft", "Open the transcript to see the Draft.");
+    return result;
+  }, [drafts, mobile, sessionId]);
 
   const selectMobileTab = useCallback((side: DockSide, tabId: string) => {
     docks.dispatch({ type: "activate", side, tabId });
