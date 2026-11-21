@@ -588,14 +588,15 @@ it("shows Git State and reads Stack and PR again when the pull request summary c
 
 function changesPane() {
   const calls: any[] = [];
+  let listed = [{ status: " M", path: "a.ts" }, { status: "??", path: "b.ts" }];
   const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
   const pane = component("git-changes", async input => {
     calls.push(input);
-    if (input.type === "git_changes") return { files: [{ status: " M", path: "a.ts" }, { status: "??", path: "b.ts" }], commits: input.view === "branch" ? ["abc Add a"] : [] };
+    if (input.type === "git_changes") return { files: listed, commits: input.view === "branch" ? ["abc Add a"] : [] };
     return { text: `--- a/${input.path}\n+++ b/${input.path}\n@@ -1 +1 @@\n-old\n+${calls.length}\n` };
   });
   const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
-  return { calls, pane, flush, plain, diffs: () => calls.filter(call => call.type === "git_diff") };
+  return { calls, pane, flush, plain, list: (files: typeof listed) => { listed = files; }, diffs: () => calls.filter(call => call.type === "git_diff") };
 }
 
 it("reads a file diff once when its Changes row opens", async () => {
@@ -651,4 +652,47 @@ it("switches the Changes view between uncommitted and branch", async () => {
   assert.deepEqual(calls.filter(call => call.type === "git_changes").map(call => call.view), ["uncommitted", "branch"]);
   assert.deepEqual(plain(find(render(), "Accordion").props.value), []);
   assert.equal(textContent(find(render(), "ul", node => node.props["aria-label"] === "Branch commits")), "abc Add a");
+});
+
+it("keeps the newest diff when an older response arrives last", async () => {
+  const pending: ((value: unknown) => void)[] = [];
+  const pane = component("git-changes", input => input.type === "git_changes"
+    ? Promise.resolve({ files: [{ status: " M", path: "a.ts" }], commits: [] })
+    : new Promise(resolve => pending.push(resolve)));
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+  const props = { sessionId: "session", revision: "a" };
+  const diffOf = () => find(find(pane.render("GitChanges", props), "AccordionItem", node => node.props.value === "a.ts"), "AccordionContent").props.children.props.diff;
+  pane.render("GitChanges", props);
+  pane.effects.at(-1)!();
+  await flush();
+  find(pane.render("GitChanges", props), "Accordion").props.onValueChange(["a.ts"]);
+  props.revision = "b";
+  pane.render("GitChanges", props);
+  pane.effects.at(-1)!();
+  await flush();
+  assert.equal(pending.length, 2);
+  pending[1]!({ text: "new" });
+  await flush();
+  pending[0]!({ text: "old" });
+  await flush();
+  assert.equal(diffOf().text, "new");
+});
+
+it("closes a row when its file leaves the list and reads no diff for it", async () => {
+  const { pane, flush, plain, list, diffs } = changesPane();
+  const props = { sessionId: "session", revision: "a" };
+  pane.render("GitChanges", props);
+  pane.effects.at(-1)!();
+  await flush();
+  find(pane.render("GitChanges", props), "Accordion").props.onValueChange(["a.ts", "b.ts"]);
+  await flush();
+  list([{ status: " M", path: "a.ts" }]);
+  for (const revision of ["b", "c"]) {
+    props.revision = revision;
+    pane.render("GitChanges", props);
+    pane.effects.at(-1)!();
+    await flush();
+  }
+  assert.deepEqual(plain(find(pane.render("GitChanges", props), "Accordion").props.value), ["a.ts"]);
+  assert.deepEqual(diffs().map(call => call.path), ["a.ts", "b.ts", "a.ts", "a.ts"]);
 });

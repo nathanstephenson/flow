@@ -3,7 +3,7 @@ import { afterEach, beforeEach, it } from "node:test";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, repository } from "./git-fixture.ts";
+import { git, repository, unbornRepository } from "./git-fixture.ts";
 import { changes, diff } from "../src/daemon/changes.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
@@ -113,7 +113,56 @@ it("uses the pull request base when Git State knows it", async () => {
   git(repo, "update-ref", "refs/remotes/origin/parent", "HEAD");
   git(repo, "switch", "--quiet", "-c", "child");
   commit("child.txt", "child\n", "Add child");
-  assert.equal((await changes(repo, "branch", "parent", github)).base, "origin/parent");
+  const asked: string[] = [];
+  const base = (branch: string) => { asked.push(branch); return branch === "child" ? "parent" : undefined; };
+  assert.equal((await changes(repo, "branch", base, github)).base, "origin/parent");
+  git(repo, "update-ref", "refs/remotes/origin/main", "main");
+  git(repo, "switch", "--quiet", "-c", "other");
+  assert.equal((await changes(repo, "branch", base, github)).base, "origin/main");
+  assert.deepEqual(asked, ["child", "other"]);
+});
+
+it("uses the stack parent from local gh stack metadata", async () => {
+  git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(repo, "switch", "--quiet", "-c", "parent");
+  commit("parent.txt", "parent\n", "Add parent");
+  git(repo, "switch", "--quiet", "-c", "child");
+  commit("child.txt", "child\n", "Add child");
+  writeFileSync(join(repo, ".git", "gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "parent" }, { branch: "child" }] }] }));
+  assert.deepEqual(await changes(repo, "branch", undefined, github), { files: [{ status: "A", path: "child.txt" }], commits: [`${git(repo, "rev-parse", "--short", "HEAD").trim()} Add child`], base: "parent" });
+});
+
+it("diffs a staged file in a repository with no commits", async () => {
+  const empty = unbornRepository(root, "empty");
+  writeFileSync(join(empty, "a.txt"), "a\n");
+  git(empty, "add", "a.txt");
+  const staged = await diff(empty, "uncommitted", "a.txt");
+  assert.ok("text" in staged && staged.text.includes("+a\n"));
+});
+
+it("gives the same diff text whatever the user Git config", async () => {
+  commit("dir/file.txt", "old\n", "add file");
+  writeFileSync(join(repo, "dir/file.txt"), "new\n");
+  const plain = await diff(repo, "uncommitted", "dir/file.txt");
+  assert.ok("text" in plain && plain.text.includes("--- a/dir/file.txt\n+++ b/dir/file.txt\n"));
+  for (const [key, value] of [["color.ui", "always"], ["color.diff", "always"], ["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"], ["diff.external", "false"]]) git(repo, "config", key!, value!);
+  assert.deepEqual(await diff(repo, "uncommitted", "dir/file.txt"), plain);
+});
+
+it("decides too large from sizes when git also writes warnings", async () => {
+  git(repo, "config", "core.autocrlf", "true");
+  commit("large.txt", "small\n", "add large");
+  writeFileSync(join(repo, "large.txt"), "x\n".repeat(600_000));
+  assert.deepEqual(await diff(repo, "uncommitted", "large.txt"), { tooLarge: true });
+  commit("old.txt", "o\n".repeat(200_000), "add old");
+  writeFileSync(join(repo, "old.txt"), "short\n");
+  assert.deepEqual(await diff(repo, "uncommitted", "old.txt"), { tooLarge: true });
+  writeFileSync(join(repo, "old.txt"), "\n".repeat(120_000));
+  git(repo, "add", "old.txt");
+  git(repo, "commit", "--quiet", "-m", "blank lines");
+  writeFileSync(join(repo, "old.txt"), "\n\n".repeat(60_000).replace(/\n\n/g, "x\n"));
+  const fits = await diff(repo, "uncommitted", "old.txt");
+  assert.ok("text" in fits);
 });
 
 it("asks for a fetch when the base ref is not known locally", async () => {

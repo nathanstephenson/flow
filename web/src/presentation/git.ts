@@ -6,10 +6,16 @@ export function gitStateLine(git: GitState): string {
   return parts.join(" · ");
 }
 
-export function diffNotice(diff: GitDiff): string | undefined {
+export function diffNotice(diff: GitDiff, path: string): string {
+  if (path.endsWith("/")) return "Directory. No text diff.";
   if ("binary" in diff) return "Binary file. No text diff.";
   if ("tooLarge" in diff) return "This diff is too large to show.";
-  return diff.text ? undefined : "No text changes.";
+  return "No text changes.";
+}
+
+export function diffHunks(text: string): string | undefined {
+  const start = text.search(/^@@ /m);
+  return start < 0 ? undefined : text.slice(start);
 }
 
 export function noChanges(view: ChangesView): string {

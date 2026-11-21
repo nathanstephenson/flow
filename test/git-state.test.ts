@@ -142,12 +142,13 @@ describe("GitStates", () => {
     const fake = github();
     const states = new GitStates(fake.run);
     const path = scope("repo");
-    assert.equal(states.pullRequestBase(path), undefined);
+    assert.equal(states.pullRequestBase(path, "main"), undefined);
     await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
-    assert.equal(states.pullRequestBase(path), "parent");
+    assert.equal(states.pullRequestBase(path, "main"), "parent");
+    assert.equal(states.pullRequestBase(path, "other"), undefined);
     fake.state.pulls = [{ ...pull, state: "MERGED" }];
     await states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
-    assert.equal(states.pullRequestBase(path), undefined);
+    assert.equal(states.pullRequestBase(path, "main"), undefined);
   });
 
   it("keeps the last value when a poll fails and clears it when the pull request is gone", async () => {

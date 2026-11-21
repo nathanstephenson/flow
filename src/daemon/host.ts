@@ -451,7 +451,7 @@ export class SessionHost {
 
   private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
     const scope = this.record(command.sessionId).scope;
-    const base = this.gitStates.pullRequestBase(scope);
+    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
     try {
       return command.type === "git_changes" ? await changes(scope, command.view, base) : await diff(scope, command.view, command.path, base);
     } catch (error) {

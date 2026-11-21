@@ -92,9 +92,9 @@ export class GitStates {
     return { revision, changed, ahead, behind, upstream, ...(entry.pr ? { pr: entry.pr } : {}) };
   }
 
-  pullRequestBase(scope: string): string | undefined {
+  pullRequestBase(scope: string, branch: string): string | undefined {
     const entry = this.entries.get(scope);
-    return entry?.pr ? entry.prBase : undefined;
+    return entry?.pr && entry.prBranch === branch ? entry.prBase : undefined;
   }
 
   async poll(sessions: PolledSession[], forced?: string): Promise<void> {

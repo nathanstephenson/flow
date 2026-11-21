@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangesView, GitChanges as Changes, GitDiff } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import { DiffText } from "@/components/diff-text.tsx";
-import { diffNotice, noChanges } from "@/presentation/git.ts";
+import { diffHunks, diffNotice, noChanges } from "@/presentation/git.ts";
 
 type Diffs = Record<string, GitDiff | { error: string }>;
 
@@ -15,22 +15,29 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
   const [diffs, setDiffs] = useState<Diffs>({});
+  const requests = useRef<Record<string, number>>({});
 
   function readDiff(path: string) {
     const key = `${view}\0${path}`;
-    void connection.command<GitDiff>({ type: "git_diff", sessionId, view, path }).then(
-      (value) => setDiffs(current => ({ ...current, [key]: value })),
-      (failure: unknown) => setDiffs(current => ({ ...current, [key]: { error: String(failure) } })),
-    );
+    const request = (requests.current[key] ?? 0) + 1;
+    requests.current[key] = request;
+    const store = (value: Diffs[string]) => { if (requests.current[key] === request) setDiffs(current => ({ ...current, [key]: value })); };
+    void connection.command<GitDiff>({ type: "git_diff", sessionId, view, path }).then(store, (failure: unknown) => store({ error: String(failure) }));
   }
 
   useEffect(() => {
     let cancelled = false;
     void connection.command<Changes>({ type: "git_changes", sessionId, view }).then(
-      (value) => { if (!cancelled) { setChanges(value); setError(""); } },
+      (value) => {
+        if (cancelled) return;
+        const listed = (path: string) => value.files.some(file => file.path === path);
+        setChanges(value);
+        setError("");
+        setOpen(current => current.filter(listed));
+        for (const path of open.filter(listed)) readDiff(path);
+      },
       (failure: unknown) => { if (!cancelled) setError(String(failure)); },
     );
-    for (const path of open) readDiff(path);
     return () => { cancelled = true; };
   }, [connection, sessionId, view, revision]);
 
@@ -69,7 +76,7 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
                   <span className="min-w-0 break-all">{file.path}</span>
                 </AccordionTrigger>
                 <AccordionContent className="pb-2">
-                  <FileDiff diff={diffs[`${view}\0${file.path}`]} />
+                  <FileDiff path={file.path} diff={diffs[`${view}\0${file.path}`]} />
                 </AccordionContent>
               </AccordionItem>
             ))}
@@ -80,15 +87,14 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
   );
 }
 
-function FileDiff({ diff }: { diff: GitDiff | { error: string } | undefined }) {
+function FileDiff({ path, diff }: { path: string; diff: GitDiff | { error: string } | undefined }) {
   if (!diff) return <p className="text-xs text-muted-foreground">Reading diff…</p>;
   if ("error" in diff) return <p role="status" className="text-xs text-muted-foreground">{diff.error}</p>;
-  if ("text" in diff && diff.text) {
-    return (
-      <pre className="m-0 max-h-[32rem] overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre text-foreground">
-        <DiffText text={diff.text} query="" />
-      </pre>
-    );
-  }
-  return <p className="text-xs text-muted-foreground">{diffNotice(diff)}</p>;
+  const hunks = "text" in diff ? diffHunks(diff.text) : undefined;
+  if (!hunks) return <p className="text-xs text-muted-foreground">{diffNotice(diff, path)}</p>;
+  return (
+    <pre className="m-0 max-h-[32rem] overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre text-foreground">
+      <DiffText text={hunks} lang="diff" query="" />
+    </pre>
+  );
 }
