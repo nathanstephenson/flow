@@ -161,8 +161,11 @@ _Avoid_: transcript, history, log
 **Pull Request**: The GitHub pull request from the branch of a Scope, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
 _Avoid_: merge request, review, change
 
-**Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a stack, otherwise the default branch of the base repository.
+**Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
 _Avoid_: target branch, trunk, upstream
+
+**Stack**: An ordered list of branches on a trunk, registered in the repository of a Scope. Each branch builds on the branch below it, and the lowest branch builds on the trunk. The branch below is the Base Branch of its Pull Request. A chain of Pull Request bases or of commits that is not registered is not a Stack.
+_Avoid_: inferred stack, stack graph, candidate
 
 **Git State**: The summary of a Scope that the Session Host holds and shows with each Agent Session in it: changed files, commits ahead of and behind the upstream, and the status of its Pull Request. It is derived again when needed. It is not stored and is not part of the Presentation Transcript.
 _Avoid_: git status, branch state, repository state

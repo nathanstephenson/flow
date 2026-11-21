@@ -1,35 +1,41 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Plus } from "lucide-react";
-import { type StackAction, type StackGraphBranch, type StackPullRequest, type StackReview, type StackStatus } from "../../../src/protocol/stack.ts";
+import { ArrowDown, ArrowUp, Copy, Plus, X } from "lucide-react";
+import type { StackCreate, StackInput, StackPullRequest, StackReview, StackStatus, StackView } from "../../../src/protocol/stack.ts";
+import type { GitState } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
+import { readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
 
-type GraphRow = { branch: StackGraphBranch; depth: number };
+type Form = { current: string; trunk?: string; branches: string[] };
+type Branch = StackView["branches"][number];
 
-function graphRows(branches: StackGraphBranch[]): GraphRow[] {
-  const names = new Set(branches.map(branch => branch.name));
-  const children = new Map<string, StackGraphBranch[]>();
-  for (const branch of branches) {
-    if (!branch.parent || !names.has(branch.parent)) continue;
-    const list = children.get(branch.parent) ?? [];
-    list.push(branch);
-    children.set(branch.parent, list);
-  }
-  for (const list of children.values()) list.sort((a, b) => a.name.localeCompare(b.name));
-  const roots = branches.filter(branch => !branch.parent || !names.has(branch.parent)).sort((a, b) => a.name.localeCompare(b.name));
-  const result: GraphRow[] = [];
-  const append = (branch: StackGraphBranch, depth: number) => {
-    result.push({ branch, depth });
-    for (const child of children.get(branch.name) ?? []) append(child, depth + 1);
-  };
-  for (const root of roots) append(root, 0);
-  return result;
+function stateLine(branch: Branch): string {
+  return [
+    branch.pr ? `#${branch.pr.number} ${readableStatus(branch.isMerged ? "MERGED" : branch.pr.state)}` : branch.isMerged ? "Merged" : "No pull request",
+    ...(branch.isQueued ? ["Queued"] : []),
+    ...(branch.needsRebase ? ["Needs rebase"] : []),
+    ...(branch.isCurrent ? ["Current"] : []),
+  ].join(" · ");
 }
 
-export function StackPane({ sessionId, disabled = false, onChange, onAvailable, revision = 0 }: { sessionId: string; disabled?: boolean; onChange: () => void; onAvailable?: (available: boolean) => void; revision?: number }) {
+function stackKey(view: StackView | undefined): string {
+  return JSON.stringify(view && [view.trunk, view.currentBranch, view.branches.map(branch => [branch.name, branch.pr?.number, branch.pr?.state, branch.isMerged, branch.isQueued, branch.needsRebase])]);
+}
+
+function moved(list: string[], from: number, to: number): string[] {
+  const next = [...list];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
+}
+
+export function StackPane({ sessionId, git, refresh = 0, disabled = false, onChange, onAvailable }: { sessionId: string; git?: GitState | undefined; refresh?: number; disabled?: boolean; onChange: () => void; onAvailable?: (available: boolean) => void }) {
   const { connection } = useHost();
   const [status, setStatus] = useState<StackStatus>();
+  const [available, setAvailable] = useState(false);
+  const [readError, setReadError] = useState("");
+  const [form, setForm] = useState<Form>();
   const [review, setReview] = useState<StackReview>();
   const [names, setNames] = useState("");
   const [adding, setAdding] = useState(false);
@@ -38,59 +44,53 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
   const [output, setOutput] = useState("");
   const [syncFailed, setSyncFailed] = useState(false);
   const requestGeneration = useRef(0);
-  function refresh(): Promise<void> {
+  const loadedBranch = useRef(git?.branch);
+  const gitKey = JSON.stringify([git?.branch, git?.head, git?.pr?.number, git?.pr?.state]);
+
+  function load(): Promise<void> {
     const generation = ++requestGeneration.current;
-    setStatus(undefined);
-    setReview(undefined);
+    if (loadedBranch.current !== git?.branch) {
+      setStatus(undefined);
+      setReview(undefined);
+    }
+    loadedBranch.current = git?.branch;
     return connection.command<StackStatus>({ type: "stack_status", sessionId }).then(value => {
-      if (generation === requestGeneration.current) setStatus(value);
-    });
+      if (generation !== requestGeneration.current) return;
+      setReadError("");
+      setStatus(value);
+      setReview(current => current && stackKey(current.view) === stackKey(value.view) ? current : undefined);
+      setAvailable(value.available);
+      setForm(current => value.create ? current?.current === value.create.current ? current : initialForm(value.create) : undefined);
+    }, failure => { if (generation === requestGeneration.current) setReadError(String(failure)); });
   }
   useEffect(() => {
-    setStatus(undefined);
-    setReview(undefined);
-    setAdding(false);
-    setNames("");
-    setSyncFailed(false);
-    setError("");
-    setOutput("");
-    const generation = ++requestGeneration.current;
-    void connection.command<StackStatus>({ type: "stack_status", sessionId }).then(
-      value => { if (generation === requestGeneration.current) setStatus(value); },
-      failure => { if (generation === requestGeneration.current) setError(String(failure)); },
-    );
+    void load();
     return () => { requestGeneration.current++; };
-  }, [connection, sessionId, revision]);
-  const managedVisible = Boolean(status?.view && (!status.view.currentBranch || !status.view.trunk || status.view.currentBranch !== status.view.trunk));
-  const diagnostic = Boolean(error || status?.warnings?.length || (status?.problem && status.problemKind !== "action"));
-  const discovered = Boolean(status?.graph || managedVisible || status?.candidate || status?.rebasing);
-  const visible = discovered || diagnostic || busy || Boolean(output || review || syncFailed);
+  }, [connection, sessionId, gitKey, refresh]);
+  const visible = available || Boolean(readError);
   useEffect(() => { onAvailable?.(visible); }, [visible, onAvailable]);
 
-  async function run(action?: StackAction, branches?: string[], token?: string) {
+  async function run(action: StackInput["action"], input: Omit<StackInput, "action"> = {}) {
     setBusy(true);
     setError("");
     setOutput("");
     try {
-      if (!action) await refresh();
-      else if ((action === "submit" || action === "sync") && !token) {
+      if ((action === "submit" || action === "sync") && !input.token) {
         setReview(await connection.command<StackReview>({ type: "prepare_stack", sessionId, action }));
       } else {
         setReview(undefined);
-        setOutput(await connection.command<string>({ type: "change_stack", sessionId, input: { action, branches, token, ...(action === "init" ? { fingerprint: status?.candidate?.fingerprint } : {}) } }));
+        setOutput(await connection.command<string>({ type: "change_stack", sessionId, input: { action, ...input } }));
         if (action === "sync") setSyncFailed(false);
         if (action === "add") { setAdding(false); setNames(""); }
         onChange();
-        await refresh();
+        await load();
       }
     } catch (failure) {
       setReview(undefined);
       setError(String(failure));
-      if (action === "sync" && token) setSyncFailed(true);
-      if (action) {
-        onChange();
-        try { await refresh(); } catch { setStatus(undefined); }
-      }
+      if (action === "sync" && input.token) setSyncFailed(true);
+      onChange();
+      await load();
     } finally { setBusy(false); }
   }
   async function assist() {
@@ -103,18 +103,17 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     finally { setBusy(false); }
   }
 
-  const displayBranches = status?.graph?.branches ?? [];
-  const pullRequests = displayBranches.flatMap(branch => branch.pr ? [branch.pr] : [])
-    .filter((pr, index, all) => all.findIndex(other => other.number === pr.number) === index).reverse();
+  const branches = [...status?.view?.branches ?? []].reverse();
+  const pullRequests = branches.flatMap(branch => branch.pr ? [branch.pr] : []);
   async function copyLinks(prs: StackPullRequest[] = pullRequests, label = "Stack") {
     setError("");
     setOutput("");
     try {
       const escape = (text: string) => text.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-      const html = prs.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title!)}</a></div>`).join("");
+      const html = prs.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title ?? pr.url!)}</a></div>`).join("");
       await navigator.clipboard.write([new ClipboardItem({
         "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([prs.map(pr => pr.title).join("\n")], { type: "text/plain" }),
+        "text/plain": new Blob([prs.map(pr => pr.title ?? pr.url).join("\n")], { type: "text/plain" }),
       })]);
       setOutput(`${label} copied.`);
     } catch (failure) { setError(`Could not copy ${label === "Stack" ? "stack" : label}: ${String(failure)}`); }
@@ -122,54 +121,57 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
 
   const blocked = busy || disabled;
   if (!visible) return null;
-  const rows = graphRows(displayBranches);
-  const managedByName = new Map(status?.view?.branches.map(branch => [branch.name, branch]) ?? []);
+  const addable = status?.create && form ? status.create.unstacked.filter(name => name !== form.trunk && !form.branches.includes(name)) : [];
   return <section aria-label="Stack" className="space-y-3">
     <div className="flex items-center gap-2">
       <h2 className="font-medium">Stack</h2>
-      <Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button>
-      {pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.title || !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}
+      {pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}
     </div>
-    {status?.problem && (status.problemKind !== "action" || discovered) ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
-    {status?.warnings?.length ? <ul aria-label="Stack diagnostics" className="space-y-1 text-muted-foreground">{status.warnings.map(warning => <li key={warning}>Warning: {warning}</li>)}</ul> : null}
-    {error ? <p role="alert">{error}</p> : null}
+    {error || readError ? <p role="alert">{error || readError}</p> : null}
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
+    {status?.notice ? <p className="text-muted-foreground">{status.notice}</p> : null}
 
-    {displayBranches.length ? <>
-      <p>{status?.graph?.trunk ? <>Trunk: <span className="font-mono">{status.graph.trunk}</span></> : "Trunk unknown"}</p>
-      <ul role="tree" aria-label="Stack branches" className="space-y-1 border-l border-border/70 py-1">
-        {rows.map(({ branch, depth }) => {
-          const managed = managedByName.get(branch.name);
-          const pr = branch.pr ?? managed?.pr;
-          return <li role="treeitem" aria-level={depth + 1} key={branch.name} className="flex flex-wrap items-center gap-2 py-1" style={{ paddingLeft: `${12 + depth * 20}px` }}>
-            <span aria-hidden="true" className="text-muted-foreground">{depth ? "└" : "●"}</span>
-            <span className={branch.isCurrent ? "font-medium" : undefined}>
-              <span className="font-mono">{branch.name}</span>{branch.isCurrent ? " (current)" : ""}
-              {branch.availability === "remote" ? " · remote-only" : " · local"}
-              {pr ? ` · #${pr.number} ${pr.state}` : " · no PR"}
-              {branch.relation === "ancestry" ? " · inferred" : ""}
-            </span>
-            {pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${pr.number} link`} title={`Copy PR #${pr.number} link`} disabled={busy || !pr.title || !pr.url} onClick={() => void copyLinks([pr], `PR #${pr.number}`)}><Copy aria-hidden="true" /></Button> : null}
-            {managed ? <Button size="sm" variant="outline" disabled={blocked || !!review || status?.rebasing || managed.isCurrent || branch.availability !== "local"} onClick={() => void run("checkout", [branch.name])}>Switch</Button> : null}
-          </li>;
-        })}
-      </ul>
-    </> : null}
+    {status?.view ? <ol aria-label="Stack branches" className="space-y-1">
+      {branches.map(branch => <li key={branch.name} className="flex min-w-0 items-center gap-2 py-1">
+        <div className="min-w-0 flex-1">
+          <p className={`truncate font-mono ${branch.isCurrent ? "font-semibold" : ""}`}>{branch.name}</p>
+          {branch.pr?.title ? <p className="truncate">{branch.pr.title}</p> : null}
+          <p className="text-xs text-muted-foreground">{branch.pr?.url ? <a className="underline" href={safePullRequestUrl(branch.pr.url)} target="_blank" rel="noreferrer">{stateLine(branch)}</a> : stateLine(branch)}</p>
+        </div>
+        {branch.pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${branch.pr.number} link`} title={`Copy PR #${branch.pr.number} link`} disabled={busy || !branch.pr.url} onClick={() => void copyLinks([branch.pr!], `PR #${branch.pr!.number}`)}><Copy aria-hidden="true" /></Button> : null}
+        <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || branch.isCurrent} onClick={() => void run("checkout", { branches: [branch.name] })}>Switch</Button>
+      </li>)}
+      <li className="py-1"><span className="font-mono text-muted-foreground">{status.view.trunk}</span> <span className="text-xs text-muted-foreground">Trunk</span></li>
+    </ol> : null}
 
-    {status?.candidate ? <div aria-label="Branches to create" className="space-y-1">
-      <p>Branches Create stack will register (bottom to top):</p>
-      <ol>{status.candidate.pullRequests.map(pr => <li key={pr.branch}>{pr.branch} · #{pr.number} {pr.state}</li>)}</ol>
-    </div> : null}
-    {status?.graph && !status.view && !status.candidate ? <p className="text-muted-foreground">This is a read-only stack graph. Branching or remote-only graphs cannot be registered or changed from Flow.</p> : null}
-    {!status?.rebasing && !status?.view && status?.candidate ? <>
-      <p>Create stack registers only the branches listed above. It does not create or fetch branches.</p>
-      {!status.available ? <p className="text-muted-foreground">Create stack is unavailable until gh-stack is installed on the Session Host.</p> : null}
-      <Button size="sm" variant="outline" disabled={blocked || !!review || !status.available} onClick={() => void run("init", status.candidate!.branches)}>Create stack</Button>
-    </> : null}
+    {status?.create && form ? <section aria-label="Create stack" className="space-y-3">
+      <p className="text-muted-foreground">This branch is not in a stack. Choose the branches from top to bottom, and the trunk.</p>
+      <Select name="branch" value={null} disabled={blocked || !addable.length} onValueChange={(name: string | null) => { if (name) setForm({ ...form, branches: [...form.branches, name] }); }}>
+        <SelectTrigger size="sm" aria-label="Add branch"><SelectValue>Add branch</SelectValue></SelectTrigger>
+        <SelectContent>{addable.map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent>
+      </Select>
+      <ol aria-label="Branches to register" className="space-y-1">
+        {form.branches.map((name, index) => <li key={name} className="flex min-w-0 items-center gap-1">
+          <span className="min-w-0 flex-1 truncate font-mono">{name}</span>
+          <Button size="icon-sm" variant="ghost" aria-label={`Move ${name} up`} title="Move up" disabled={blocked || index === form.branches.length - 1} onClick={() => setForm({ ...form, branches: moved(form.branches, index, index + 1) })}><ArrowUp aria-hidden="true" /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label={`Move ${name} down`} title="Move down" disabled={blocked || index === 0} onClick={() => setForm({ ...form, branches: moved(form.branches, index, index - 1) })}><ArrowDown aria-hidden="true" /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label={`Remove ${name}`} title="Remove" disabled={blocked} onClick={() => setForm({ ...form, branches: form.branches.filter(other => other !== name) })}><X aria-hidden="true" /></Button>
+        </li>).reverse()}
+      </ol>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="text-muted-foreground">Trunk</span>
+        <Select name="trunk" value={form.trunk ?? null} disabled={blocked} onValueChange={(trunk: string | null) => { if (trunk) setForm({ ...form, trunk, branches: form.branches.filter(name => name !== trunk) }); }}>
+          <SelectTrigger size="sm" aria-label="Trunk"><SelectValue>{form.trunk ?? "Choose the trunk"}</SelectValue></SelectTrigger>
+          <SelectContent>{status.create.branches.map(name => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent>
+        </Select>
+      </div>
+      <p className="text-muted-foreground">Create stack registers these branches in this order, then switches to the top branch. It does not commit, rebase or push.</p>
+      <Button size="sm" disabled={blocked || !form.trunk || !form.branches.length} onClick={() => void run("init", { branches: form.branches, ...(form.trunk ? { trunk: form.trunk } : {}) })}>Create stack</Button>
+    </section> : null}
 
-    {!status?.rebasing && managedVisible && status?.view ? <>
+    {!status?.rebasing && status?.view ? <>
       <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Commit uncommitted files first.</p>
-      {adding ? <form className="space-y-2" aria-label="New branch" onSubmit={(event) => { event.preventDefault(); if (!blocked && !review && names.trim()) void run("add", [names.trim()]); }}>
+      {adding ? <form className="space-y-2" aria-label="New branch" onSubmit={(event) => { event.preventDefault(); if (!blocked && !review && names.trim()) void run("add", { branches: [names.trim()] }); }}>
         <label className="block">New branch name<Input autoFocus required value={names} onChange={(event) => setNames(event.target.value)} disabled={blocked || !!review} /></label>
         <div className="flex gap-2">
           <Button type="submit" size="sm" variant="outline" disabled={blocked || !!review || !names.trim()}>Add branch</Button>
@@ -184,12 +186,11 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
       </div>
     </> : status?.rebasing ? <>
       <h3>Rebase in progress</h3>
-      {!status.available ? <p className="text-muted-foreground">Install gh-stack on the Session Host before continuing or aborting this rebase.</p> : null}
       <ul aria-label="Conflict files">{status.conflicts.map(file => <li key={file}>{file}</li>)}</ul>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={blocked || !status.available || status.conflicts.length > 0} onClick={() => void run("continue")}>Continue</Button>
-        <Button size="sm" variant="outline" disabled={blocked || !status.available} onClick={() => void run("abort")}>Abort</Button>
-        <Button size="sm" variant="outline" disabled={blocked || !status.available} onClick={() => void assist()}>Ask agent to fix, then continue</Button>
+        <Button size="sm" disabled={blocked || status.conflicts.length > 0} onClick={() => void run("continue")}>Continue</Button>
+        <Button size="sm" variant="outline" disabled={blocked} onClick={() => void run("abort")}>Abort</Button>
+        <Button size="sm" variant="outline" disabled={blocked} onClick={() => void assist()}>Ask agent to fix, then continue</Button>
       </div><p>Abort restores the branches to their state before Rebase.</p>
     </> : null}
     {syncFailed ? <p role="status">Sync was not confirmed. On conflicts, gh stack sync restores all branches. Use Rebase to resolve conflicts locally, then review and confirm Sync again. Flow will not retry or push automatically.</p> : null}
@@ -198,7 +199,11 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
       <p>{review.action === "submit" ? "Push stack branches and create or update PRs and their bases. New PRs are drafts with automatic titles. Existing draft states stay unchanged." : "Fetch, rebase, and push stack branches. This changes local and remote branches. Conflicts restore all branches; resolve them with Rebase before a separately confirmed retry."}</p>
       <ul>{review.view.branches.map(branch => <li key={branch.name}>{branch.name} · {branch.pr ? `#${branch.pr.number} ${branch.pr.state}` : "new draft PR on Submit"}{branch.isMerged || branch.isQueued ? " (merged or queued; gh stack may skip)" : ""}</li>)}</ul>
       <Button variant="outline" disabled={blocked} onClick={() => setReview(undefined)}>Cancel</Button>{" "}
-      <Button disabled={blocked} onClick={() => void run(review.action, undefined, review.token)}>Confirm and {review.action}</Button>
+      <Button disabled={blocked} onClick={() => void run(review.action, { token: review.token })}>Confirm and {review.action}</Button>
     </section> : null}
   </section>;
+}
+
+function initialForm(create: StackCreate): Form {
+  return { current: create.current, ...(create.trunk ? { trunk: create.trunk } : {}), branches: [create.current] };
 }
