@@ -49,8 +49,8 @@ other thing that outlives a turn and the one this is most often mistaken for.
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
 fraction of a window, and a session routinely bills many times what its window holds. One known
-exception, stated rather than fixed (ADR 0020): naming an Agent Session or drafting Git publish text
-bills the Summary Model in a Backend Session that is thrown away, so those calls appear in no
+exception, stated rather than fixed (ADR 0020): naming an Agent Session or suggesting commit and Pull Request
+text bills the Summary Model in a Backend Session that is thrown away, so those calls appear in no
 Agent Session's Spend.
 _Avoid_: usage, cost, tokens, context
 
@@ -172,13 +172,14 @@ Never reapplied on Revive and never inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
 **Summary Model**:
-The model the Session Host uses to name an Agent Session and draft Git publish text, chosen per
+The model the Session Host uses to name an Agent Session and suggest commit and Pull Request text, chosen per
 Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's Summary Model,
 without the Default Effort. Reached through an ordinary Backend Adapter, in a throwaway Backend
 Session that holds no Presentation Transcript, runs no tools, and is disposed of when it answers —
-so it is not an Agent Session and is never Revived (ADR 0020). Git publish text and suggested branch
-names are shown for editing only when its owner opens Publish; the model never renames branches,
-commits, or pushes changes.
+so it is not an Agent Session and is never Revived (ADR 0020). It writes a commit message, a branch
+name, or a Pull Request title and body only when its owner clicks Suggest, and the text fills only
+empty fields. The owner commits, pushes, and creates the Pull Request as three separate steps; the
+model never renames branches, commits, or pushes changes.
 _Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:

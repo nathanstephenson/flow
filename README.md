@@ -146,7 +146,7 @@ Steering is a deliberate action.
   section.
 
 Settings, Projects, MCP connections and fonts are described in
-[docs/configuration.md](docs/configuration.md). Git publishing and stacked pull requests are
+[docs/configuration.md](docs/configuration.md). Commit, push, pull requests and stacked pull requests are
 described in [docs/git.md](docs/git.md).
 
 ## Where state lives
@@ -186,7 +186,7 @@ requirements, the browser update, systemd setup and the repair procedure.
 | [docs/isolation.md](docs/isolation.md) | Filesystem isolation, Bubblewrap and sandboxes |
 | [docs/remote-access.md](docs/remote-access.md) | Container access and the OIDC gate |
 | [docs/configuration.md](docs/configuration.md) | Settings, MCP connections, Projects, fonts, environment variables |
-| [docs/git.md](docs/git.md) | Publish branch names and stacked pull requests |
+| [docs/git.md](docs/git.md) | Commit, push, pull requests and stacked pull requests |
 | [docs/workflow-builder-scope.md](docs/workflow-builder-scope.md) | Workflows, including direct MCP steps |
 | [docs/development.md](docs/development.md) | Build, test, web development, releases |
 | [docs/milestones.md](docs/milestones.md) | Project status and design notes from each milestone |

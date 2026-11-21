@@ -7,7 +7,7 @@ import { releaseRepositories, resolvePullRequest, resolveRepository, type Reposi
 import type { GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
 
-export type LocalGitState = Omit<GitState, "pr"> & { branch: string | undefined };
+export type LocalGitState = Omit<GitState, "pr">;
 export type PolledSession = { scope: string; lifecycle: SessionLifecycle; watched: boolean };
 
 const READ_INTERVAL_MS = 3_000;
@@ -20,13 +20,15 @@ export async function readLocal(scope: string): Promise<LocalGitState | undefine
   if (!status.ok) return undefined;
   const records = status.value.split("\0");
   const revision = createHash("sha256").update(status.value);
-  const state = { changed: 0, ahead: 0, behind: 0, upstream: false, branch: undefined as string | undefined };
+  const state: Omit<LocalGitState, "revision"> = { changed: 0, ahead: 0, behind: 0, upstream: false };
   for (let index = 0; index < records.length; index++) {
     const record = records[index]!;
     const counts = /^# branch\.ab \+(\d+) -(\d+)$/.exec(record);
     if (counts) Object.assign(state, { upstream: true, ahead: Number(counts[1]), behind: Number(counts[2]) });
     const branch = /^# branch\.head (.+)$/.exec(record)?.[1];
     if (branch && branch !== "(detached)") state.branch = branch;
+    const oid = /^# branch\.oid ([0-9a-f]+)$/.exec(record)?.[1];
+    if (oid) state.head = oid;
     const offset = pathOffsets[record[0] ?? ""];
     if (offset === undefined || record[1] !== " ") continue;
     state.changed += 1;
@@ -88,8 +90,12 @@ export class GitStates {
   summary(scope: string): GitState | undefined {
     const entry = this.entries.get(scope);
     if (!entry?.local) return undefined;
-    const { revision, changed, ahead, behind, upstream } = entry.local;
-    return { revision, changed, ahead, behind, upstream, ...(entry.pr ? { pr: entry.pr } : {}) };
+    return { ...entry.local, ...(entry.pr ? { pr: entry.pr } : {}) };
+  }
+
+  hasPullRequest(scope: string, branch: string): boolean {
+    const entry = this.entries.get(scope);
+    return Boolean(entry?.pr && entry.prBranch === branch);
   }
 
   pullRequestBase(scope: string, branch: string): string | undefined {

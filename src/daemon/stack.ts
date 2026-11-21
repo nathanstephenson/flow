@@ -2,7 +2,7 @@ import { localStack, localStacks, type LocalStack } from "./stack-metadata.ts";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { repositoryTarget } from "./publish.ts";
+import { resolveRepository, type Repository } from "./repository.ts";
 import { gh, type Gh } from "./github.ts";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { stackDisplayGraph, type StackCandidate, type StackGraph, type StackGraphBranch, type StackInput, type StackPullRequest, type StackStatus, type StackView } from "../protocol/stack.ts";
@@ -50,7 +50,7 @@ type RefState = {
 };
 
 type Edge = { parent: string; relation: NonNullable<StackGraphBranch["relation"]> };
-type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Awaited<ReturnType<typeof repositoryTarget>>; prs: PullRequest[]; pullsComplete?: boolean };
+type DiscoverySnapshot = { current: string; reference: RefState; stacks: LocalStack[]; destination?: Repository; prs: PullRequest[]; pullsComplete?: boolean };
 type Discovery = { graph?: StackGraph; warnings: string[]; snapshot?: DiscoverySnapshot };
 
 // Project each API page to one compact JSON line. gh forbids combining --slurp and
@@ -88,12 +88,12 @@ function sameRepository(pr: PullRequest, id: string): boolean {
   return identity(pr.head.repo) === id && identity(pr.base.repo) === id;
 }
 
-async function loadPullRequests(scope: string, github: Gh, destination: Awaited<ReturnType<typeof repositoryTarget>>, current: string, localEdges: Map<string, Edge> = new Map(), explicitEdges: Map<string, Edge> = new Map(), blocked: Set<string> = new Set(), trunk = destination.defaultBranch): Promise<{ prs: PullRequest[]; warnings: string[] }> {
+async function loadPullRequests(scope: string, github: Gh, destination: Repository, current: string, localEdges: Map<string, Edge> = new Map(), explicitEdges: Map<string, Edge> = new Map(), blocked: Set<string> = new Set(), trunk = destination.base.defaultBranch): Promise<{ prs: PullRequest[]; warnings: string[] }> {
   const warnings: string[] = [];
   const load = async (query: string) => {
-    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.repo}/pulls?${query}&per_page=100`]), "pull request");
+    const loaded = pages<PullRequest>(await github(scope, ["api", "--paginate", "--jq", pullProjection, `repos/${destination.base.repo}/pulls?${query}&per_page=100`]), "pull request");
     if (loaded.some(pr => !validPull(pr))) addWarning(warnings, "Some invalid pull request relationships were ignored.");
-    return loaded.filter(pr => validPull(pr) && sameRepository(pr, String(destination.id)));
+    return loaded.filter(pr => validPull(pr) && sameRepository(pr, String(destination.base.id)));
   };
   const prs = await load("state=open");
   const component = new Set([current]);
@@ -117,7 +117,7 @@ async function loadPullRequests(scope: string, github: Gh, destination: Awaited<
     if (!branch) break;
     queried.add(branch);
     try {
-      const history = await load(`state=closed&head=${encodeURIComponent(`${destination.repo.split("/")[0]}:${branch}`)}`);
+      const history = await load(`state=closed&head=${encodeURIComponent(`${destination.base.repo.split("/")[0]}:${branch}`)}`);
       prs.push(...history.filter(pr => pr.head.ref === branch && Boolean(pr.merged_at)));
     } catch (error) { addWarning(warnings, `Pull request ancestors for ${branch} could not be read: ${message(error)}`); }
   }
@@ -199,16 +199,16 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
   catch (error) { addWarning(warnings, `Local stack metadata could not be read: ${message(error)}`); }
   const localMatches = stacks.filter(stack => stack.branches.some(branch => branch.branch === current));
 
-  let destination: Awaited<ReturnType<typeof repositoryTarget>> | undefined;
+  let destination: Repository | undefined;
   let prs: PullRequest[] = [];
   let pullsComplete = false;
   let nativeStacks: NativeStack[] = [];
   if (reference.remoteName) {
-    try { destination = await repositoryTarget(scope, github); }
+    try { destination = await resolveRepository(scope, undefined, github); }
     catch (error) { addWarning(warnings, `GitHub stack discovery failed: ${message(error)}`); }
     if (destination) {
       const [nativeResult] = await Promise.allSettled([
-        github(scope, ["api", "--paginate", "--jq", nativeProjection, `repos/${destination.repo}/stacks?per_page=100`]),
+        github(scope, ["api", "--paginate", "--jq", nativeProjection, `repos/${destination.base.repo}/stacks?per_page=100`]),
       ]);
       if (nativeResult.status === "fulfilled") {
         try {
@@ -287,7 +287,7 @@ export async function discoverStackGraph(scope: string, github: Gh = gh): Promis
   let trunk: string | undefined;
   if (explicitTrunks.size === 1) trunk = [...explicitTrunks][0];
   else if (explicitTrunks.size > 1) addWarning(warnings, "Conflicting explicit stack trunks were found; the trunk was left unknown.");
-  else trunk = destination?.defaultBranch ?? reference.remoteHead;
+  else trunk = destination?.base.defaultBranch ?? reference.remoteHead;
 
   const localParents = new Map<string, Edge>();
   const ambiguousParents = new Set<string>();
@@ -471,11 +471,11 @@ function indexPullRequests(pullRequests: PullRequest[]): PullIndexes {
 function candidateFromSnapshot(snapshot: DiscoverySnapshot): StackCandidate | undefined {
   const { current, reference, stacks, destination } = snapshot;
   const { byHead, openByBase } = indexPullRequests(snapshot.prs);
-  if (!destination?.id || current === destination.defaultBranch) return;
+  if (!destination?.base.id || current === destination.base.defaultBranch) return;
   const tracked = new Set(stacks.flatMap(stack => [stack.trunk.branch, ...stack.branches.map(branch => branch.branch)]));
   if (stacks.some(stack => stack.branches.some(branch => branch.branch === current))) return;
   const localRefs = [...reference.local].map(([name, value]) => [name, value.oid] as [string, string]);
-  const trunk = destination.defaultBranch;
+  const trunk = destination.base.defaultBranch;
   const base = localRefs.find(([name]) => name === trunk);
   if (!base) return;
   const choose = (branch: string, merged: boolean): PullRequest | undefined => {
@@ -521,9 +521,9 @@ export async function discoverStack(scope: string, github: Gh = gh): Promise<Sta
   try {
     const current = await head(scope);
     if (!current.ok || current.value.detached) return;
-    const [reference, stacks, destination] = await Promise.all([refs(scope), localStacks(scope), repositoryTarget(scope, github)]);
+    const [reference, stacks, destination] = await Promise.all([refs(scope), localStacks(scope), resolveRepository(scope, undefined, github)]);
     const { prs, warnings } = await loadPullRequests(scope, github, destination, current.value.name);
-    if (warnings.length || !destination.id) return;
+    if (warnings.length || !destination.base.id) return;
     return candidateFromSnapshot({ current: current.value.name, reference, stacks, destination, prs });
   } catch { return; }
 }
@@ -608,7 +608,7 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
 }
 
 export async function cleanStack(scope: string): Promise<void> {
-  if ((await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).length) throw new Error("This Scope has uncommitted changes. Use Publish or commit them first. Stack operations never stash changes.");
+  if ((await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).length) throw new Error("This Scope has uncommitted changes. Commit them first. Stack operations never stash changes.");
   for (const operation of ["rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "gh-stack-rebase-state"]) {
     const path = (await git(scope, ["rev-parse", "--git-path", operation])).trim();
     if (await access(resolve(scope, path)).then(() => true, () => false)) throw new Error("Finish or abort the current Git operation first.");
@@ -666,4 +666,4 @@ export async function changeStack(scope: string, input: StackInput, github: Gh =
   return github(scope, args);
 }
 
-export const stackConflictMessage = "Resolve the current gh stack rebase conflicts in this Scope. Inspect the Stack rebase state and conflict files first. Preserve the intended changes and stage only resolved files. Run gh stack rebase --continue only after git diff --name-only --diff-filter=U is empty and all conflicts are resolved. Repeat for further conflicts; stop and report if the intended resolution is unclear. This request permits local conflict repair and Stack rebase continuation only. Do not push, publish, submit, sync, merge, or restructure the stack. Report the result so I can review it before any separate Sync confirmation.";
+export const stackConflictMessage = "Resolve the current gh stack rebase conflicts in this Scope. Inspect the Stack rebase state and conflict files first. Preserve the intended changes and stage only resolved files. Run gh stack rebase --continue only after git diff --name-only --diff-filter=U is empty and all conflicts are resolved. Repeat for further conflicts; stop and report if the intended resolution is unclear. This request permits local conflict repair and Stack rebase continuation only. Do not push, submit, sync, merge, or restructure the stack. Report the result so I can review it before any separate Sync confirmation.";

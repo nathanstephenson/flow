@@ -1,9 +1,32 @@
-import type { ChangesView, GitDiff, GitState } from "../../../src/protocol/git.ts";
+import type { ChangesView, GitDiff, GitState, PullRequestSummary } from "../../../src/protocol/git.ts";
+
+export type GitStep = "commit" | "push" | "pull_request";
+export const stepLabels: Record<GitStep, string> = { commit: "Commit", push: "Push", pull_request: "Create pull request" };
+
+export function gitSteps(git: GitState | undefined, defaultBranch: string | undefined): GitStep[] {
+  if (!git) return [];
+  const steps: GitStep[] = git.changed > 0 ? ["commit"] : [];
+  if (!git.branch || !git.head || git.branch === defaultBranch) return steps;
+  if (!git.upstream || git.ahead > 0) steps.push("push");
+  else if (git.pr?.state !== "OPEN") steps.push("pull_request");
+  return steps;
+}
+
+export function nextStep(git: GitState | undefined, defaultBranch: string | undefined): GitStep | undefined {
+  return gitSteps(git, defaultBranch)[0];
+}
+
+export function branchLine(git: GitState): string {
+  return git.branch ?? `detached at ${git.head?.slice(0, 7)}`;
+}
 
 export function gitStateLine(git: GitState): string {
-  const parts = [git.upstream ? `${git.ahead} ahead, ${git.behind} behind` : "No upstream branch"];
-  if (git.pr) parts.push(`PR #${git.pr.number}`, git.pr.checks === "none" ? "No checks" : `Checks ${git.pr.checks}`);
-  return parts.join(" · ");
+  return git.upstream ? `${git.ahead} ahead, ${git.behind} behind` : "No upstream branch";
+}
+
+export function pullRequestLine(pr: PullRequestSummary): string {
+  const state = pr.state === "OPEN" ? pr.isDraft ? "Draft" : "Open" : pr.state === "MERGED" ? "Merged" : "Closed";
+  return `PR #${pr.number} · ${state} · ${pr.checks === "none" ? "No checks" : `Checks ${pr.checks}`}`;
 }
 
 export function diffNotice(diff: GitDiff, path: string): string {

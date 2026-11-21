@@ -1,15 +1,18 @@
-# Git: publishing and stacked pull requests
+# Git: commit, push, pull requests and stacked pull requests
 
-## Publish branch names
+## Commit, push and create a pull request
 
-Before the first push, Publish shows a branch name that you can edit.
+The Git pane shows the next step above its tabs: Commit, Push, or Create pull request.
 
-- Flow uses the Summary Model to suggest the name, if one is configured. Otherwise it uses a local
-  fallback.
-- When you confirm, Flow creates a feature branch from the default branch, or renames an
-  unpublished branch.
-- Published branches and registered stack branches keep their names.
-- Flow does not change branches while it prepares the review.
+- Commit includes only the files that you select in the Uncommitted view. Other files keep their
+  staged and unstaged state. Git hooks run.
+- On the default branch or a detached HEAD, Commit requires a new branch name. You can rename a
+  branch that has no pull request, no remote branch and no stack registration.
+- Push sends the current branch to its push remote and sets the upstream. Flow never pushes the
+  default branch. If the push replaces remote commits, Flow lists them and asks first.
+- Create pull request uses the stack parent or the default branch as the base. The branch must be
+  pushed.
+- Suggest asks the Summary Model for text, if one is configured. It fills only empty fields.
 
 ## Stacked pull requests
 
@@ -32,7 +35,7 @@ available.
 - Switching and changes require that no Agent Session in the same Scope is working, including
   background work.
 - The working tree must be clean, except to continue or abort a conflict. Flow never stashes
-  changes. Use Publish for uncommitted files.
+  changes. Commit uncommitted files first.
 - Stack branches use their active parent as the review base, and as the base for new PRs.
 
 ### Create
@@ -70,7 +73,7 @@ A paused Rebase shows the conflict files, **Continue** and **Abort**.
 asks the agent to resolve and stage the conflicts, then to run `gh stack rebase --continue` only when
 they are resolved.
 
-- This does not give permission to publish, push, sync or merge.
+- This does not give permission to push, sync or merge.
 - Examine the result, then refresh Stack.
 
 ### Copy

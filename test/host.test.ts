@@ -3,11 +3,13 @@ import { describe, it, beforeEach, mock } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { repository } from "./git-fixture.ts";
+import { git, repository } from "./git-fixture.ts";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { AgentEvent } from "../src/protocol/events.ts";
+import type { GitChanges } from "../src/protocol/git.ts";
+import type { Command } from "../src/protocol/commands.ts";
 
 function events(host: SessionHost, id: string): AgentEvent[] {
   return host.logFor(id).since(0).map((entry) => entry.event);
@@ -1726,7 +1728,7 @@ describe("SessionHost Git State", () => {
   it("puts Git State on the summary at create and on refresh_git without moving the transcript", async () => {
     const { scope, host, first, second, git, cleanup } = await gitHost();
     try {
-      assert.deepEqual({ ...git(first), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false });
+      assert.deepEqual({ ...git(first), revision: undefined, head: undefined }, { revision: undefined, branch: "main", head: undefined, changed: 0, ahead: 0, behind: 0, upstream: false });
       writeFileSync(join(scope, "new.txt"), "new");
       const seq = host.logFor(first).lastSeq;
       await host.execute({ type: "refresh_git", sessionId: first });
@@ -1764,9 +1766,80 @@ describe("SessionHost Git State", () => {
     try {
       writeFileSync(join(scope, "new.txt"), "new\n");
       await host.send(second, "work", "now");
-      assert.deepEqual(await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }), { files: [{ status: "??", path: "new.txt" }], commits: [] });
+      const { fingerprint, ...listed } = await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }) as GitChanges;
+      assert.match(fingerprint!, /^[0-9a-f]{64}$/);
+      assert.deepEqual(listed, { files: [{ status: "??", path: "new.txt" }], commits: [], branch: "main", canRename: false });
       assert.deepEqual(await host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "new.txt" }), { text: "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+new\n" });
       await assert.rejects(host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "README.md" }), (error: Error) => error instanceof CommandRefused && /not in the list/.test(error.message));
+    } finally { await cleanup(); }
+  });
+
+  it("refuses each Git write during a turn and allows suggestions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost({ summaryModel: () => ({ backend: "fake", modelId: "fake-2", automatic: false }) });
+    host.registerBackend(backend);
+    try {
+      const first = await host.create({ scope, backend: "fake" });
+      const second = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      await host.send(second, "work", "now");
+      const head = git(scope, "rev-parse", "HEAD").trim();
+      for (const command of [
+        { type: "commit", sessionId: first, fingerprint: "x", paths: ["new.txt"], message: "Add" },
+        { type: "push_state", sessionId: first },
+        { type: "push", sessionId: first, head },
+        { type: "create_pull_request", sessionId: first, head, title: "Add", body: "", draft: true },
+      ] satisfies Command[]) await assert.rejects(host.execute(command), (error: Error) => error instanceof CommandRefused && /occupied/.test(error.message), command.type);
+      backend.autoReply = JSON.stringify({ message: "Add new file" });
+      assert.deepEqual(await host.execute({ type: "suggest_git_text", sessionId: first, kind: "commit", paths: ["new.txt"] }), { message: "Add new file" });
+      assert.match(backend.latest.prompts[0]!, /\+new/);
+      assert.equal(backend.latest.toolless, true);
+    } finally {
+      await host.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const operation of ["settle", "dispose"] as const) {
+    it(`refuses a commit while ${operation} stops a Backend Session`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+      const host = new SessionHost({ retention: 0 });
+      const backend = new FakeBackend();
+      host.registerBackend(backend);
+      const id = await host.create({ scope: repository(root, "repo"), backend: "fake" });
+      await host.send(id, "work", "now");
+      let release!: () => void;
+      const stopped = new Promise<void>((resolve) => { release = resolve; });
+      const session = backend.latest;
+      const dispose = session.dispose.bind(session);
+      session.dispose = async () => { await stopped; await dispose(); };
+      const closing = host[operation](id);
+      try {
+        await assert.rejects(host.commit(id, { fingerprint: "x", paths: ["a"], message: "Add" }), /stopping/);
+        assert.deepEqual(await host.reap(Date.now() + 1_000), []);
+      } finally {
+        release();
+        await closing;
+        await host.shutdown();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("tells other Agent Sessions in the Scope when a commit creates a branch", async () => {
+    const { scope, backend, host, first, second, cleanup } = await gitHost();
+    try {
+      git(scope, "config", "user.name", "Test");
+      git(scope, "config", "user.email", "test@example.com");
+      git(scope, "switch", "--quiet", "--detach");
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      const { fingerprint } = await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }) as GitChanges;
+      await host.execute({ type: "commit", sessionId: first, fingerprint: fingerprint!, paths: ["new.txt"], message: "Add", branch: "feat/new" });
+      assert.equal(host.list().find(session => session.id === second)?.branch?.name, "feat/new");
+      await host.send(second, "next", "now");
+      assert.match(backend.sessions[1]!.prompts.at(-1)!, /moved this Scope to branch feat\/new/);
     } finally { await cleanup(); }
   });
 });
