@@ -441,16 +441,22 @@ export class SessionHost {
     }
   }
 
-  private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
-    const scope = this.record(command.sessionId).scope;
-    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
+  private async readGit<T>(read: () => Promise<T>): Promise<T> {
     try {
-      if (command.type === "git_diff") return await diff(scope, command.view, command.path, base);
-      const listed = await changes(scope, command.view, base);
-      return command.view === "branch" ? listed : { ...listed, ...await commitContext(scope, branch => this.gitStates.hasPullRequest(scope, branch)) };
+      return await read();
     } catch (error) {
       throw new CommandRefused(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
+    const scope = this.record(command.sessionId).scope;
+    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
+    return this.readGit(async () => {
+      if (command.type === "git_diff") return await diff(scope, command.view, command.path, base);
+      const listed = await changes(scope, command.view, base);
+      return command.view === "branch" ? listed : { ...listed, ...await commitContext(scope, branch => this.gitStates.hasPullRequest(scope, branch)) };
+    });
   }
 
   async commit(sessionId: string, input: CommitInput): Promise<string> {
@@ -477,12 +483,10 @@ export class SessionHost {
     if (!["commit", "pull_request", "branch"].includes(kind) || (paths !== undefined && (!Array.isArray(paths) || paths.some(path => typeof path !== "string")))) throw new CommandRefused("Invalid suggestion request.");
     const model = this.summaryModel?.(record.backendName);
     if (!model) throw new CommandRefused("No Summary Model is configured. Choose one in Settings, or enter the text.");
-    try {
+    return this.readGit(async () => {
       const text = await changesText(record.scope, kind === "pull_request" ? "branch" : "uncommitted", paths, branch => this.gitStates.pullRequestBase(record.scope, branch));
       return await suggestGitText({ backend: this.backendFor(model.backend), modelId: model.modelId, text, kind });
-    } catch (error) {
-      throw new CommandRefused(error instanceof Error ? error.message : String(error));
-    }
+    });
   }
 
   private readonly store: TranscriptStore | undefined;
@@ -2477,7 +2481,7 @@ export class SessionHost {
       case "commit":
         return await this.commit(command.sessionId, { fingerprint: command.fingerprint, paths: command.paths, message: command.message, ...(command.branch === undefined ? {} : { branch: command.branch }) });
       case "push_state":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => pushState(this.record(command.sessionId).scope));
+        return await this.readGit(() => pushState(this.record(command.sessionId).scope));
       case "push":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, push(this.record(command.sessionId).scope, { head: command.head, ...(command.replace === undefined ? {} : { replace: command.replace }) })));
       case "create_pull_request":

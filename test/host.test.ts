@@ -1774,7 +1774,7 @@ describe("SessionHost Git State", () => {
     } finally { await cleanup(); }
   });
 
-  it("refuses each Git write during a turn and allows suggestions", async () => {
+  it("refuses each Git write during a turn and allows reads and suggestions", async () => {
     const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
     const scope = repository(root, "repo");
     const backend = new FakeBackend();
@@ -1788,10 +1788,10 @@ describe("SessionHost Git State", () => {
       const head = git(scope, "rev-parse", "HEAD").trim();
       for (const command of [
         { type: "commit", sessionId: first, fingerprint: "x", paths: ["new.txt"], message: "Add" },
-        { type: "push_state", sessionId: first },
         { type: "push", sessionId: first, head },
         { type: "create_pull_request", sessionId: first, head, title: "Add", body: "", draft: true },
       ] satisfies Command[]) await assert.rejects(host.execute(command), (error: Error) => error instanceof CommandRefused && /occupied/.test(error.message), command.type);
+      await assert.rejects(host.execute({ type: "push_state", sessionId: first }), (error: Error) => error instanceof CommandRefused && /No remote/.test(error.message));
       backend.autoReply = JSON.stringify({ message: "Add new file" });
       assert.deepEqual(await host.execute({ type: "suggest_git_text", sessionId: first, kind: "commit", paths: ["new.txt"] }), { message: "Add new file" });
       assert.match(backend.latest.prompts[0]!, /\+new/);
