@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
+import { failureText } from "@/presentation/git.ts";
 
 type Props = { sessionId: string; head: string; onCreated: (url: string) => void; onCancel: () => void };
 
@@ -35,7 +36,7 @@ export function GitPullRequestForm({ sessionId, head, onCreated, onCancel }: Pro
       const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId, kind: "pull_request" });
       if (text.title) setTitle(current => current.trim() ? current : text.title!);
       if (text.body) setBody(current => current.trim() ? current : text.body!);
-    } catch (failure) { setError(`No suggestion. ${String(failure)}`); }
+    } catch (failure) { setError(`No suggestion. ${failureText(failure)}`); }
     finally { setBusy(false); }
   }
 
@@ -43,7 +44,7 @@ export function GitPullRequestForm({ sessionId, head, onCreated, onCancel }: Pro
     setBusy(true);
     setError("");
     try { onCreated(await connection.command<string>({ type: "create_pull_request", sessionId, head, title, body, draft })); }
-    catch (failure) { setError(String(failure)); }
+    catch (failure) { setError(failureText(failure)); }
     finally { setBusy(false); }
   }
 

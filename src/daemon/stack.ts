@@ -64,12 +64,14 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
   return { ...status, create: { current: branch, ...(trunk ? { trunk } : {}), branches: listed.value, unstacked: listed.value.filter(name => !stacked.has(name)) } };
 }
 
-const titles = new Map<string, { key: string; expires: number; found: Map<number, string> }>();
+type Title = { title: string; isDraft: boolean };
 
-async function readTitles(scope: string, branch: string, numbers: number[], github: Gh): Promise<Map<number, string>> {
+const titles = new Map<string, { key: string; expires: number; found: Map<number, Title> }>();
+
+async function readTitles(scope: string, branch: string, numbers: number[], github: Gh): Promise<Map<number, Title>> {
   const [owner, name] = (await resolveRepository(scope, branch, github)).base.repo.split("/");
-  const query = (list: number[]) => api<{ repository: Record<string, { title: string } | null> }>(scope, github,
-    `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${list.map(number => `pr${number}:pullRequest(number:${number}){title}`).join(" ")}}}`, { owner: owner!, name: name! });
+  const query = (list: number[]) => api<{ repository: Record<string, Title | null> }>(scope, github,
+    `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${list.map(number => `pr${number}:pullRequest(number:${number}){title isDraft}`).join(" ")}}}`, { owner: owner!, name: name! });
   let wanted = numbers;
   let data: Awaited<ReturnType<typeof query>>;
   try { data = await query(wanted); }
@@ -79,7 +81,7 @@ async function readTitles(scope: string, branch: string, numbers: number[], gith
     if (!missing.length || !wanted.length) throw error;
     data = await query(wanted);
   }
-  return new Map(wanted.flatMap(number => data.repository[`pr${number}`] ? [[number, data.repository[`pr${number}`]!.title]] : []));
+  return new Map(wanted.flatMap(number => data.repository[`pr${number}`] ? [[number, data.repository[`pr${number}`]!]] : []));
 }
 
 export async function stackTitles(scope: string, view: StackView, github: Gh = gh): Promise<boolean> {
@@ -90,10 +92,10 @@ export async function stackTitles(scope: string, view: StackView, github: Gh = g
   const cached = titles.get(scope);
   let found = cached?.key === key ? cached.found : undefined;
   if (!found) {
-    found = await readTitles(scope, view.currentBranch, numbers, github).catch(() => new Map<number, string>());
+    found = await readTitles(scope, view.currentBranch, numbers, github).catch(() => new Map<number, Title>());
     titles.set(scope, { key, expires: Date.now() + 5 * 60_000, found });
   }
-  for (const branch of view.branches) if (branch.pr && found.has(branch.pr.number)) branch.pr.title = found.get(branch.pr.number)!;
+  for (const branch of view.branches) if (branch.pr && found.has(branch.pr.number)) Object.assign(branch.pr, found.get(branch.pr.number));
   return numbers.every(number => found.has(number));
 }
 

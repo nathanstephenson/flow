@@ -1,11 +1,11 @@
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { run, GIT_READ_TIMEOUT_MS } from "./git.ts";
-import { canNameBranch, git } from "./changes.ts";
+import { canNameBranch } from "./changes.ts";
 import { readStatus } from "./git-state.ts";
 import { gh, type Gh } from "./github.ts";
 import { remoteHead } from "./push.ts";
-import { localRepository, resolvePullRequest, resolveRepository, type LocalRepository } from "./repository.ts";
+import { git, localRepository, resolvePullRequest, resolveRepository, type LocalRepository } from "./repository.ts";
 import type { CommitInput } from "../protocol/git.ts";
 
 async function refuseOperation(scope: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { api, connection, gh, page, type Connection, type Gh } from "./github.ts";
-import { resolvePullRequest, resolveRepository, type ResolvedPullRequest } from "./repository.ts";
+import { githubRepository, localRepository, resolvePullRequest, resolveRepository, type ResolvedPullRequest } from "./repository.ts";
 import { cleanStack } from "./stack.ts";
 import { pushTarget, remoteHead } from "./push.ts";
 import { localStack, stackParent } from "./stack-metadata.ts";
@@ -68,7 +68,7 @@ export async function pullRequest(scope: string, known: PullRequestRef | undefin
   if (!isRepository(scope)) return null;
   const branch = await head(scope);
   if (!branch.ok) throw new Error(branch.failure.message);
-  if (branch.value.detached) return null;
+  if (branch.value.detached || !(await localRepository(scope, branch.value.name))?.github) return null;
   const repository = await resolveRepository(scope, branch.value.name, github);
   if (known?.repo === repository.base.repo) {
     const read = await details(scope, known, github);
@@ -135,7 +135,7 @@ export async function changePullRequest(scope: string, action: "rebase" | "merge
   let baseUrl = `https://github.com/${pr.repo}.git`;
   for (const remote of (await git(scope, ["remote"])).split("\n").filter(Boolean)) {
     const url = await git(scope, ["remote", "get-url", remote]);
-    const repo = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1];
+    const repo = githubRepository(url);
     if (repo?.toLowerCase() === pr.repo.toLowerCase()) { baseUrl = url; break; }
   }
   await git(scope, ["fetch", "--no-tags", baseUrl, `refs/heads/${pr.baseBranch}`]);

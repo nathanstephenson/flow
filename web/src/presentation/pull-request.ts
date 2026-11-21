@@ -69,3 +69,9 @@ export function checkDraftBlock(check: PullRequestCheck, log?: PullRequestCheckL
   const lead = `Failed check: ${check.name}${check.url ? `\nURL: ${check.url}` : ""}`;
   return log ? `${lead}\n\n${log.truncated ? "Part of the job log" : "Job log"}:\n${fenced(log.text, "text")}` : lead;
 }
+
+export function mergeUnavailable(pr: Pick<PullRequestDetails, "isDraft" | "mergeMethods">): string | undefined {
+  if (pr.isDraft) return "Merge is not available for a draft. Mark the pull request ready for review first.";
+  if (pr.mergeMethods.length === 0) return "You cannot merge this Pull Request in this repository.";
+  return undefined;
+}

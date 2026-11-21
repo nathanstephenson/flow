@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestIndicators, pullRequestLine, pullStep } from "./git.ts";
+import { branchLine, diffHunks, diffNotice, failureText, gitStateLine, gitSteps, noChanges, pullRequestIndicators, pullRequestLine, pullStep } from "./git.ts";
 
-const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
+const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true, github: true as const };
 const { branch: _branch, ...detached } = local;
 const { head: _head, ...unborn } = local;
 const pr = { number: 12, url: "https://github.com/test/repo/pull/12", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 0, reviewDecision: null, unresolvedThreads: 0, updatedAt: "2025-01-01" };
@@ -35,6 +35,10 @@ it("lists the Git steps that apply, the next step first", () => {
   assert.deepEqual(gitSteps({ ...clean, branch: "main", changed: 1 }), ["commit"]);
   assert.deepEqual(gitSteps({ ...detached, ahead: 0, behind: 0, upstream: false }), []);
   assert.deepEqual(gitSteps({ ...unborn, ahead: 0, behind: 0, upstream: false }), []);
+  const { github: _github, ...noGitHub } = clean;
+  assert.deepEqual(gitSteps({ ...noGitHub, changed: 2, ahead: 1 }), ["commit"]);
+  assert.deepEqual(gitSteps({ ...noGitHub, upstream: false }), []);
+  assert.deepEqual(gitSteps(noGitHub), []);
 });
 
 it("offers Pull only when the branch is behind, clean and not diverged", () => {
@@ -48,6 +52,8 @@ it("offers Pull only when the branch is behind, clean and not diverged", () => {
   assert.deepEqual(pullStep({ ...clean, ahead: 1, behind: 2 }), diverged);
   assert.deepEqual(pullStep({ ...clean, ahead: 1, behind: 2, changed: 1 }), diverged);
   assert.deepEqual(pullStep({ ...clean, defaultBranch: "feature", ahead: 1, behind: 2 }), { diverged: "This branch and its upstream have diverged. Rebase or merge in the Shell." });
+  const { github: _github, ...withoutGitHub } = clean;
+  assert.deepEqual(pullStep({ ...withoutGitHub, ahead: 1, behind: 2 }), { diverged: "This branch and its upstream have diverged. Rebase or merge in the Shell." });
 });
 
 it("names diffs that have no text and empty views", () => {
@@ -76,4 +82,12 @@ it("gives the pull request state and check status an icon, a tone and words", ()
   assert.equal(pullRequestIndicators({ ...pr, checks: "none" }).checks, undefined);
   assert.equal(pullRequestIndicators({ ...pr, number: 178, isDraft: true, checks: "passing" }).text, "Pull Request #178. Draft. Checks passing.");
   assert.equal(pullRequestIndicators({ ...pr, state: "MERGED", checks: "none" }).text, "Pull Request #12. Merged. No checks.");
+});
+
+it("shows only the host's message of a failed command", () => {
+  assert.equal(failureText(new Error("409 Conflict: This Scope has uncommitted changes.")), "This Scope has uncommitted changes.");
+  assert.equal(failureText(new Error("500 Internal Server Error")), "500 Internal Server Error");
+  assert.equal(failureText(new Error("Could not reach the Session Host.")), "Could not reach the Session Host.");
+  assert.equal(failureText("409 Conflict: Refused: try again."), "Refused: try again.");
+  assert.equal(failureText(new Error("409: This Scope has uncommitted changes.")), "This Scope has uncommitted changes.");
 });

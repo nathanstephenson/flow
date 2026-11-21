@@ -81,13 +81,13 @@ async function checkGit(viewport, screenshotSuffix) {
   const list = page.getByRole("tablist", { name: "Git views" });
   await list.waitFor();
   await page.getByText("Reading changes…").waitFor({ state: "hidden" });
-  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
+  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "Pull request", exact: true }).waitFor();
   else await page.waitForTimeout(500);
   const labels = await list.getByRole("tab").allTextContents();
   assert.equal(labels[0], "Changes");
-  assert.deepEqual(labels, labels.filter((label) => ["Changes", "Stack", "PR"].includes(label)));
-  assert.equal(labels.join(",").includes("PR,Stack"), false, "Git tabs must stay in Changes / Stack / PR order");
-  const selected = labels.includes("PR") ? "PR" : "Changes";
+  assert.deepEqual(labels, labels.filter((label) => ["Changes", "Pull request", "Stack"].includes(label)));
+  assert.equal(labels.join(",").includes("Stack,Pull request"), false, "Git tabs must stay in Changes / Pull request / Stack order");
+  const selected = "Changes";
   await assertSelected(page, list, selected);
   await assertFits(page, list);
 
@@ -105,7 +105,7 @@ async function checkGit(viewport, screenshotSuffix) {
   await page.reload({ waitUntil: "domcontentloaded" });
   await list.waitFor();
   await page.getByText("Reading changes…").waitFor({ state: "hidden" });
-  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
+  if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "Pull request", exact: true }).waitFor();
   else await page.waitForTimeout(500);
 
   if (process.env.SCREENSHOT_DIR) {

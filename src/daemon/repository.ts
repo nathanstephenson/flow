@@ -1,4 +1,4 @@
-import { run, GIT_READ_TIMEOUT_MS } from "./git.ts";
+import { run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { api, gh, type Gh } from "./github.ts";
 import type { CheckStatus, PullRequestSummary } from "../protocol/git.ts";
 import type { PullRequestRef } from "../protocol/pull-request.ts";
@@ -28,13 +28,13 @@ function completed(counts: Counts | undefined): number {
 
 const identities = new Map<string, Pick<Repository, "head" | "base">>();
 
-async function git(scope: string, args: string[]): Promise<string> {
-  const result = await run(scope, args, GIT_READ_TIMEOUT_MS);
+export async function git(scope: string, args: string[], write = false): Promise<string> {
+  const result = await run(scope, args, write ? GIT_WRITE_TIMEOUT_MS : GIT_READ_TIMEOUT_MS);
   if (!result.ok) {
     if (result.failure.message.includes("ENOENT")) throw new Error("Git is missing. Install git on the Session Host.");
     throw new Error(`Git ${result.failure.attempted} failed: ${result.failure.message}`);
   }
-  return result.value.trim();
+  return result.value;
 }
 
 async function config(scope: string, key: string): Promise<string | undefined> {
@@ -44,7 +44,7 @@ async function config(scope: string, key: string): Promise<string | undefined> {
 }
 
 async function pushRemote(scope: string, branch: string | undefined): Promise<string | undefined> {
-  const remotes = (await git(scope, ["remote"])).split("\n").filter(Boolean);
+  const remotes = (await git(scope, ["remote"])).trim().split("\n").filter(Boolean);
   if (remotes.length === 0) return undefined;
   const keys = branch ? [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`] : ["remote.pushDefault"];
   for (const key of keys) {
@@ -63,7 +63,7 @@ async function view(scope: string, repo: string, github: Gh): Promise<Repository
   return { ...info, id: info.id, defaultBranch: info.defaultBranchRef.name };
 }
 
-function githubRepository(url: string): string | undefined {
+export function githubRepository(url: string): string | undefined {
   return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url)?.[1];
 }
 
@@ -72,7 +72,7 @@ export type LocalRepository = { remote: string; github: boolean; defaultBranches
 export async function localRepository(scope: string, branch: string | undefined): Promise<LocalRepository | undefined> {
   const remote = await pushRemote(scope, branch);
   if (!remote) return undefined;
-  const url = await git(scope, ["remote", "get-url", "--push", remote]);
+  const url = (await git(scope, ["remote", "get-url", "--push", remote])).trim();
   const cached = identities.get(`${scope}\0${remote}\0${url}`)?.base.defaultBranch;
   const head = await run(scope, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], GIT_READ_TIMEOUT_MS);
   const local = head.ok ? head.value.trim().slice(remote.length + 1) : undefined;
@@ -82,7 +82,7 @@ export async function localRepository(scope: string, branch: string | undefined)
 export async function resolveRepository(scope: string, branch: string | undefined, github: Gh = gh): Promise<Repository> {
   const remote = await pushRemote(scope, branch);
   if (!remote) throw new Error("No remote is configured. Add a GitHub remote.");
-  const url = await git(scope, ["remote", "get-url", "--push", remote]);
+  const url = (await git(scope, ["remote", "get-url", "--push", remote])).trim();
   const repo = githubRepository(url);
   if (!repo) throw new Error("This remote is not a supported github.com repository URL.");
   const key = `${scope}\0${remote}\0${url}`;

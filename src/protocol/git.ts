@@ -75,6 +75,7 @@ export type GitState = {
   ahead: number;
   behind: number;
   upstream: boolean;
+  github?: true;
   pr?: PullRequestSummary;
 };
 
