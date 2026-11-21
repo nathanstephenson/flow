@@ -132,6 +132,7 @@ export function AgentSessionPaneHeader({
             <a
               className="rounded-sm font-mono text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
               href={safePullRequestUrl(pr.url)}
+              aria-label={`Pull Request #${pr.number}`}
               target="_blank"
               rel="noreferrer"
             >

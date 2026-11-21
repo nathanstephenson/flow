@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Command } from "../../../src/protocol/commands.ts";
 import type { GitText } from "../../../src/protocol/git.ts";
-import type { MergeMethod, PullRequestActionInput, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
+import type { MergeMethod, PullRequestActionInput, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -26,9 +26,8 @@ function link(url: string, children: ReactNode) {
 export function PullRequestPane({ sessionId, revision = 0, disabled = false, onAvailable, onChange }: Props) {
   const { connection } = useHost();
   const [pr, setPr] = useState<PullRequestDetails | null>();
-  const [reading, setReading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ text: string; read: boolean }>();
   const [notice, setNotice] = useState("");
   const [sections, setSections] = useState(["overview", "checks", "threads", "discussion"]);
   const [openThreads, setOpenThreads] = useState<Record<string, boolean>>({});
@@ -40,45 +39,49 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
 
   function read() {
     const request = ++latest.current;
-    setReading(true);
     void connection.command<PullRequestDetails | null>({ type: "pull_request", sessionId }).then(
       (value) => {
         if (request !== latest.current) return;
+        const shown = (input: { pr: PullRequestRef } | undefined) => Boolean(input && value && input.pr.id === value.id && input.pr.number === value.number && input.pr.repo === value.repo);
         setPr(value);
-        setError("");
-        setReading(false);
+        setError(current => current?.read ? undefined : current);
+        setConfirm(current => shown(current?.input) ? current : undefined);
+        setEdit(current => shown(current) ? current : undefined);
         onAvailable?.(Boolean(value));
       },
       (failure: unknown) => {
-        if (request !== latest.current) return;
-        setError(`Pull request could not be read. ${String(failure)}`);
-        setReading(false);
+        if (request === latest.current) setError({ text: `Pull request could not be read. ${String(failure)}`, read: true });
       },
     );
   }
 
-  useEffect(read, [connection, sessionId, revision]);
+  useEffect(() => {
+    read();
+    const visible = () => { if (document.visibilityState === "visible") read(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => document.removeEventListener("visibilitychange", visible);
+  }, [connection, sessionId, revision]);
 
   async function write(command: Command, success: string, done?: () => void) {
     setBusy(true);
-    setError("");
+    setError(undefined);
     setNotice("");
     try {
       await connection.command(command);
       done?.();
       setNotice(success);
       read();
-    } catch (failure) { setError(String(failure)); }
+    } catch (failure) { setError({ text: String(failure), read: false }); }
     finally { setBusy(false); }
   }
 
   async function suggest() {
     setBusy(true);
-    setError("");
+    setError(undefined);
     try {
       const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId, kind: "pull_request" });
       setEdit(current => current && { ...current, ...(text.title ? { title: text.title } : {}), ...(text.body ? { body: text.body } : {}) });
-    } catch (failure) { setError(`No suggestion. ${String(failure)}`); }
+    } catch (failure) { setError({ text: `No suggestion. ${String(failure)}`, read: false }); }
     finally { setBusy(false); }
   }
 
@@ -197,18 +200,17 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
   const actionInput = pr ? { pr: { repo: pr.repo, number: pr.number, id: pr.id }, headOid: pr.headRefOid, baseBranch: pr.baseRefName } : undefined;
   return (
     <section aria-label="Pull request" className="min-w-0 space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {pr && open && actionInput ? <>
+      {pr && open && actionInput ? (
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={locked || !!confirm || pr.isDraft || pr.mergeMethods.length === 0} onClick={() => setConfirm({ action: "merge", input: { ...actionInput, method: pr.mergeMethods[0]! } })}>Merge</Button>
           <Button size="sm" variant="outline" disabled={locked || !!confirm} onClick={() => setConfirm({ action: "rebase", input: actionInput })}>Rebase</Button>
           <Button size="sm" variant="outline" disabled={locked || !!edit} onClick={() => setEdit({ pr: actionInput.pr, title: pr.title, body: pr.body })}>Edit</Button>
           <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "set_pull_request_draft", sessionId, input: { pr: actionInput.pr, draft: !pr.isDraft } }, pr.isDraft ? "Marked ready for review." : "Converted to draft.")}>
             {pr.isDraft ? "Ready for review" : "Convert to draft"}
           </Button>
-        </> : null}
-        <Button size="sm" variant="ghost" disabled={reading} onClick={read}>{reading ? "Refreshing…" : "Refresh"}</Button>
-      </div>
-      {error ? <p role="alert">{pr ? "Showing the last pull request read. " : ""}{error}</p> : null}
+        </div>
+      ) : null}
+      {error ? <p role="alert">{error.read && pr ? "Showing the last pull request read. " : ""}{error.text}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {pr && confirm ? (
         <form aria-label={confirm.action === "merge" ? "Confirm merge" : "Confirm rebase"} className="space-y-3 rounded-md border p-3" onSubmit={(event) => {

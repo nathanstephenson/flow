@@ -103,6 +103,14 @@ it("refreshes PR data without remounting comment drafts from Changes", async () 
   assert.equal(after.props.revision, before.props.revision + 1);
 });
 
+it("refreshes local Git State and forces one pull request poll from the header Refresh", async () => {
+  const calls: any[] = [];
+  const pane = component("git-pane", async input => { calls.push(input); });
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  findButton(render(), "Refresh").props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ type: "refresh_git", sessionId: "session", pullRequest: true }]);
+});
+
 it("refreshes Stack after a PR action or Pull", async () => {
   gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 0, behind: 1, upstream: true };
   const pane = component("git-pane", async () => undefined);
@@ -191,18 +199,21 @@ function prDetails(extra: Record<string, unknown> = {}) {
   };
 }
 const prRef = { repo: "test/repo", number: 1, id: "PR_one" };
-function prPane(details: Record<string, unknown> = prDetails(), read?: () => Promise<unknown>) {
+function prPane(details: Record<string, unknown> = prDetails(), read?: () => Promise<unknown>, write?: (input: any) => Promise<unknown>) {
   const calls: any[] = [];
+  const listeners: Record<string, (() => void)[]> = {};
+  const document = { visibilityState: "visible", addEventListener: (type: string, listener: () => void) => { (listeners[type] ??= []).push(listener); }, removeEventListener: (type: string, listener: () => void) => { listeners[type] = (listeners[type] ?? []).filter(value => value !== listener); } };
   const pane = component("pull-request-pane", async input => {
     calls.push(input);
     if (input.type === "pull_request") return read ? read() : details;
+    if (write) return write(input);
     if (input.type === "suggest_git_text") return { title: "Suggested", body: "Suggested body" };
-  });
+  }, { document });
   const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {} };
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
-  return { calls, render, flush, load, writes: () => calls.filter(call => call.type !== "pull_request") };
+  return { calls, render, flush, load, document, listeners, writes: () => calls.filter(call => call.type !== "pull_request") };
 }
 const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
 
@@ -311,6 +322,120 @@ it("PR merge is unavailable without a permitted method or for a draft", async ()
     await load();
     assert.equal(findButton(render(), "Merge").props.disabled, true);
   }
+});
+
+it("has no Refresh of its own; the Git pane header owns Refresh", async () => {
+  const { render, load } = prPane();
+  await load();
+  assert.throws(() => findButton(render(), "Refresh"));
+});
+
+it("reads again when the document becomes visible", async () => {
+  const { calls, load, listeners, flush } = prPane();
+  await load();
+  for (const listener of listeners.visibilitychange ?? []) listener();
+  await flush();
+  assert.equal(calls.filter(call => call.type === "pull_request").length, 2);
+});
+
+it("prefixes only a failed read with the last-read notice", async () => {
+  let fail = false;
+  const { render, load, flush } = prPane(undefined, async () => { if (fail) throw new Error("offline"); return prDetails(); }, async () => { throw new Error("denied"); });
+  await load();
+  findButton(render(), "Convert to draft").props.onClick();
+  await flush();
+  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "Error: denied");
+  fail = true;
+  await load(1);
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^Showing the last pull request read\. Pull request could not be read\. Error: offline$/);
+});
+
+it("keeps typed comment text and shows the error when the comment fails", async () => {
+  const { render, load, flush } = prPane(undefined, undefined, async () => { throw new Error("locked"); });
+  await load();
+  const form = () => find(render(), "form", node => node.props["aria-label"] === "Add comment");
+  find(form(), "Textarea").props.onChange({ target: { value: "typed comment" } });
+  form().props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.equal(find(form(), "Textarea").props.value, "typed comment");
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /locked/);
+});
+
+it("disables every action while a write is in flight", async () => {
+  let release!: () => void;
+  const { render, load, flush } = prPane(undefined, undefined, () => new Promise<void>(resolve => { release = resolve; }));
+  await load();
+  find(find(render(), "form", node => node.props["aria-label"] === "Reply to thread in b.ts line 2"), "Textarea").props.onChange({ target: { value: "reply" } });
+  findButton(render(), "Convert to draft").props.onClick();
+  const buttons = findAll(render(), "Button");
+  assert.ok(buttons.length >= 9);
+  for (const button of buttons) assert.equal(button.props.disabled, true, textContent(button.props.children));
+  for (const field of findAll(render(), "Textarea")) assert.equal(field.props.disabled, true);
+  release();
+  await flush();
+  assert.equal(findButton(render(), "Convert to draft").props.disabled, false);
+});
+
+it("shows an alert and keeps the typed title and body when Suggest fails", async () => {
+  const { render, load, flush } = prPane(undefined, undefined, async () => { throw new Error("no model"); });
+  await load();
+  findButton(render(), "Edit").props.onClick();
+  const form = () => find(render(), "form", node => node.props["aria-label"] === "Edit pull request");
+  find(form(), "Input").props.onChange({ target: { value: "Typed title" } });
+  find(form(), "Textarea").props.onChange({ target: { value: "Typed body" } });
+  findButton(render(), "Suggest").props.onClick();
+  await flush();
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^No suggestion\. Error: no model$/);
+  assert.equal(find(form(), "Input").props.value, "Typed title");
+  assert.equal(find(form(), "Textarea").props.value, "Typed body");
+});
+
+it("closes the Edit form on Cancel and opens it again with the current title and body", async () => {
+  let details = prDetails();
+  const { render, load } = prPane(undefined, async () => details);
+  await load();
+  findButton(render(), "Edit").props.onClick();
+  const form = () => find(render(), "form", node => node.props["aria-label"] === "Edit pull request");
+  find(form(), "Input").props.onChange({ target: { value: "Discarded" } });
+  findButton(form(), "Cancel").props.onClick();
+  assert.throws(() => form());
+  details = prDetails({ title: "Renamed", body: "New body" });
+  await load(1);
+  findButton(render(), "Edit").props.onClick();
+  assert.equal(find(form(), "Input").props.value, "Renamed");
+  assert.equal(find(form(), "Textarea").props.value, "New body");
+});
+
+for (const next of [null, "other"]) it(`closes the Merge, Rebase and Edit forms when the pull request becomes ${next ?? "absent"}`, async () => {
+  for (const [button, label] of [["Merge", "Confirm merge"], ["Rebase", "Confirm rebase"], ["Edit", "Edit pull request"]]) {
+    let details: unknown = prDetails();
+    const { render, load } = prPane(undefined, async () => details);
+    await load();
+    findButton(render(), button!).props.onClick();
+    find(render(), "form", node => node.props["aria-label"] === label);
+    details = next === null ? null : prDetails({ id: "PR_two", number: 2 });
+    await load(1);
+    assert.throws(() => find(render(), "form", node => node.props["aria-label"] === label), label);
+    if (next) {
+      details = prDetails();
+      await load(2);
+      assert.throws(() => find(render(), "form", node => node.props["aria-label"] === label), label);
+    }
+  }
+});
+
+it("keeps a typed reply on its thread when a reload reorders the threads", async () => {
+  let details = prDetails();
+  const { render, load } = prPane(undefined, async () => details);
+  await load();
+  const reply = (place: string) => find(find(render(), "form", node => node.props["aria-label"] === `Reply to thread in ${place}`), "Textarea");
+  reply("b.ts line 2").props.onChange({ target: { value: "on b" } });
+  const threads = (details as any).threads as any[];
+  details = prDetails({ threads: [{ ...threads[0], isResolved: false }, { ...threads[1], isResolved: true }] });
+  await load(1);
+  assert.deepEqual(findAll(find(render(), "Accordion", node => node.props["aria-label"] === "Review threads"), "AccordionItem").map(node => node.props.value), ["T_resolved", "T_open"]);
+  assert.equal(reply("b.ts line 2").props.value, "on b");
+  assert.equal(reply("a.ts line 1").props.value, "");
 });
 
 it("keeps the newest pull request read when an older response arrives last", async () => {

@@ -77,7 +77,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
 
   function refresh() {
     reread("changes", "stack", "pullRequest");
-    void run(() => connection.command({ type: "refresh_git", sessionId }));
+    void run(() => connection.command({ type: "refresh_git", sessionId, pullRequest: true }));
   }
 
   function pull() {

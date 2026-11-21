@@ -196,8 +196,8 @@ describe("Agent Session rail DOM focus and material", () => {
       window.mountTranscriptHeader(sessions);
     }, pr);
     const header = page.locator('[data-transcript-header]');
-    await header.getByRole('link', { name: '#178' }).waitFor();
-    assert.equal(await header.getByRole('link', { name: '#178' }).getAttribute('href'), pr.url);
+    await header.getByRole('link', { name: 'Pull Request #178', exact: true }).waitFor();
+    assert.equal(await header.getByRole('link', { name: 'Pull Request #178', exact: true }).getAttribute('href'), pr.url);
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
       for (const scope of [cursor(), header]) {
@@ -211,6 +211,20 @@ describe("Agent Session rail DOM focus and material", () => {
     }
     assert.match(await cursor().textContent(), /#178/);
     assert.equal(await page.locator('[data-sidebar="menu-button"]', { hasText: '#178' }).count(), 1);
+  });
+
+  it("shows no pull request line or badges on a row and a header without a pull request", async () => {
+    await page.evaluate(() => {
+      const sessions = [{ ...window.summary('a'), branch: { name: 'main' }, git: { revision: 'r', changed: 0, ahead: 0, behind: 0, upstream: true } }, { ...window.summary('b'), branch: { name: 'other' } }];
+      window.renderRail({ withTranscriptHeader: true, sessions });
+      window.mountTranscriptHeader(sessions);
+    });
+    const header = page.locator('[data-transcript-header]');
+    await header.getByText('Transcript title', { exact: true }).waitFor();
+    await page.waitForTimeout(1000);
+    assert.equal(await page.locator('[data-slot="badge"]').count(), 0);
+    assert.equal(await header.getByRole('link').count(), 0);
+    assert.doesNotMatch(await page.locator('[data-sidebar="menu"]').first().textContent(), /#\d/);
   });
 
   it("moves DOM focus with repeated arrow cursor changes", async () => {
