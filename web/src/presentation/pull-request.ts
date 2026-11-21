@@ -1,4 +1,4 @@
-import type { PullRequest } from "../../../src/protocol/publish.ts";
+import type { PullRequest } from "../../../src/protocol/pull-request.ts";
 import type { PullRequestRef } from "../../../src/protocol/pull-request.ts";
 
 export function pullRequestKey(pr: PullRequestRef): string {

@@ -1,5 +1,3 @@
-import type { GitFile } from "./publish.ts";
-
 /**
  * Git, as it crosses the wire.
  *
@@ -49,8 +47,9 @@ export type BranchList = {
   truncated?: true;
 };
 
+export type GitFile = { path: string; status: string };
 export type ChangesView = "uncommitted" | "branch";
-export type GitChanges = { files: GitFile[]; commits: string[]; base?: string };
+export type GitChanges = { files: GitFile[]; commits: string[]; base?: string; fingerprint?: string; branch?: string; defaultBranch?: string; canRename?: boolean };
 export type GitDiff = { text: string } | { binary: true } | { tooLarge: true };
 
 export type CheckStatus = "passing" | "failing" | "pending" | "none";
@@ -68,9 +67,19 @@ export type PullRequestSummary = {
 
 export type GitState = {
   revision: string;
+  branch?: string;
+  head?: string;
+  defaultBranch?: string;
   changed: number;
   ahead: number;
   behind: number;
   upstream: boolean;
   pr?: PullRequestSummary;
 };
+
+export type CommitInput = { fingerprint: string; paths: string[]; message: string; branch?: string };
+export type PushState = { branch: string; head: string; remote?: string; replaced: string[] };
+export type PushInput = { head: string; replace?: string };
+export type PullRequestInput = { head: string; title: string; body: string; draft: boolean };
+export type GitTextKind = "commit" | "pull_request" | "branch";
+export type GitText = { message?: string; title?: string; body?: string; branch?: string };

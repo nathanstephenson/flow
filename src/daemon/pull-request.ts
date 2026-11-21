@@ -1,6 +1,9 @@
 import { api, connection, gh, type Gh } from "./github.ts";
 import { resolvePullRequest, resolveRepository } from "./repository.ts";
 import { cleanStack } from "./stack.ts";
+import { pushTarget, remoteHead } from "./push.ts";
+import { localStack, stackParent } from "./stack-metadata.ts";
+import type { PullRequestInput } from "../protocol/git.ts";
 import type { MergeMethod, PullRequestActionInput } from "../protocol/pull-request.ts";
 import { head, isRepository, run, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import type { PullRequestComment, PullRequestDetails, PullRequestCommentInput, PullRequestThreadInput, PullRequestRef, PullRequestThread } from "../protocol/pull-request.ts";
@@ -51,6 +54,19 @@ export async function pullBranch(scope: string, branch: string): Promise<void> {
   const selected = await head(scope);
   if (!selected.ok || selected.value.detached || selected.value.name !== branch) throw new Error("The branch has changed. Refresh Git status before pulling.");
   await git(scope, ["pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-squash"]);
+}
+
+export async function createPullRequest(scope: string, input: PullRequestInput, github: Gh = gh): Promise<string> {
+  if (typeof input.title !== "string" || !input.title.trim() || typeof input.body !== "string") throw new Error("Enter a pull request title.");
+  const { branch, head, repository } = await pushTarget(scope, github);
+  if (head !== input.head) throw new Error("HEAD moved after the branch was read. Read it again.");
+  if (await remoteHead(scope, repository.remote, branch) !== head) throw new Error(`Push the branch first. ${repository.remote} does not have the current HEAD of ${branch}.`);
+  const existing = await resolvePullRequest(scope, repository, branch, github);
+  if (existing?.state === "OPEN") throw new Error(`Pull request #${existing.number} is already open for ${branch}.`);
+  const stack = await localStack(scope, branch);
+  const base = stack ? stackParent(stack, branch) : repository.base.defaultBranch;
+  const owner = repository.head.repo.split("/")[0];
+  return (await github(scope, ["pr", "create", "--repo", repository.base.repo, "--head", `${owner}:${branch}`, "--base", base, "--title", input.title, "--body", input.body, ...(input.draft ? ["--draft"] : [])])).trim();
 }
 
 export async function changePullRequest(scope: string, action: "rebase" | "merge", input: PullRequestActionInput, github: Gh = gh): Promise<void> {

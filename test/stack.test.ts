@@ -177,7 +177,7 @@ it("sends conflict assistance through the current Agent Session without permitti
     assert.equal(backend.latest.prompts.length, 1);
     assert.match(JSON.stringify(backend.latest.prompts[0]), /gh stack rebase --continue/);
     assert.match(stackConflictMessage, /only after.*empty/);
-    assert.match(stackConflictMessage, /Do not push, publish, submit, sync, merge/);
+    assert.match(stackConflictMessage, /Do not push, submit, sync, merge/);
     assert.doesNotMatch(readFileSync(join(root, "calls"), "utf8"), /stack rebase --continue|stack sync|stack submit/);
   } finally { await host.shutdown(); }
 });

@@ -1,10 +1,9 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
-import type { Branch, ChangesView, GitState } from "./git.ts";
+import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
 import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
-import type { PublishInput } from "./publish.ts";
 
 export type SendWhen = "now" | "after_turn";
 
@@ -211,12 +210,14 @@ export type Command =
   | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
   | { type: "change_stack"; sessionId: string; input: StackInput }
   | { type: "assist_stack"; sessionId: string }
-  | { type: "git_status"; sessionId: string }
   | { type: "refresh_git"; sessionId: string }
   | { type: "git_changes"; sessionId: string; view: ChangesView }
   | { type: "git_diff"; sessionId: string; view: ChangesView; path: string }
-  | { type: "prepare_publish"; sessionId: string }
-  | { type: "publish"; sessionId: string; input: PublishInput }
+  | ({ type: "commit"; sessionId: string } & CommitInput)
+  | { type: "push_state"; sessionId: string }
+  | ({ type: "push"; sessionId: string } & PushInput)
+  | ({ type: "create_pull_request"; sessionId: string } & PullRequestInput)
+  | { type: "suggest_git_text"; sessionId: string; kind: GitTextKind; paths?: string[] }
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
    * Move a **Scope's** checkout, with no Agent Session in it yet.

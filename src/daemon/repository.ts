@@ -36,9 +36,9 @@ async function config(scope: string, key: string): Promise<string | undefined> {
   return value && value !== "." ? value : undefined;
 }
 
-async function pushRemote(scope: string, branch: string | undefined): Promise<string> {
+async function pushRemote(scope: string, branch: string | undefined): Promise<string | undefined> {
   const remotes = (await git(scope, ["remote"])).split("\n").filter(Boolean);
-  if (remotes.length === 0) throw new Error("No remote is configured. Add a GitHub remote.");
+  if (remotes.length === 0) return undefined;
   const keys = branch ? [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`] : ["remote.pushDefault"];
   for (const key of keys) {
     const configured = await config(scope, key);
@@ -56,10 +56,27 @@ async function view(scope: string, repo: string, github: Gh): Promise<Repository
   return { ...info, id: info.id, defaultBranch: info.defaultBranchRef.name };
 }
 
+function githubRepository(url: string): string | undefined {
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url)?.[1];
+}
+
+export type LocalRepository = { remote: string; github: boolean; defaultBranches: string[] };
+
+export async function localRepository(scope: string, branch: string | undefined): Promise<LocalRepository | undefined> {
+  const remote = await pushRemote(scope, branch);
+  if (!remote) return undefined;
+  const url = await git(scope, ["remote", "get-url", "--push", remote]);
+  const cached = identities.get(`${scope}\0${remote}\0${url}`)?.base.defaultBranch;
+  const head = await run(scope, ["symbolic-ref", "--quiet", "--short", `refs/remotes/${remote}/HEAD`], GIT_READ_TIMEOUT_MS);
+  const local = head.ok ? head.value.trim().slice(remote.length + 1) : undefined;
+  return { remote, github: githubRepository(url) !== undefined, defaultBranches: [...new Set([cached, local].filter((name): name is string => Boolean(name)))] };
+}
+
 export async function resolveRepository(scope: string, branch: string | undefined, github: Gh = gh): Promise<Repository> {
   const remote = await pushRemote(scope, branch);
+  if (!remote) throw new Error("No remote is configured. Add a GitHub remote.");
   const url = await git(scope, ["remote", "get-url", "--push", remote]);
-  const repo = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url)?.[1];
+  const repo = githubRepository(url);
   if (!repo) throw new Error("This remote is not a supported github.com repository URL.");
   const key = `${scope}\0${remote}\0${url}`;
   let identity = identities.get(key);

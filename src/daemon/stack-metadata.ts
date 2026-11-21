@@ -12,7 +12,7 @@ export async function localStacks(scope: string): Promise<LocalStack[]> {
   try { raw = await readFile(resolve(scope, path.value.trim()), "utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   const data = JSON.parse(raw) as { schemaVersion: number; stacks: LocalStack[] };
-  if (data.schemaVersion !== 1 || !Array.isArray(data.stacks) || data.stacks.some(s => !s.trunk || typeof s.trunk.branch !== "string" || !Array.isArray(s.branches) || s.branches.some(b => typeof b.branch !== "string"))) throw new Error("Invalid or unsupported gh stack metadata. Repair it with gh stack before publishing or syncing.");
+  if (data.schemaVersion !== 1 || !Array.isArray(data.stacks) || data.stacks.some(s => !s.trunk || typeof s.trunk.branch !== "string" || !Array.isArray(s.branches) || s.branches.some(b => typeof b.branch !== "string"))) throw new Error("Invalid or unsupported gh stack metadata. Repair it with gh stack before you continue.");
   return data.stacks;
 }
 

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -42,4 +42,17 @@ export function unbornRepository(parent: string, name: string): string {
   mkdirSync(path, { recursive: true });
   git(path, "init", "--initial-branch=main", "--quiet");
   return path;
+}
+
+export function githubRemote(parent: string, repo: string): string {
+  const bare = join(parent, "remote.git");
+  mkdirSync(bare);
+  git(bare, "init", "--bare", "--quiet");
+  const ssh = join(parent, "ssh");
+  writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\ncase "$last" in git-upload-pack*) exec git-upload-pack '${bare}';; *) exec git-receive-pack '${bare}';; esac\n`);
+  chmodSync(ssh, 0o755);
+  process.env.GIT_SSH_COMMAND = ssh;
+  process.env.GIT_SSH_VARIANT = "ssh";
+  git(repo, "remote", "add", "origin", "git@github.com:test/repo.git");
+  return bare;
 }

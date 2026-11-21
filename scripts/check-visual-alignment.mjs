@@ -307,7 +307,7 @@ async function dockAndGit(mode) {
   const views = page.getByRole('tablist', { name: 'Git views', exact: true });
   await views.getByRole('tab', { name: 'PR', exact: true }).waitFor();
   await views.getByRole('tab', { name: 'Changes', exact: true }).click();
-  // Refresh is a read-only handler, unlike Publish/Pull. Wait for both optional
+  // Refresh is a read-only handler, unlike Commit/Push/Pull. Wait for both optional
   // views' discovery before measuring a three-way strip.
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await views.getByRole('tab', { name: 'Stack', exact: true }).waitFor();
@@ -317,11 +317,7 @@ async function dockAndGit(mode) {
   assert.equal(tabs.length, 3); assert.ok(tabs.every(tab => tab.radius === '0px' && tab.height === 36));
   assert.ok(tabs.every(tab => Math.abs(tab.width - viewBox.width / 3) < 1));
   await views.getByRole('tab', { name: 'Changes', exact: true }).click();
-  const publish = page.getByRole('button', { name: 'Publish', exact: true }), actions = publish.locator('..');
-  const actionBox = await surface(actions), actionFaces = await actions.getByRole('button').evaluateAll(nodes => nodes.map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height, radius: getComputedStyle(node).borderRadius })));
-  assert.equal(actionFaces.length, 3); assert.ok(actionFaces.every(face => face.height === 34 && face.radius === '0px'));
-  assert.ok(Math.abs(actionFaces.reduce((sum, face) => sum + face.width, 0) - actionBox.width) < 1);
-  // Never Publish/Pull or close a Shell: those are actual host writes.
+  // Never Commit, Push, Pull or close a Shell: those are actual host writes.
   await capture(`dock-git-accents-${mode}`);
 }
 

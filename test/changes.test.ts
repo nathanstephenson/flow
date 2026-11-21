@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
-import { changes, diff } from "../src/daemon/changes.ts";
+import { changes, commitContext, diff } from "../src/daemon/changes.ts";
+import { resolveRepository } from "../src/daemon/repository.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
 const calls: string[][] = [];
@@ -168,4 +169,19 @@ it("decides too large from sizes when git also writes warnings", async () => {
 it("asks for a fetch when the base ref is not known locally", async () => {
   git(repo, "branch", "-m", "main", "feature");
   await assert.rejects(changes(repo, "branch", undefined, github), /Fetch main from origin/);
+});
+
+it("reads the commit context without GitHub, from the cached identity or the local remote HEAD", async () => {
+  assert.deepEqual(await commitContext(repo, "main", () => false), { branch: "main", canRename: false });
+  git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  assert.deepEqual(await commitContext(repo, "main", () => false), { branch: "main", defaultBranch: "main", canRename: false });
+  git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+  await resolveRepository(repo, "main", github);
+  calls.length = 0;
+  git(repo, "switch", "--quiet", "-c", "feature");
+  assert.deepEqual(await commitContext(repo, "feature", () => false), { branch: "feature", defaultBranch: "main", canRename: true });
+  assert.deepEqual(await commitContext(repo, "feature", () => true), { branch: "feature", defaultBranch: "main", canRename: false });
+  assert.deepEqual(await commitContext(repo, undefined, () => false), { defaultBranch: "main", canRename: false });
+  assert.deepEqual(calls, []);
 });

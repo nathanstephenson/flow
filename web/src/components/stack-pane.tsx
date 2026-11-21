@@ -98,7 +98,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     setError("");
     try {
       await connection.command({ type: "assist_stack", sessionId });
-      setOutput("Asked this Agent Session to resolve conflicts and continue locally. Review its result, then refresh. No push, Publish, Sync, or merge was authorised.");
+      setOutput("Asked this Agent Session to resolve conflicts and continue locally. Review its result, then refresh. No push, Sync, or merge was authorised.");
     } catch (failure) { setError(String(failure)); }
     finally { setBusy(false); }
   }
@@ -168,7 +168,7 @@ export function StackPane({ sessionId, disabled = false, onChange, onAvailable, 
     </> : null}
 
     {!status?.rebasing && managedVisible && status?.view ? <>
-      <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Use Publish for uncommitted files.</p>
+      <p className="text-muted-foreground">Switching requires a clean Scope with no working Agent Sessions, Subagents, or Background Calls. Changes are never stashed. Commit uncommitted files first.</p>
       {adding ? <form className="space-y-2" aria-label="New branch" onSubmit={(event) => { event.preventDefault(); if (!blocked && !review && names.trim()) void run("add", [names.trim()]); }}>
         <label className="block">New branch name<Input autoFocus required value={names} onChange={(event) => setNames(event.target.value)} disabled={blocked || !!review} /></label>
         <div className="flex gap-2">
