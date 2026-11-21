@@ -23,7 +23,7 @@ export type MobileDockNavigation = {
 /**
  * One desktop Dock, or the body selected by the unified mobile tab row.
  *
- * Non-Shell tab bodies stay mounted while hidden. That is what preserves an unfinished Git publish,
+ * Non-Shell tab bodies stay mounted while hidden. That is what preserves an unfinished commit message,
  * Workflow input, or graph selection when a reader changes mobile views. Shells are the deliberate
  * exception: hiding one disconnects its renderer while its host pty continues running, exactly as
  * minimising a desktop Dock always has.

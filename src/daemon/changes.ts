@@ -2,10 +2,10 @@ import { lstat, readFile, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { resolveRepository } from "./repository.ts";
-import { localStack, stackParent } from "./stack-metadata.ts";
-import type { GitFile } from "../protocol/publish.ts";
-import type { ChangesView, GitChanges, GitDiff } from "../protocol/git.ts";
+import { localRepository, resolveRepository } from "./repository.ts";
+import { readStatus } from "./git-state.ts";
+import { localStack, localStacks, stackParent } from "./stack-metadata.ts";
+import type { ChangesView, GitChanges, GitDiff, GitFile } from "../protocol/git.ts";
 
 const SIDE_LIMIT = 250_000;
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -20,8 +20,7 @@ export async function git(scope: string, args: string[], write = false): Promise
 }
 
 export async function files(scope: string): Promise<GitFile[]> {
-  const raw = await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
-  return raw.split("\0").filter(Boolean).map((line) => ({ status: line.slice(0, 2), path: line.slice(3) }));
+  return (await readStatus(scope)).files;
 }
 
 export async function baseRef(scope: string, remote: string, branch: string, preferLocal: boolean): Promise<string | undefined> {
@@ -99,4 +98,29 @@ export async function diff(scope: string, view: ChangesView, path: string, pullR
   const numstat = await git(scope, ["--literal-pathspecs", "diff", "--numstat", ...range, "--", path]);
   if (numstat.startsWith("-\t-\t")) return { binary: true };
   return { text: await git(scope, ["--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", ...range, "--", path]) };
+}
+
+export async function canNameBranch(scope: string, branch: string, remote: string, pullRequest: boolean): Promise<boolean> {
+  if (pullRequest) return false;
+  if ((await localStacks(scope)).some(stack => stack.trunk.branch === branch || stack.branches.some(item => item.branch === branch))) return false;
+  return !(await run(scope, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], GIT_READ_TIMEOUT_MS)).ok;
+}
+
+export async function commitContext(scope: string, branch: string | undefined, pullRequest: (branch: string) => boolean): Promise<Pick<GitChanges, "branch" | "defaultBranch" | "canRename">> {
+  const repository = await localRepository(scope, branch).catch(() => undefined);
+  const defaultBranch = repository?.defaultBranches[0];
+  const canRename = Boolean(branch && repository?.github && defaultBranch && !repository.defaultBranches.includes(branch) && await canNameBranch(scope, branch, repository.remote, pullRequest(branch)));
+  return { ...(branch ? { branch } : {}), ...(defaultBranch ? { defaultBranch } : {}), canRename };
+}
+
+export async function changesText(scope: string, view: ChangesView, paths: string[] | undefined, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<string> {
+  const listed = await changes(scope, view, pullRequestBase, github);
+  let text = listed.commits.length > 0 ? `Commits:\n${listed.commits.join("\n")}\n` : "";
+  for (const file of listed.files) {
+    if (text.length > 24_000) break;
+    if (paths && !paths.includes(file.path)) continue;
+    const shown = await diff(scope, view, file.path, pullRequestBase, github);
+    text += "text" in shown ? shown.text : `${file.status} ${file.path}: no text diff\n`;
+  }
+  return text;
 }

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
 import { resolvePullRequest, resolveRepository } from "../src/daemon/repository.ts";
-import type { Gh } from "../src/daemon/github.ts";
+import { gh, type Gh } from "../src/daemon/github.ts";
 
 const repositories: Record<string, unknown> = {
   "test/origin": { id: "R_origin", defaultBranchRef: { name: "main" }, isFork: false },
@@ -137,5 +137,27 @@ describe("resolvePullRequest", () => {
     assert.equal(await checks({ state: "EXPECTED" }), "pending");
     assert.equal(await checks(null), "none");
     assert.equal(await checks(undefined), "none");
+  });
+});
+
+describe("gh", () => {
+  it("distinguishes missing gh, authentication failure and request failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-gh-"));
+    const path = process.env.PATH;
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const fake = (script: string) => { writeFileSync(join(bin, "gh"), `#!/bin/sh\n${script}\n`); chmodSync(join(bin, "gh"), 0o755); };
+    process.env.PATH = bin;
+    try {
+      await assert.rejects(gh(root, ["auth", "status"]), /CLI is missing/);
+      fake("echo 'not logged in' >&2\nexit 1");
+      await assert.rejects(gh(root, ["auth", "status"]), /authentication failed/);
+      await assert.rejects(gh(root, ["pr", "list"]), /request failed/);
+      fake("echo 'HTTP 503 unavailable' >&2\nexit 1");
+      await assert.rejects(gh(root, ["auth", "status"]), /request failed/);
+    } finally {
+      process.env.PATH = path;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

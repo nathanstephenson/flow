@@ -2,16 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import type { ChangesView, GitChanges as Changes, GitDiff } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
+import { Checkbox } from "@/components/ui/checkbox.tsx";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import { DiffText } from "@/components/diff-text.tsx";
+import { GitCommitForm } from "@/components/git-commit-form.tsx";
 import { diffHunks, diffNotice, noChanges } from "@/presentation/git.ts";
 
 type Diffs = Record<string, GitDiff | { error: string }>;
 
-export function GitChanges({ sessionId, revision }: { sessionId: string; revision: string | undefined }) {
+type Props = {
+  sessionId: string;
+  revision: string;
+  view: ChangesView;
+  onViewChange: (view: ChangesView) => void;
+  onCommitted: (commit: string) => void;
+};
+
+export function GitChanges({ sessionId, revision, view, onViewChange, onCommitted }: Props) {
   const { connection } = useHost();
-  const [view, setView] = useState<ChangesView>("uncommitted");
-  const [changes, setChanges] = useState<Changes>();
+  const [read, setRead] = useState<{ view: ChangesView; changes: Changes }>();
+  const changes = read?.view === view ? read.changes : undefined;
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const [message, setMessage] = useState("");
+  const [branchName, setBranchName] = useState("");
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
   const [diffs, setDiffs] = useState<Diffs>({});
@@ -31,8 +44,9 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
       (value) => {
         if (cancelled) return;
         const listed = (path: string) => value.files.some(file => file.path === path);
-        setChanges(value);
+        setRead({ view, changes: value });
         setError("");
+        if (view === "uncommitted") setExcluded(current => current.filter(listed));
         setOpen(current => current.filter(listed));
         for (const path of open.filter(listed)) readDiff(path);
       },
@@ -46,9 +60,8 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
       <Tabs
         value={view}
         onValueChange={(value: ChangesView) => {
-          setView(value);
+          onViewChange(value);
           setOpen([]);
-          setChanges(undefined);
           setError("");
         }}
       >
@@ -71,10 +84,21 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
           >
             {changes.files.map(file => (
               <AccordionItem key={file.path} value={file.path} className="border-b last:border-b-0">
-                <AccordionTrigger className="min-w-0 gap-3 rounded-none py-1.5 text-left font-mono text-xs font-normal">
-                  <span className="w-5 shrink-0 whitespace-pre text-muted-foreground">{file.status}</span>
-                  <span className="min-w-0 break-all">{file.path}</span>
-                </AccordionTrigger>
+                <div className="flex min-w-0 items-center gap-2">
+                  {view === "uncommitted" ? (
+                    <Checkbox
+                      aria-label={`Commit ${file.path}`}
+                      checked={!excluded.includes(file.path)}
+                      onCheckedChange={(checked: boolean) => setExcluded(current => checked ? current.filter(path => path !== file.path) : [...current, file.path])}
+                    />
+                  ) : null}
+                  <div className="min-w-0 flex-1">
+                    <AccordionTrigger className="min-w-0 gap-3 rounded-none py-1.5 text-left font-mono text-xs font-normal">
+                      <span className="w-5 shrink-0 whitespace-pre text-muted-foreground">{file.status}</span>
+                      <span className="min-w-0 break-all">{file.path}</span>
+                    </AccordionTrigger>
+                  </div>
+                </div>
                 <AccordionContent className="pb-2">
                   <FileDiff path={file.path} diff={diffs[`${view}\0${file.path}`]} />
                 </AccordionContent>
@@ -82,6 +106,21 @@ export function GitChanges({ sessionId, revision }: { sessionId: string; revisio
             ))}
           </Accordion>
         )}
+        {view === "uncommitted" && changes.fingerprint && changes.files.length > 0 ? (
+          <GitCommitForm
+            sessionId={sessionId}
+            paths={changes.files.map(file => file.path).filter(path => !excluded.includes(path))}
+            fingerprint={changes.fingerprint}
+            branch={changes.branch}
+            defaultBranch={changes.defaultBranch}
+            canRename={changes.canRename === true}
+            message={message}
+            branchName={branchName}
+            onMessage={setMessage}
+            onBranchName={setBranchName}
+            onCommitted={onCommitted}
+          />
+        ) : null}
       </>}
     </section>
   );

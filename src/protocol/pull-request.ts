@@ -1,4 +1,11 @@
-import type { PullRequest } from "./publish.ts";
+export type PullRequest = {
+  number: number;
+  url: string;
+  title: string;
+  isDraft: boolean;
+  reviewDecision: string;
+  statusCheckRollup: { name?: string; context?: string; status?: string; conclusion?: string; state?: string; detailsUrl?: string; targetUrl?: string }[];
+};
 
 export type MergeMethod = "MERGE" | "SQUASH" | "REBASE";
 export type PullRequestActionInput = { pr: PullRequestRef; headOid: string; baseBranch: string; method?: MergeMethod };

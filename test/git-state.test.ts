@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, repository } from "./git-fixture.ts";
-import { GitStates, readLocal } from "../src/daemon/git-state.ts";
+import { git, repository, unbornRepository } from "./git-fixture.ts";
+import { GitStates, readLocal, readStatus } from "../src/daemon/git-state.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
 let root: string;
@@ -44,8 +44,34 @@ describe("readLocal", () => {
     writeFileSync(join(path, "a file.txt"), "untracked");
     git(path, "mv", "README.md", "moved.md");
     const state = await readLocal(path);
-    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 3, ahead: 0, behind: 0, upstream: false, branch: "main" });
+    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 4, ahead: 0, behind: 0, upstream: false, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
     assert.equal(await readLocal(root), undefined);
+  });
+
+  it("reports a detached HEAD and a repository with no commits", async () => {
+    const path = scope("detached");
+    git(path, "switch", "--quiet", "--detach");
+    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, head: git(path, "rev-parse", "HEAD").trim() });
+    const empty = unbornRepository(root, "empty");
+    assert.deepEqual({ ...await readLocal(empty), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, branch: "main" });
+  });
+
+  it("reads the default branch from the local remote HEAD", async () => {
+    const path = scope("default");
+    git(path, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    assert.equal((await readLocal(path))?.defaultBranch, "main");
+  });
+
+  it("lists changed files with a fingerprint that ignores the branch name but not the files", async () => {
+    const path = scope("fingerprint");
+    writeFileSync(join(path, "new.txt"), "new");
+    const first = await readStatus(path);
+    assert.deepEqual(first.files, [{ status: "??", path: "new.txt" }]);
+    git(path, "switch", "--quiet", "-c", "other");
+    assert.equal((await readStatus(path)).fingerprint, first.fingerprint);
+    writeFileSync(join(path, "new.txt"), "newer");
+    assert.notEqual((await readStatus(path)).fingerprint, first.fingerprint);
   });
 
   it("reports ahead and behind against the upstream", async () => {
@@ -56,7 +82,7 @@ describe("readLocal", () => {
     git(path, "commit", "--quiet", "--allow-empty", "-m", "local two");
     git(remote, "commit", "--quiet", "--allow-empty", "-m", "remote");
     git(path, "fetch", "--quiet");
-    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true, branch: "main" });
+    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true, branch: "main", defaultBranch: "main", head: git(path, "rev-parse", "HEAD").trim() });
   });
 
   it("changes revision when a changed file changes again", async () => {
@@ -75,7 +101,7 @@ describe("GitStates", () => {
   it("reads at most once each 3 s with one trailing read", async () => {
     mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
     const reads: string[] = [];
-    const states = new GitStates(github().run, async (path) => { reads.push(path); return { revision: String(reads.length), changed: 0, ahead: 0, behind: 0, upstream: false, branch: undefined }; });
+    const states = new GitStates(github().run, async (path) => { reads.push(path); return { revision: String(reads.length), changed: 0, ahead: 0, behind: 0, upstream: false }; });
     states.touch("scope");
     states.touch("scope");
     states.touch("scope");

@@ -80,7 +80,7 @@ async function checkGit(viewport, screenshotSuffix) {
   await chooseDockView(page, "Git");
   const list = page.getByRole("tablist", { name: "Git views" });
   await list.waitFor();
-  await page.getByText("Reading Git status…").waitFor({ state: "hidden" });
+  await page.getByText("Reading changes…").waitFor({ state: "hidden" });
   if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
   else await page.waitForTimeout(500);
   const labels = await list.getByRole("tab").allTextContents();
@@ -102,19 +102,9 @@ async function checkGit(viewport, screenshotSuffix) {
     await page.keyboard.press("ArrowRight");
     await assertSelected(page, list, labels.at(-1));
   }
-  if (labels.at(-1) !== "Changes") await list.getByRole("tab", { name: "Changes" }).click();
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await page.getByRole("tab", { name: "Changes", exact: true }).waitFor();
-  for (const tab of await list.getByRole("tab").all()) {
-    assert.equal(await tab.isDisabled(), true, "Publish should lock every Git tab");
-  }
-  if (labels.length > 1) {
-    await list.getByRole("tab", { name: labels.at(-1) }).click({ force: true });
-    assert.equal(await list.getByRole("tab", { name: "Changes" }).getAttribute("aria-selected"), "true", "a disabled Git tab must not activate");
-  }
   await page.reload({ waitUntil: "domcontentloaded" });
   await list.waitFor();
-  await page.getByText("Reading Git status…").waitFor({ state: "hidden" });
+  await page.getByText("Reading changes…").waitFor({ state: "hidden" });
   if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
   else await page.waitForTimeout(500);
 
