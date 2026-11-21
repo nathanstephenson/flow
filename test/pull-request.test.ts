@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { git, repository } from "./git-fixture.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { MergeMethod, PullRequestDetails, PullRequestRef } from "../src/protocol/pull-request.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch, editPullRequest, setPullRequestDraft, rerunPullRequestChecks } from "../src/daemon/pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "../src/daemon/pull-request.ts";
 import { resolveRepository } from "../src/daemon/repository.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import type { Gh } from "../src/daemon/github.ts";
@@ -21,6 +21,7 @@ test("Session Host routes all PR commands through Agent Session lookup", async (
     { type: "edit_pull_request" as const, sessionId: "missing", input: { pr: ref, title: "Title", body: "" } },
     { type: "set_pull_request_draft" as const, sessionId: "missing", input: { pr: ref, draft: true } },
     { type: "rerun_pull_request_checks" as const, sessionId: "missing", input: { pr: ref, runId: 1 } },
+    { type: "pull_request_check_log" as const, sessionId: "missing", pr: ref, jobId: 1 },
   ]) await assert.rejects(host.execute(command), /session/i);
 });
 
@@ -35,6 +36,7 @@ test("each pull request write polls Git State once for its Scope, and reads run 
     const sessionId = await host.create({ scope: path });
     await host.send(sessionId, "work", "now");
     await assert.rejects(host.execute({ type: "pull_request", sessionId }), /No remote/);
+    await assert.rejects(host.execute({ type: "pull_request_check_log", sessionId, pr: ref, jobId: 1 }), /No remote/);
     assert.deepEqual(polls, []);
     for (const command of [
       { type: "comment_pull_request" as const, sessionId, input: { pr: ref, body: "text" } },
@@ -276,6 +278,59 @@ test("re-runs the failed jobs of one run in the base repository, and refuses a b
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+const logLine = (text: string, index: number) => `2026-11-21T00:47:${String(index % 60).padStart(2, "0")}.0372247Z \u001b[36;1m${text}\u001b[0m`;
+
+test("reads the end of a failed job log up to its last error, without timestamps or colour", async () => {
+  const path = await scope();
+  try {
+    const lines = [...Array.from({ length: 190 }, (_, index) => `line ${index + 1}`), "##[error]Process completed with exit code 1.", "Post job cleanup.", "Cleaning up orphan processes"];
+    const { github, calls } = mock({ log: `\ufeff${lines.map(logLine).join("\n")}\n` });
+    const log = await checkLog(path, ref, 456, github);
+    assert.equal(log?.truncated, true);
+    assert.deepEqual(log?.text.split("\n"), [...lines.slice(111, 190), "##[error]Process completed with exit code 1."]);
+    assert.ok(calls.some(call => call.join(" ") === "api repos/base/repo/actions/jobs/456"));
+    assert.ok(calls.some(call => call.join(" ") === "api repos/base/repo/actions/jobs/456/logs --allow-escape-sequences"));
+    assert.ok(!calls.some(call => call[0] === "run"));
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log: ["one", "two"].map(logLine).join("\r\n") }).github), { text: "one\ntwo", truncated: false });
+    const plain = Array.from({ length: 100 }, (_, index) => `line ${index + 1}`);
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log: plain.map(logLine).join("\n") }).github), { text: plain.slice(20).join("\n"), truncated: true });
+    const early = ["setup", "##[error]Bad input", ...plain];
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log: early.map(logLine).join("\n") }).github), { text: "setup\n##[error]Bad input", truncated: true });
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("removes every escape sequence and control character from a job log", async () => {
+  const path = await scope();
+  try {
+    const log = "\ufeffplain bom line\n2026-11-21T00:47:01.0Z \u001b]8;;https://evil\u0007link\u001b]8;;\u0007 \u001b[38:5:1mx\u001b(B progress 10%\rprogress 100%\u0008\u0000\u007f\tend\n\ufeff2026-11-21T00:47:02.0Z \u001b]0;title\u001b\\##[error]boom\n";
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log }).github), { text: "plain bom line\nlink x progress 10%\nprogress 100%\tend\n##[error]boom", truncated: false });
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("refuses a job log for a stale pull request, a job of another head, or a bad job ID", async () => {
+  const path = await scope();
+  try {
+    const stale = mock({ log: "x" });
+    await assert.rejects(checkLog(path, { ...ref, id: "other" }, 456, stale.github), /changed/);
+    assert.ok(!stale.calls.some(call => call[1]?.startsWith("repos/")));
+    const other = mock({ log: "x", runSha: "b".repeat(40) });
+    await assert.rejects(checkLog(path, ref, 456, other.github), /not for the current head/);
+    assert.ok(!other.calls.some(call => call[1]?.endsWith("/logs")));
+    const invalid = mock({ log: "x" });
+    for (const jobId of [0, -1, 1.5, "12", "12/../runs", Number.NaN, undefined]) await assert.rejects(checkLog(path, ref, jobId as never, invalid.github), /Invalid/);
+    assert.equal(invalid.calls.length, 0);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("gives no job log when the log is too large or cannot be read", async () => {
+  const path = await scope();
+  try {
+    for (const failure of ["GitHub request failed: stdout maxBuffer length exceeded", "GitHub request failed: HTTP 410: Gone"]) {
+      assert.equal(await checkLog(path, ref, 456, mock({ log: new Error(failure) }).github), null);
+    }
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("pages a thread on a later page whose comments also have a next page", async () => {
   const path = await scope();
   try {
@@ -464,7 +519,7 @@ const repositoryView = (args: string[]) => JSON.stringify(args[2] === "base/repo
   ? { id: "R_base", defaultBranchRef: { name: "main" }, isFork: false }
   : { id: "R_source", defaultBranchRef: { name: "main" }, isFork: true, parent: { name: "repo", owner: { login: "base" } } });
 const entry = { id: "C_one", author: { login: "user" }, body: "![image](url)", url: "url", createdAt: "2025-01-01", diffHunk: "@@ -1 +1 @@" };
-type Options = { candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" | "nested"; threadPr?: string; runSha?: string; later?: object; headRepositoryId?: string };
+type Options = { candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" | "nested"; threadPr?: string; runSha?: string; log?: string | Error; later?: object; headRepositoryId?: string };
 function mock(options: Options = {}) {
   const mutations: string[][] = [];
   const calls: string[][] = [];
@@ -484,6 +539,10 @@ function mock(options: Options = {}) {
   const github: Gh = async (_, args) => {
     calls.push(args);
     if (args[0] === "auth" || args[0] === "run") return "";
+    if (args[0] === "api" && args[1]?.endsWith("/logs")) {
+      if (options.log instanceof Error) throw options.log;
+      return options.log ?? "";
+    }
     if (args[0] === "api" && args[1]?.startsWith("repos/")) return JSON.stringify({ head_sha: options.runSha ?? "a".repeat(40) });
     if (args[0] === "repo") return repositoryView(args);
     const query = args.find(value => value.startsWith("query="))!;

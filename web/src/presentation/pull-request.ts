@@ -1,5 +1,5 @@
 import type { PullRequestSummary } from "../../../src/protocol/git.ts";
-import type { PullRequestCheck, PullRequestDetails } from "../../../src/protocol/pull-request.ts";
+import type { PullRequestCheck, PullRequestCheckLog, PullRequestDetails, PullRequestThread } from "../../../src/protocol/pull-request.ts";
 
 export function safePullRequestUrl(value: string): string | undefined {
   try {
@@ -20,6 +20,7 @@ const outcomes: Record<string, Outcome> = Object.fromEntries([
   ...["SUCCESS", "NEUTRAL", "SKIPPED"].map(status => [status, "passed"]),
 ]);
 const outcome = (check: PullRequestCheck): Outcome => outcomes[check.status.toUpperCase()] ?? "unknown";
+export const failedCheck = (check: PullRequestCheck): boolean => outcome(check) === "failed";
 const order: Outcome[] = ["failed", "pending", "passed", "unknown"];
 
 export function checksSummary(checks: PullRequestCheck[]): string {
@@ -43,8 +44,28 @@ export function orderedChecks(checks: PullRequestCheck[]): PullRequestCheck[] {
 export function failedRuns(checks: PullRequestCheck[]): { runId: number; names: string[] }[] {
   const runs = new Map<number, string[]>();
   for (const check of checks) {
-    if (check.runId === undefined || outcome(check) !== "failed") continue;
+    if (check.runId === undefined || !failedCheck(check)) continue;
     runs.set(check.runId, [...runs.get(check.runId) ?? [], check.name]);
   }
   return [...runs].map(([runId, names]) => ({ runId, names }));
+}
+
+function fenced(text: string, info: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}${info}\n${text}\n${fence}`;
+}
+
+function quoted(text: string): string {
+  return text.split("\n").map(line => line ? `> ${line}` : ">").join("\n");
+}
+
+export function threadDraftBlock(thread: PullRequestThread): string {
+  const lead = `Review thread on ${thread.path}${thread.line === null ? "" : ` line ${thread.line}`}:${thread.isOutdated ? "\nThis thread is outdated." : ""}`;
+  return [lead, ...(thread.diffHunk ? [fenced(thread.diffHunk, "diff")] : []), ...thread.comments.map(comment => `Comment by ${comment.author}:\n${quoted(comment.body)}`)].join("\n\n");
+}
+
+export function checkDraftBlock(check: PullRequestCheck, log?: PullRequestCheckLog): string {
+  const lead = `Failed check: ${check.name}${check.url ? `\nURL: ${check.url}` : ""}`;
+  return log ? `${lead}\n\n${log.truncated ? "Part of the job log" : "Job log"}:\n${fenced(log.text, "text")}` : lead;
 }

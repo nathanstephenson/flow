@@ -2,7 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
 import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
-import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRerunInput, PullRequestThreadInput } from "./pull-request.ts";
+import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -209,6 +209,7 @@ export type Command =
   | { type: "edit_pull_request"; sessionId: string; input: PullRequestEditInput }
   | { type: "set_pull_request_draft"; sessionId: string; input: PullRequestDraftInput }
   | { type: "rerun_pull_request_checks"; sessionId: string; input: PullRequestRerunInput }
+  | { type: "pull_request_check_log"; sessionId: string; pr: PullRequestRef; jobId: number }
   | { type: "stack_status"; sessionId: string }
   | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
   | { type: "change_stack"; sessionId: string; input: StackInput }
