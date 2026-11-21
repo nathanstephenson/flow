@@ -262,6 +262,16 @@ describe("GitStates", () => {
     assert.equal(fake.queries.length, 2);
   });
 
+  it("releases the base branch of a group that has no Scope", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const bases = (states as unknown as { bases: Map<string, string | undefined> }).bases;
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(bases.size, 1);
+    await states.poll([]);
+    assert.equal(bases.size, 0);
+  });
+
   it("queries a forced Scope at once, ignoring the interval", async () => {
     const fake = github();
     const states = new GitStates(fake.run);
