@@ -74,6 +74,10 @@ export async function resolveRepository(scope: string, branch: string | undefine
   return { remote, url, ...identity };
 }
 
+export function forgetRepository(scope: string): void {
+  for (const key of identities.keys()) if (key.startsWith(`${scope}\0`)) identities.delete(key);
+}
+
 function checks(rollup: { state: string } | null | undefined): CheckStatus {
   if (!rollup) return "none";
   if (rollup.state === "SUCCESS") return "passing";

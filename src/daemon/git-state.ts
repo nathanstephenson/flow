@@ -3,7 +3,7 @@ import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
+import { forgetRepository, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
 import type { GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
 
@@ -84,6 +84,12 @@ export class GitStates {
     entry.trailing.unref();
   }
 
+  forget(scope: string): void {
+    clearTimeout(this.entries.get(scope)?.trailing);
+    this.entries.delete(scope);
+    forgetRepository(scope);
+  }
+
   summary(scope: string): GitState | undefined {
     const entry = this.entries.get(scope);
     if (!entry?.local) return undefined;
@@ -116,6 +122,8 @@ export class GitStates {
       group.forced ||= scope === forced;
       groups.set(key, group);
     }
+    for (const key of this.polledAt.keys()) if (!groups.has(key)) this.polledAt.delete(key);
+    for (const key of this.results.keys()) if (!groups.has(key)) this.results.delete(key);
     for (const [key, group] of groups) {
       const due = group.forced || now - (this.polledAt.get(key) ?? -Infinity) >= (group.watched ? WATCHED_POLL_MS : UNWATCHED_POLL_MS);
       if (due) {

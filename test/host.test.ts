@@ -265,6 +265,41 @@ describe("SessionHost", () => {
     await unavailableHost.shutdown();
   });
 
+  it("forgets the Git State of a Scope when its last Agent Session is removed", async () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const shared = mkdtempSync(join(tmpdir(), "flow-shared-"));
+    const alone = mkdtempSync(join(tmpdir(), "flow-alone-"));
+    const reaping = new SessionHost({ retention: DAY });
+    reaping.registerBackend(new FakeBackend());
+    const forgotten: string[] = [];
+    (reaping as unknown as { gitStates: { forget(scope: string): void } }).gitStates.forget = scope => { forgotten.push(scope); };
+    const first = await reaping.create({ scope: shared, backend: "fake" });
+    const second = await reaping.create({ scope: `${shared}/.`, backend: "fake" });
+    const other = await reaping.create({ scope: alone, backend: "fake" });
+    await reaping.settle(first);
+    await reaping.settle(other);
+    await reaping.reap(Date.now() + 2 * DAY);
+    assert.deepEqual(forgotten, [alone]);
+    await reaping.settle(second);
+    await reaping.reap(Date.now() + 2 * DAY);
+    assert.deepEqual(forgotten, [alone, shared]);
+    await reaping.shutdown();
+    rmSync(shared, { recursive: true, force: true });
+    rmSync(alone, { recursive: true, force: true });
+  });
+
+  it("forgets the Git State of a Scope when creation fails", async () => {
+    const scope = mkdtempSync(join(tmpdir(), "flow-refused-"));
+    const unavailableHost = new SessionHost();
+    unavailableHost.registerBackend(new FakeBackend({ models: [] }));
+    const forgotten: string[] = [];
+    (unavailableHost as unknown as { gitStates: { forget(scope: string): void } }).gitStates.forget = scope => { forgotten.push(scope); };
+    await assert.rejects(unavailableHost.create({ scope, backend: "fake" }), /Model capabilities are unavailable/);
+    assert.deepEqual(forgotten, [scope]);
+    await unavailableHost.shutdown();
+    rmSync(scope, { recursive: true, force: true });
+  });
+
   it("uses the Default Backend for omitted choices, without changing existing sessions", async () => {
     let chosen: string | undefined = "second";
     const configured = new SessionHost({ defaultBackend: () => chosen });

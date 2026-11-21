@@ -1032,6 +1032,7 @@ export class SessionHost {
       if (!options.scheduled) await this.releaseWorktree(record);
       record.log.closeSubscribers();
       this.sessions.delete(id);
+      this.forgetGitState(record.scope);
       this.store?.deleteSession(id);
       throw error;
     }
@@ -2219,6 +2220,11 @@ export class SessionHost {
     this.announceClosed(sessionId);
   }
 
+  private forgetGitState(scope: string): void {
+    const key = scopeKey(scope);
+    if (![...this.sessions.values()].some(record => scopeKey(record.scope) === key)) this.gitStates.forget(scope);
+  }
+
   /**
    * Delete Settled Agent Sessions whose retention window has passed. Only Settled ones: no other
    * state is deleted on a rule its owner did not opt into.
@@ -2250,6 +2256,7 @@ export class SessionHost {
         await this.releaseWorktree(record);
         record.log.closeSubscribers();
         this.sessions.delete(record.id);
+        this.forgetGitState(record.scope);
         this.publishReviews.delete(record.id);
         this.store?.deleteSession(record.id);
         reaped.push(record.id);

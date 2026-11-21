@@ -22,15 +22,17 @@ const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, check
 
 function github() {
   const queries: string[][] = [];
+  const views: string[][] = [];
   const state = { pulls: [pull] as unknown[], fail: false };
   const run: Gh = async (_scope, args) => {
     if (args[0] === "auth") return "";
+    if (args[0] === "repo") views.push(args);
     if (args[0] === "repo") return JSON.stringify({ id: "R_repo", defaultBranchRef: { name: "main" }, isFork: false });
     queries.push(args);
     if (state.fail) throw new Error("GitHub request failed: offline");
     return JSON.stringify({ data: { repository: { pullRequests: { nodes: state.pulls } } } });
   };
-  return { queries, state, run };
+  return { queries, views, state, run };
 }
 
 describe("readLocal", () => {
@@ -186,6 +188,29 @@ describe("GitStates", () => {
     await states.poll([{ scope: first, lifecycle: "live", watched: false }, { scope: second, lifecycle: "live", watched: false }]);
     assert.equal(fake.queries.length, 1);
     assert.deepEqual(states.summary(second)?.pr, summary);
+  });
+
+  it("releases the state and repository identity of a forgotten Scope", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(fake.views.length, 1);
+    states.forget(path);
+    assert.equal(states.summary(path), undefined);
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(fake.views.length, 2);
+  });
+
+  it("releases the poll time and result of a group that has no Scope", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    await states.poll([]);
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(fake.queries.length, 2);
   });
 
   it("queries a forced Scope at once, ignoring the interval", async () => {
