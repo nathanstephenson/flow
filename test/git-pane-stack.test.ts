@@ -15,6 +15,7 @@ function managedStack(branches: { name: string; pr?: { number: number; state?: s
 }
 
 type Element = { type: string; key?: string; props: Record<string, any> };
+let gitState: unknown;
 function component(file: string, command: (input: any) => Promise<any>, globals: Record<string, unknown> = {}) {
   const states: any[] = [];
   let index = 0;
@@ -31,6 +32,8 @@ function component(file: string, command: (input: any) => Promise<any>, globals:
     };
     if (name === "react/jsx-runtime") return require(name);
     if (name === "@/host.tsx") return { useHost: () => ({ connection: { command } }) };
+    if (name === "@/git-state.ts") return { useGitState: () => gitState };
+    if (name === "@/presentation/git.ts") return require("../web/src/presentation/git.ts");
     if (name.endsWith("src/protocol/stack.ts")) return require("../src/protocol/stack.ts");
     return new Proxy({}, { get: (_target, key) => key });
   } });
@@ -557,4 +560,28 @@ it("clears stale Stack graphs and errors as soon as a refresh revision starts", 
   resolveSecond!({ available: true, conflicts: [], rebasing: false });
   await Promise.resolve();
   assert.equal(pane.render("StackPane", second), null);
+});
+
+it("shows Git State and reads Stack and PR again when the pull request summary changes", async () => {
+  gitState = { revision: "a", changed: 1, ahead: 2, behind: 0, upstream: true };
+  const pane = component("git-pane", async () => ({ repository: true, branch: { name: "feature" }, files: [] }));
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  render();
+  pane.effects.at(-2)!();
+  pane.effects.at(-1)!();
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  const stack = find(render(), "StackPane").props.revision;
+  const pr = find(render(), "PullRequestPane").props.revision;
+  assert.equal(textContent(find(render(), "p", node => textContent(node.props.children).includes("ahead")).props.children), "2 ahead, 0 behind");
+  gitState = { revision: "b", changed: 1, ahead: 2, behind: 0, upstream: true };
+  render();
+  pane.effects.at(-1)!();
+  assert.equal(find(render(), "StackPane").props.revision, stack);
+  gitState = { revision: "b", changed: 1, ahead: 2, behind: 0, upstream: true, pr: { number: 9, url: "u", state: "OPEN", isDraft: false, checks: "failing", reviewDecision: null, unresolvedThreads: 0 } };
+  render();
+  pane.effects.at(-1)!();
+  assert.equal(find(render(), "StackPane").props.revision, stack + 1);
+  assert.equal(find(render(), "PullRequestPane").props.revision, pr + 1);
+  assert.match(textContent(find(render(), "p", node => textContent(node.props.children).includes("PR #9")).props.children), /Checks failing/);
+  gitState = undefined;
 });

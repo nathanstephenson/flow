@@ -105,6 +105,10 @@ export class SessionLog {
     return { seq: this.lastSeq, entries: this.indexedRange(view.entries, start, end), start, total };
   }
 
+  get watched(): boolean {
+    return this.listeners.size > 0 || this.presentationListeners.size > 0;
+  }
+
   subscribePresentation(listener: PresentationListener): () => void {
     this.presentationView();
     this.presentationListeners.add(listener);

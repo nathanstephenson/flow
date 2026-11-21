@@ -46,6 +46,10 @@ const bundle = await build({
         `,
         loader: 'tsx',
       }));
+      build.onLoad({ filter: /\/git-state\.ts$/ }, () => ({
+        contents: 'export function useGitState() { return undefined; }',
+        loader: 'ts',
+      }));
       for (const [file, component] of [['stack-pane', 'StackPane'], ['pull-request-pane', 'PullRequestPane']]) {
         build.onLoad({ filter: new RegExp('/' + file + '\\.tsx$') }, () => ({
           contents: `

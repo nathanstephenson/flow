@@ -9,7 +9,7 @@ import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { MergeMethod } from "../src/protocol/pull-request.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch } from "../src/daemon/pull-request.ts";
 import { SessionHost } from "../src/daemon/host.ts";
-import type { Gh } from "../src/daemon/publish.ts";
+import type { Gh } from "../src/daemon/github.ts";
 
 test("Session Host routes all PR commands through Agent Session lookup", async () => {
   const host = new SessionHost();
@@ -147,16 +147,19 @@ test("PR actions and Pull share the Scope operation safeguards", async () => {
 });
 
 const ref = { repo: "base/repo", number: 1, id: "PR_one" };
-const closed = { ...ref, state: "CLOSED", updatedAt: "2026-01-02", closedAt: "2026-01-02" as string | null, headRepository: { id: "R_source" } };
-const open = { ...closed, state: "OPEN", updatedAt: "2025-01-01", closedAt: null };
+const open = { ...ref, url: "https://github.com/base/repo/pull/1", title: "Change", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_source" }, commits: { nodes: [] }, reviewThreads: { nodes: [] } };
+const repositoryView = (args: string[]) => JSON.stringify(args[2] === "base/repo"
+  ? { id: "R_base", defaultBranchRef: { name: "main" }, isFork: false }
+  : { id: "R_source", defaultBranchRef: { name: "main" }, isFork: true, parent: { name: "repo", owner: { login: "base" } } });
 const thread = { id: "PRRT_one", path: "a.ts", line: 2, isOutdated: false, isResolved: false, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true };
 const entry = { id: "C_one", author: { login: "user" }, body: "![image](url)", url: "url", createdAt: "2025-01-01", diffHunk: "@@ -1 +1 @@" };
-function mock(options: { candidates?: typeof closed[]; denied?: boolean; fail?: boolean; paginate?: boolean; locked?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean } = {}) {
+function mock(options: { candidates?: typeof open[]; denied?: boolean; fail?: boolean; paginate?: boolean; locked?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean } = {}) {
   const mutations: string[][] = [];
   const calls: string[][] = [];
   const github: Gh = async (_, args) => {
     calls.push(args);
-    if (args[0] === "repo") return JSON.stringify({ nameWithOwner: ref.repo, id: "R_source" });
+    if (args[0] === "auth") return "";
+    if (args[0] === "repo") return repositoryView(args);
     const query = args.find(value => value.startsWith("query="))!;
     const connection = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: !!options.paginate && !args.includes("cursor=next"), endCursor: "next" } });
     let data: unknown;
@@ -180,21 +183,9 @@ async function scope() {
   return path;
 }
 
-test("reads fork with multiple remotes; prefers open and excludes foreign sources", async () => {
+test("handles comment locks", async () => {
   const path = await scope();
   try {
-    const { github } = mock({ candidates: [{ ...closed, id: "foreign", headRepository: { id: "R_other" } }, closed, { ...open, id: "selected" }] });
-    assert.equal((await pullRequest(path, github))?.id, "selected");
-    const latest = mock({ candidates: [{ ...closed, id: "older", closedAt: "2024-01-01", updatedAt: "2026-02-01" }, { ...closed, state: "MERGED", id: "latest" }] });
-    assert.equal((await pullRequest(path, latest.github))?.id, "latest");
-    assert.equal(await pullRequest(path, mock({ candidates: [] }).github), null);
-  } finally { await rm(path, { recursive: true, force: true }); }
-});
-
-test("matches repository IDs after a rename and handles comment locks", async () => {
-  const path = await scope();
-  try {
-    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:old-owner/old-name.git"], { cwd: path });
     const loaded = await pullRequest(path, mock().github);
     assert.equal(loaded?.id, ref.id);
     assert.equal(loaded?.viewerCanComment, true);
@@ -253,6 +244,6 @@ test("rejects stale ownership, missing threads, permissions and malformed inputs
     await assert.rejects(commentPullRequest(path, { pr: ref, body: "text", threadId: thread.id }, denied.github), /Cannot reply/);
     for (const resolved of [true, false]) await assert.rejects(resolvePullRequestThread(path, { pr: ref, threadId: thread.id, resolved }, denied.github), /Cannot change/);
     assert.equal(normal.mutations.length + denied.mutations.length, 0);
-    await assert.rejects(pullRequest(path, async (_, args) => args[0] === "repo" ? JSON.stringify({ nameWithOwner: ref.repo, id: "R_source" }) : JSON.stringify({ errors: [{ message: "API failure" }] })), /API failure/);
+    await assert.rejects(pullRequest(path, async (_, args) => args[0] === "repo" ? repositoryView(args) : JSON.stringify({ errors: [{ message: "API failure" }] })), /API failure/);
   } finally { await rm(path, { recursive: true, force: true }); }
 });

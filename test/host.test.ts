@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, mock } from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { repository } from "./git-fixture.ts";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
@@ -1704,4 +1707,55 @@ it("refuses a branch switch while a Permission Prompt holds the turn", async () 
 
   await assert.rejects(() => host.switchBranch(sessionId, "other"), /abort the turn/);
 });
+});
+
+describe("SessionHost Git State", () => {
+  async function gitHost() {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost();
+    host.registerBackend(backend);
+    const first = await host.create({ scope, backend: "fake" });
+    const second = await host.create({ scope, backend: "fake" });
+    const git = (id: string) => host.list().find(session => session.id === id)?.git;
+    const cleanup = async () => { await host.shutdown(); rmSync(root, { recursive: true, force: true }); };
+    return { scope, backend, host, first, second, git, cleanup };
+  }
+
+  it("puts Git State on the summary at create and on refresh_git without moving the transcript", async () => {
+    const { scope, host, first, second, git, cleanup } = await gitHost();
+    try {
+      assert.deepEqual({ ...git(first), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false });
+      writeFileSync(join(scope, "new.txt"), "new");
+      const seq = host.logFor(first).lastSeq;
+      await host.execute({ type: "refresh_git", sessionId: first });
+      assert.equal(git(first)?.changed, 1);
+      assert.equal(git(second)?.changed, 1);
+      assert.equal(host.logFor(first).lastSeq, seq);
+    } finally { await cleanup(); }
+  });
+
+  it("reads Git State after tool calls during a turn, throttled, and at turn end", async () => {
+    const { scope, backend, host, first, second, git, cleanup } = await gitHost();
+    const settled = async (changed: number) => {
+      const deadline = performance.now() + 5_000;
+      while (git(first)?.changed !== changed && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(git(first)?.changed, changed);
+    };
+    try {
+      await host.send(second, "work", "now");
+      mock.timers.enable({ apis: ["setTimeout"] });
+      writeFileSync(join(scope, "one.txt"), "one");
+      backend.latest.useTool("Write", {}, "ok");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(git(first)?.changed, 0);
+      mock.timers.tick(3_000);
+      await settled(1);
+      mock.timers.reset();
+      writeFileSync(join(scope, "two.txt"), "two");
+      backend.latest.completeTurn();
+      await settled(2);
+    } finally { mock.timers.reset(); await cleanup(); }
+  });
 });
