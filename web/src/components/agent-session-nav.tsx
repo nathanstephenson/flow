@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, FolderGit2, GitBranch, GitPullRequest, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -465,7 +465,6 @@ function PullRequestLine({ summary }: { summary: SessionSummary }) {
   if (!pr) return null;
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <GitPullRequest aria-hidden className="size-3! shrink-0" />
       <span className="font-mono">#{pr.number}</span>
       <PullRequestBadges pr={pr} />
     </span>
