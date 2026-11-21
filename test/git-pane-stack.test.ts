@@ -180,7 +180,7 @@ function findAll(element: any, type: string, matches: (element: Element) => bool
 const actionsUrl = (run: number, job: number) => `https://github.com/test/repo/actions/runs/${run}/job/${job}`;
 function prDetails(extra: Record<string, unknown> = {}) {
   return {
-    repo: "test/repo", id: "PR_one", number: 1, url: "https://github.com/test/repo/pull/1", title: "Change", body: "Body", state: "OPEN", isDraft: false, reviewDecision: null,
+    repo: "test/repo", id: "PR_one", number: 1, url: "https://github.com/test/repo/pull/1", title: "Change", body: "Body", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "u0",
     author: "user", headRefName: "feature", headRefOid: "a".repeat(40), baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", viewerCanComment: true, mergeMethods: ["SQUASH", "REBASE"],
     checks: [
       { name: "lint", status: "SUCCESS", url: actionsUrl(9, 1), runId: 9, jobId: 1 },
@@ -213,7 +213,7 @@ function prPane(details: Record<string, unknown> = prDetails(), read?: () => Pro
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
-  return { calls, render, flush, load, document, listeners, writes: () => calls.filter(call => call.type !== "pull_request") };
+  return { calls, render, flush, load, document, listeners, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
 }
 const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
 
@@ -328,6 +328,39 @@ it("has no Refresh of its own; the Git pane header owns Refresh", async () => {
   const { render, load } = prPane();
   await load();
   assert.throws(() => findButton(render(), "Refresh"));
+});
+
+it("sends one pull_request read after a comment, an edit and a manual Refresh", async () => {
+  let details = prDetails();
+  const { render, load, flush, calls, props, effects } = prPane(undefined, async () => details);
+  const reads = () => calls.filter(call => call.type === "pull_request").length;
+  const summarize = async (summary: Record<string, unknown> = {}) => {
+    props.summary = { number: 1, url: details.url, state: details.state, isDraft: details.isDraft, checks: "failing", checksCompleted: 5, reviewDecision: null, unresolvedThreads: 1, updatedAt: details.updatedAt, ...summary };
+    render();
+    effects.at(-2)!();
+    await flush();
+  };
+  await summarize();
+  await load();
+  assert.equal(reads(), 1);
+  details = { ...details, updatedAt: "u1" };
+  find(find(render(), "form", node => node.props["aria-label"] === "Add comment"), "Textarea").props.onChange({ target: { value: "typed comment" } });
+  find(render(), "form", node => node.props["aria-label"] === "Add comment").props.onSubmit({ preventDefault() {} });
+  await flush();
+  await summarize();
+  assert.equal(reads(), 2);
+  details = { ...details, updatedAt: "u2", title: "Final" };
+  findButton(render(), "Edit").props.onClick();
+  find(render(), "form", node => node.props["aria-label"] === "Edit pull request").props.onSubmit({ preventDefault() {} });
+  await flush();
+  await summarize();
+  assert.equal(reads(), 3);
+  details = { ...details, updatedAt: "u3" };
+  await load(1);
+  await summarize();
+  assert.equal(reads(), 4);
+  await summarize({ checks: "passing" });
+  assert.equal(reads(), 5);
 });
 
 it("reads again when the document becomes visible", async () => {
@@ -876,7 +909,7 @@ it("clears stale Stack graphs and errors as soon as a refresh revision starts", 
   assert.equal(pane.render("StackPane", second), null);
 });
 
-it("shows Git State and reads Stack and PR again when the pull request summary changes", async () => {
+it("shows Git State, reads Stack again and gives the PR pane the summary when the pull request summary changes", async () => {
   gitState = { revision: "a", branch: "feature", head: "h", changed: 1, ahead: 2, behind: 0, upstream: true };
   const pane = component("git-pane", async () => undefined);
   const render = () => pane.render("GitPane", { sessionId: "session" });
@@ -894,7 +927,8 @@ it("shows Git State and reads Stack and PR again when the pull request summary c
   render();
   pane.effects.at(-1)!();
   assert.equal(find(render(), "StackPane").props.revision, stack + 1);
-  assert.equal(find(render(), "PullRequestPane").props.revision, pr + 1);
+  assert.equal(find(render(), "PullRequestPane").props.revision, pr);
+  assert.equal(find(render(), "PullRequestPane").props.summary, (gitState as { pr: unknown }).pr);
   const link = find(render(), "a", node => textContent(node).includes("PR #9"));
   assert.equal(textContent(link), "PR #9 · Open · Checks failing");
   assert.equal(link.props.href, "https://github.com/test/repo/pull/9");

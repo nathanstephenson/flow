@@ -310,6 +310,16 @@ describe("GitStates", () => {
     assert.equal(bases.size, 0);
   });
 
+  it("releases the pull request reference of a group that has no Scope", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const refs = (states as unknown as { refs: Map<string, unknown> }).refs;
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(refs.size, 1);
+    await states.poll([]);
+    assert.equal(refs.size, 0);
+  });
+
   it("queries a forced Scope at once, ignoring the interval", async () => {
     const fake = github();
     const states = new GitStates(fake.run);

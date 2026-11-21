@@ -187,33 +187,46 @@ describe("Agent Session rail DOM focus and material", () => {
     }
   });
 
-  it("shows the pull request number, state and checks on the rail row and in the header", async () => {
+  it("shows the pull request state and checks as icons on the rail row and in the header", async () => {
     const pr = { number: 178, url: 'https://github.com/test/repo/pull/178', state: 'OPEN', isDraft: true, checks: 'failing', reviewDecision: null, unresolvedThreads: 0, updatedAt: '' };
     await page.evaluate(pr => {
       const git = { revision: 'r', changed: 0, ahead: 0, behind: 0, upstream: true, pr };
-      const sessions = [{ ...window.summary('a'), branch: { name: 'feature' }, git }, { ...window.summary('b'), branch: { name: 'main' } }];
+      const sessions = [{ ...window.summary('a'), branch: { name: 'feature/a-very-long-branch-name-that-must-truncate-in-the-rail' }, git }, { ...window.summary('b'), branch: { name: 'main' } }];
       window.renderRail({ withTranscriptHeader: true, sessions });
       window.mountTranscriptHeader(sessions);
     }, pr);
     const header = page.locator('[data-transcript-header]');
     await header.getByRole('link', { name: 'Pull Request #178', exact: true }).waitFor();
     assert.equal(await header.getByRole('link', { name: 'Pull Request #178', exact: true }).getAttribute('href'), pr.url);
+    const branch = cursor().locator('.font-mono', { hasText: 'feature/' });
+    const line = branch.locator('..');
+    const indicators = line.locator('[data-slot="tooltip-trigger"]');
+    assert.equal(await indicators.count(), 1);
+    assert.equal(await line.evaluate(node => node.lastElementChild?.getAttribute('data-slot')), 'tooltip-trigger');
+    assert.equal(await cursor().locator('a, button, [tabindex]').count(), 0);
+    assert.doesNotMatch(await cursor().textContent(), /#178/);
+    const [branchBox, indicatorBox, lineBox] = await Promise.all([branch.boundingBox(), indicators.boundingBox(), line.boundingBox()]);
+    assert.ok(branchBox.width < lineBox.width - indicatorBox.width, 'the branch name truncates');
+    assert.ok(Math.abs(indicatorBox.y + indicatorBox.height / 2 - (branchBox.y + branchBox.height / 2)) < 1, 'the icons stay on the branch line');
+    const glyph = await line.locator('svg').first().boundingBox();
+    for (const icon of await indicators.locator('svg').all()) assert.deepEqual([(await icon.boundingBox()).width, (await icon.boundingBox()).height], [glyph.width, glyph.height]);
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
       for (const scope of [cursor(), header]) {
-        for (const label of ['Draft', 'Checks failing']) {
-          const badge = scope.locator('[data-slot="badge"]', { hasText: label });
-          assert.equal(await badge.count(), 1, `${theme}: ${label}`);
-          const [color, background] = await badge.evaluate(node => [getComputedStyle(node).color, getComputedStyle(node.closest('[data-transcript-header], [data-cursor]')).backgroundColor]);
+        assert.deepEqual(await scope.locator('[data-slot="tooltip-trigger"] .sr-only').allTextContents(), ['Draft', 'Checks failing']);
+        for (const icon of ['git-pull-request-draft', 'x']) {
+          const svg = scope.locator(`[data-slot="tooltip-trigger"] svg.lucide-${icon}`);
+          assert.equal(await svg.count(), 1, `${theme}: ${icon}`);
+          const [color, background] = await svg.evaluate(node => [getComputedStyle(node).color, getComputedStyle(node.closest('[data-transcript-header], [data-cursor]')).backgroundColor]);
           assert.notEqual(color, background);
         }
       }
     }
-    assert.match(await cursor().textContent(), /#178/);
-    assert.equal(await page.locator('[data-sidebar="menu-button"]', { hasText: '#178' }).count(), 1);
+    await header.locator('[data-slot="tooltip-trigger"]').hover();
+    await page.getByText('Pull Request #178. Draft. Checks failing.', { exact: true }).waitFor();
   });
 
-  it("shows no pull request line or badges on a row and a header without a pull request", async () => {
+  it("shows no pull request icons on a row and a header without a pull request", async () => {
     await page.evaluate(() => {
       const sessions = [{ ...window.summary('a'), branch: { name: 'main' }, git: { revision: 'r', changed: 0, ahead: 0, behind: 0, upstream: true } }, { ...window.summary('b'), branch: { name: 'other' } }];
       window.renderRail({ withTranscriptHeader: true, sessions });
@@ -222,7 +235,7 @@ describe("Agent Session rail DOM focus and material", () => {
     const header = page.locator('[data-transcript-header]');
     await header.getByText('Transcript title', { exact: true }).waitFor();
     await page.waitForTimeout(1000);
-    assert.equal(await page.locator('[data-slot="badge"]').count(), 0);
+    assert.equal(await page.locator('svg[class*="lucide-git-pull-request"], svg.lucide-git-merge').count(), 0);
     assert.equal(await header.getByRole('link').count(), 0);
     assert.doesNotMatch(await page.locator('[data-sidebar="menu"]').first().textContent(), /#\d/);
   });

@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checksSummary, failedRuns, orderedChecks, readableStatus, safePullRequestUrl } from "./pull-request.ts";
+import { checksSummary, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl } from "./pull-request.ts";
 
 const check = (name: string, status: string, runId?: number) => ({ name, status, url: "", ...(runId === undefined ? {} : { runId, jobId: 1 }) });
 
 describe("pull request presentation", () => {
+  it("matches a loaded pull request to a summary by update time, state and checks", () => {
+    const loaded = { number: 4, updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: [check("a", "SUCCESS"), check("b", "IN_PROGRESS")] };
+    const summary = { number: 4, url: "", updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 1, reviewDecision: null, unresolvedThreads: 0 };
+    assert.equal(matchesSummary(loaded, summary), true);
+    assert.equal(matchesSummary(loaded, undefined), false);
+    for (const change of [{ number: 5 }, { updatedAt: "u2" }, { state: "MERGED" as const }, { isDraft: true }, { checks: "failing" as const }, { checksCompleted: 2 }]) assert.equal(matchesSummary(loaded, { ...summary, ...change }), false);
+    assert.equal(matchesSummary({ ...loaded, checks: [] }, { ...summary, checks: "none", checksCompleted: 0 }), true);
+    assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "FAILURE")] }, { ...summary, checks: "failing", checksCompleted: 2 }), true);
+    assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "SKIPPED")] }, { ...summary, checks: "passing", checksCompleted: 2 }), true);
+  });
+
   it("permits only absolute web links", () => {
     assert.equal(safePullRequestUrl("https://github.com/a/b/pull/1"), "https://github.com/a/b/pull/1");
     assert.equal(safePullRequestUrl("http://example.com"), "http://example.com/");

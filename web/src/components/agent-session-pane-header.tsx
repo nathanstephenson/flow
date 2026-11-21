@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
-import { PullRequestBadges } from "@/components/pull-request-badges.tsx";
+import { PullRequestIndicators } from "@/components/pull-request-indicators.tsx";
 import { McpConnectionMenu, useMcpConnectionStatus } from "@/components/mcp-status.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -138,7 +138,7 @@ export function AgentSessionPaneHeader({
             >
               #{pr.number}
             </a>
-            <PullRequestBadges pr={pr} />
+            <PullRequestIndicators pr={pr} />
           </span>
         ) : null}
 

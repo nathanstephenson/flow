@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestBadges, pullRequestLine, pullStep } from "./git.ts";
+import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestIndicators, pullRequestLine, pullStep } from "./git.ts";
 
 const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
 const { branch: _branch, ...detached } = local;
@@ -66,12 +66,14 @@ it("shows a diff from its first hunk", () => {
   assert.equal(diffHunks(""), undefined);
 });
 
-it("labels and tones the pull request state and check status for each value", () => {
-  for (const [state, isDraft, label, tone] of [["OPEN", true, "Draft", "muted"], ["OPEN", false, "Open", "positive"], ["MERGED", false, "Merged", "merged"], ["CLOSED", false, "Closed", "negative"], ["CLOSED", true, "Closed", "negative"]] as const) {
-    assert.deepEqual(pullRequestBadges({ ...pr, state, isDraft }).state, { label, tone });
+it("gives the pull request state and check status an icon, a tone and words", () => {
+  for (const [state, isDraft, icon, label, tone] of [["OPEN", true, "draft", "Draft", "muted"], ["OPEN", false, "open", "Open", "positive"], ["MERGED", false, "merged", "Merged", "merged"], ["CLOSED", false, "closed", "Closed", "negative"], ["CLOSED", true, "closed", "Closed", "negative"]] as const) {
+    assert.deepEqual(pullRequestIndicators({ ...pr, state, isDraft }).state, { icon, label, tone });
   }
   for (const [checks, label, tone] of [["passing", "Checks passing", "positive"], ["failing", "Checks failing", "negative"], ["pending", "Checks pending", "pending"]] as const) {
-    assert.deepEqual(pullRequestBadges({ ...pr, checks }).checks, { label, tone });
+    assert.deepEqual(pullRequestIndicators({ ...pr, checks }).checks, { icon: checks, label, tone });
   }
-  assert.equal(pullRequestBadges({ ...pr, checks: "none" }).checks, undefined);
+  assert.equal(pullRequestIndicators({ ...pr, checks: "none" }).checks, undefined);
+  assert.equal(pullRequestIndicators({ ...pr, number: 178, isDraft: true, checks: "passing" }).text, "Pull Request #178. Draft. Checks passing.");
+  assert.equal(pullRequestIndicators({ ...pr, state: "MERGED", checks: "none" }).text, "Pull Request #12. Merged. No checks.");
 });

@@ -29,6 +29,7 @@ export type PullRequestDetails = PullRequestRef & {
   state: "OPEN" | "MERGED" | "CLOSED";
   isDraft: boolean;
   reviewDecision: string | null;
+  updatedAt: string;
   author: string;
   headRefName: string;
   headRepository?: string;

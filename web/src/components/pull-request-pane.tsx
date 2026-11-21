@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Command } from "../../../src/protocol/commands.ts";
-import type { GitText } from "../../../src/protocol/git.ts";
+import type { GitText, PullRequestSummary } from "../../../src/protocol/git.ts";
 import type { MergeMethod, PullRequestActionInput, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
@@ -8,12 +8,12 @@ import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
-import { PullRequestBadge } from "@/components/pull-request-badges.tsx";
+import { PullRequestIcon } from "@/components/pull-request-indicators.tsx";
 import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
-import { pullRequestBadges } from "@/presentation/git.ts";
-import { checksSummary, failedRuns, orderedChecks, readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { pullRequestIndicators } from "@/presentation/git.ts";
+import { checksSummary, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
 
-type Props = { sessionId: string; revision?: number; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void };
+type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
 
 const methodLabels: Record<MergeMethod, string> = { MERGE: "Merge commit", SQUASH: "Squash and merge", REBASE: "Rebase and merge" };
@@ -23,7 +23,7 @@ function link(url: string, children: ReactNode) {
   return href ? <a className="break-words underline underline-offset-2" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId, revision = 0, disabled = false, onAvailable, onChange }: Props) {
+export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onChange }: Props) {
   const { connection } = useHost();
   const [pr, setPr] = useState<PullRequestDetails | null>();
   const [busy, setBusy] = useState(false);
@@ -35,6 +35,8 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
   const [confirm, setConfirm] = useState<Confirm>();
   const [edit, setEdit] = useState<PullRequestEditInput>();
   const latest = useRef(0);
+  const summaryKey = JSON.stringify(summary ?? null);
+  const seenSummary = useRef(summaryKey);
   const locked = busy || disabled;
 
   function read() {
@@ -54,6 +56,12 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
       },
     );
   }
+
+  useEffect(() => {
+    if (seenSummary.current === summaryKey) return;
+    seenSummary.current = summaryKey;
+    if (!pr || !matchesSummary(pr, summary)) read();
+  }, [summaryKey]);
 
   useEffect(() => {
     read();
@@ -115,6 +123,7 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
     );
     const threads = [...pr.threads].sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
     const discussion = [...pr.comments, ...pr.reviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const { state } = pullRequestIndicators({ ...pr, checks: "none" });
     return (
       <Accordion aria-label="Pull request sections" multiple value={sections} onValueChange={setSections}>
         <AccordionItem value="overview" className="border-b">
@@ -122,7 +131,7 @@ export function PullRequestPane({ sessionId, revision = 0, disabled = false, onA
           <AccordionContent className="space-y-3">
             <h3 className="text-base font-semibold">{link(pr.url, `#${pr.number} ${pr.title}`)}</h3>
             <p className="flex flex-wrap items-center gap-2">
-              <PullRequestBadge badge={pullRequestBadges({ state: pr.state, isDraft: pr.isDraft, checks: "none" }).state} />
+              <span className="flex items-center gap-1"><PullRequestIcon indicator={state} className="size-3.5" />{state.label}</span>
               <span className="text-muted-foreground">by {pr.author}</span>
             </p>
             <p className="break-all font-mono text-xs">{pr.headRefName} → {pr.baseRefName}</p>

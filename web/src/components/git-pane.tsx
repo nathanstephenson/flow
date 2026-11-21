@@ -42,7 +42,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     if (seenPrKey.current === prKey) return;
     seenPrKey.current = prKey;
-    reread("stack", "pullRequest");
+    reread("stack");
   }, [prKey]);
 
   async function run(work: () => Promise<Notice | void>) {
@@ -157,7 +157,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
         <StackPane key={sessionId} sessionId={sessionId} revision={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("stack", "mount"); }} />
       </TabsContent>
       <TabsContent value="PR" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} disabled={busy} onAvailable={setHasPr} onChange={() => reread("stack")} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onChange={() => reread("stack")} />
       </TabsContent>
     </Tabs>
   );

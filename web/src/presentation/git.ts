@@ -27,18 +27,20 @@ export function gitStateLine(git: GitState): string {
 }
 
 export type PullRequestTone = "muted" | "positive" | "negative" | "pending" | "merged";
-export type PullRequestBadge = { label: string; tone: PullRequestTone };
+export type PullRequestIcon = "draft" | "open" | "merged" | "closed" | Exclude<PullRequestSummary["checks"], "none">;
+export type PullRequestIndicator = { icon: PullRequestIcon; label: string; tone: PullRequestTone };
 
-const states: Record<PullRequestSummary["state"], PullRequestBadge> = { OPEN: { label: "Open", tone: "positive" }, MERGED: { label: "Merged", tone: "merged" }, CLOSED: { label: "Closed", tone: "negative" } };
+const states: Record<PullRequestSummary["state"], PullRequestIndicator> = { OPEN: { icon: "open", label: "Open", tone: "positive" }, MERGED: { icon: "merged", label: "Merged", tone: "merged" }, CLOSED: { icon: "closed", label: "Closed", tone: "negative" } };
 const checkTones: Record<Exclude<PullRequestSummary["checks"], "none">, PullRequestTone> = { passing: "positive", failing: "negative", pending: "pending" };
 
-export function pullRequestBadges(pr: Pick<PullRequestSummary, "state" | "isDraft" | "checks">): { state: PullRequestBadge; checks?: PullRequestBadge } {
-  const state = pr.state === "OPEN" && pr.isDraft ? { label: "Draft", tone: "muted" as const } : states[pr.state];
-  return { state, ...(pr.checks === "none" ? {} : { checks: { label: `Checks ${pr.checks}`, tone: checkTones[pr.checks] } }) };
+export function pullRequestIndicators(pr: Pick<PullRequestSummary, "number" | "state" | "isDraft" | "checks">): { state: PullRequestIndicator; checks?: PullRequestIndicator; text: string } {
+  const state = pr.state === "OPEN" && pr.isDraft ? { icon: "draft" as const, label: "Draft", tone: "muted" as const } : states[pr.state];
+  const checks = pr.checks === "none" ? undefined : { icon: pr.checks, label: `Checks ${pr.checks}`, tone: checkTones[pr.checks] };
+  return { state, ...(checks ? { checks } : {}), text: `Pull Request #${pr.number}. ${state.label}. ${checks?.label ?? "No checks"}.` };
 }
 
 export function pullRequestLine(pr: PullRequestSummary): string {
-  const { state, checks } = pullRequestBadges(pr);
+  const { state, checks } = pullRequestIndicators(pr);
   return `PR #${pr.number} · ${state.label} · ${checks?.label ?? "No checks"}`;
 }
 

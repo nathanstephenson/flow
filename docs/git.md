@@ -29,9 +29,12 @@ Resolved threads are collapsed.
 - Re-run failed jobs runs the failed jobs of one GitHub Actions run again. It shows once for each
   run that has a failed job. Flow refuses a run that is not for the current head.
 - Each action first makes sure that the pull request is still the one of the current branch.
-- The tab reads the pull request again when the polled Git State of the pull request changes.
+- The tab reads the pull request again when the polled Git State of the pull request changes. It does
+  not read again when the pull request it shows has the same update time, state and checks.
 
-The rail row and the session header show the pull request number, its state and its check status.
+The rail row shows two icons at the end of the branch line: the pull request state and its check
+status. The session header shows the pull request number as a link, followed by the same icons. A
+tooltip gives the words, for example "Pull Request #178. Draft. Checks passing."
 
 ## Stacked pull requests
 

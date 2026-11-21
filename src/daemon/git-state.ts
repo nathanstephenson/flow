@@ -151,6 +151,7 @@ export class GitStates {
     for (const key of this.polledAt.keys()) if (!groups.has(key)) this.polledAt.delete(key);
     for (const key of this.results.keys()) if (!groups.has(key)) this.results.delete(key);
     for (const key of this.bases.keys()) if (!groups.has(key)) this.bases.delete(key);
+    for (const key of this.refs.keys()) if (!groups.has(key)) this.refs.delete(key);
     for (const [key, group] of groups) {
       const due = group.forced || now - (this.polledAt.get(key) ?? -Infinity) >= (group.watched ? WATCHED_POLL_MS : UNWATCHED_POLL_MS);
       if (due) {
