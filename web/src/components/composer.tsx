@@ -1067,6 +1067,17 @@ function WorkStack({ running, models, onOpen }: {
                   <Loader2 aria-hidden className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
                 </span>
               </span>
+              {card.full ? (
+                <span
+                  className={cn(
+                    "mt-1.5 ml-5.5 hidden rounded-md bg-muted px-2 py-1 whitespace-normal [overflow-wrap:anywhere]",
+                    "group-hover/card:line-clamp-6 group-focus-visible/card:line-clamp-6",
+                    card.kind === "call" && "font-mono",
+                  )}
+                >
+                  {card.full}
+                </span>
+              ) : null}
               {card.kind === "agent" && (card.model || card.effort) ? (
                 <span className="mt-1 hidden pl-5.5 font-mono group-hover/card:block group-focus-visible/card:block">
                   {[card.model && modelLabel(card.model, models), card.effort].filter(Boolean).join(" · ")}

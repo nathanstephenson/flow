@@ -17,17 +17,18 @@ type Argument = { key: string; shape: "path" | "text" | "questions" };
 
 /**
  * Ordered, because a tool's input usually carries several of these and the first is the one the
- * question is about: a Bash call's `command` before its `description`, a Grep's `pattern` before the
- * directory it searched.
+ * question is about: the `description` a model wrote for a call before the `command` or `prompt` it
+ * describes, a Grep's `pattern` before the directory it searched.
  *
  * Keyed on the shape of the arguments rather than on the tool's name, because the name is the part
  * that varies: Claude's `Edit` and a pi tool that edits a file are not called the same thing, while
  * `file_path` means the same in both. An unrecognised tool with a recognisable argument still reads.
  */
 const ARGUMENTS: readonly Argument[] = [
+  { key: "description", shape: "text" },
   { key: "command", shape: "text" },
-  // Ahead of `description` and `prompt`, which an AskUserQuestion call does not carry but a future
-  // asking tool might. Keyed on the argument rather than the tool's name, which is this list's rule.
+  // Ahead of `prompt`, which an AskUserQuestion call does not carry but a future asking tool might.
+  // Keyed on the argument rather than the tool's name, which is this list's rule.
   { key: "questions", shape: "questions" },
   { key: "file_path", shape: "path" },
   { key: "notebook_path", shape: "path" },
@@ -35,9 +36,10 @@ const ARGUMENTS: readonly Argument[] = [
   { key: "url", shape: "text" },
   { key: "query", shape: "text" },
   { key: "path", shape: "path" },
-  { key: "description", shape: "text" },
   { key: "prompt", shape: "text" },
 ];
+
+const MAIN_ARGUMENTS = ARGUMENTS.filter(({ key }) => key !== "description");
 
 /**
  * Returns undefined when there is nothing worth saying, so a caller renders the tool's name alone
@@ -48,16 +50,19 @@ export function toolSummary(input: unknown): string | undefined {
   return summarise(input, MAX);
 }
 
-/** The same argument as `toolSummary`, unclipped, for a card that has room to wrap it. */
+/**
+ * The first argument after `description`, unclipped — the command or prompt the description
+ * stands for — for a card that has room to wrap it.
+ */
 export function fullToolSummary(input: unknown): string | undefined {
-  return summarise(input, Infinity);
+  return summarise(input, Infinity, MAIN_ARGUMENTS);
 }
 
-function summarise(input: unknown, max: number): string | undefined {
+function summarise(input: unknown, max: number, args = ARGUMENTS): string | undefined {
   if (!input || typeof input !== "object") return undefined;
   const record = input as Record<string, unknown>;
 
-  for (const argument of ARGUMENTS) {
+  for (const argument of args) {
     const value = record[argument.key];
     if (argument.shape === "questions") {
       const asked = clipQuestions(value, max);
