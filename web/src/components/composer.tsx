@@ -42,7 +42,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils.ts";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 
-export type ComposerHandle = { append: (block: string) => void };
+export type AppendResult = "added" | "question" | "locked";
+export type ComposerHandle = { append: (block: string) => AppendResult };
+
+export function appendToComposer(composer: ComposerHandle | null, drafts: DraftStash, id: string, block: string): AppendResult {
+  if (composer) return composer.append(block);
+  const draft = drafts.read(id);
+  drafts.write(id, { ...draft, text: appendDraftText(draft.text, block) });
+  return "added";
+}
 
 /**
  * Where a message goes in, and what the next turn will cost to run.
@@ -307,14 +315,22 @@ export function Composer({
     [drafts, id],
   );
 
+  const appendState = useRef({ blocked, locked });
+  appendState.current = { blocked, locked };
   useEffect(() => {
     if (!handle) return;
     handle.current = {
       append: (block) => {
         const relayed = relayedDraft.current;
-        if (!relayed) return input.current?.append(block);
-        relayedDraft.current = { ...relayed, text: appendDraftText(relayed.text, block) };
-        latest.current = relayedDraft.current;
+        if (relayed) {
+          relayedDraft.current = { ...relayed, text: appendDraftText(relayed.text, block) };
+          latest.current = relayedDraft.current;
+          return "added";
+        }
+        if (appendState.current.blocked) return "question";
+        if (appendState.current.locked) return "locked";
+        input.current?.append(block);
+        return "added";
       },
     };
     return () => { handle.current = null; };

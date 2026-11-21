@@ -6,6 +6,7 @@ import { StackPane } from "@/components/stack-pane.tsx";
 import { GitChanges } from "@/components/git-changes.tsx";
 import { GitPullRequestForm } from "@/components/git-pull-request-form.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
+import type { AppendResult } from "@/components/composer.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 import { branchLine, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
 import { useGitState } from "@/git-state.ts";
@@ -16,7 +17,7 @@ type Reads = { changes: number; stack: number; pullRequest: number; mount: numbe
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
 
-export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => void }) {
+export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
   const { connection } = useHost();
   const git = useGitState(sessionId);
   const prKey = JSON.stringify(git?.pr ?? null);

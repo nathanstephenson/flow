@@ -14,7 +14,7 @@ const bundle = await build({
       import React, { useRef, useState } from 'react';
       import { createRoot } from 'react-dom/client';
       import { flushSync } from 'react-dom';
-      import { Composer } from './web/src/components/composer.tsx';
+      import { Composer, appendToComposer } from './web/src/components/composer.tsx';
       import { HostProvider } from './web/src/host.tsx';
       import { SessionsProvider } from './web/src/agent-sessions.tsx';
       import { TooltipProvider } from './web/src/components/ui/tooltip.tsx';
@@ -29,16 +29,18 @@ const bundle = await build({
       function Harness() {
         const [status, setStatus] = useState('idle');
         const [asking, setAsking] = useState();
+        const [authorising, setAuthorising] = useState();
         const [mounted, setMounted] = useState(true);
         const composer = useRef(null);
         const drafts = useDraftStash(['fixture']);
         window.renderStatus = (status) => flushSync(() => setStatus(status));
         window.setAsking = (asking) => flushSync(() => setAsking(asking));
+        window.setAuthorising = (authorising) => flushSync(() => setAuthorising(authorising));
         window.setMounted = (mounted) => flushSync(() => setMounted(mounted));
-        window.append = (block) => composer.current.append(block);
-        window.readDraft = () => drafts.read('fixture').text;
+        window.append = (block) => appendToComposer(composer.current, drafts, 'fixture', block);
+        window.readDraft = (key = 'fixture') => drafts.read(key).text;
         const chrome = {
-          status, backend: 'pi', scope: '/tmp/project', queueDepth: 0, asking,
+          status, backend: 'pi', scope: '/tmp/project', queueDepth: 0, asking, authorising,
           activeSubagents: 0, activeBackgroundCalls: 0, compacting: false, spoken: false,
           model: { id: 'fixture', label: 'Fixture model' },
           capabilities: { models: [{ id: 'fixture' }] },
@@ -102,7 +104,7 @@ for (const browserName of browsers) describe(`${browserName}: Composer Add to Dr
     await page.keyboard.type("typed");
     await page.keyboard.press("Home");
     await page.evaluate(() => document.activeElement.blur());
-    await page.evaluate(() => window.append("block"));
+    assert.equal(await page.evaluate(() => window.append("block")), "added");
     assert.equal(await text(), "typed\n\nblock");
     assert.ok(await page.evaluate(() => document.activeElement?.closest(".cm-editor") !== null));
     await page.keyboard.type("X");
@@ -138,6 +140,36 @@ for (const browserName of browsers) describe(`${browserName}: Composer Add to Dr
     await page.evaluate(() => window.setMounted(true));
     await page.evaluate(() => window.setAsking(undefined));
     assert.equal(await text(), "mine\n\nblock");
+  });
+
+  it("does not append into an Enquiry Answer or a Permission Prompt", async () => {
+    await input().click();
+    await page.keyboard.type("mine");
+    await page.evaluate(relay => window.setAsking({ ...relay, context: undefined }), relay);
+    assert.equal(await page.evaluate(() => window.append("block")), "question");
+    await page.evaluate(() => window.setAsking(undefined));
+    await page.evaluate(() => window.setAuthorising({ callId: "call", tool: "Bash" }));
+    assert.equal(await page.evaluate(() => window.append("block")), "question");
+    await page.evaluate(() => window.setAuthorising(undefined));
+    assert.equal(await text(), "mine");
+    await page.evaluate(() => window.setMounted(false));
+    assert.equal(await page.evaluate(() => window.readDraft()), "mine");
+  });
+
+  it("does not append to the composer of an ended Agent Session", async () => {
+    await page.evaluate(() => window.renderStatus("ended"));
+    assert.equal(await page.evaluate(() => window.append("block")), "locked");
+    assert.equal(await text(), "");
+  });
+
+  it("writes to the Draft stash of this Agent Session only when its composer is not mounted", async () => {
+    await page.evaluate(() => window.append("one"));
+    await page.evaluate(() => window.setMounted(false));
+    assert.equal(await page.evaluate(() => window.append("two")), "added");
+    assert.equal(await page.evaluate(() => window.readDraft()), "one\n\ntwo");
+    assert.equal(await page.evaluate(() => window.readDraft("other")), "");
+    await page.evaluate(() => window.setMounted(true));
+    assert.equal(await text(), "one\n\ntwo");
   });
 
   it("keeps the appended text in the Draft stash after unmount", async () => {
