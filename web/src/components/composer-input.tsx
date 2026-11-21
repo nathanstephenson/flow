@@ -12,6 +12,7 @@ import {
   type MenuKeys,
 } from "@/components/composer-extensions.ts";
 import type { Triggerable } from "@/presentation/composer-menu.ts";
+import { appendDraftText } from "@/presentation/drafts.ts";
 
 export type { EnquiryKeys, MenuKeys, PermissionKeys };
 
@@ -46,6 +47,7 @@ export type ComposerInputHandle = {
    * completing a name — `/code-review the diff` wants the caret after the name, not after "diff".
    */
   replace: (text: string, caret: number) => void;
+  append: (block: string) => void;
 };
 
 export function ComposerInput({
@@ -130,6 +132,15 @@ export function ComposerInput({
           changes: { from: 0, to: editor.state.doc.length, insert: text },
           selection: { anchor: Math.min(caret, text.length) },
         }),
+      append: (block) => {
+        const text = editor.state.doc.toString();
+        const next = appendDraftText(text, block);
+        editor.dispatch({
+          changes: { from: text.length, insert: next.slice(text.length) },
+          effects: EditorView.scrollIntoView(next.length, { y: "nearest" }),
+        });
+        editor.focus();
+      },
     };
 
     return () => {

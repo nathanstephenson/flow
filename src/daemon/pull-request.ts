@@ -5,7 +5,7 @@ import { pushTarget, remoteHead } from "./push.ts";
 import { localStack, stackParent } from "./stack-metadata.ts";
 import type { PullRequestInput } from "../protocol/git.ts";
 import { head, isRepository, run, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
-import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestThread, PullRequestThreadInput } from "../protocol/pull-request.ts";
+import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestCheckLog, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestThread, PullRequestThreadInput } from "../protocol/pull-request.ts";
 
 const commentFields = "id author{login} body url createdAt";
 const threadFields = "id path line isOutdated isResolved viewerCanReply viewerCanResolve viewerCanUnresolve";
@@ -197,4 +197,21 @@ export async function rerunPullRequestChecks(scope: string, input: PullRequestRe
   const run = JSON.parse(await github(scope, ["api", `repos/${pr.repo}/actions/runs/${input.runId}`])) as { head_sha?: string };
   if (run.head_sha !== pr.headRefOid) throw new Error("This run is not for the current head of the pull request. Reload it before you re-run checks.");
   await github(scope, ["run", "rerun", String(input.runId), "--failed", "--repo", pr.repo]);
+}
+
+const checkLogLines = 80;
+
+export async function checkLog(scope: string, ref: PullRequestRef, jobId: number, github: Gh = gh): Promise<PullRequestCheckLog | null> {
+  validate(ref);
+  if (!Number.isSafeInteger(jobId) || jobId < 1) throw new Error("Invalid job ID.");
+  const pr = await target(scope, ref, github);
+  const job = JSON.parse(await github(scope, ["api", `repos/${pr.repo}/actions/jobs/${jobId}`])) as { head_sha?: string };
+  if (job.head_sha !== pr.headRefOid) throw new Error("This job is not for the current head of the pull request. Reload it before you add its log.");
+  let log: string;
+  try { log = await github(scope, ["api", `repos/${pr.repo}/actions/jobs/${jobId}/logs`, "--allow-escape-sequences"]); }
+  catch { return null; }
+  const lines = log.replace(/\s+$/, "").split(/\r?\n/).map(line => line.replace(/^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, ""));
+  const end = lines.findLastIndex(line => line.startsWith("##[error]")) + 1 || lines.length;
+  const start = Math.max(0, end - checkLogLines);
+  return { text: lines.slice(start, end).join("\n"), truncated: start > 0 };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Command } from "../../../src/protocol/commands.ts";
 import type { GitText, PullRequestSummary } from "../../../src/protocol/git.ts";
-import type { MergeMethod, PullRequestActionInput, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
+import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestCheckLog, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -11,9 +11,9 @@ import { Textarea } from "@/components/ui/textarea.tsx";
 import { PullRequestIcon } from "@/components/pull-request-indicators.tsx";
 import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 import { pullRequestIndicators } from "@/presentation/git.ts";
-import { checksSummary, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
-type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void };
+type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void; onAddToDraft: (block: string) => void };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
 
 const methodLabels: Record<MergeMethod, string> = { MERGE: "Merge commit", SQUASH: "Squash and merge", REBASE: "Rebase and merge" };
@@ -23,7 +23,7 @@ function link(url: string, children: ReactNode) {
   return href ? <a className="break-words underline underline-offset-2" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onChange }: Props) {
+export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onChange, onAddToDraft }: Props) {
   const { connection } = useHost();
   const [pr, setPr] = useState<PullRequestDetails | null>();
   const [busy, setBusy] = useState(false);
@@ -34,6 +34,8 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<Confirm>();
   const [edit, setEdit] = useState<PullRequestEditInput>();
+  const [added, setAdded] = useState<{ key: string; text: string }>();
+  const readingLogs = useRef(new Set<string>());
   const latest = useRef(0);
   const summaryKey = JSON.stringify(summary ?? null);
   const seenSummary = useRef(summaryKey);
@@ -92,6 +94,24 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     } catch (failure) { setError({ text: `No suggestion. ${String(failure)}`, read: false }); }
     finally { setBusy(false); }
   }
+
+  function addToDraft(key: string, block: string, text = "Added to Draft.") {
+    onAddToDraft(block);
+    setAdded({ key, text });
+  }
+
+  async function addCheck(key: string, check: PullRequestCheck, pr: PullRequestRef) {
+    if (check.jobId === undefined) return addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. This check is not a GitHub Actions job.");
+    if (readingLogs.current.has(key)) return;
+    readingLogs.current.add(key);
+    setAdded({ key, text: "Reading the job log…" });
+    const log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", sessionId, pr, jobId: check.jobId }).catch(() => null);
+    readingLogs.current.delete(key);
+    if (log) addToDraft(key, checkDraftBlock(check, log));
+    else addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. The job log could not be read or is too large.");
+  }
+
+  const addedStatus = (key: string, className = "") => added?.key === key ? <span role="status" className={`text-xs text-muted-foreground ${className}`}>{added.text}</span> : null;
 
   function commentForm(key: string, label: string, input: Omit<PullRequestCommentInput, "body">) {
     const text = drafts[key] ?? "";
@@ -152,9 +172,19 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
               </div>
             ))}
             <ul aria-label="Checks" className="space-y-1">
-              {orderedChecks(pr.checks).map((check, index) => (
-                <li key={index} className="flex flex-wrap justify-between gap-x-3">{link(check.url, check.name)}<span>{readableStatus(check.status)}</span></li>
-              ))}
+              {orderedChecks(pr.checks).map((check, index) => {
+                const key = `check:${check.name}:${check.url}`;
+                return (
+                  <li key={index} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                    {link(check.url, check.name)}
+                    <span className="flex items-center gap-2">
+                      {failedCheck(check) ? <Button size="xs" variant="outline" disabled={readingLogs.current.has(key)} onClick={() => void addCheck(key, check, ref)}>Add to Draft</Button> : null}
+                      <span>{readableStatus(check.status)}</span>
+                    </span>
+                    {addedStatus(key, "basis-full")}
+                  </li>
+                );
+              })}
             </ul>
           </AccordionContent>
         </AccordionItem>
@@ -179,6 +209,10 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
                       <AccordionContent className="space-y-3">
                         {thread.diffHunk ? <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs" aria-label="Diff context"><code>{thread.diffHunk}</code></pre> : null}
                         {thread.comments.map(entry)}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button size="sm" variant="outline" onClick={() => addToDraft(`thread:${thread.id}`, threadDraftBlock(thread))}>Add to Draft</Button>
+                          {addedStatus(`thread:${thread.id}`)}
+                        </div>
                         {thread.viewerCanReply ? commentForm(`thread:${thread.id}`, `Reply to thread in ${place}`, { pr: ref, threadId: thread.id }) : null}
                         {(thread.isResolved ? thread.viewerCanUnresolve : thread.viewerCanResolve) ? (
                           <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "resolve_pull_request_thread", sessionId, input: { pr: ref, threadId: thread.id, resolved: !thread.isResolved } }, thread.isResolved ? "Thread reopened." : "Thread resolved.")}>

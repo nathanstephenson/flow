@@ -37,6 +37,7 @@ export function Dock({
   visible = true,
   mobile = false,
   mobileNavigation,
+  onAddToDraft,
 }: {
   side: DockSide;
   dock: DockState;
@@ -46,6 +47,7 @@ export function Dock({
   visible?: boolean;
   mobile?: boolean;
   mobileNavigation?: MobileDockNavigation;
+  onAddToDraft: (block: string) => void;
 }) {
   const root = useRef<HTMLElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
@@ -177,6 +179,7 @@ export function Dock({
               dispatch={dispatch}
               onStatus={(status) => noteStatus(tab.id, status)}
               mobileNavigation={mobileNavigation?.tabId === tab.id ? mobileNavigation : undefined}
+              onAddToDraft={onAddToDraft}
             />
           ))
         )}
@@ -195,6 +198,7 @@ function DockTabPanel({
   dispatch,
   onStatus,
   mobileNavigation,
+  onAddToDraft,
 }: {
   side: DockSide;
   tab: DockTab;
@@ -205,6 +209,7 @@ function DockTabPanel({
   dispatch: (action: DockAction) => void;
   onStatus: (status: ShellStatus) => void;
   mobileNavigation?: MobileDockNavigation;
+  onAddToDraft: (block: string) => void;
 }) {
   const content = tab.content;
   return (
@@ -228,7 +233,7 @@ function DockTabPanel({
           />
         </Suspense>
       ) : content?.kind === "git" ? (
-        <GitPane key={`${sessionId}-${tab.id}`} sessionId={sessionId} />
+        <GitPane key={`${sessionId}-${tab.id}`} sessionId={sessionId} onAddToDraft={onAddToDraft} />
       ) : content?.kind === "subagents" ? (
         <SubagentsPane
           key={tab.id}
