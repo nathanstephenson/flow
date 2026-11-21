@@ -23,55 +23,85 @@ export function parseStack(raw: string): StackView {
 
 const install = "Install gh-stack on the Session Host: gh extension install github/gh-stack. Run gh auth login if needed.";
 const notInStack = /is not part of a stack/i;
+export const otherWorktreeRebase = "A stack rebase is in progress in another worktree.";
+const queues = new Map<string, Promise<unknown>>();
+
+async function runStack(scope: string, args: string[], github: Gh): Promise<string> {
+  const key = await commonGitPath(scope, ".");
+  const run = (queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => github(scope, ["stack", ...args]));
+  queues.set(key, run);
+  try { return await run; }
+  finally { if (queues.get(key) === run) queues.delete(key); }
+}
+
+async function gitPathExists(scope: string, name: string): Promise<boolean> {
+  return access(resolve(scope, (await git(scope, ["rev-parse", "--git-path", name])).trim())).then(() => true, () => false);
+}
 
 export async function stackStatus(scope: string, github: Gh = gh): Promise<StackStatus> {
-  try { await github(scope, ["stack", "--help"]); }
+  try { await runStack(scope, ["--help"], github); }
   catch { return { available: false, conflicts: [], rebasing: false }; }
   const conflicts = (await git(scope, ["diff", "--name-only", "--diff-filter=U", "-z"])).split("\0").filter(Boolean);
-  const rebasing = await access(await commonGitPath(scope, "gh-stack-rebase-state")).then(() => true, () => false);
+  const stackRebase = await access(await commonGitPath(scope, "gh-stack-rebase-state")).then(() => true, () => false);
+  const rebasing = stackRebase && (await gitPathExists(scope, "rebase-merge") || await gitPathExists(scope, "rebase-apply"));
   const status: StackStatus = { available: true, conflicts, rebasing };
   if (rebasing) return status;
+  if (stackRebase) return { ...status, notice: otherWorktreeRebase };
   const current = await head(scope);
   if (!current.ok) throw new Error(current.failure.message);
   if (current.value.detached) return { ...status, notice: "HEAD is detached. Switch to a branch to see its stack." };
-  try { return { ...status, view: parseStack(await github(scope, ["stack", "view", "--json"])) }; }
-  catch (error) { if (!notInStack.test(String(error))) throw error; }
   const branch = current.value.name;
-  const [listed, stacks, repository] = await Promise.all([localBranches(scope), localStacks(scope), localRepository(scope, branch)]);
+  const [listed, stacks] = await Promise.all([localBranches(scope), localStacks(scope)]);
   if (!listed.ok) throw new Error(listed.failure.message);
-  const trunk = repository?.defaultBranches.find(name => listed.value.includes(name));
-  if (branch === trunk || stacks.some(stack => stack.trunk.branch === branch)) return { ...status, notice: `${branch} is a trunk. Switch to another branch to create a stack.` };
+  if (!listed.value.includes(branch)) return { ...status, notice: "This branch has no commits yet. Commit first to create a stack." };
+  const trunkNotice = `${branch} is a trunk. Switch to another branch to create a stack.`;
+  if (stacks.some(stack => stack.trunk.branch === branch)) return { ...status, notice: trunkNotice };
+  try { return { ...status, view: parseStack(await runStack(scope, ["view", "--json"], github)) }; }
+  catch (error) { if (!notInStack.test(String(error))) throw error; }
+  const trunk = (await localRepository(scope, branch))?.defaultBranches.find(name => listed.value.includes(name));
+  if (branch === trunk) return { ...status, notice: trunkNotice };
   const stacked = new Set(stacks.flatMap(stack => stack.branches.map(member => member.branch)));
   return { ...status, create: { current: branch, ...(trunk ? { trunk } : {}), branches: listed.value, unstacked: listed.value.filter(name => !stacked.has(name)) } };
 }
 
 const titles = new Map<string, { key: string; expires: number; found: Map<number, string> }>();
 
-export async function stackTitles(scope: string, view: StackView, github: Gh = gh): Promise<void> {
+async function readTitles(scope: string, branch: string, numbers: number[], github: Gh): Promise<Map<number, string>> {
+  const [owner, name] = (await resolveRepository(scope, branch, github)).base.repo.split("/");
+  const query = (list: number[]) => api<{ repository: Record<string, { title: string } | null> }>(scope, github,
+    `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${list.map(number => `pr${number}:pullRequest(number:${number}){title}`).join(" ")}}}`, { owner: owner!, name: name! });
+  let wanted = numbers;
+  let data: Awaited<ReturnType<typeof query>>;
+  try { data = await query(wanted); }
+  catch (error) {
+    const missing = [...String(error).matchAll(/number of (\d+)/g)].map(match => Number(match[1]));
+    wanted = numbers.filter(number => !missing.includes(number));
+    if (!missing.length || !wanted.length) throw error;
+    data = await query(wanted);
+  }
+  return new Map(wanted.flatMap(number => data.repository[`pr${number}`] ? [[number, data.repository[`pr${number}`]!.title]] : []));
+}
+
+export async function stackTitles(scope: string, view: StackView, github: Gh = gh): Promise<boolean> {
   const numbers = view.branches.flatMap(branch => branch.pr ? [branch.pr.number] : []);
-  if (!numbers.length) return;
-  try {
-    const repository = await resolveRepository(scope, view.currentBranch, github);
-    const key = JSON.stringify([repository.base.repo, view.branches.map(branch => branch.pr && [branch.pr.number, branch.pr.state])]);
-    const cached = titles.get(scope);
-    let found = cached && cached.key === key && cached.expires > Date.now() ? cached.found : undefined;
-    if (!found) {
-      const [owner, name] = repository.base.repo.split("/");
-      const data = await api<{ repository: Record<string, { title: string } | null> }>(scope, github,
-        `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${numbers.map(number => `pr${number}:pullRequest(number:${number}){title}`).join(" ")}}}`, { owner: owner!, name: name! });
-      found = new Map(numbers.map(number => [number, data.repository[`pr${number}`]?.title ?? ""]));
-      titles.set(scope, { key, expires: Date.now() + 5 * 60_000, found });
-    }
-    for (const branch of view.branches) if (branch.pr && found.get(branch.pr.number)) branch.pr.title = found.get(branch.pr.number)!;
-  } catch { return; }
+  if (!numbers.length) return true;
+  const key = JSON.stringify(view.branches.map(branch => branch.pr && [branch.pr.number, branch.pr.state]));
+  const cached = titles.get(scope);
+  let found = cached && cached.key === key && cached.expires > Date.now() ? cached.found : undefined;
+  if (!found) {
+    found = await readTitles(scope, view.currentBranch, numbers, github).catch(() => new Map<number, string>());
+    titles.set(scope, { key, expires: Date.now() + 5 * 60_000, found });
+  }
+  for (const branch of view.branches) if (branch.pr && found.has(branch.pr.number)) branch.pr.title = found.get(branch.pr.number)!;
+  return numbers.every(number => found.has(number));
 }
 
 export async function cleanStack(scope: string): Promise<void> {
   if ((await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).length) throw new Error("This Scope has uncommitted changes. Commit them first. Stack operations never stash changes.");
-  const paths = await Promise.all(["rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].map(async operation => resolve(scope, (await git(scope, ["rev-parse", "--git-path", operation])).trim())));
-  for (const path of [...paths, await commonGitPath(scope, "gh-stack-rebase-state")]) {
-    if (await access(path).then(() => true, () => false)) throw new Error("Finish or abort the current Git operation first.");
+  for (const operation of ["rebase-merge", "rebase-apply", "sequencer", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
+    if (await gitPathExists(scope, operation)) throw new Error("Finish or abort the current Git operation first.");
   }
+  if (await access(await commonGitPath(scope, "gh-stack-rebase-state")).then(() => true, () => false)) throw new Error("A stack rebase is in progress in this or another worktree. Finish or abort it first.");
 }
 
 export async function stackFingerprint(scope: string, view: StackView, sync = false, github: Gh = gh): Promise<string> {
@@ -92,7 +122,7 @@ export async function stackFingerprint(scope: string, view: StackView, sync = fa
 }
 
 async function validateInit(scope: string, trunk: unknown, branches: string[], github: Gh): Promise<void> {
-  try { await github(scope, ["stack", "--help"]); }
+  try { await runStack(scope, ["--help"], github); }
   catch { throw new Error(install); }
   const listed = await localBranches(scope);
   if (!listed.ok) throw new Error(listed.failure.message);
@@ -111,10 +141,10 @@ export async function changeStack(scope: string, input: StackInput, github: Gh =
   if (!["init", "add", "checkout", "rebase", "continue", "abort", "submit", "sync"].includes(action)) throw new Error("Unknown Stack action.");
   if (action === "continue" || action === "abort") {
     const state = await stackStatus(scope, github);
-    if (!state.rebasing) throw new Error("No Stack rebase is in progress.");
+    if (!state.rebasing) throw new Error(state.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress.");
     if (action === "continue" && state.conflicts.length) throw new Error("Resolve and stage all conflict files before continuing.");
   } else await cleanStack(scope);
-  const args = ["stack", action];
+  const args: string[] = [action];
   if (action === "init" || action === "add" || action === "checkout") {
     if (!Array.isArray(input.branches) || !input.branches.length || (action !== "init" && input.branches.length !== 1)) throw new Error("Enter a branch name.");
     for (const branch of input.branches) {
@@ -134,9 +164,9 @@ export async function changeStack(scope: string, input: StackInput, github: Gh =
     }
     args.push(...input.branches);
   }
-  if (action === "continue" || action === "abort") args.splice(1, 1, "rebase", `--${action}`);
+  if (action === "continue" || action === "abort") args.splice(0, 1, "rebase", `--${action}`);
   if (action === "submit") args.push("--auto");
-  return github(scope, args);
+  return runStack(scope, args, github);
 }
 
 export const stackConflictMessage = "Resolve the current gh stack rebase conflicts in this Scope. Inspect the Stack rebase state and conflict files first. Preserve the intended changes and stage only resolved files. Run gh stack rebase --continue only after git diff --name-only --diff-filter=U is empty and all conflicts are resolved. Repeat for further conflicts; stop and report if the intended resolution is unclear. This request permits local conflict repair and Stack rebase continuation only. Do not push, submit, sync, merge, or restructure the stack. Report the result so I can review it before any separate Sync confirmation.";

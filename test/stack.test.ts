@@ -3,7 +3,7 @@ import { afterEach, beforeEach, it } from "node:test";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, repository } from "./git-fixture.ts";
+import { git, repository, unbornRepository } from "./git-fixture.ts";
 import { changeStack, cleanStack, parseStack, stackStatus, stackTitles, stackConflictMessage, stackFingerprint } from "../src/daemon/stack.ts";
 import { SessionHost } from "../src/daemon/host.ts";
 import { gh } from "../src/daemon/github.ts";
@@ -39,7 +39,7 @@ async function hostFixture() {
   return { host, backend, id };
 }
 
-it("parses the v0.1.1 schema and rejects malformed data", () => {
+it("parses the gh stack view JSON and rejects malformed data", () => {
   assert.deepEqual(parseStack(JSON.stringify(view)), view);
   for (const value of [null, {}, { ...view, branches: [null] }, { ...view, branches: [{}] }, { ...view, branches: [{ ...view.branches[0], pr: { number: "12" } }] }]) assert.throws(() => parseStack(JSON.stringify(value)), /Invalid/);
 });
@@ -161,6 +161,7 @@ it("sends conflict assistance through the current Agent Session without permitti
   try {
     await assert.rejects(host.assistStack(id), /No Stack rebase/);
     writeFileSync(join(repo, ".git/gh-stack-rebase-state"), "{}");
+    mkdirSync(join(repo, ".git/rebase-merge"));
     await host.assistStack(id);
     assert.equal(backend.latest.prompts.length, 1);
     assert.match(JSON.stringify(backend.latest.prompts[0]), /gh stack rebase --continue/);
@@ -184,6 +185,7 @@ it("switches numeric local stack branches without passing a PR number to gh", as
 });
 
 it("refuses Sync when remote membership changes after the review", async () => {
+  git(repo, "switch", "feature");
   const { host, id } = await hostFixture();
   try {
     writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ id: "42", trunk: { branch: "main" }, branches: [{ branch: "feature", pullRequest: { number: 12 } }] }] }));
@@ -277,12 +279,30 @@ it("reads the stack metadata of a linked worktree from the common Git directory"
   assert.deepEqual([...status.create!.unstacked].sort(), ["feature", "main"]);
 });
 
-it("finds a gh stack rebase of a linked worktree in the common Git directory", async () => {
+it("offers the Stack rebase only in the worktree where it stopped", async () => {
   const worktree = join(root, "worktree");
   git(repo, "worktree", "add", "--quiet", worktree, "feature");
   writeFileSync(join(repo, ".git/gh-stack-rebase-state"), "{}");
+  mkdirSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "rebase-merge").trim());
   assert.equal((await stackStatus(worktree, notInStack("feature"))).rebasing, true);
+  const calls: string[][] = [];
+  const main = await stackStatus(repo, notInStack("main", calls));
+  assert.equal(main.rebasing, false);
+  assert.equal(main.notice, "A stack rebase is in progress in another worktree.");
+  assert.deepEqual(calls, [["stack", "--help"]]);
+  for (const action of ["abort", "continue"] as const) await assert.rejects(changeStack(repo, { action }, notInStack("main", calls)), /another worktree/);
+  await assert.rejects(changeStack(repo, { action: "rebase" }, notInStack("main", calls)), /another worktree/);
   await assert.rejects(cleanStack(worktree), /Finish or abort/);
+  assert.equal(calls.some(args => ["abort", "continue", "rebase"].some(action => args.includes(action) || args.includes(`--${action}`))), false);
+});
+
+it("shows a one-line notice on a branch with no commits", async () => {
+  const unborn = unbornRepository(root, "unborn");
+  const calls: string[][] = [];
+  const status = await stackStatus(unborn, notInStack("main", calls));
+  assert.equal(status.create, undefined);
+  assert.match(status.notice!, /no commits/);
+  assert.deepEqual(calls, [["stack", "--help"]]);
 });
 
 it("shows a one-line notice on the trunk and on a detached HEAD", async () => {
@@ -292,7 +312,11 @@ it("shows a one-line notice on the trunk and on a detached HEAD", async () => {
   assert.match(onTrunk.notice!, /trunk/);
   registered("feature", ["other"]);
   git(repo, "switch", "feature");
-  assert.match((await stackStatus(repo, notInStack("feature"))).notice!, /trunk/);
+  const trunkCalls: string[][] = [];
+  assert.match((await stackStatus(repo, notInStack("feature", trunkCalls))).notice!, /trunk/);
+  writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "feature" }, branches: [{ branch: "one" }] }, { trunk: { branch: "feature" }, branches: [{ branch: "two" }] }] }));
+  assert.match((await stackStatus(repo, notInStack("feature", trunkCalls))).notice!, /trunk/);
+  assert.deepEqual(trunkCalls, [["stack", "--help"], ["stack", "--help"]]);
   git(repo, "switch", "--detach");
   const calls: string[][] = [];
   const detached = await stackStatus(repo, notInStack("HEAD", calls));
@@ -318,7 +342,7 @@ it("reads Pull Request titles with one query and not again when nothing changed 
   };
   const stack: StackView = { ...view, branches: [view.branches[0]!, { ...view.branches[0]!, name: "second", isCurrent: false, pr: { number: 13, url: "https://github.com/test/repo/pull/13", state: "OPEN" } }, { name: "unpublished", isCurrent: false, isMerged: false, isQueued: false, needsRebase: false }] };
   const first = structuredClone(stack);
-  await stackTitles(repo, first, github);
+  assert.equal(await stackTitles(repo, first, github), true);
   assert.deepEqual(first.branches.map(branch => branch.pr?.title), ["Twelve", "Thirteen", undefined]);
   assert.equal(queries.length, 1);
   assert.match(queries[0]!, /pr12:pullRequest\(number:12\)\{title\}.*pr13:pullRequest\(number:13\)\{title\}/);
@@ -338,11 +362,43 @@ it("reads Pull Request titles with one query and not again when nothing changed 
   } finally { Date.now = now; }
 });
 
-it("keeps the stack without titles when the title query fails", async () => {
+it("keeps the stack without titles when the title query fails, and does not ask again for 5 minutes", async () => {
   git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
+  let queries = 0;
+  const github = async (_scope: string, args: string[]) => {
+    if (args[0] === "auth") return "";
+    if (args[0] === "repo") return JSON.stringify({ id: "R", defaultBranchRef: { name: "main" }, isFork: false });
+    queries++;
+    throw new Error("GitHub request failed: HTTP 502");
+  };
   const stack = structuredClone(view);
-  await stackTitles(repo, stack, async () => { throw new Error("GitHub unavailable"); });
+  assert.equal(await stackTitles(repo, stack, github), false);
   assert.deepEqual(stack, view);
+  assert.equal(await stackTitles(repo, structuredClone(view), github), false);
+  assert.equal(queries, 1);
+});
+
+it("uses the titles that resolve when one pull request is not found", async () => {
+  git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
+  const queries: string[] = [];
+  const github = async (_scope: string, args: string[]) => {
+    if (args[0] === "auth") return "";
+    if (args[0] === "repo") return JSON.stringify({ id: "R", defaultBranchRef: { name: "main" }, isFork: false });
+    const query = args.find(arg => arg.startsWith("query="))!;
+    queries.push(query);
+    if (query.includes("pr13:")) throw new Error("GitHub request failed: gh: Could not resolve to a PullRequest with the number of 13.");
+    return JSON.stringify({ data: { repository: { pr12: { title: "Twelve" } } } });
+  };
+  const stack: StackView = { ...view, branches: [view.branches[0]!, { ...view.branches[0]!, name: "second", isCurrent: false, pr: { number: 13, url: "https://github.com/test/repo/pull/13", state: "OPEN" } }] };
+  const read = structuredClone(stack);
+  assert.equal(await stackTitles(repo, read, github), false);
+  assert.deepEqual(read.branches.map(branch => branch.pr?.title), ["Twelve", undefined]);
+  assert.equal(queries.length, 2);
+  assert.doesNotMatch(queries[1]!, /pr13:/);
+  const again = structuredClone(stack);
+  assert.equal(await stackTitles(repo, again, github), false);
+  assert.equal(again.branches[0]!.pr?.title, "Twelve");
+  assert.equal(queries.length, 2);
 });
 
 it("registers the chosen trunk and branches in order with gh stack init", async () => {
@@ -375,18 +431,49 @@ for (const [name, input, refusal] of [
   assert.equal(calls.some(args => args[1] === "init"), false);
 });
 
-it("reads Stack status during a turn and does not block a concurrent Git write", async () => {
+function holdGh(command: string) {
+  const executable = join(root, "bin/gh");
+  writeFileSync(executable, readFileSync(executable, "utf8").replace(`case "$*" in`, `[ "$*" = '${command}' ] && while [ ! -f '${root}/release' ]; do sleep 0.05; done\ncase "$*" in`));
+}
+const callCount = (line: string) => readFileSync(join(root, "calls"), "utf8").split("\n").filter(call => call === line).length;
+async function until(test: () => boolean) {
+  while (!test()) await new Promise(resolve => setTimeout(resolve, 20));
+}
+
+it("reads Stack status during a turn, and a Stack write waits for a running gh stack view", async () => {
   const { host, backend, id } = await hostFixture();
   try {
     await host.send(id, "work", "now");
     assert.deepEqual(((await host.execute({ type: "stack_status", sessionId: id })) as StackStatus).view, view);
     backend.latest.completeTurn();
-    const executable = join(root, "bin/gh");
-    writeFileSync(executable, readFileSync(executable, "utf8").replace(`'stack view --json') cat`, `'stack view --json') while [ ! -f '${root}/release' ]; do sleep 0.05; done; cat`));
+    holdGh("stack view --json");
     const reading = host.execute({ type: "stack_status", sessionId: id });
-    while (readFileSync(join(root, "calls"), "utf8").split("\n").filter(line => line === "stack view --json").length < 2) await new Promise(resolve => setTimeout(resolve, 20));
-    await host.changeStack(id, { action: "rebase" });
+    await until(() => callCount("stack view --json") === 2);
+    const rebasing = host.changeStack(id, { action: "rebase" });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(callCount("stack rebase"), 0);
     writeFileSync(join(root, "release"), "");
     assert.deepEqual(((await reading) as StackStatus).view, view);
+    await rebasing;
+    assert.equal(callCount("stack rebase"), 1);
+  } finally { await host.shutdown(); }
+});
+
+it("starts the gh stack view of a Stack status only after a running Submit ends", async () => {
+  const { host, id } = await hostFixture();
+  try {
+    const review = await host.prepareStack(id, "submit");
+    holdGh("stack submit --auto");
+    const submitting = host.changeStack(id, { action: "submit", token: review.token });
+    await until(() => callCount("stack submit --auto") === 1);
+    const views = callCount("stack view --json");
+    const reading = host.execute({ type: "stack_status", sessionId: id });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(callCount("stack view --json"), views);
+    writeFileSync(join(root, "release"), "");
+    await submitting;
+    assert.deepEqual(((await reading) as StackStatus).view, view);
+    const calls = readFileSync(join(root, "calls"), "utf8").split("\n");
+    assert.ok(calls.lastIndexOf("stack view --json") > calls.indexOf("stack submit --auto"));
   } finally { await host.shutdown(); }
 });
