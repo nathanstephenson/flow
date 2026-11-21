@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, '..');
 const out = process.argv[2] ?? resolve(root, 'build/workflow-runtime.cjs');
 mkdirSync(dirname(out), { recursive: true });
-const lib = dirname(require.resolve('typescript'));
+const lib = dirname(require.resolve('typescript-api'));
 const libraries = Object.fromEntries(readdirSync(lib).filter(name => /^lib\..*\.d\.ts$/.test(name)).map(name => [name, readFileSync(resolve(lib, name), 'utf8')]));
 const wasm = readFileSync(resolve(dirname(require.resolve('@jitl/quickjs-wasmfile-release-sync')), 'emscripten-module.wasm')).toString('base64');
 await build({ entryPoints: [resolve(root, 'src/workflows/runtime.ts')], outfile: out, platform: 'node', target: 'node22', format: 'cjs', bundle: true,
