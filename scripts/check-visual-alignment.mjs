@@ -78,9 +78,9 @@ await context.route('**/*', async route => {
     if (command.type === 'pull_request') return route.fulfill({ json: { result: {
       repo: 'example/fixture', id: 'visual-fixture', number: 1, url: 'https://github.com/example/fixture/pull/1',
       title: 'Read-only visual fixture', isDraft: false, body: 'Browser-local discovery fixture', state: 'CLOSED',
-      author: 'Fixture', headRefName: 'rail-refinement', baseRefName: 'main', createdAt: '', updatedAt: '',
-      mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', viewerCanComment: false,
-      comments: [], reviews: [], threads: [], reviewDecision: '', statusCheckRollup: [],
+      author: 'Fixture', headRefName: 'rail-refinement', headRefOid: '0'.repeat(40), baseRefName: 'main',
+      mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', viewerCanComment: false, mergeMethods: [],
+      comments: [], reviews: [], threads: [], reviewDecision: null, checks: [],
     } } });
   }
   // Browser-local GET discovery only: the fake host has no curated Projects,

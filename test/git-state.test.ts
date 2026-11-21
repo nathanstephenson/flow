@@ -18,7 +18,7 @@ function scope(name: string): string {
 }
 
 const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", baseRefName: "parent", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
-const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
+const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", checksCompleted: 0, reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
 
 function github() {
   const queries: string[][] = [];
@@ -164,6 +164,18 @@ describe("GitStates", () => {
     assert.deepEqual(states.summary(path)?.pr, summary);
   });
 
+  it("keeps the reference of the polled pull request for the pane read", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    assert.equal(states.pullRequestRef(path), undefined);
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
+    assert.deepEqual(states.pullRequestRef(path), { repo: "test/repo", number: 4, id: "PR_1" });
+    fake.state.pulls = [];
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
+    assert.equal(states.pullRequestRef(path), undefined);
+  });
+
   it("keeps the base branch of an open pull request only", async () => {
     const fake = github();
     const states = new GitStates(fake.run);
@@ -296,6 +308,16 @@ describe("GitStates", () => {
     assert.equal(bases.size, 1);
     await states.poll([]);
     assert.equal(bases.size, 0);
+  });
+
+  it("releases the pull request reference of a group that has no Scope", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const refs = (states as unknown as { refs: Map<string, unknown> }).refs;
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(refs.size, 1);
+    await states.poll([]);
+    assert.equal(refs.size, 0);
   });
 
   it("queries a forced Scope at once, ignoring the interval", async () => {

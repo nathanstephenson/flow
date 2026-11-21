@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest } from "./pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks } from "./pull-request.ts";
 import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
@@ -2468,11 +2468,17 @@ export class SessionHost {
       case "change_pull_request":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
       case "pull_request":
-        return await pullRequest(this.record(command.sessionId).scope);
+        return await pullRequest(this.record(command.sessionId).scope, this.gitStates.pullRequestRef(this.record(command.sessionId).scope));
       case "comment_pull_request":
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
       case "resolve_pull_request_thread":
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, resolvePullRequestThread(this.record(command.sessionId).scope, command.input));
+      case "edit_pull_request":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, editPullRequest(this.record(command.sessionId).scope, command.input));
+      case "set_pull_request_draft":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, setPullRequestDraft(this.record(command.sessionId).scope, command.input));
+      case "rerun_pull_request_checks":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, rerunPullRequestChecks(this.record(command.sessionId).scope, command.input));
       case "stack_status":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
       case "prepare_stack":
@@ -2482,7 +2488,9 @@ export class SessionHost {
       case "assist_stack":
         return await this.assistStack(command.sessionId);
       case "refresh_git":
-        return await this.gitStates.refresh(this.record(command.sessionId).scope);
+        await this.gitStates.refresh(this.record(command.sessionId).scope);
+        if (command.pullRequest === true) await this.pollGitState(this.record(command.sessionId).scope);
+        return;
       case "git_changes":
       case "git_diff":
         return await this.readChanges(command);

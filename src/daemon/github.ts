@@ -25,8 +25,8 @@ export const gh: Gh = async (scope, args) => {
   }
 };
 
-type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
-const page = "pageInfo { hasNextPage endCursor }";
+export type Connection<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+export const page = "pageInfo { hasNextPage endCursor }";
 
 export async function api<T>(scope: string, github: Gh, query: string, variables: Record<string, string | number | boolean | null>): Promise<T> {
   const args = ["api", "graphql", "-f", `query=${query}`];
@@ -38,25 +38,19 @@ export async function api<T>(scope: string, github: Gh, query: string, variables
   return result.data;
 }
 
-async function pages<T>(load: (cursor: string | null) => Promise<Connection<T>>): Promise<T[]> {
-  const result: T[] = [];
-  let cursor: string | null = null;
+export async function connection<T>(scope: string, github: Gh, first: Connection<T>, id: string, type: string, field: string, fields: string): Promise<T[]> {
+  const result = [...first.nodes];
   const seen = new Set<string>();
+  let current = first;
   for (let count = 0; count < 1000; count++) {
-    const connection = await load(cursor);
-    result.push(...connection.nodes);
-    if (!connection.pageInfo.hasNextPage) return result;
-    cursor = connection.pageInfo.endCursor;
+    if (!current.pageInfo.hasNextPage) return result;
+    const cursor = current.pageInfo.endCursor;
     if (!cursor || seen.has(cursor)) throw new Error("GitHub returned an invalid page cursor.");
     seen.add(cursor);
-  }
-  throw new Error("GitHub pagination limit exceeded.");
-}
-
-export async function connection<T>(scope: string, github: Gh, id: string, type: string, field: string, fields: string): Promise<T[]> {
-  return pages(async cursor => {
     const data = await api<{ node: Record<string, Connection<T>> }>(scope, github,
       `query($id:ID!,$cursor:String){node(id:$id){... on ${type}{${field}(first:100,after:$cursor){nodes{${fields}} ${page}}}}}`, { id, cursor });
-    return data.node[field]!;
-  });
+    current = data.node[field]!;
+    result.push(...current.nodes);
+  }
+  throw new Error("GitHub pagination limit exceeded.");
 }
