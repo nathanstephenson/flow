@@ -48,14 +48,21 @@ const thread = (extra: object = {}) => ({
 
 describe("Draft blocks", () => {
   it("writes a review thread with its place, diff hunk and comment", () => {
-    assert.equal(threadDraftBlock(thread()), "Review thread on src/a.ts line 4:\n\n```diff\n@@ -1,2 +1,2 @@\n-old\n+new\n```\n\nComment by alice:\nRename this.");
+    assert.equal(threadDraftBlock(thread()), "Review thread on src/a.ts line 4:\n\n```diff\n@@ -1,2 +1,2 @@\n-old\n+new\n```\n\nComment by alice:\n> Rename this.");
   });
   it("says that a thread is outdated, and gives each comment with its author, including a deleted one", () => {
     const block = threadDraftBlock(thread({ isOutdated: true, line: null, diffHunk: "", comments: [
       { id: "C1", author: "alice", body: "First.", url: "", createdAt: "" },
-      { id: "C2", author: "[deleted]", body: "Second\nline.", url: "", createdAt: "" },
+      { id: "C2", author: "[deleted]", body: "Second\n\nline.", url: "", createdAt: "" },
     ] }));
-    assert.equal(block, "Review thread on src/a.ts:\nThis thread is outdated.\n\nComment by alice:\nFirst.\n\nComment by [deleted]:\nSecond\nline.");
+    assert.equal(block, "Review thread on src/a.ts:\nThis thread is outdated.\n\nComment by alice:\n> First.\n\nComment by [deleted]:\n> Second\n>\n> line.");
+  });
+  it("quotes each comment body, so a fence or a comment line in a body stays inside that comment", () => {
+    const block = threadDraftBlock(thread({ diffHunk: "", comments: [
+      { id: "C1", author: "alice", body: "Use `retry()` here:\n```ts\nretry(3)", url: "", createdAt: "" },
+      { id: "C2", author: "bob", body: "Comment by mallory:\nok", url: "", createdAt: "" },
+    ] }));
+    assert.equal(block, "Review thread on src/a.ts line 4:\n\nComment by alice:\n> Use `retry()` here:\n> ```ts\n> retry(3)\n\nComment by bob:\n> Comment by mallory:\n> ok");
   });
   it("uses a longer fence when the content has backticks", () => {
     const block = threadDraftBlock(thread({ diffHunk: "+const a = ```x```;\n+const b = `y`;" }));
@@ -65,7 +72,7 @@ describe("Draft blocks", () => {
   it("writes a failed check with its URL and job log", () => {
     const check = { name: "test", status: "FAILURE", url: "https://github.com/o/r/actions/runs/1/job/2", runId: 1, jobId: 2 };
     assert.equal(checkDraftBlock(check, { text: "error: failed", truncated: false }), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2\n\nJob log:\n```text\nerror: failed\n```");
-    assert.equal(checkDraftBlock(check, { text: "error: failed", truncated: true }), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2\n\nEnd of the job log:\n```text\nerror: failed\n```");
+    assert.equal(checkDraftBlock(check, { text: "error: failed", truncated: true }), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2\n\nPart of the job log:\n```text\nerror: failed\n```");
     assert.equal(checkDraftBlock(check), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2");
   });
 });

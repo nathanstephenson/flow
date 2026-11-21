@@ -292,6 +292,18 @@ test("reads the end of a failed job log up to its last error, without timestamps
     assert.ok(calls.some(call => call.join(" ") === "api repos/base/repo/actions/jobs/456/logs --allow-escape-sequences"));
     assert.ok(!calls.some(call => call[0] === "run"));
     assert.deepEqual(await checkLog(path, ref, 456, mock({ log: ["one", "two"].map(logLine).join("\r\n") }).github), { text: "one\ntwo", truncated: false });
+    const plain = Array.from({ length: 100 }, (_, index) => `line ${index + 1}`);
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log: plain.map(logLine).join("\n") }).github), { text: plain.slice(20).join("\n"), truncated: true });
+    const early = ["setup", "##[error]Bad input", ...plain];
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log: early.map(logLine).join("\n") }).github), { text: "setup\n##[error]Bad input", truncated: true });
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("removes every escape sequence and control character from a job log", async () => {
+  const path = await scope();
+  try {
+    const log = "\ufeffplain bom line\n2026-11-21T00:47:01.0Z \u001b]8;;https://evil\u0007link\u001b]8;;\u0007 \u001b[38:5:1mx\u001b(B progress 10%\rprogress 100%\u0008\u0000\u007f\tend\n\ufeff2026-11-21T00:47:02.0Z \u001b]0;title\u001b\\##[error]boom\n";
+    assert.deepEqual(await checkLog(path, ref, 456, mock({ log }).github), { text: "plain bom line\nlink x progress 10%\nprogress 100%\tend\n##[error]boom", truncated: false });
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
