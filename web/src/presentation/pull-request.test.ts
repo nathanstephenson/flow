@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "./pull-request.ts";
+import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "./pull-request.ts";
 
 const check = (name: string, status: string, runId?: number) => ({ name, status, url: "", ...(runId === undefined ? {} : { runId, jobId: 1 }) });
 
@@ -15,6 +15,12 @@ describe("pull request presentation", () => {
     assert.equal(matchesSummary({ ...loaded, checks: [] }, { ...summary, checks: "none", checksCompleted: 0 }), true);
     assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "FAILURE")] }, { ...summary, checks: "failing", checksCompleted: 2 }), true);
     assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "SKIPPED")] }, { ...summary, checks: "passing", checksCompleted: 2 }), true);
+  });
+
+  it("says why Merge is not available", () => {
+    assert.equal(mergeUnavailable({ isDraft: false, mergeMethods: ["SQUASH"] }), undefined);
+    assert.equal(mergeUnavailable({ isDraft: true, mergeMethods: ["SQUASH"] }), "Merge is not available for a draft. Mark the pull request ready for review first.");
+    assert.equal(mergeUnavailable({ isDraft: false, mergeMethods: [] }), "You cannot merge this Pull Request in this repository.");
   });
 
   it("permits only absolute web links", () => {

@@ -2476,8 +2476,10 @@ export class SessionHost {
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
       case "change_pull_request":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
-      case "pull_request":
-        return await pullRequest(this.record(command.sessionId).scope, this.gitStates.pullRequestRef(this.record(command.sessionId).scope));
+      case "pull_request": {
+        const scope = this.record(command.sessionId).scope;
+        return await this.readGit(() => pullRequest(scope, this.gitStates.pullRequestRef(scope)));
+      }
       case "comment_pull_request":
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
       case "resolve_pull_request_thread":
@@ -2498,10 +2500,16 @@ export class SessionHost {
         return await this.changeStack(command.sessionId, command.input);
       case "assist_stack":
         return await this.assistStack(command.sessionId);
-      case "refresh_git":
-        await this.gitStates.refresh(this.record(command.sessionId).scope);
-        if (command.pullRequest === true) await this.pollGitState(this.record(command.sessionId).scope);
-        return;
+      case "refresh_git": {
+        const scope = this.record(command.sessionId).scope;
+        if (!isRepository(scope)) {
+          await this.gitStates.refresh(scope);
+          return { repository: false };
+        }
+        await Promise.all([...this.sessions.values()].filter(other => scopeKey(other.scope) === scopeKey(scope)).map(other => this.refreshBranch(other)));
+        if (command.pullRequest === true) await this.pollGitState(scope);
+        return { repository: true };
+      }
       case "git_changes":
       case "git_diff":
         return await this.readChanges(command);

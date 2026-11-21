@@ -9,7 +9,7 @@ import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { MergeMethod, PullRequestDetails, PullRequestRef } from "../src/protocol/pull-request.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "../src/daemon/pull-request.ts";
 import { resolveRepository } from "../src/daemon/repository.ts";
-import { SessionHost } from "../src/daemon/host.ts";
+import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
 test("Session Host routes all PR commands through Agent Session lookup", async () => {
@@ -35,7 +35,7 @@ test("each pull request write polls Git State once for its Scope, and reads run 
   try {
     const sessionId = await host.create({ scope: path });
     await host.send(sessionId, "work", "now");
-    await assert.rejects(host.execute({ type: "pull_request", sessionId }), /No remote/);
+    assert.equal(await host.execute({ type: "pull_request", sessionId }), null);
     await assert.rejects(host.execute({ type: "pull_request_check_log", sessionId, pr: ref, jobId: 1 }), /No remote/);
     assert.deepEqual(polls, []);
     for (const command of [
@@ -49,6 +49,23 @@ test("each pull request write polls Git State once for its Scope, and reads run 
       await assert.rejects(host.execute(command), /No remote/, command.type);
       assert.deepEqual(polls.slice(before), [path], command.type);
     }
+  } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
+});
+
+test("pull_request answers no Pull Request without a github.com remote and refuses a failed read", async () => {
+  const path = await mkdtemp(join(tmpdir(), "flow-pr-none-"));
+  execFileSync("git", ["init", "-b", "feature"], { cwd: path });
+  const host = new SessionHost();
+  host.registerBackend(new FakeBackend());
+  try {
+    const sessionId = await host.create({ scope: path });
+    assert.equal(await host.execute({ type: "pull_request", sessionId }), null);
+    execFileSync("git", ["remote", "add", "origin", "https://gitlab.com/test/repo.git"], { cwd: path });
+    assert.equal(await host.execute({ type: "pull_request", sessionId }), null);
+    execFileSync("git", ["remote", "add", "other", "https://gitlab.com/test/other.git"], { cwd: path });
+    execFileSync("git", ["remote", "remove", "origin"], { cwd: path });
+    execFileSync("git", ["remote", "add", "second", "git@github.com:test/repo.git"], { cwd: path });
+    await assert.rejects(host.execute({ type: "pull_request", sessionId }), (error: unknown) => error instanceof CommandRefused && /push remote/.test(error.message));
   } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
 });
 

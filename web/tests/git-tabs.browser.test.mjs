@@ -48,7 +48,7 @@ const bundle = await build({
         loader: 'tsx',
       }));
       build.onLoad({ filter: /\/git-state\.ts$/ }, () => ({
-        contents: 'export function useGitState() { return undefined; }',
+        contents: 'export function useGitState() { return { git: undefined, repository: true }; }',
         loader: 'ts',
       }));
       for (const [file, component] of [['stack-pane', 'StackPane'], ['pull-request-pane', 'PullRequestPane']]) {
@@ -103,7 +103,7 @@ describe('GitPane tab selection material', () => {
     await page.addStyleTag({ content: themeCSS });
     await page.addScriptTag({ content: bundle.outputFiles.find(file => file.path.endsWith('.js')).text });
     await page.getByRole('tab', { name: 'Stack', exact: true }).waitFor();
-    await page.getByRole('tab', { name: 'PR', exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'Pull request', exact: true }).waitFor();
   });
   afterEach(async () => { await page?.close(); });
 
@@ -120,12 +120,12 @@ describe('GitPane tab selection material', () => {
       assert.notEqual(active.background, 'rgba(0, 0, 0, 0)');
       assert.notEqual(active.color, inactive.color);
 
-      for (const selected of ['Changes', 'Stack', 'PR', 'Changes']) {
+      for (const selected of ['Changes', 'Pull request', 'Stack', 'Changes']) {
         await tab(selected).click();
         await composer.focus();
         await composer.hover();
         assert.equal((await face(list)).background, 'rgba(0, 0, 0, 0)');
-        for (const name of ['Changes', 'Stack', 'PR']) {
+        for (const name of ['Changes', 'Pull request', 'Stack']) {
           assert.equal(await tab(name).getAttribute('aria-selected'), String(name === selected));
           assert.equal(await page.getByRole('tabpanel', { name, exact: true }).isVisible(), name === selected);
           const style = await face(tab(name));

@@ -8,29 +8,29 @@ import { GitPullRequestForm } from "@/components/git-pull-request-form.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import type { AppendResult } from "@/components/composer.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
-import { branchLine, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
+import { branchLine, failureText, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
 import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
-type Tab = "Changes" | "Stack" | "PR";
+type Tab = "Changes" | "Pull request" | "Stack";
 type Reads = { changes: number; stack: number; pullRequest: number; mount: number };
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
 
 export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
   const { connection } = useHost();
-  const git = useGitState(sessionId);
+  const { git, repository } = useGitState(sessionId);
   const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
   const [view, setView] = useState<ChangesView>("uncommitted");
   const [step, setStep] = useState<Step>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<Notice>();
-  const [hasPr, setHasPr] = useState(false);
-  const [hasStack, setHasStack] = useState(false);
-  const [tab, setTab] = useState<Tab>();
-  const tabs: Tab[] = ["Changes", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
-  const selected = tab === "Changes" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Changes";
+  const [available, setAvailable] = useState({ pullRequest: false, stack: false });
+  const [tab, setTab] = useState<Tab>("Changes");
+  const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : [])];
+  if (!tabs.includes(tab)) setTab("Changes");
+  const selected = tabs.includes(tab) ? tab : "Changes";
   const steps = gitSteps(git);
   const pullOffer = pullStep(git);
 
@@ -43,7 +43,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
     setError("");
     setNotice(undefined);
     try { setNotice(await work() ?? undefined); }
-    catch (failure) { setError(String(failure)); }
+    catch (failure) { setError(failureText(failure)); }
     finally { setBusy(false); }
   }
 
@@ -80,11 +80,14 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
     });
   }
 
+  if (repository === undefined) return null;
+  if (!repository) return <p className="px-4 pt-2 text-sm">This Scope is not a Git repository.</p>;
+
   return (
     <Tabs
       value={selected}
       onValueChange={(value) => {
-        if (!busy && (value === "Changes" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
+        if (!busy && tabs.includes(value)) setTab(value);
       }}
       className="min-h-0 min-w-0 space-y-4 overflow-auto px-4 pb-4 text-sm"
     >
@@ -100,6 +103,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
           </p>
         ) : null}
         {typeof pullOffer === "object" ? <p className="text-xs text-muted-foreground">{pullOffer.diverged}</p> : null}
+        {git && !git.github ? <p className="text-xs text-muted-foreground">No GitHub remote. Commit only.</p> : null}
         {steps.length > 0 || pullOffer === "pull" ? (
           <div className="flex flex-wrap gap-2">
             {steps.map((value, index) => (
@@ -147,10 +151,10 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>
-        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("mount"); }} />
+        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={(stack: boolean) => setAvailable(current => current.stack === stack ? current : { ...current, stack })} onChange={() => reread("mount")} />
       </TabsContent>
-      <TabsContent value="PR" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onAddToDraft={onAddToDraft} />
+      <TabsContent value="Pull request" keepMounted>
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );

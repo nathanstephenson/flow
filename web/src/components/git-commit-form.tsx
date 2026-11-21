@@ -4,6 +4,7 @@ import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
+import { failureText } from "@/presentation/git.ts";
 
 type Props = {
   sessionId: string;
@@ -32,7 +33,7 @@ export function GitCommitForm({ sessionId, paths, fingerprint, branch, defaultBr
       const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId, kind, paths });
       if (text.message) setMessage(current => current.trim() ? current : text.message!);
       if (text.branch) setName(current => current.trim() ? current : text.branch!);
-    } catch (failure) { setError(`No suggestion. ${String(failure)}`); }
+    } catch (failure) { setError(`No suggestion. ${failureText(failure)}`); }
     finally { setBusy(false); }
   }
 
@@ -44,7 +45,7 @@ export function GitCommitForm({ sessionId, paths, fingerprint, branch, defaultBr
       setMessage("");
       setName("");
       onCommitted(id);
-    } catch (failure) { setError(String(failure)); }
+    } catch (failure) { setError(failureText(failure)); }
     finally { setBusy(false); }
   }
 
