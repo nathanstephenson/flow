@@ -1769,6 +1769,8 @@ describe("SessionHost Git State", () => {
     git(scope, "push", "--quiet", "origin", "main");
     git(scope, "remote", "set-head", "origin", "main");
     git(scope, "switch", "--quiet", "feature");
+    git(scope, "config", "user.name", "Test");
+    git(scope, "config", "user.email", "test@example.com");
     const bin = join(root, "bin");
     const created = join(root, "created");
     mkdirSync(bin);
