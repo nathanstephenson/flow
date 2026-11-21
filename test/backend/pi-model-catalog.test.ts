@@ -97,7 +97,7 @@ test('Pi restores legacy Radius models without auth resolution and keeps worker 
   assert.equal(model.name, 'Worker override');
   assert.equal(model.maxTokens, 4096);
   assert.equal(model.baseUrl, 'https://synthetic.invalid/v1');
-  assert.ok(runtime.getModels('radius').some(entry => entry.id !== cachedModel.id));
+  assert.deepEqual(runtime.getModels('radius').map(entry => entry.id), [cachedModel.id]);
   assert.ok(runtime.getAllModels('radius').some(entry => entry.id === cachedModel.id));
   assert.ok(runtime.getAvailableSnapshot().some(entry => entry.id === cachedModel.id));
   assert.equal(runtime.isUsingOAuth('radius'), true);
@@ -144,22 +144,57 @@ test('Pi Radius catalog refresh uses broker request auth and persists only in wo
   assert.equal(f.snapshots(), 4);
 });
 
-for (const configured of [true, false]) test(`Pi Radius hooks use current broker metadata, configured: ${configured}`, { timeout: 10000 }, async t => {
+for (const configured of [true, false]) test(`Pi Radius stored catalogs survive legacy metadata changes and logout, configured: ${configured}`, { timeout: 10000 }, async t => {
   const f = fixture(t);
   const runtime = await createWorkerPiModelRuntime(f.auth, configured ? f.modelsPath : null);
   writeFileSync(f.authPath, JSON.stringify({ radius: { ...f.credential, gatewayConfig: {
     baseUrl: 'https://changed.invalid/v1', models: [{ ...cachedModel, id: 'synthetic-radius-replaced' }],
   } } }));
   await runtime.refresh({ allowNetwork: false });
-  assert.equal(runtime.getModel('radius', cachedModel.id), undefined);
-  assert.equal(runtime.getModel('radius', 'synthetic-radius-replaced')?.baseUrl, 'https://changed.invalid/v1');
+  assert.equal(runtime.getModel('radius', cachedModel.id)?.baseUrl, 'https://synthetic.invalid/v1');
+  assert.equal(runtime.getModel('radius', 'synthetic-radius-replaced'), undefined);
   writeFileSync(f.authPath, '{}');
   await runtime.refresh({ allowNetwork: false });
+  assert.ok(runtime.getModel('radius', cachedModel.id));
   assert.equal(runtime.getModel('radius', 'synthetic-radius-replaced'), undefined);
   assert.equal(runtime.isUsingOAuth('radius'), false);
+  assert.deepEqual(await runtime.getAvailable('radius'), []);
   assert.deepEqual(f.requests, []);
   assert.deepEqual(f.resolutions, []);
   assert.equal(f.snapshots(), 3);
+});
+
+test('Pi imports an empty legacy Radius account catalog without restoring the baseline', async t => {
+  const f = fixture(t);
+  writeFileSync(f.authPath, JSON.stringify({ radius: { ...f.credential,
+    gatewayConfig: { baseUrl: 'https://synthetic.invalid/v1', models: [] },
+  } }));
+  const before = readFileSync(f.authPath, 'utf8');
+  const runtime = await createWorkerPiModelRuntime(f.auth, f.modelsPath);
+  assert.deepEqual(runtime.getModels('radius'), []);
+  assert.deepEqual(runtime.getAllModels('radius'), []);
+  assert.deepEqual(await runtime.getAvailable('radius'), []);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.root, 'models-store.json'), 'utf8')).radius.models, []);
+  assert.equal(runtime.isUsingOAuth('radius'), true);
+  assert.equal(readFileSync(f.authPath, 'utf8'), before);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(f.resolutions, []);
+});
+
+for (const empty of [false, true]) test(`Pi prefers the stored Radius account catalog over legacy metadata, empty: ${empty}`, async t => {
+  const f = fixture(t);
+  const models = empty ? [] : [{ ...cachedModel, id: 'stored-only', provider: 'radius', api: 'pi-messages', baseUrl: 'https://stored.invalid/v1' }];
+  writeFileSync(join(f.root, 'models-store.json'), JSON.stringify({ radius: { models, checkedAt: Date.now() } }));
+  const before = readFileSync(f.authPath, 'utf8');
+  for (let i = 0; i < 2; i++) {
+    const runtime = await createWorkerPiModelRuntime(f.auth, f.modelsPath);
+    assert.deepEqual(runtime.getModels('radius').map(model => model.id), models.map(model => model.id));
+    assert.deepEqual((await runtime.getAvailable('radius')).map(model => model.id), models.map(model => model.id));
+    assert.equal(runtime.getModel('radius', cachedModel.id), undefined);
+  }
+  assert.equal(readFileSync(f.authPath, 'utf8'), before);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(f.resolutions, []);
 });
 
 test('Pi leaves custom worker-local Radius gateway definitions intact', { timeout: 10000 }, async t => {

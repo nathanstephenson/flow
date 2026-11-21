@@ -41,6 +41,7 @@ function fixture(t: TestContext, id: string) {
   configure();
   expire();
   const requests: string[] = [];
+  let beforeRefresh: (() => void) | undefined;
   const resolutions: unknown[] = [];
   const registrations: string[] = [];
   const register = ModelRuntime.prototype.registerNativeProvider;
@@ -52,6 +53,7 @@ function fixture(t: TestContext, id: string) {
     const url = String(input);
     requests.push(url);
     if (url === `${gateway}/v1/oauth/token`) {
+      beforeRefresh?.();
       assert.equal(init?.method, 'POST');
       assert.equal(new URLSearchParams(String(init?.body)).get('grant_type'), 'refresh_token');
       assert.equal(new URLSearchParams(String(init?.body)).get('refresh_token'), refreshToken);
@@ -83,7 +85,7 @@ function fixture(t: TestContext, id: string) {
     },
   };
   return { root, authPath, modelsPath, workerModels, marker, requests, resolutions, registrations,
-    host, auth, configure, expire, gateway: () => gateway };
+    host, auth, configure, expire, gateway: () => gateway, beforeRefresh: (fn: () => void) => { beforeRefresh = fn; } };
 }
 
 for (const id of ['custom-radius', 'radius']) {
@@ -141,6 +143,51 @@ for (const id of ['custom-radius', 'radius']) {
     assert.equal(existsSync(f.marker), false);
   });
 }
+
+for (const id of ['custom-radius', 'radius']) test(`Pi preserves the legacy ${id} account catalog across token rotation and offline Revive`, { timeout: 10000 }, async t => {
+  const f = fixture(t, id);
+  const before = readFileSync(f.authPath, 'utf8');
+  const runtime = await createWorkerPiModelRuntime(f.auth, f.workerModels);
+  const cachePath = join(f.root, 'worker', 'models-store.json');
+  assert.deepEqual(runtime.getModels(id).map(model => model.id), [cachedModel.id]);
+  assert.equal(readFileSync(f.authPath, 'utf8'), before);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(JSON.parse(readFileSync(cachePath, 'utf8'))[id].models.map((model: { id: string }) => model.id), [cachedModel.id]);
+  assert.doesNotMatch(readFileSync(cachePath, 'utf8'), /synthetic-expired-access|synthetic-custom-refresh|X-Secret|touch/);
+  const canonicalCache = join(f.root, 'models-store.json');
+  f.beforeRefresh(() => {
+    assert.deepEqual(JSON.parse(readFileSync(canonicalCache, 'utf8'))[id].models.map((model: { id: string }) => model.id), [cachedModel.id]);
+    assert.doesNotMatch(readFileSync(canonicalCache, 'utf8'), /synthetic-expired-access|synthetic-custom-refresh|X-Secret|touch/);
+  });
+  assert.equal((await runtime.getAuth(id))?.auth.apiKey, access);
+  const rotated = JSON.parse(readFileSync(f.authPath, 'utf8'))[id];
+  assert.equal(rotated.refresh, 'synthetic-rotated-refresh');
+  assert.equal(rotated.gatewayConfig, undefined);
+  assert.deepEqual([...(await runtime.refresh({ allowNetwork: false })).errors], []);
+  const revived = await createWorkerPiModelRuntime(f.auth, f.workerModels);
+  const restarted = createPiModelAuth({ authPath: f.authPath });
+  const fresh = [];
+  for (const [i, auth] of [f.auth, restarted].entries()) {
+    const state = join(f.root, `fresh-${i}`);
+    mkdirSync(state);
+    const models = join(state, 'models.json');
+    writeFileSync(models, readFileSync(f.workerModels));
+    fresh.push(await createWorkerPiModelRuntime(auth, models));
+  }
+  for (const current of [runtime, revived, ...fresh]) {
+    assert.deepEqual(current.getModels(id).map(model => model.id), [cachedModel.id]);
+    assert.deepEqual((await current.getAvailable(id)).map(model => model.id), [cachedModel.id]);
+    assert.equal(current.getModel(id, cachedModel.id)?.name, 'Worker override');
+    assert.equal(current.getModel(id, cachedModel.id)?.maxTokens, 4096);
+  }
+  assert.deepEqual(f.requests, [`${f.gateway()}/v1/oauth/token`]);
+  assert.equal(f.resolutions.length, 1);
+  assert.equal(existsSync(f.marker), false);
+  assert.equal(existsSync(join(f.root, 'worker', 'auth.json')), false);
+  assert.doesNotMatch(readFileSync(cachePath, 'utf8'), /synthetic-custom-access|synthetic-custom-refresh|synthetic-rotated-refresh/);
+  assert.doesNotMatch(readFileSync(canonicalCache, 'utf8'), /synthetic-custom-access|synthetic-custom-refresh|synthetic-rotated-refresh/);
+  await restarted.close?.();
+});
 
 test('Pi native Radius metadata normalizes only native gateway configuration without resolving commands', async t => {
   const f = fixture(t, 'alias');

@@ -21,7 +21,7 @@ Flow runs coding-agent sessions. You can watch and control them from a terminal 
 
 ## Requirements
 
-- Node.js 22 or later, and npm. CI checks installs on Linux and macOS.
+- Node.js 22.19.0 or later, and npm. CI checks installs on Linux and macOS.
 - A user-owned npm prefix, for example from a Node version manager. Do not use sudo or a shared
   system prefix.
 - For filesystem isolation on Linux: Bubblewrap. See [docs/isolation.md](docs/isolation.md).
@@ -72,6 +72,14 @@ Configure credentials for the Backend Adapter that you use.
   (see [docs/development.md](docs/development.md#single-executable)).
 - **pi** — pi keeps its own credential store. Run `pi`, then `/login`, before you start a pi
   session. Flow reads pi state from `PI_CODING_AGENT_DIR` (default `~/.pi/agent`).
+
+Flow uses its own Pi SDK. Update Flow, not only standalone pi, to get a newer model catalogue.
+Pi 1.6 calls the Azure Provider `azure`. Flow accepts saved `azure-openai-responses/<model>`
+references, but legacy Provider keys in Pi's `auth.json` and `models.json` must change to `azure`.
+The API name `azure-openai-responses` does not change. Unavailable models require an explicit new
+selection; Flow does not substitute another model.
+
+Pi cache warming stays limited to active runs unless Pi's global `cacheWarming` setting is `idle`.
 
 ## Everyday use
 

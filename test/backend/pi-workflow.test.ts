@@ -144,7 +144,7 @@ it("expands pi prompt templates and Skills while preserving workflow input and i
   assert.equal(await template.done, "{}");
   const templateRequest = fixture.requests.find((request) => request.model === "child")!;
   assert.equal(userText(templateRequest), "REVIEW TEMPLATE: cancellation");
-  const templateSystem = templateRequest.messages.find((message) => message.role === "developer")?.content;
+  const templateSystem = templateRequest.messages.find((message) => message.role === "system")?.content;
   assert.ok(String(templateSystem).includes('"mapped":"template"'));
   assert.ok(String(templateSystem).includes("Return only JSON matching the schema"));
   assert.equal(templateRequest.tools?.some((tool) => tool.function.name === "subagent"), false);
@@ -160,6 +160,9 @@ it("expands pi prompt templates and Skills while preserving workflow input and i
   assert.ok(userText(skillRequest).includes('<skill name="audit"'));
   assert.ok(userText(skillRequest).includes("AUDIT SKILL BODY"));
   assert.ok(userText(skillRequest).includes("changed files"));
+  const skillSystem = skillRequest.messages.find((message) => message.role === "system")?.content;
+  assert.ok(String(skillSystem).includes('"mapped":"skill"'));
+  assert.ok(String(skillSystem).includes("Return only JSON matching the schema"));
 
   writeFileSync(join(fixture.scope, ".pi", "prompts", "review.md"), "UPDATED TEMPLATE: $ARGUMENTS");
   const fresh = session.startWorkflowSubagent!(options("fresh", {

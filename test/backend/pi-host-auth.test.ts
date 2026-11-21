@@ -77,6 +77,34 @@ test("Pi host metadata reads only stored metadata and executes no auth or model 
   assert.deepEqual((await host.snapshot()).map((entry) => entry.providerId), ["added"]);
 });
 
+test("Pi host accepts Pi model configuration syntax without executing commands or rewriting files", { timeout: 5000 }, async (t) => {
+  const f = fixture(t);
+  const marker = join(f.root, "model-command-ran");
+  const modelsPath = join(f.root, "models.json");
+  const models = `\uFEFF{
+    // Pi model configuration
+    "providers": {
+      "corporate": {
+        "oauth": "radius",
+        "baseUrl": "https://gateway.invalid/v1", // Preserve URL slashes
+        "apiKey": "!touch ${marker}",
+      },
+    },
+  }`;
+  writeFileSync(modelsPath, models);
+  f.write({ corporate: { type: "api_key", key: "stored-key" } });
+  const authBefore = readFileSync(f.authPath, "utf8");
+  const host = f.host();
+  assert.deepEqual(await host.snapshot(), [{
+    providerId: "corporate", check: { type: "api_key", source: "stored credential" }, radiusGateway: "https://gateway.invalid",
+  }]);
+  assert.deepEqual(await host.resolve("corporate"), { auth: { apiKey: "stored-key" }, source: "stored credential" });
+  assert.equal(readFileSync(modelsPath, "utf8"), models);
+  assert.equal(readFileSync(f.authPath, "utf8"), authBefore);
+  assert.equal(existsSync(marker), false);
+  assert.equal(f.refreshes(), 0);
+});
+
 test("Pi host returns only the selected raw key and env without expansion", { timeout: 5000 }, async (t) => {
   const f = fixture(t);
   f.write({ selected: { type: "api_key", key: "${DO_NOT_EXPAND}", env: { SYNTHETIC: "raw-value" }, private: "hidden-extra" }, unrelated });

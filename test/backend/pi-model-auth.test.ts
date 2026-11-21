@@ -212,14 +212,21 @@ test('Pi retains credential-specific Copilot model filtering without exposing to
   const f = await fixture(t);
   const catalog = await ModelRuntime.create({ authPath: f.authPath, modelsPath: null, refreshOnCreate: false });
   const selected = catalog.getModels('github-copilot')[0]!;
+  const classifiers = catalog.getModelsOfType('classifier', 'github-copilot').map(model => model.id);
   assert.ok(selected);
+  assert.ok(classifiers.length);
   writeFileSync(f.authPath, JSON.stringify({ 'github-copilot': { ...expired,
     expires: Date.now() + 3600000, availableModelIds: [selected.id] } }));
   const runtime = await createWorkerPiModelRuntime(f.host(), null);
   assert.deepEqual((await runtime.getAvailable('github-copilot')).map(model => model.id), [selected.id]);
-  assert.deepEqual((await runtime.getAllAvailable('github-copilot')).map(model => model.id), [selected.id]);
+  assert.deepEqual((await runtime.getAllAvailable('github-copilot')).map(model => model.id), [selected.id, ...classifiers]);
   await runtime.refresh({ allowNetwork: false });
   assert.deepEqual((await runtime.getAvailable('github-copilot')).map(model => model.id), [selected.id]);
+  writeFileSync(f.authPath, JSON.stringify({ 'github-copilot': { ...expired,
+    expires: Date.now() + 3600000, availableModelIds: [] } }));
+  await runtime.refresh({ allowNetwork: false });
+  assert.deepEqual(await runtime.getAvailable('github-copilot'), []);
+  assert.deepEqual((await runtime.getAllAvailable('github-copilot')).map(model => model.id), classifiers);
   assert.equal(f.refreshes(), 0);
 });
 

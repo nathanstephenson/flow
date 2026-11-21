@@ -81,24 +81,25 @@ export function projectPi099RadiusCatalog(providerId: string, value: unknown): r
   });
 }
 
+export function projectPiStoredRadiusCatalog(providerId: string, value: unknown): readonly Model<Api>[] | undefined {
+  if (!object(value) || !Array.isArray(value.models)) return undefined;
+  return value.models.flatMap<Model<Api>>(model => {
+    if (!object(model) || model.provider !== providerId || model.api !== 'pi-messages') return [];
+    return projectPi099RadiusCatalog(providerId, { baseUrl: model.baseUrl, models: [model] }) ?? [];
+  });
+}
+
 export function withPi099RadiusCatalog(provider: Provider, cached: () => readonly Model<Api>[] | undefined): Provider {
-  let hasStoredCatalog = false;
-  const getModels = () => {
-    const models = new Map(provider.getModels().map(model => [model.id, model]));
-    if (!hasStoredCatalog) for (const model of cached() ?? []) models.set(model.id, model);
-    return [...models.values()];
-  };
   return {
     ...provider,
-    getModels,
-    getAllModels: getModels,
     async refreshModels(context) {
-      await provider.refreshModels?.({ ...context, publish: publication => context.publish({ ...publication,
-        update: () => {
-          publication.update?.();
-          if (context.stored || publication.persist) hasStoredCatalog = true;
-        },
-      }) });
+      const legacy = context.stored ? undefined : cached();
+      if (legacy) {
+        const stored = { models: [...legacy], checkedAt: Date.now() };
+        if (!await context.publish({ persist: stored })) return;
+        context = { ...context, stored };
+      }
+      await provider.refreshModels?.(context);
     },
   };
 }
