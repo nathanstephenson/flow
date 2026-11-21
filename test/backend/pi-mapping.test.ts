@@ -199,7 +199,7 @@ describe("pi adapter mapping", () => {
     await session.prompt("hello");
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
     assert.equal(events.some((event) => event.type === "turn_ended"), false);
-    stub.fire({ type: "agent_settled" });
+    stub.fire({ type: "agent_settled", aborted: false });
 
     const ended = events.filter((event) => event.type === "turn_ended");
     assert.equal(ended.length, 1);
@@ -212,7 +212,7 @@ describe("pi adapter mapping", () => {
     assert.equal(events.filter((event) => event.type === "turn_ended").length, 0);
 
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
-    stub.fire({ type: "agent_settled" });
+    stub.fire({ type: "agent_settled", aborted: false });
     assert.equal(events.filter((event) => event.type === "turn_ended").length, 1);
   });
 
@@ -220,11 +220,19 @@ describe("pi adapter mapping", () => {
     await session.prompt("hello");
     await session.abort();
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
-    stub.fire({ type: "agent_settled" });
+    stub.fire({ type: "agent_settled", aborted: true });
 
     const ended = events.find((event) => event.type === "turn_ended");
     assert.equal(ended?.type === "turn_ended" ? ended.reason : "", "aborted");
     assert.equal(stub.aborted, 1);
+  });
+
+  it("reports SDK cancellation even without a Flow abort or assistant message", async () => {
+    await session.prompt("hello");
+    stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
+    stub.fire({ type: "agent_settled", aborted: true });
+    const ended = events.find((event) => event.type === "turn_ended");
+    assert.equal(ended?.type === "turn_ended" ? ended.reason : "", "aborted");
   });
 
   it("emits assistant text as growing snapshots under one id", async () => {
@@ -278,7 +286,7 @@ describe("pi adapter mapping", () => {
   it("reports context usage when the run ends", async () => {
     await session.prompt("hello");
     stub.fire({ type: "agent_end", messages: [], willRetry: false } as unknown as AgentSessionEvent);
-    stub.fire({ type: "agent_settled" });
+    stub.fire({ type: "agent_settled", aborted: false });
 
     const usage = events.find((event) => event.type === "context_usage");
     assert.deepEqual(usage?.type === "context_usage" ? [usage.used, usage.window] : [], [42, 200_000]);

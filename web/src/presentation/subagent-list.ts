@@ -1,6 +1,7 @@
 import { relativeTime } from "../../../src/client/relative-time.ts";
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
 import type { ModelInfo } from "../../../src/protocol/events.ts";
+import { producerKey, subagentParents } from "../../../src/client/subagent-tree.ts";
 
 /**
  * The Subagents of one Agent Session, as a list a reader can scan.
@@ -50,7 +51,9 @@ export function subagentKeys(
 }
 
 /**
- * The same Subagents, ordered for reading: still working at the top, oldest at the bottom.
+ * The same Subagents as a tree, ordered for reading: each child directly under its parent, one level
+ * deeper. Among siblings, still working at the top, oldest at the bottom. A Subagent whose parent is
+ * missing sits at the root.
  *
  * `spawned` is expected in first-seen order — what `subagentKeys` returns — so "oldest last" is its
  * reverse. Within a rank the newest sits above the older ones, which puts the Subagent a reader is
@@ -61,11 +64,37 @@ export function subagentKeys(
 export function ordered(
   spawned: readonly string[],
   getEntry: (key: string) => Entry | undefined,
-): string[] {
-  return spawned
+): { key: string; depth: number }[] {
+  const parents = subagentParents(spawned, getEntry);
+  const children = new Map<string | undefined, string[]>();
+  spawned
     .map((key, index) => ({ key, index, status: statusOf(key, getEntry) }))
     .sort((left, right) => RANK[left.status] - RANK[right.status] || right.index - left.index)
-    .map((row) => row.key);
+    .forEach(({ key }) => {
+      const parent = parents.get(key);
+      children.set(parent, [...(children.get(parent) ?? []), key]);
+    });
+  const rows: { key: string; depth: number }[] = [];
+  const visit = (parent: string | undefined, depth: number) => {
+    for (const key of children.get(parent) ?? []) {
+      rows.push({ key, depth });
+      visit(key, depth + 1);
+    }
+  };
+  visit(undefined, 0);
+  return rows;
+}
+
+/** How many Background Calls one Subagent started itself are still running. */
+export function runningCalls(
+  keys: readonly string[],
+  getEntry: (key: string) => Entry | undefined,
+  subagent: string,
+): number {
+  return keys.filter((key) => {
+    const entry = getEntry(key);
+    return entry?.kind === "background_call" && entry.status === "running" && producerKey(entry) === subagent;
+  }).length;
 }
 
 /** Subagents still working, for anything that wants the count without the list. */

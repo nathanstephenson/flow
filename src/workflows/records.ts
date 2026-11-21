@@ -6,6 +6,7 @@ import { resolveWorkflowCalls } from './calls.ts';
 import { dictionaryRecord } from './schema.ts';
 import { validateDefinition, workflowDefinitionValidator } from './graph.ts';
 import { validateCompatibleDefinition } from './recovery.ts';
+import { executionIdentity, executionOwnerKey, executionOwnerOf } from './owner.ts';
 
 const errorValidator = z.object({ message: z.string(), kind: z.enum(['failure', 'timeout', 'interrupted']) }).strict();
 const identityValidator = z.object({ headerId: z.string().min(1), activation: z.number().int().positive(), try: z.number().int().positive() }).strict();
@@ -38,7 +39,7 @@ const invocationValidator = z.object({
   callStepId: z.string().min(1), callAttempt: z.number().int().positive(), definitionId: z.string().min(1),
 }).strict();
 export const workflowExecutionValidator = z.object({
-  ...checkpointFields, version: z.literal(1), id: z.string().min(1), sessionId: z.string().min(1), scope: z.string(), definition: workflowDefinitionValidator,
+  ...checkpointFields, version: z.union([z.literal(1), z.literal(2)]), occurrenceId: z.string().regex(/^[a-zA-Z0-9_-]+$/).optional(), runtime: z.object({ nodePath: z.string().optional(), isolationMode: z.enum(['none', 'bubblewrap', 'sandbox']) }).strict().optional(), id: z.string().min(1), sessionId: z.string().min(1).optional(), scope: z.string(), definition: workflowDefinitionValidator,
   retainedDefinitions: z.preprocess(
     value => value && typeof value === 'object' && !Array.isArray(value) ? new Map(Object.entries(value)) : value,
     z.map(workflowDefinitionValidator.shape.id, workflowDefinitionValidator),
@@ -137,6 +138,7 @@ function stepConfiguration(record: WorkflowExecution, original: WorkflowDefiniti
 
 export function parseExecution(value: unknown): WorkflowExecution {
   const record = workflowExecutionValidator.parse(value) as WorkflowExecution;
+  executionIdentity(record);
   const original = validateCheckpoint(record);
   const manifest = record.retainedDefinitions;
   if (!manifest) {
@@ -162,7 +164,7 @@ export function parseExecution(value: unknown): WorkflowExecution {
       if (index < 0) throw new Error('Unknown invocation correction step');
       definition.steps[index] = structuredClone(update.nextStep);
     }
-    const local: WorkflowExecution = { ...invocation, version: 1, sessionId: record.sessionId, scope: record.scope, definition };
+    const local: WorkflowExecution = { ...invocation, ...executionIdentity(record), scope: record.scope, definition };
     if (!isDeepStrictEqual(validateCheckpoint(local), retained)) throw new Error('Invocation corrections do not match the retained definition');
     locals.set(id, local);
     originals.set(id, retained);
@@ -200,4 +202,9 @@ export function parseExecution(value: unknown): WorkflowExecution {
     if (!locals.has(id)) throw new Error('Missing invocation checkpoint');
   }
   return record;
+}
+
+/** Stable checkpoint owner, independent of optional Agent Session association. */
+export function executionOwner(record: Pick<WorkflowExecution, 'occurrenceId' | 'sessionId'>): string {
+  return executionOwnerKey(executionOwnerOf(record));
 }

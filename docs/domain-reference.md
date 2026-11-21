@@ -311,10 +311,41 @@ that opting in is a click rather than a typed path. Discovered, never configured
 as a Scope.
 _Avoid_: project, suggestion, available project
 
+**Workflow Schedule**:
+A saved Workflow Definition ID, fixed typed inputs, opted-in Project, MCP selection, optional fresh
+Worktree policy, recurrence and overlap limit. Enabling waits a full interval or until the next future
+local daily time in its saved IANA timezone. Re-enabling resets the interval anchor, so pausing and
+re-enabling shifts its timing; unrelated edits preserve it. Intervals measure elapsed time; daily
+times skip gaps and choose the first fold occurrence. Startup admits only future due times, with no
+catch-up even one second after a due time. Pausing or deleting affects only future admission.
+_Avoid_: cron, timer, job
+
+**Workflow Occurrence**:
+One due time and immutable launch configuration, whether admitted, missed, capacity-skipped or failed
+before execution. Each admitted occurrence retains the latest root and reachable called definitions.
+Before scheduled effects, all agent steps in those definitions, including unreached branches, must
+pass model and Effort catalog validation. A cold catalog permits a metadata-only Backend Session
+probe, never an Agent Session, Presentation Transcript, Summary Model or paid inference. Definitions
+without agent steps need no backend. The Session Host owns execution independently of Agent Sessions. Agent work, human input or
+recovery attaches one Agent Session; successful code/MCP work needs none and requests no model summary.
+Code/MCP retain their captured runtime isolation. Newly attached or Revived Backend Sessions use
+current Settings: a change from Sandbox to none makes agent work unrestricted while code/MCP remain
+in their captured Sandbox environment.
+Terminal history lasts seven days after completion; active/input/recovery work does not expire.
+Agent Session transcripts and Spend follow their own lifecycle, not occurrence history retention.
+_Avoid_: Agent Session, job
+
+**Workflow Execution**:
+An independent execution slot owned by one Agent Session for manual work or one Workflow Occurrence
+for scheduled work. Optional Agent Session association never relocates a scheduled checkpoint.
+Retained definitions, nested invocations, attempts and explicit recovery rules apply to both owners.
+_Avoid_: parent turn, Background Call
+
 **Worktree**:
 A Scope the Session Host made, by cutting a branch from a Project. Owned by the host rather than by
-whoever asked for it: it is chosen when an Agent Session is created, never entered later, and it is
-removed when that Agent Session is Reaped — but only while it is clean, so uncommitted work survives.
+whoever asked for it. It is chosen before work starts, and is removed on Agent Session Reap or
+sessionless occurrence history expiry only when clean and safe. Lazy Agent Session attachment adopts
+the existing Scope, never creates another Worktree. Uncommitted work survives.
 Unmerged branches survive Reaping; merged local branches may be removed with the Worktree.
 _Avoid_: checkout, copy, clone, workspace — and note it is a *kind of* Scope, not an alternative to
 one, so an Agent Session bound to a Worktree is bound for its whole life like any other.

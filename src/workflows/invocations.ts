@@ -1,8 +1,11 @@
 import type { WorkflowExecution, WorkflowInvocation } from '../protocol/workflows.ts';
+import { executionIdentity } from './owner.ts';
+
+export class WorkflowInvocationNotFound extends Error {}
 
 export function invocationExecution(root: WorkflowExecution, invocationId: string): WorkflowExecution {
-  const invocation = root.invocations?.[invocationId];
-  if (!invocation) throw new Error('Unknown workflow invocation');
+  if (!root.invocations || !Object.hasOwn(root.invocations, invocationId)) throw new WorkflowInvocationNotFound('Unknown workflow invocation');
+  const invocation = root.invocations[invocationId]!;
   const retained = root.retainedDefinitions?.[invocation.definitionId];
   if (!retained) throw new Error('Missing retained Workflow Definition');
   const definition = structuredClone(retained);
@@ -11,10 +14,10 @@ export function invocationExecution(root: WorkflowExecution, invocationId: strin
     if (index < 0) throw new Error('Invalid invocation correction');
     definition.steps[index] = structuredClone(correction.nextStep);
   }
-  return { ...structuredClone(invocation), version: 1, sessionId: root.sessionId, scope: root.scope, definition };
+  return { ...structuredClone(invocation), ...executionIdentity(root), scope: root.scope, definition };
 }
 
 export function invocationCheckpoint(record: WorkflowExecution, ownership: Pick<WorkflowInvocation, 'parentInvocationId' | 'callStepId' | 'callAttempt' | 'definitionId'>): WorkflowInvocation {
-  const { version: _, sessionId: __, scope: ___, definition: ____, ...state } = record;
+  const { version: _, occurrenceId: _occurrence, runtime: _runtime, sessionId: __, scope: ___, definition: ____, ...state } = record;
   return { ...state, ...ownership };
 }

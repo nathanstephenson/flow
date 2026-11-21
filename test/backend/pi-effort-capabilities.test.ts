@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { OPENAI_MODELS } from "@earendil-works/pi-ai/providers/openai.models";
+import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 
 import { piAcceptsWorkflowEffort, piEffortLevels } from "../../src/backend/pi/effort-capabilities.ts";
 import { describeModel } from "../../src/backend/pi/index.ts";
@@ -21,6 +23,32 @@ describe("Pi SDK Effort capabilities", () => {
       ["off", "low", "high", "xhigh", "max"],
     );
   });
+
+  for (const { catalogue, expectedLevels, acceptsMinimal } of [
+    {
+      catalogue: OPENAI_MODELS,
+      expectedLevels: ["low", "medium", "high", "xhigh", "max"],
+      acceptsMinimal: false,
+    },
+    {
+      catalogue: OPENAI_CODEX_MODELS,
+      expectedLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
+      acceptsMinimal: true,
+    },
+  ]) {
+    for (const id of ["gpt-6.2-astra", "gpt-6.2-sol"] as const) {
+      const sdkModel = catalogue[id];
+      it(`preserves ${sdkModel.provider}/${id} Effort restrictions from the installed SDK`, () => {
+        assert.deepEqual(piEffortLevels(sdkModel), expectedLevels);
+        assert.deepEqual(describeModel(sdkModel).effortLevels, expectedLevels);
+        assert.equal(piAcceptsWorkflowEffort(sdkModel, "off"), false);
+        assert.equal(piAcceptsWorkflowEffort(sdkModel, "minimal"), acceptsMinimal);
+        for (const level of ["low", "medium", "high", "xhigh", "max"] as const) {
+          assert.equal(piAcceptsWorkflowEffort(sdkModel, level), true, level);
+        }
+      });
+    }
+  }
 
   it("maps the SDK's off-only non-reasoning state to confirmed no-control", () => {
     const plain = model(false);

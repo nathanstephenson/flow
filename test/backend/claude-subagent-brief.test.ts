@@ -29,8 +29,8 @@ async function fixture(t: TestContext) {
     messages.push(message as SDKMessage);
     await new Promise((resolve) => setImmediate(resolve));
   };
-  const spawn = (id: string, input: object) => push({
-    type: "assistant", parent_tool_use_id: null, session_id: "s", uuid: `a-${id}`,
+  const spawn = (id: string, input: object, parent: string | null = null) => push({
+    type: "assistant", parent_tool_use_id: parent, session_id: "s", uuid: `a-${id}`,
     message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Agent", input: { description: id, prompt: "p", ...input } }] },
   });
   const last = (id: string) => events.findLast((event): event is Extract<BackendEvent, { type: "subagent" }> =>
@@ -47,6 +47,14 @@ it("reports the model and effort a Subagent starts with", async (t) => {
   assert.deepEqual(f.last("inherits"), { type: "subagent", subagentId: "inherits", name: "general-purpose", description: "inherits", model: "opus", effort: "high", state: "running" });
   assert.equal(f.last("defined")?.model, "haiku");
   assert.equal(f.last("asked")?.model, "sonnet");
+});
+
+it("gives a nested Subagent the model and effort of the Subagent that spawned it", async (t) => {
+  const f = await fixture(t);
+  await f.spawn("parent", { subagent_type: "general-purpose", model: "sonnet", effort: "low" });
+  await f.spawn("child", { subagent_type: "general-purpose" }, "parent");
+  assert.deepEqual(f.last("child"), { type: "subagent", subagentId: "child", name: "general-purpose", description: "child",
+    model: "sonnet", effort: "low", producer: { subagentId: "parent" }, state: "running" });
 });
 
 it("corrects the model from the resolved model the Agent result reports", async (t) => {

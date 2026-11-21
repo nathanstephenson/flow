@@ -440,6 +440,24 @@ export function runContract(target: ConformanceTarget): void {
       }
     });
 
+    it("gives a Subagent the producer of the tool call that spawned it", async () => {
+      const { session, events, dispose } = await start(target);
+      try {
+        if (!session.capabilities.subagents) return;
+        await target.runTurn(session, "Reply with exactly: ok");
+
+        const spawners = new Map(events.flatMap((event) =>
+          event.type === "tool_started" ? [[event.callId, event.producer?.subagentId] as const] : []));
+        for (const event of events) {
+          if (event.type !== "subagent") continue;
+          // What places a nested Subagent under its parent rather than at the root.
+          assert.equal(event.producer?.subagentId, spawners.get(event.subagentId), `subagent ${event.subagentId} disagrees with its tool call about who spawned it`);
+        }
+      } finally {
+        await dispose();
+      }
+    });
+
     it("names a Subagent on every snapshot, so a client always has something to print", async () => {
       const { session, events, dispose } = await start(target);
       try {

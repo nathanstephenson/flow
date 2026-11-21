@@ -21,7 +21,7 @@ Flow runs coding-agent sessions. You can watch and control them from a terminal 
 
 ## Requirements
 
-- Node.js 22 or later, and npm. CI checks installs on Linux and macOS.
+- Node.js 22.19.0 or later, and npm. CI checks installs on Linux and macOS.
 - A user-owned npm prefix, for example from a Node version manager. Do not use sudo or a shared
   system prefix.
 - For filesystem isolation on Linux: Bubblewrap. See [docs/isolation.md](docs/isolation.md).
@@ -72,6 +72,14 @@ Configure credentials for the Backend Adapter that you use.
   (see [docs/development.md](docs/development.md#single-executable)).
 - **pi** — pi keeps its own credential store. Run `pi`, then `/login`, before you start a pi
   session. Flow reads pi state from `PI_CODING_AGENT_DIR` (default `~/.pi/agent`).
+
+Flow uses its own Pi SDK. Update Flow, not only standalone pi, to get a newer model catalogue.
+Pi 1.6 calls the Azure Provider `azure`. Flow accepts saved `azure-openai-responses/<model>`
+references, but legacy Provider keys in Pi's `auth.json` and `models.json` must change to `azure`.
+The API name `azure-openai-responses` does not change. Unavailable models require an explicit new
+selection; Flow does not substitute another model.
+
+Pi cache warming stays limited to active runs unless Pi's global `cacheWarming` setting is `idle`.
 
 ## Everyday use
 
@@ -182,3 +190,21 @@ requirements, the browser update, systemd setup and the repair procedure.
 | [docs/workflow-builder-scope.md](docs/workflow-builder-scope.md) | Workflows, including direct MCP steps |
 | [docs/development.md](docs/development.md) | Build, test, web development, releases |
 | [docs/milestones.md](docs/milestones.md) | Project status and design notes from each milestone |
+
+### Repeating workflows
+
+Open **Schedules** to run a saved workflow every N minutes/hours/days, or daily at a local time in
+an explicitly saved IANA timezone. Enabling never runs immediately. The Session Host must remain
+running; missed times are recorded without catch-up. Daily clock gaps are skipped and repeated times
+run only once, at the first occurrence.
+
+Choose fixed typed inputs, an opted-in Project, MCP connections and an overlap limit (default 3).
+Shared-directory runs can conflict. Optional fresh worktrees use the current local base branch commit
+without fetching or copying uncommitted changes. Each occurrence uses the latest saved root/called
+workflows and retains its own snapshot. Pause or delete stops future runs, not already admitted work.
+
+Code/MCP-only success creates no Agent Session or model summary. An actual agent step, human input
+or recovery attaches one Agent Session with the normal controls. Inspect execution graphs, attempts,
+activity and results in occurrence history, and follow its Agent Session link when input is needed.
+Terminal history lasts seven days; active/input/recovery work and associated transcripts are not
+pruned by that window. Unsafe worktree cleanup preserves dirty files and unmerged commits.

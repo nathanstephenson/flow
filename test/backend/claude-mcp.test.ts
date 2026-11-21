@@ -80,6 +80,7 @@ test("real Claude SDK refreshes tools after delayed discovery and Retry without 
       CLAUDE_CODE_USE_VERTEX: undefined, CLAUDE_CODE_USE_FOUNDRY: undefined },
   } });
   try {
+    await stream.supportedModels();
     const tools = async () => (await stream.mcpServerStatus()).find((server) => server.name === "fixture")?.tools?.map((tool) => tool.name).sort() ?? [];
     const relayAvailable = async () => (await stream.mcpServerStatus()).find((server) => server.name === "flow_workflow")?.tools?.some((tool) => tool.name === "workflow_relay_enquiry") ?? false;
     await refreshClaudeMcp({

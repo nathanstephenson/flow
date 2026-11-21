@@ -6,6 +6,16 @@ export type WireMessage =
   | { kind: "cancel"; id: number }
   | { kind: "notification"; name: string; value: unknown };
 
+export function waitForAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { reject(signal.reason); };
+    signal.addEventListener("abort", abort, { once: true });
+    void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) { signal.removeEventListener("abort", abort); abort(); }
+  });
+}
+
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

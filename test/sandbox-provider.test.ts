@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { ConfigStore } from "../src/daemon/config-store.ts";
-import { createSandbox, detectSandboxSupport, fillTemplate, parseSandboxProvider, sandboxMounts, sandboxProviderPath } from "../src/isolation/sandbox.ts";
-import { fakeProvider } from "./backend/sandbox-fixture.ts";
+import { createSandbox, detectSandboxSupport, fillTemplate, hostClaude, parseSandboxProvider, sandboxMounts, sandboxProviderPath } from "../src/isolation/sandbox.ts";
+import { fakeHostClaude, fakeProvider } from "./backend/sandbox-fixture.ts";
 
 const valid = {
   version: 1,
@@ -26,12 +26,17 @@ describe("sandbox provider file", () => {
     assert.deepEqual(parseSandboxProvider(JSON.stringify(sbx)), sbx);
     const shell = { ...valid, shell: ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"] };
     assert.deepEqual(parseSandboxProvider(JSON.stringify(shell)), shell);
+    const host = { ...valid, claudePath: undefined, hostClaudePath: "/home/me/.local/bin/claude" };
+    assert.deepEqual(parseSandboxProvider(JSON.stringify(host)), JSON.parse(JSON.stringify(host)));
+    const bundled = { ...valid, claudePath: undefined };
+    assert.deepEqual(parseSandboxProvider(JSON.stringify(bundled)), JSON.parse(JSON.stringify(bundled)));
   });
 
   for (const [label, change, error] of [
     ["wrong version", { version: 2 }, /version must be 1/],
     ["relative node path", { nodePath: "node" }, /nodePath must be an absolute path/],
-    ["missing claude path", { claudePath: undefined }, /claudePath must be an absolute path/],
+    ["guest and host claude paths", { hostClaudePath: "/home/me/.local/bin/claude" }, /set claudePath or hostClaudePath, not both/],
+    ["relative host claude path", { claudePath: undefined, hostClaudePath: "claude" }, /hostClaudePath must be an absolute path/],
     ["relative auth dir", { claudeAuthDir: "claude" }, /claudeAuthDir must be an absolute path/],
     ["missing command", { remove: undefined }, /remove must be a non-empty array/],
     ["empty command", { probe: [] }, /probe must be a non-empty array/],
@@ -128,5 +133,48 @@ describe("sandbox Shell command", () => {
     const sandbox = await createSandbox({ ...f.support.provider, shell: ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"] }, spec, join(f.state, "sandbox.json"));
     assert.deepEqual(sandbox.shellCommand(f.scope), { command: "sbx", args: ["exec", "-it", "-w", f.scope, "flow-test", "/bin/bash", "-l"] });
     await sandbox.close();
+  });
+});
+
+describe("host-installed Claude", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "flow-host-claude-")); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("resolves the link to the versioned executable and its versions directory", () => {
+    const install = fakeHostClaude(root, "2.1.0");
+    assert.deepEqual(hostClaude(install.link), { executable: install.executable, directory: install.versions });
+  });
+
+  it("follows a link repointed by an update", () => {
+    fakeHostClaude(root, "2.1.0");
+    const install = fakeHostClaude(root, "2.2.0");
+    assert.equal(hostClaude(install.link).executable, install.executable);
+  });
+
+  it("refuses an executable for another CPU", () => {
+    const install = fakeHostClaude(root, "2.1.0", 3);
+    assert.throws(() => hostClaude(install.link), /is not a 64-bit .* executable/);
+  });
+
+  it("refuses a non-ELF executable, such as a macOS binary or a script", () => {
+    const { link, executable } = fakeHostClaude(root, "2.1.0");
+    writeFileSync(executable, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]));
+    assert.throws(() => hostClaude(link), /is not a Linux native executable/);
+    writeFileSync(executable, "#!/usr/bin/env node\n");
+    assert.throws(() => hostClaude(link), /is not a Linux native executable/);
+  });
+
+  it("refuses a missing executable", () => {
+    assert.throws(() => hostClaude(join(root, "claude")), /ENOENT/);
+  });
+
+  it("refuses a directory that is not dedicated to Claude versions", () => {
+    const install = fakeHostClaude(root, "2.1.0");
+    mkdirSync(join(install.versions, "nested"));
+    assert.throws(() => hostClaude(install.link), /holds nested, which is not a regular file/);
+    rmSync(join(install.versions, "nested"), { recursive: true });
+    symlinkSync("/etc/passwd", join(install.versions, "linked"));
+    assert.throws(() => hostClaude(install.link), /holds linked, which is not a regular file/);
   });
 });

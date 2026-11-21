@@ -463,10 +463,12 @@ it('bounds message storage, turn failures, startup timeout, total builders and l
   } finally { await f.cleanup(); }
 });
 
-it('expires idle builders, shuts down active editors, and sanitises background prompt failures', async () => {
+it('expires idle builders, shuts down active editors, and sanitises background prompt failures', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: 1_000 });
   const f = fixture({ limits: { idleMs: 25, lifetimeMs: 120, disposeMs: 20 } });
   try {
     const view = await f.service.create({ definition: draft() });
+    t.mock.timers.tick(25);
     await wait(() => f.sessions[0]!.disposed === 1);
     assert.throws(() => f.service.view(view.id), /not found/);
     const active = await f.service.create({ definition: draft() });

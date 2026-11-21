@@ -108,7 +108,8 @@ Sandbox mode needs a sandbox provider file. The Session Host reads it once, at s
 | --- | --- |
 | `version` | `1` |
 | `nodePath` | Absolute path of Node in the guest. |
-| `claudePath` | Absolute path of Claude in the guest. |
+| `claudePath` | Optional. Absolute path of Claude in the guest. |
+| `hostClaudePath` | Optional. Absolute path of a native Claude on the host. See [Host-installed Claude](#host-installed-claude). |
 | `claudeAuthDir` | Optional. Host folder that holds Claude's `.credentials.json`. |
 | `probe` | Argv template. Sandbox is available only when `probe` exits with 0. |
 | `create` | Argv template with `{spec}`, and optionally `{name}`. |
@@ -116,6 +117,10 @@ Sandbox mode needs a sandbox provider file. The Session Host reads it once, at s
 | `remove` | Argv template with `{name}`. |
 | `shell` | Optional argv template with `{name}` and `{cwd}`. Opens a Shell in the session's VM. |
 
+- Set `claudePath` or `hostClaudePath`, not both. With neither, the Claude SDK runs the Claude in
+  Flow's own `node_modules`, which Flow mounts read-only. That Claude matches the SDK version, and
+  changes only when you update Flow. It runs only if Flow was installed on Linux with the guest's
+  CPU and libc. For example, a macOS host needs `claudePath` or `hostClaudePath`.
 - Flow adds `/bin/bash -l` to the `shell` template.
 - Without `shell`, Flow refuses to open a Shell in sandbox mode.
 - Flow mounts `claudeAuthDir` writable in the VM, so refreshed tokens stay on the host.
@@ -128,7 +133,6 @@ Example, with a base environment from `harness plan --out <dir>`:
 {
   "version": 1,
   "nodePath": "/usr/local/bin/node",
-  "claudePath": "/home/agent/.local/bin/claude",
   "claudeAuthDir": "/Users/<you>/.local/state/goodstack-ai-harness/goodstack/claude",
   "probe": ["sbx", "ls", "--json"],
   "create": ["sbx", "env", "create", "<dir>", "{spec}", "--force"],
@@ -137,6 +141,30 @@ Example, with a base environment from `harness plan --out <dir>`:
   "shell": ["sbx", "exec", "-it", "-w", "{cwd}", "{name}"]
 }
 ```
+
+### Host-installed Claude
+
+Set `hostClaudePath` to use the host's Claude, for example `/home/<you>/.local/bin/claude`. Then the
+sandbox template does not need to install Claude.
+
+When a sandbox Backend Session starts, Flow:
+
+1. resolves the symlinks of `hostClaudePath`, for example to
+   `~/.local/share/claude/versions/<version>`,
+2. refuses the work unless that file is a 64-bit Linux ELF executable for the host CPU,
+3. refuses the work unless its directory contains only regular files,
+4. mounts that directory read-only at the same path in the VM, and runs the resolved file. The
+   symlink itself is not mounted.
+
+Flow sets `DISABLE_AUTOUPDATER=1` for this Claude. The host updates Claude, not the VM.
+
+- A native install on a Linux host with a glibc guest is supported. macOS binaries and npm
+  (JavaScript) installs are refused. Flow does not change to unrestricted execution.
+- If the guest libc does not match, the Claude SDK reports the failed launch at the first prompt.
+- When a host update moves the symlink, new Backend Sessions and Revives use the new version. Running
+  sessions keep the old version while it stays in the directory. The mount does not change, so a
+  Shared Sandbox is not replaced.
+- Credentials do not change: `claudeAuthDir` works as before.
 
 ### Pi instructions, skills and prompts
 

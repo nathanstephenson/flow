@@ -82,6 +82,7 @@ export type AgentSessionNavProps = {
   onSettle: (sessionId: string) => void;
   onNew: () => void;
   onOpenSettings: () => void;
+  onSchedules?: () => void;
 };
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
@@ -194,7 +195,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
+      <RailFooter onSchedules={props.onSchedules ? () => { props.onSchedules!(); closeMobile(); } : undefined} onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }
@@ -533,9 +534,10 @@ function CollapsibleGroup({
  * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
  * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
-function RailFooter({ onNew, onOpenSettings }: { onNew: () => void; onOpenSettings: () => void }) {
+function RailFooter({ onNew, onOpenSettings, onSchedules }: { onNew: () => void; onOpenSettings: () => void; onSchedules?: (() => void) | undefined }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
+      {onSchedules && <Button size="sm" variant="ghost" onClick={onSchedules}>Schedules</Button>}
       <Tooltip>
         <TooltipTrigger
           render={

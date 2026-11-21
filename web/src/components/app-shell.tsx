@@ -20,6 +20,7 @@ import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-laye
 import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsDialog } from "@/components/settings-dialog.tsx";
+import { WorkflowSchedulesPage } from "@/components/workflow-schedules-page.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
@@ -57,7 +58,7 @@ export function AppShell() {
     route,
     sessionId: focusedId,
     focus,
-    openNewAgentSession,
+    openNewAgentSession, openSchedules,
     openSettings,
     leaveSettings,
   } = useRoute();
@@ -146,7 +147,12 @@ export function AppShell() {
    */
   const [landed, setLanded] = useState(false);
   useEffect(() => {
-    if (landed || route.settings !== undefined) return;
+    if (landed) return;
+    if (route.schedules) {
+      setLanded(true);
+      return;
+    }
+    if (route.settings !== undefined) return;
     if (focusedId !== undefined) {
       setLanded(true);
       return;
@@ -163,7 +169,7 @@ export function AppShell() {
     // Nothing worth opening when there are none or every Agent Session is Filed away.
     if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
-  }, [landed, loaded, sessions, focusedId, focus, route.settings]);
+  }, [landed, loaded, sessions, focusedId, focus, route.settings, route.schedules]);
 
   // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
   // that identity was Reaped or hidden in a collapsed section, never merely because it moved to
@@ -320,6 +326,7 @@ export function AppShell() {
             onSettle={settle}
             onNew={openNewAgentSession}
             onOpenSettings={openSettings}
+            onSchedules={() => openSchedules()}
           />
         </Sidebar>
 
@@ -334,7 +341,7 @@ export function AppShell() {
            * the handle itself is the affordance.
            */}
           <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
-          {focusedId === undefined ? (
+          {route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
             /*
              * The New Agent Session view *is* the empty state — nothing focused and "you are
              * starting one" were always the same moment. Held back until the auto-open rule above has
@@ -354,6 +361,7 @@ export function AppShell() {
               drafts={drafts}
               shells={config.shell === true}
               onOpenProject={openProject}
+              onOpenSession={onCreated}
             />
           )}
         </SidebarInset>

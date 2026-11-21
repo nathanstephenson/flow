@@ -115,7 +115,12 @@ export type Capabilities = {
   models: ModelInfo[];
   compaction: boolean;
   autoCompaction?: "startup" | "model-change";
+  /** Set when a Fork of this Agent Session can start with its Conversation Context. */
   fork: boolean;
+  /** Set when the Conversation Context can return to just before one of its user messages. */
+  rewind?: boolean;
+  /** Set when the Scope's files can also return to their state at one of its user messages. */
+  rewindFiles?: boolean;
   /**
    * Set when this Backend Adapter reports Subagents. False is not "this backend has no subagents"
    * but "this backend does not tell us about them" — the distinction `effortLevels` draws for a
@@ -302,7 +307,7 @@ export type AgentEvent =
    * replayed on every Revive (ADR 0001), so a line of it carrying megabytes of base64 would make the
    * record unreadable and unbounded — the bytes live beside it and are fetched when shown.
    */
-  | { type: "user_message"; id: string; text: string; attachments?: string[] }
+  | { type: "user_message"; id: string; text: string; attachments?: string[]; fromSessionId?: string }
   | { type: "turn_started"; turnId: string }
   /**
    * `producer` on these five is what attributes a Subagent's work to it (ADR 0015). Absent means
@@ -324,8 +329,17 @@ export type AgentEvent =
    *
    * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
    * `since: N` holds a lifecycle it can complete.
+   *
+   * `producer` is the Subagent that spawned this one, absent for one the Agent Session spawned.
    */
-  | ({ type: "subagent"; subagentId: string; name: string; description?: string; model?: string; effort?: EffortLevel } & SubagentState)
+  | ({ type: "subagent"; subagentId: string; name: string; description?: string; model?: string; effort?: EffortLevel; producer?: Producer } & SubagentState)
+  /**
+   * Instructions a Subagent received from the model that spawned it: its first brief and every
+   * message sent to it later. The Backend Adapter reports these, because a model sends them inside
+   * the Backend Session, where the Session Host never sees them. `producer` is the Subagent that
+   * received them. Not a `user_message`: that is what the human sent, and the host owns it.
+   */
+  | { type: "subagent_instruction"; id: string; text: string; producer: Producer }
   /**
    * One Background Call, wholly — a tool call the Backend Session goes on running past the turn that
    * made it, reporting back into a later one (ADR 0021).
@@ -465,12 +479,18 @@ export type AgentEvent =
   | { type: "permission_mode_changed"; mode: AgentPermissionMode }
   | { type: "branch_changed"; branch: Branch }
   | { type: 'workflow_spend'; executionId: string; spend: Spend }
-  | { type: "notice"; level: NoticeLevel; text: string }
+  | { type: "notice"; level: NoticeLevel; text: string; sessionId?: string }
   | { type: "session_dormant"; reason: string }
   | { type: "session_settled" }
   /** `scope` is where the Agent Session is now bound; it changes only after a relocation (ADR 0036). */
   | { type: "revived"; fromSeq: number; scope?: string }
+  /** The Conversation Context, files, or both, went back to just before `userMessageId`. */
+  | { type: "rewound"; userMessageId: string; restore: RewindRestore }
+  /** This Agent Session is a Fork. The events before this one are copied from the source. */
+  | { type: "forked"; fromSessionId: string; userMessageId: string }
   | { type: "session_ended"; reason: string };
+
+export type RewindRestore = "conversation" | "files" | "both";
 
 export type AgentEventType = AgentEvent["type"];
 
@@ -493,6 +513,8 @@ export const HOST_OWNED_EVENT_TYPES = [
   "session_ended",
   "branch_changed",
   "workflow_spend",
+  "rewound",
+  "forked",
 ] as const;
 
 export type HostOwnedEventType = (typeof HOST_OWNED_EVENT_TYPES)[number];

@@ -139,3 +139,23 @@ The parent receives compact current-workflow context on every user turn and a de
 `workflow_recover` rejects stale state. One provably safe retry/continue per failure episode is allowed automatically; completed executed attempts reset the budget, not a retry launch or supplied output. Agent, shell and MCP retries have uncertain external effects and require a one-shot human confirmation, as do replacement outputs and loop extensions. Confirmations are bound to the revision and cancelled with the parent or workflow. Existing scheduler validation and tool permissions still apply.
 
 New activity is fsynced to `workflow-activity/<execution>.jsonl`; the JSON sidecar contains a recent preview and recovery bookkeeping. Legacy runs retain their surviving events with an explicit unavailable-history indicator. All attempts remain inspectable after restart. Output and transcript transport have no arbitrary 100k/1MB rejection; timeout, runtime memory, code-size, loop and schema limits still apply.
+
+## Scheduled ownership
+
+`schedules.ts` owns pure Temporal recurrence and strict record validation. `schedule-store.ts`
+persists private atomic/fsynced definitions, cursors, claims, history and cleanup warnings.
+`daemon/workflow-schedules.ts` serializes admission/mutations and reserves capacity before provisioning;
+`workflow-schedule-driver.ts` prepares latest definitions and worktrees through existing execution APIs.
+
+`executionOwner` normalizes a manual Agent Session or an explicit occurrence namespace. Version-1
+manual records remain compatible; version-2 scheduled records have an optional `sessionId` association
+and captured runtime policy. Checkpoints/activity never move on attachment. The existing scheduler
+handles graphs, calls, loops and recovery for both; there is no second workflow engine.
+
+`WorkflowEnvironment` owns backend-free code/MCP resources, including Sandbox MCP-only workers.
+Lazy attachment is shared across concurrent agent/input/recovery needs. A promoted backend does not
+replace parallel scheduled code/MCP resources. Recovery waits retain their captured environment,
+including during rejected recovery and pending call deadlines. Own-VM journals survive failed cleanup
+and are reconciled even without an execution checkpoint. Shutdown stops admission first; interrupted work is
+never automatically replayed. Terminal history expires after seven days independently of transcripts;
+active recovery and unsafe Worktree cleanup records remain. See ADR 0040 for the ownership boundary.

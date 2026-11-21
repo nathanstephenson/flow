@@ -1,7 +1,8 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import type { Producer } from "../../protocol/events.ts";
 import { EFFORT_ORDER } from "../effort.ts";
-import type { PiWork, ToolResult } from "./work.ts";
+import { callIdFor, type PiWork, type ToolResult } from "./work.ts";
 
 export const SUBAGENT_TOOL = "subagent";
 const parameters = Type.Object({
@@ -14,15 +15,17 @@ const parameters = Type.Object({
 });
 export type SubagentInput = Static<typeof parameters>;
 
-export function subagentTool(work: PiWork, run: (id: string, input: SubagentInput, signal: AbortSignal) => Promise<ToolResult>) {
+export function subagentTool(work: PiWork, run: (id: string, input: SubagentInput, signal: AbortSignal) => Promise<ToolResult>, producer?: Producer) {
   return defineTool({
     name: SUBAGENT_TOOL,
     label: "Subagent",
     description: "Delegate work to a Subagent with its own Conversation Context. Subagents run in the background by default and report back automatically. Multiple Subagents may run concurrently. They cannot ask the human or create further Subagents.",
     promptSnippet: "Delegate independent work to Subagents",
     parameters,
-    execute: async (id, input, signal) => work.run({ type: "subagent", subagentId: id,
-      name: input.name ?? "Subagent", description: input.description },
-      (childSignal) => run(id, input, childSignal), input.run_in_background !== false, signal),
+    execute: async (id, input, signal) => {
+      const subagentId = callIdFor(id, producer);
+      return work.run({ type: "subagent", subagentId, name: input.name ?? "Subagent", description: input.description,
+        ...(producer ? { producer } : {}) }, (childSignal) => run(subagentId, input, childSignal), input.run_in_background !== false, signal);
+    },
   });
 }

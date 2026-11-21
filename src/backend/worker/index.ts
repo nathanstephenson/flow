@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { prepareFilesystemIsolation } from "../../isolation/filesystem.ts";
-import { createSandbox, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
+import { createSandbox, hostClaude, sandboxMounts, sandboxUnavailable, type Sandbox, type SandboxSupport } from "../../isolation/sandbox.ts";
 import { validateFilesystemScope } from "../../isolation/filesystem.ts";
 import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/shared-sandbox.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
@@ -19,8 +19,9 @@ import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
-import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState } from "./claude-state.ts";
-import { relocatePiState } from "../pi/state.ts";
+import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
+import { relocatePiState, forkPiState } from "../pi/state.ts";
+import { createPiModelAuth, type PiModelAuth } from '../pi/model-auth.ts';
 import { recordTiming } from "../../daemon/timings.ts";
 
 export type WorkerBackendOptions = WorkerLaunchOptions & {
@@ -44,7 +45,31 @@ export type WorkerBackendOptions = WorkerLaunchOptions & {
 export class WorkerBackend implements AgentBackend {
   readonly name: "pi" | "claude";
   private readonly options: WorkerBackendOptions;
+  private piAuth?: PiModelAuth;
+  private stopped = false;
   constructor(options: WorkerBackendOptions = {}) { this.options = options; this.name = options.backend ?? "pi"; }
+  async shutdown(): Promise<void> {
+    this.stopped = true;
+    await this.piAuth?.close?.();
+  }
+  private assertRunning(): void {
+    if (this.stopped) throw new Error("Backend Adapter stopped");
+  }
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const packageRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const readable = [packageRoot, ...(this.options.readablePaths ?? [])];
+    if (this.options.entry) readable.push(this.options.entry);
+    if (this.options.backendModule) readable.push(fileURLToPath(this.options.backendModule));
+    readable.push(...nodeExecutionAssets(readable));
+    const env = { ...process.env, ...this.options.env };
+    const source = this.name === 'pi' ? env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi/agent')
+      : resolve(scope, env.CLAUDE_CONFIG_DIR || join(env.HOME ?? homedir(), '.claude'));
+    const resources = this.name === 'pi' ? ['AGENTS.md', 'skills', 'prompts']
+      : ['CLAUDE.md', 'settings.json', 'commands', 'skills', 'agents', 'rules', 'plugins'];
+    for (const name of resources) if (existsSync(join(source, name))) readable.push(realpathSync(join(source, name)));
+    const support = this.options.sandbox?.();
+    return { readable, writable: support?.supported && support.provider.claudeAuthDir ? [support.provider.claudeAuthDir] : [] };
+  }
   private async opened(proxy: WorkerSession, signal: AbortSignal | undefined, isolation: FilesystemIsolationMode, begin: number,
     sandbox?: { sharing: "shared" | "own"; remove: number; create: number }): Promise<void> {
     const opening = performance.now();
@@ -75,6 +100,14 @@ export class WorkerBackend implements AgentBackend {
     const assets = [packageRoot, bundle, ...(this.options.readablePaths ?? [])];
     if (this.options.backendModule) assets.push(fileURLToPath(this.options.backendModule));
     assets.push(...nodeExecutionAssets(assets));
+    let claudePath = support.provider.claudePath;
+    if (support.provider.hostClaudePath && (shared || this.name === "claude")) {
+      let host: ReturnType<typeof hostClaude>;
+      try { host = hostClaude(support.provider.hostClaudePath); }
+      catch (error) { throw new Error(`${sandboxUnavailable().message}: ${(error as Error).message}`); }
+      claudePath = host.executable;
+      assets.push(host.directory);
+    }
     const env: Record<string, string> = { FLOW_BACKEND_WORKER: "1",
       ...Object.fromEntries(Object.entries(this.options.env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined)) };
     const cleanups: (() => void)[] = [];
@@ -85,10 +118,11 @@ export class WorkerBackend implements AgentBackend {
       cleanups.push(claude.cleanup);
       env.CLAUDE_CONFIG_DIR = claude.env.CLAUDE_CONFIG_DIR!;
       if (claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) env.CLAUDE_SECURESTORAGE_CONFIG_DIR = claude.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
-      env.FLOW_CLAUDE_PATH = support.provider.claudePath;
+      if (claudePath) env.FLOW_CLAUDE_PATH = claudePath;
+      if (support.provider.hostClaudePath) env.DISABLE_AUTOUPDATER = "1";
       for (const entry of readdirSync(env.CLAUDE_CONFIG_DIR)) {
         const link = join(env.CLAUDE_CONFIG_DIR, entry);
-        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && entry !== "projects") assets.push(realpathSync(link));
+        if (!options.workflowBuilder && lstatSync(link).isSymbolicLink() && !["projects", "file-history"].includes(entry)) assets.push(realpathSync(link));
       }
     } else {
       const source = this.options.env?.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi/agent");
@@ -96,7 +130,7 @@ export class WorkerBackend implements AgentBackend {
       rmSync(agent, { recursive: true, force: true });
       mkdirSync(agent, { recursive: true, mode: 0o700 });
       cleanups.push(() => rmSync(agent, { recursive: true, force: true }));
-      for (const name of ["auth.json", "models.json", "settings.json"]) {
+      for (const name of ["models.json", "settings.json"]) {
         if (existsSync(join(source, name))) copyFileSync(join(source, name), join(agent, name));
       }
       // Keep user resources live and read-only, including Git-managed trees reached through
@@ -130,6 +164,7 @@ export class WorkerBackend implements AgentBackend {
         ({ startup } = sandbox);
         cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       }
+      this.assertRunning();
       const launch = sandbox.command(scope, [support.provider.nodePath, ...plan.args], env);
       proxy = new WorkerSession({ ...options, scope, stateDir }, { ...this.options, sandboxed: sandbox, startupTimeoutMs: this.options.startupTimeoutMs ?? 300_000, command: launch.command, args: launch.args, env: {} }, cleanup);
       await this.opened(proxy, options.signal, "sandbox", begin, { sharing: shared ? "shared" : "own", remove: Math.round(startup.remove), create: Math.round(startup.create) });
@@ -145,10 +180,20 @@ export class WorkerBackend implements AgentBackend {
     else relocatePiState(stateDir, from, to);
   }
 
+  fork(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
+    return this.name === "claude" ? forkClaudeState(from, to) : forkPiState(from.stateDir, to.stateDir, to.scope);
+  }
+
   async create(options: BackendCreateOptions): Promise<BackendSession> {
+    this.assertRunning();
     const begin = performance.now();
     options.signal?.throwIfAborted();
-    const isolationMode = this.options.isolationMode?.() ?? "bubblewrap";
+    if (this.name === 'pi' && !this.options.backendModule && !options.piAuth) {
+      const directory = this.options.env?.PI_CODING_AGENT_DIR;
+      this.piAuth ??= createPiModelAuth(directory ? { authPath: join(directory, 'auth.json') } : {});
+      options = { ...options, piAuth: this.piAuth };
+    }
+    const isolationMode = options.isolationMode ?? this.options.isolationMode?.() ?? "bubblewrap";
     if (isolationMode === "sandbox") return this.createSandboxed(options);
     if (isolationMode === "none") {
       const scope = realpathSync(options.scope);
@@ -184,6 +229,7 @@ export class WorkerBackend implements AgentBackend {
       env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets });
     let proxy: WorkerSession | undefined;
     try {
+      this.assertRunning();
       options.signal?.throwIfAborted();
       if (this.name === "claude") migrateLegacyClaudeState(options.stateDir,
         { ...process.env, ...this.options.env }, isolation.scope, options.resume);
@@ -205,6 +251,7 @@ class WorkerSession implements BackendSession {
   private readonly worker: ReturnType<typeof launchWorker>;
   private readonly rpc: WorkerRpc;
   private failed: Error | undefined;
+  private piAuthProviders = new Set<string>();
   private disposing = false;
   private disposal: Promise<void> | undefined;
   private readonly workflows = new Map<string, {
@@ -215,6 +262,7 @@ class WorkerSession implements BackendSession {
   refreshMcp?: () => Promise<void>;
   startWorkflowSubagent?: (options: WorkflowSubagentOptions) => WorkflowSubagentHandle;
   compact?: (instructions?: string) => Promise<void>;
+  rewindFiles?: (messageId: string) => Promise<void>;
   skills?: () => Promise<Skill[]>;
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
@@ -234,11 +282,22 @@ class WorkerSession implements BackendSession {
     }, async (method, args, signal) => {
       if (this.disposing || this.failed) throw new Error("Backend Session stopped");
       // Builders never inherit other host capabilities, even if the worker asks directly.
-      if (this.options.workflowBuilder && !["workflowBuilder.read", "workflowBuilder.list", "workflowBuilder.write"].includes(method)) {
+      if (this.options.workflowBuilder && !["pi.auth.snapshot", "pi.auth.resolve", "workflowBuilder.read", "workflowBuilder.list", "workflowBuilder.write"].includes(method)) {
         throw new Error("Host capability is not enabled for workflow builder");
       }
       // Never look up host functions by a worker-supplied property name.
       switch (method) {
+        case 'pi.auth.snapshot': return this.snapshotPiAuth(signal);
+        case 'pi.auth.resolve': {
+          const auth = this.requirePiAuth();
+          const provider = args[0];
+          if (typeof provider !== 'string' || !this.piAuthProviders.has(provider)) throw new Error('Unknown Pi provider');
+          try { return await auth.resolve(provider, signal); }
+          catch {
+            signal.throwIfAborted();
+            throw new Error(`Pi authentication failed for ${provider}. Check sign-in and auth.json access. Move any !command credentials to models.json.`);
+          }
+        }
         case "mcp.token": {
           if (!(this.options.mcp instanceof SandboxMcpSession) || typeof args[0] !== "string") throw new Error("Host capability is not enabled");
           return this.options.mcp.token(args[0], args[1] === true);
@@ -272,6 +331,17 @@ class WorkerSession implements BackendSession {
     child.once("exit", (code, signal) => this.fail(new Error(`Backend worker exited (${signal ?? code ?? "unknown"})${this.worker.diagnostics() ? `: ${this.worker.diagnostics()}` : ""}`)));
   }
 
+  private requirePiAuth() {
+    if ((this.launchOptions.backend ?? 'pi') !== 'pi' || !this.options.piAuth) throw new Error('Pi auth is not enabled');
+    return this.options.piAuth;
+  }
+
+  private async snapshotPiAuth(signal?: AbortSignal) {
+    const metadata = await this.requirePiAuth().snapshot(signal);
+    this.piAuthProviders = new Set(metadata.map(({ providerId }) => providerId));
+    return metadata;
+  }
+
   private requireWorkflowBuilder(input: unknown) {
     if (!this.options.workflowBuilder) throw new Error("Workflow builder tools are not enabled");
     if (typeof input !== "string") throw new Error("Invalid workflow builder input: expected a string");
@@ -289,14 +359,16 @@ class WorkerSession implements BackendSession {
   }
 
   async open(signal?: AbortSignal): Promise<SessionSnapshot["startup"]> {
-    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, sessionTools, ...options } = this.options;
+    const { emit: _emit, onFailure: _onFailure, signal: _signal, evict: _evict, mcp, workflow, workflowBuilder, sessionTools, piAuth, ...options } = this.options;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
     if (signal?.aborted) cancel();
     else signal?.addEventListener('abort', cancel, { once: true });
     const timer = setTimeout(() => controller.abort(), this.launchOptions.startupTimeoutMs ?? 60_000);
     try {
+      const auth = piAuth ? await this.snapshotPiAuth(controller.signal) : undefined;
       const state = await this.rpc.call<SessionSnapshot>("create", [{ ...options, backend: this.launchOptions.backend ?? "pi",
+        ...(auth ? { piAuth: auth } : {}),
         workflowEnabled: !workflowBuilder && !!workflow,
         sessionToolsEnabled: !workflowBuilder && options.tools !== "none" && !!sessionTools,
         ...(workflowBuilder ? { workflowBuilderInstructions: workflowBuilder.instructions }
@@ -309,6 +381,7 @@ class WorkerSession implements BackendSession {
       const methods = new Set(state.methods);
       if (!workflowBuilder && methods.has("refreshMcp")) this.refreshMcp = () => this.rpc.call("refreshMcp", [mcpMetadata(this.options.mcp)]);
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
+      if (methods.has("rewindFiles")) this.rewindFiles = (messageId) => this.rpc.call("rewindFiles", [messageId]);
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
@@ -379,7 +452,7 @@ class WorkerSession implements BackendSession {
     void this.worker.stop(async () => {}).then(this.cleanup).catch(() => {});
   }
   resumeToken() { return this.resume; }
-  prompt(text: string, attachments?: PromptAttachment[]) { return this.rpc.call<void>("prompt", [text, attachments]); }
+  prompt(text: string, attachments?: PromptAttachment[], messageId?: string) { return this.rpc.call<void>("prompt", [text, attachments, messageId]); }
   abort() { return this.rpc.call<void>("abort"); }
   setModel(modelId: string) { return this.rpc.call<void>("setModel", [modelId]); }
   setEffort(effort: EffortLevel) { return this.rpc.call<void>("setEffort", [effort]); }

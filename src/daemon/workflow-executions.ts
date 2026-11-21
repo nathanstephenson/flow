@@ -1,3 +1,13 @@
+import { randomUUID } from 'node:crypto';
+import { closeSync, createReadStream, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { isDeepStrictEqual } from 'node:util';
+import { ZodError } from 'zod';
+import { executionOwner } from '../workflows/records.ts';
+import { executionOwnerKey, executionOwnerOf } from '../workflows/owner.ts';
+import { WorkflowExecutionResources } from './workflow-execution-resources.ts';
+import { prepareWorkflowLaunch, type WorkflowLaunch, type ManualWorkflowLaunch, type ScheduledWorkflowLaunch } from './workflow-execution-launch.ts';
 import { resolveWorkflowCalls } from '../workflows/calls.ts';
 import { invocationExecution } from '../workflows/invocations.ts';
 import { recoveryRevision, recoverySteps, safeAutomaticRecovery, successfulProgress, savedDefinitionRevision, validateCompatibleDefinition } from "../workflows/recovery.ts";
@@ -7,16 +17,11 @@ import { workflowAgentNameInput, workflowOutcomeNameInput } from './summariser.t
 import { connectionIdentity, snapshotTool, sameSchema } from './workflow-mcp.ts';
 import { validateJsonSchema } from '../workflows/json-schema.ts';
 import { boundedMcpValue, validateMcpSchemas } from '../workflows/mcp.ts';
-import { createReadStream } from 'node:fs';
-import { isDeepStrictEqual } from 'node:util';
-import { createInterface } from 'node:readline';
-import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { WorkflowSubagentHandle } from '../backend/types.ts';
-import type { BackendEvent, ModelInfo, Spend } from '../protocol/events.ts';
+import type { ModelInfo, Spend } from '../protocol/events.ts';
+import { assertNoSecrets, attemptIdentity, confirmedAgentStep, outcomeNamingData, publicDefinition, publicExecutionData, redact, redactEvent, relayContext, relaySignal, safeError, sameProject, selectWorkflowInvocation, spendKey, sumSpend, uniqueCredentials, WorkflowConflict, WorkflowValidationError } from './workflow-execution-values.ts';
 import type { WorkflowExecutionView, WorkflowRuntimeStatus, RecoverWorkflow, WorkflowActivity, WorkflowActivityPage } from '../protocol/workflow-executions.ts';
-import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution, WorkflowStep } from '../protocol/workflows.ts';
+import type { Json, McpToolDiscovery, WorkflowDefinition, WorkflowExecution } from '../protocol/workflows.ts';
 import { leadingSkillInvocation } from '../protocol/skills.ts';
 import { createCodeExecutors } from '../workflows/executors.ts';
 import { parseValue } from '../workflows/schema.ts';
@@ -27,12 +32,15 @@ import type { ConfigStore } from './config-store.ts';
 import type { SecretStore } from './secret-store.ts';
 import { SessionHost } from './host.ts';
 
+export { WorkflowConflict } from './workflow-execution-values.ts';
+
 type PrivateView = Omit<WorkflowExecutionView, 'execution'> & {
   automaticAtProgress?: number;
   notifiedRevision?: string;
   /** Persisted before the parent prompt so reconcile and repeated callbacks cannot announce twice. */
   completionAnnounced?: boolean;
 };
+type RecoveryAuthority = { revision: string; authorized: boolean; signal?: AbortSignal | undefined };
 type Launch = { sessionId: string; executionId: string; invocationId?: string; stepId: string; attempt: number; handle: WorkflowSubagentHandle; requestIds: Map<string, string> };
 type RelayRequestBase = {
   id: string;
@@ -61,6 +69,10 @@ type NewRelayRequest =
 
 export class WorkflowExecutionService {
   readonly scheduler: WorkflowScheduler;
+  private readonly resources: WorkflowExecutionResources;
+  onScheduledResult?: (record: WorkflowExecution) => Promise<void>;
+  scheduledOwnershipAvailable = true;
+
   private readonly host: SessionHost;
   private readonly store: WorkflowStore;
   private readonly secrets: SecretStore;
@@ -82,11 +94,13 @@ export class WorkflowExecutionService {
   private readonly runtimeSnapshots = new Map<string, { nodePath?: string; isolationMode: import('../protocol/settings.ts').FilesystemIsolationMode }>();
   private runtimeOptions!: { nodePath?: string; isolationMode: import('../protocol/settings.ts').FilesystemIsolationMode };
   private checkingCode: WorkflowExecutors | undefined;
+  private readonly scheduledPublications = new Map<string, Set<Promise<void>>>();
   private readonly cancelling = new Map<string, { sessionId: string; done: Promise<WorkflowExecution> }>();
 
   constructor(host: SessionHost, store: WorkflowStore, secrets: SecretStore, config: ConfigStore, runtimePath: string) {
     store.redact = value => redactCredentials(value, host.workflowMcpCredentials());
     this.host = host; this.store = store; this.secrets = secrets; this.config = config; this.runtimePath = runtimePath;
+    this.resources = new WorkflowExecutionResources(host, store, runtimePath);
     const code = (kind: 'shell' | 'typescript'): WorkflowExecutor => ({
       check: (step, session) => {
         const executor = (this.checkingCode ?? this.code)[kind];
@@ -103,7 +117,7 @@ export class WorkflowExecutionService {
       mcp: {
         check: (step, session) => {
           if (step.kind !== 'mcp') throw new Error('Invalid MCP step');
-          this.checkMcp(session.sessionId, step.tool);
+          this.checkMcp(executionOwner(session), step.tool);
         },
         execute: context => this.mcp(context),
       },
@@ -111,15 +125,56 @@ export class WorkflowExecutionService {
       agent: {
         check: (step, session) => {
           if (step.kind !== 'agent') throw new Error('Invalid Agent step');
-          this.checkAgent(session.sessionId, step);
+          if (session.sessionId) this.checkAgent(session.sessionId, step);
         },
         execute: async context => {
-          try { return await this.agent(context); } catch (error) { throw safeError(error, this.secretValues.get(context.executionId) ?? []); }
+          try { return await this.agent(await this.attachContext(context)); } catch (error) { throw safeError(error, this.secretValues.get(context.executionId) ?? []); }
         },
       },
     }, record => this.watch(record));
     host.workflowOwner = this;
     this.refresh();
+  }
+
+  private async attachContext(context: ExecutorContext): Promise<ExecutorContext & { sessionId: string }> {
+    if (context.sessionId) return { ...context, sessionId: context.sessionId };
+    const identity = executionOwnerOf(context);
+    if (identity.kind !== 'occurrence') throw new Error('Agent Session required');
+    const sessionId = await this.resources.occurrence(executionOwnerKey(identity)).attach();
+    context.signal.throwIfAborted();
+    this.scheduler.associate(identity.occurrenceId, context.executionId, sessionId);
+    return { ...context, sessionId };
+  }
+
+  startScheduled(options: ScheduledWorkflowLaunch) { return this.launch({ kind: 'occurrence', options }); }
+
+  async expireScheduled(occurrenceId: string): Promise<void> {
+    const owner = executionOwnerKey({ kind: 'occurrence', occurrenceId });
+    while (this.scheduledPublications.has(owner)) await Promise.allSettled([...this.scheduledPublications.get(owner)!]);
+    await this.resources.forget(owner);
+    this.scheduler.forgetSession(owner);
+    for (const record of this.store.listExecutions(owner)) {
+      this.views.delete(record.id); this.snapshots.delete(record.id); this.secretValues.delete(record.id); this.runtimeSnapshots.delete(record.id);
+    }
+  }
+
+  async stopScheduled(): Promise<void> {
+    const stopped = await Promise.allSettled(this.store.listOwners().filter(owner => owner.kind === 'occurrence').map(owner => this.stop(executionOwnerKey(owner))));
+    while (this.scheduledPublications.size) await Promise.allSettled([...this.scheduledPublications.values()].flatMap(publications => [...publications]));
+    const closed = await Promise.allSettled([this.resources.closeAll()]);
+    const errors = [...stopped, ...closed].flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, 'Scheduled work shutdown failed');
+  }
+
+  private connections(owner: string) { return this.resources.get(owner).connections(); }
+
+  private openMcp(owner: string, connectionId: string, mode: import('../protocol/settings.ts').FilesystemIsolationMode, signal?: AbortSignal) {
+    return this.resources.get(owner).mcp(connectionId, mode, signal);
+  }
+
+  restoreScheduled(record: WorkflowExecution, connectionIds: string[], attach: () => Promise<string>): void {
+    this.privateView(executionOwner(record), record.id);
+    this.resources.restore(record, connectionIds, attach);
   }
 
   private filesystemPolicy() {
@@ -163,7 +218,7 @@ export class WorkflowExecutionService {
       for (const record of this.store.listExecutions(sessionId)) {
         const view = this.privateView(sessionId, record.id);
         if (view.spend) this.host.workflowSpend(sessionId, record.id, view.spend);
-        if (!view.completionAnnounced) this.publishResult(record);
+        if (!record.occurrenceId && !view.completionAnnounced) this.publishResult(record);
       }
     }
   }
@@ -251,11 +306,11 @@ export class WorkflowExecutionService {
   }
 
   private appendActivity(context: ExecutorContext, view: PrivateView, event: WorkflowActivity['event'], subagentId: string): void {
-    const path = this.privatePath(context.sessionId, context.executionId) + 'l';
+    const path = this.privatePath(executionOwner(context), context.executionId) + 'l';
     const item = redactCredentials({ sequence: (view.activity.at(-1)?.sequence ?? 0) + 1, at: Date.now(), ...attemptIdentity(context), subagentId, event }, this.host.workflowMcpCredentials());
     // Seed a legacy log with exactly what was retained, never invented backfill.
     if (!existsSync(path)) {
-      this.savePrivate(context.sessionId, context.executionId, view);
+      this.savePrivate(executionOwner(context), context.executionId, view);
       const fd = openSync(path, 'wx', 0o600);
       try { writeFileSync(fd, view.activity.map(item => JSON.stringify(item) + '\n').join('')); fsyncSync(fd); } finally { closeSync(fd); }
     }
@@ -274,7 +329,7 @@ export class WorkflowExecutionService {
 
   private summary(root: WorkflowExecution, invocationId?: string) {
     const record = selectWorkflowInvocation(root, invocationId);
-    const view = this.privateView(root.sessionId, root.id);
+    const view = this.privateView(executionOwner(root), root.id);
     return { executionId: root.id, workflowId: record.definition.id, name: record.definition.name, status: record.status,
       ...(invocationId ? { invocationId } : {}),
       invocations: Object.values(root.invocations ?? {}).map(item => ({ id: item.id, parentInvocationId: item.parentInvocationId, callStepId: item.callStepId, callAttempt: item.callAttempt, workflowId: item.definitionId, status: item.status })),
@@ -460,88 +515,82 @@ export class WorkflowExecutionService {
     return redactCredentials(message, this.host.workflowMcpCredentials());
   }
 
+  async validateScheduledAgents(definition: WorkflowDefinition, input: Json, scope: string, projectId = scope): Promise<void> {
+    const manifest = resolveWorkflowCalls(definition, id => this.store.getDefinition(id));
+    const definitions = Object.values(manifest);
+    for (const candidate of definitions) {
+      if (candidate.backend !== definition.backend) throw new WorkflowValidationError('Backend Adapter mismatch');
+      if (candidate.projectId && !sameProject(candidate.projectId, projectId)) throw new WorkflowValidationError('Workflow is restricted to another Project');
+    }
+    try { parseValue(definition.inputSchema, input); }
+    catch (error) {
+      if (error instanceof ZodError) throw new WorkflowValidationError('Workflow input does not match its schema');
+      throw error;
+    }
+    const values = uniqueCredentials([...this.host.workflowMcpCredentials(), ...definitions.flatMap(candidate => this.referencedSecrets(candidate))]);
+    for (const candidate of definitions) assertNoSecrets(publicDefinition(candidate), values);
+    assertNoSecrets(input, values, true);
+    const agents = definitions.flatMap(candidate => candidate.steps.filter(step => step.kind === 'agent'));
+    if (!agents.length) return;
+    const models = await this.host.workflowAgentModels(scope, definition.backend);
+    for (const step of agents) this.checkAgentModel(step, models);
+    if (!isDeepStrictEqual(resolveWorkflowCalls(definition, id => this.store.getDefinition(id)), manifest)) throw new WorkflowConflict();
+  }
+
   validateDefinitionCredentials(definition: WorkflowDefinition): void {
     assertNoSecrets(publicDefinition(definition), this.host.workflowMcpCredentials(), true);
   }
 
-  async start(options: { sessionId: string; definition: WorkflowDefinition; input: Json; stepId?: string; nameSession?: boolean; launchId?: string }) {
-    const { sessionId, definition, input, stepId, nameSession = false, launchId } = options;
-    if (launchId && !stepId) {
-      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
-      if (existing) return this.view(sessionId, existing.id);
-    }
-    const identity = this.host.workflowSession(sessionId);
-    if (definition.backend !== identity.backend) throw new Error('Backend Adapter mismatch');
-    if (definition.projectId && !sameProject(definition.projectId, identity.projectId)) throw new Error('Workflow is restricted to another Project');
-    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    const manifest = resolveWorkflowCalls(definition, id => this.store.getDefinition(id), stepId);
-    const definitions = Object.values(manifest);
-    for (const candidate of definitions) {
-      if (candidate.backend !== identity.backend) throw new Error('Backend Adapter mismatch');
-      if (candidate.projectId && !sameProject(candidate.projectId, identity.projectId)) throw new Error('Workflow is restricted to another Project');
-    }
+  start(options: ManualWorkflowLaunch) { return this.launch({ kind: 'session', options }); }
+
+  private async launch(launch: WorkflowLaunch): Promise<WorkflowExecutionView> {
+    const manual = launch.kind === 'session' ? launch.options : undefined;
+    const owner = launch.kind === 'session' ? launch.options.sessionId : executionOwnerKey({ kind: 'occurrence', occurrenceId: launch.options.occurrenceId });
+    const existing = () => manual?.launchId && !manual.stepId ? this.store.listExecutions(owner).find(record => record.launchId === manual.launchId) : undefined;
+    const prior = existing();
+    if (prior) return this.view(owner, prior.id);
+    if (this.scheduler.occupied(owner)) throw new WorkflowConflict();
     this.refresh();
-    const selectedSteps = definitions.flatMap(candidate => candidate.steps.filter(step => candidate.id !== definition.id || !stepId || step.id === stepId));
-    const needsCode = selectedSteps.some(step => ['shell', 'typescript'].includes(step.kind));
-    const snapshot = needsCode ? await this.codeSnapshot() : { runtime: this.runtimeOptions, code: this.code };
-    const values = uniqueCredentials(definitions.flatMap(candidate => this.referencedSecrets(candidate, candidate.id === definition.id ? stepId : undefined)));
-    for (const candidate of definitions) assertNoSecrets(publicDefinition(candidate), values);
-    assertNoSecrets(input, values, true);
-    const session = await this.host.openWorkflowSession(sessionId);
-    if (definition.projectId && !sameProject(definition.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
-    this.host.assertWorkflowSession(sessionId, session.session);
-    const workflowBackend = session.session;
-    if (!workflowBackend) throw new Error('Workflow Backend Session is unavailable');
-    // Confirmed no-control is the sole automatic persisted-effort correction. Do it before the
-    // scheduler validates or records the definition, so old drafts and direct launches both run
-    // with the same internal sentinel the editor applies.
-    const preparedManifest = Object.fromEntries(definitions.map(candidate => [candidate.id, withConfirmedNoControlOff(candidate, workflowBackend.capabilities.models)]));
-    const preparedDefinition = preparedManifest[definition.id]!;
-    for (const candidate of definitions) {
-      for (const step of candidate.steps) {
-        if (candidate.id === definition.id && stepId && step.id !== stepId) continue;
-        if (step.kind === 'mcp') this.checkMcp(sessionId, step.tool);
-        if (step.kind === 'agent') this.checkAgent(sessionId, preparedManifest[candidate.id]!.steps.find(item => item.id === step.id) as Extract<typeof step, { kind: 'agent' }>);
-        if (step.kind === 'shell' || step.kind === 'typescript') {
-          const executor = snapshot.code[step.kind];
-          if (!executor) throw new Error('Workflow runtime is unavailable');
-          executor.check(step, session);
+    let record: WorkflowExecution | undefined;
+    let values: string[] = [];
+    try {
+      const prepared = await prepareWorkflowLaunch(launch, {
+        host: this.host, store: this.store, secrets: this.secrets, resources: this.resources, runtimePath: this.runtimePath,
+        snapshot: async needsCode => needsCode ? this.codeSnapshot() : { runtime: this.runtimeOptions, code: this.code },
+        discover: (id, connection, tools, mode, signal) => this.discoverMcp(id, connection, tools, mode, signal),
+        validateScheduledAgents: (definition, input, scope, projectId) => this.validateScheduledAgents(definition, input, scope, projectId),
+      });
+      values = prepared.values;
+      const raced = existing();
+      if (raced) return this.view(owner, raced.id);
+      if (this.scheduler.occupied(owner)) throw new WorkflowConflict();
+      prepared.assertCurrent();
+      this.checkingCode = prepared.code;
+      try { record = this.scheduler.start(prepared.definition, prepared.session, launch.options.input, manual?.stepId, manual?.launchId, !!manual?.nameSession && !manual.stepId, prepared.manifest); }
+      finally { this.checkingCode = undefined; }
+      this.secretValues.set(record.id, values);
+      this.runtimeSnapshots.set(record.id, prepared.runtime);
+      this.snapshots.set(record.id, prepared.code);
+      this.privateView(owner, record.id).historyComplete = true;
+      this.savePrivate(owner, record.id, this.privateView(owner, record.id));
+      this.watch(record);
+      return this.view(owner, record.id);
+    } catch (error) {
+      if (launch.kind === 'occurrence') {
+        record ??= this.store.listExecutions(owner)[0];
+        if (record) {
+          const interrupted = await this.scheduler.interrupt(owner, record.id);
+          this.watch(interrupted);
+          return this.view(owner, record.id);
         }
+        await this.resources.forget(owner);
       }
+      if (error instanceof WorkflowConflict) throw error;
+      throw safeError(error, values);
     }
-    const pinned = new Map<string, import('../protocol/workflows.ts').McpToolSnapshot[]>();
-    for (const step of selectedSteps) {
-      if (step.kind !== 'mcp') continue;
-      const tools = pinned.get(step.tool.connectionId) ?? [];
-      tools.push(step.tool);
-      pinned.set(step.tool.connectionId, tools);
-    }
-    for (const [connectionId, tools] of pinned) await this.discoverMcp(sessionId, connectionId, tools, snapshot.runtime.isolationMode);
-    this.host.assertWorkflowSession(sessionId, session.session);
-    // All setup above may yield. Resolve an overlapping retry by its durable identity before
-    // treating the session as occupied, then make occupancy the final check before the synchronous
-    // scheduler start.
-    if (launchId && !stepId) {
-      const existing = this.store.listExecutions(sessionId).find(record => record.launchId === launchId);
-      if (existing) return this.view(sessionId, existing.id);
-    }
-    if (this.scheduler.occupied(sessionId)) throw new WorkflowConflict();
-    const currentManifest = resolveWorkflowCalls(definition, id => this.store.getDefinition(id), stepId);
-    if (!isDeepStrictEqual(currentManifest, manifest)) throw new WorkflowConflict();
-    let record: WorkflowExecution;
-    this.checkingCode = snapshot.code;
-    try { record = this.scheduler.start(preparedDefinition, { ...session, matchesProject: project => sameProject(project, session.projectId) }, input, stepId, launchId, nameSession && !stepId, preparedManifest); }
-    finally { this.checkingCode = undefined; }
-    this.secretValues.set(record.id, values);
-    this.runtimeSnapshots.set(record.id, snapshot.runtime);
-    this.privateView(sessionId, record.id).historyComplete = true;
-    this.savePrivate(sessionId, record.id, this.privateView(sessionId, record.id));
-    this.snapshots.set(record.id, snapshot.code);
-    this.watch(record);
-    return this.view(sessionId, record.id);
   }
 
-  async recover(sessionId: string, executionId: string, action: RecoverWorkflow, authority?: { revision: string; authorized: boolean; signal?: AbortSignal | undefined }) {
+  async recover(sessionId: string, executionId: string, action: RecoverWorkflow, authority?: RecoveryAuthority) {
     const saved = this.scheduler.get(sessionId, executionId);
     if (saved.status !== 'recovery-required') throw new WorkflowConflict();
     const updated = this.updatedRecoveryDefinition(saved, action);
@@ -551,9 +600,10 @@ export class WorkflowExecutionService {
     const session = await this.host.openWorkflowSession(sessionId);
     this.privateView(sessionId, executionId);
     // Pre-toggle records were always restricted. Missing historical policy must never downgrade them.
-    const options = this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationMode: 'bubblewrap' as const };
+    const options = saved.runtime ?? this.runtimeSnapshots.get(executionId) ?? { ...workflowRuntimeOptions(this.config.view().workflowRuntime), isolationMode: 'bubblewrap' as const };
     const needsCode = definitions.some(candidate => candidate.steps.some(step => ['shell', 'typescript'].includes(step.kind)));
-    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: (sessionId) => this.host.workflowSandbox(sessionId), isolationMode: options.isolationMode, scope: session.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
+    const resources = this.resources.get(executionOwner(saved));
+    const code = needsCode ? await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: () => resources.sandbox(), isolationMode: options.isolationMode, scope: saved.scope, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) }) : {};
     for (const candidate of definitions) {
       if (candidate.backend !== session.backend) throw new Error('Backend Adapter mismatch');
       if (candidate.projectId && !sameProject(candidate.projectId, session.projectId)) throw new Error('Workflow is restricted to another Project');
@@ -564,29 +614,36 @@ export class WorkflowExecutionService {
     if (action.kind === 'supply') assertNoSecrets(action.output, values, true);
     this.secretValues.set(executionId, values);
     this.host.assertWorkflowSession(sessionId, session.session);
+    this.recoveryAuthority(sessionId, executionId, action, authority);
+    if (saved.occurrenceId) await this.resources.occurrence(executionOwner(saved)).environment.recover(authority?.signal);
     let record: WorkflowExecution;
     this.checkingCode = code;
     try {
-      if (authority) {
-        authority.signal?.throwIfAborted();
-        const current = this.scheduler.get(sessionId, executionId);
-        if (current.status !== 'recovery-required' || recoveryRevision(current) !== authority.revision) throw new WorkflowConflict();
-        const view = this.privateView(sessionId, executionId);
-        const progress = successfulProgress(current);
-        if (!authority.authorized && (!safeAutomaticRecovery(current, action) || (view.automaticAtProgress !== undefined && progress <= view.automaticAtProgress))) throw new Error('User direction required. Explain the failure and proposed recovery, then request confirmation.');
-        // Persist before launching, so crashes cannot refund an automatic attempt.
-        view.automaticAtProgress = progress;
-        this.savePrivate(sessionId, executionId, view);
+      const consent = this.recoveryAuthority(sessionId, executionId, action, authority);
+      if (consent) {
+        consent.view.automaticAtProgress = consent.progress;
+        this.savePrivate(sessionId, executionId, consent.view);
       }
       // Re-read after readiness/Revive and human confirmation: saving again revokes consent.
       if (updated && savedDefinitionRevision(this.store.getDefinition(updated.id)) !== savedDefinitionRevision(updated)) throw new WorkflowConflict();
-      record = this.scheduler.recover({ ...session, matchesProject: project => sameProject(project, session.projectId) }, executionId, action, updated);
+      record = this.scheduler.recover({ ...session, ...(saved.occurrenceId ? { occurrenceId: saved.occurrenceId } : {}), matchesProject: project => sameProject(project, session.projectId) }, executionId, action, updated);
     }
     catch (error) { if (error instanceof WorkflowLoopConflict) throw new WorkflowConflict(); throw error; }
     finally { this.checkingCode = undefined; }
     this.snapshots.set(executionId, code);
     this.watch(record);
     return this.view(sessionId, executionId);
+  }
+
+  private recoveryAuthority(sessionId: string, executionId: string, action: RecoverWorkflow, authority?: RecoveryAuthority) {
+    if (!authority) return;
+    authority.signal?.throwIfAborted();
+    const current = this.scheduler.get(sessionId, executionId);
+    if (current.status !== 'recovery-required' || recoveryRevision(current) !== authority.revision) throw new WorkflowConflict();
+    const progress = successfulProgress(current);
+    const view = this.privateView(sessionId, executionId);
+    if (!authority.authorized && (!safeAutomaticRecovery(current, action) || (view.automaticAtProgress !== undefined && progress <= view.automaticAtProgress))) throw new Error('User direction required. Explain the failure and proposed recovery, then request confirmation.');
+    return { view, progress };
   }
 
   async cancel(sessionId: string, executionId: string) {
@@ -598,7 +655,10 @@ export class WorkflowExecutionService {
     if (record.status !== 'running' && record.status !== 'recovery-required') return this.view(sessionId, executionId);
     const done = this.scheduler.cancel(sessionId, executionId);
     this.cancelling.set(executionId, { sessionId, done });
-    try { await done; } finally { this.cancelling.delete(executionId); }
+    try {
+      await done;
+      if (record.occurrenceId) await this.resources.close(executionOwner(record));
+    } finally { this.cancelling.delete(executionId); }
     return this.view(sessionId, executionId);
   }
 
@@ -606,11 +666,25 @@ export class WorkflowExecutionService {
     this.host.cancelWorkflowConfirmation(sessionId);
     await Promise.all([...this.cancelling.values()].filter(item => item.sessionId === sessionId).map(item => item.done));
     for (const record of this.store.listExecutions(sessionId)) {
-      if (record.status === 'running' || record.status === 'recovery-required') await this.scheduler.interrupt(sessionId, record.id);
+      if (record.status === 'running' || record.status === 'recovery-required') { const interrupted = await this.scheduler.interrupt(sessionId, record.id); if (interrupted.occurrenceId) await this.onScheduledResult?.(interrupted); }
     }
   }
 
+  canForget(sessionId: string, occurrenceId?: string): boolean {
+    // Consult durable records: host.load() may reap before scheduler reconciliation.
+    const records = this.store.listExecutions(sessionId);
+    // Session metadata can precede the checkpoint's association write during attachment.
+    if (occurrenceId) {
+      const owned = this.store.listExecutions({ kind: 'occurrence', occurrenceId });
+      if (!owned.length && !this.scheduledOwnershipAvailable) return false;
+      records.push(...owned);
+    }
+    return !records.some(record => record.occurrenceId &&
+      (record.status === 'running' || record.status === 'recovery-required'));
+  }
+
   async forget(sessionId: string): Promise<void> {
+    if (!this.canForget(sessionId)) throw new WorkflowConflict();
     await this.stop(sessionId);
     this.scheduler.forgetSession(sessionId);
     for (const record of this.store.listExecutions(sessionId)) {
@@ -708,28 +782,38 @@ export class WorkflowExecutionService {
     if (oldest && !oldest.announced && !oldest.relaying) this.host.workflowInput(sessionId);
   }
 
-  private checkAgent(sessionId: string, step: Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>): void {
+  private checkAgent(sessionId: string, step: Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>) {
     const backend = this.host.workflowSession(sessionId).session;
     if (!backend?.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
-    const model = backend.capabilities.models.find(model => model.id === step.model);
-    if (!model) throw new Error(`Agent model “${step.model}” is unavailable. Refresh models and select an available model.`);
+    return this.checkAgentModel(step, backend.capabilities.models);
+  }
+
+  private checkAgentModel(step: Extract<WorkflowDefinition['steps'][number], { kind: 'agent' }>, models: readonly ModelInfo[]) {
+    step = confirmedAgentStep(step, models);
+    const model = models.find(model => model.id === step.model);
+    if (!model) throw new WorkflowValidationError(`Agent model “${step.model}” is unavailable. Refresh models and select an available model.`);
     const levels = model.effortLevels ?? [];
-    if (levels.length > 0 && !levels.includes(step.effort)) throw new Error(`Effort “${step.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.join(', ')}.`);
-    if (levels.length === 0 && step.effort !== 'off') throw new Error(`${model.label ?? model.id} has no Effort control. Re-select the model to use internal off.`);
+    if (levels.length ? !levels.includes(step.effort) : step.effort !== 'off') throw new WorkflowValidationError(`Effort “${step.effort}” is unsupported for ${model.label ?? model.id}. Choose one of ${levels.length ? levels.join(', ') : 'off'}.`);
+    return step;
   }
 
   private checkMcp(sessionId: string, tool: import('../protocol/workflows.ts').McpToolSnapshot): void {
-    const connection = this.host.workflowMcpConnections(sessionId).find(connection => connection.id === tool.connectionId);
+    const connection = this.connections(sessionId).find(connection => connection.id === tool.connectionId);
     if (!connection || connectionIdentity(connection) !== tool.identity) throw new Error('MCP connection removed, disabled or changed. Enable the original connection or reselect the tool in the workflow editor.');
     validateMcpSchemas(tool);
   }
 
-  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[], isolationMode = this.config.filesystemIsolationMode()): Promise<McpToolDiscovery> {
+  async discoverMcp(sessionId: string, connectionId: string, expected?: import('../protocol/workflows.ts').McpToolSnapshot | import('../protocol/workflows.ts').McpToolSnapshot[], isolationMode = this.config.filesystemIsolationMode(), signal?: AbortSignal): Promise<McpToolDiscovery> {
     const pinned = expected ? (Array.isArray(expected) ? expected : [expected]) : [];
     for (const tool of pinned) this.checkMcp(sessionId, tool);
-    const session = await this.host.openWorkflowMcp(sessionId, connectionId, isolationMode);
+    signal?.throwIfAborted();
+    const session = await this.openMcp(sessionId, connectionId, isolationMode, signal);
+    const abort = () => { void session.dispose().catch(() => {}); };
+    signal?.addEventListener('abort', abort, { once: true });
     try {
+      signal?.throwIfAborted();
       await session.open();
+      signal?.throwIfAborted();
       if (session.status()[0]?.state !== 'connected') throw new Error('MCP connection unavailable. Sign in in MCP Settings or reconfigure the server, then retry manually.');
       // Preflight validates only pinned tools, not unrelated advertised schemas.
       const tools: McpToolDiscovery['tools'] = [], errors: McpToolDiscovery['errors'] = [];
@@ -750,17 +834,17 @@ export class WorkflowExecutionService {
         if (!tool || tool.serverIdentity !== expected.serverIdentity || !sameSchema(tool.inputSchema, expected.inputSchema) || !sameSchema(tool.outputSchema, expected.outputSchema)) throw new Error('MCP tool or schema changed. Reselect the tool in the workflow editor; this execution will not retarget it.');
       }
       return { tools, errors };
-    } finally { await session.dispose(); }
+    } finally { signal?.removeEventListener('abort', abort); await session.dispose(); }
   }
 
   mcpConnections(sessionId: string) {
     return { connections: this.host.workflowMcpConnections(sessionId).map(({ id, name, transport }) => ({ id, name, transport })) };
   }
 
-  private async mcpPermission(context: ExecutorContext): Promise<void> {
+  private async mcpPermission(context: ExecutorContext & { sessionId: string }): Promise<void> {
     if (context.permission !== 'ask') return;
     const id = randomUUID(), callId = randomUUID();
-    const view = this.privateView(context.sessionId, context.executionId);
+    const view = this.privateView(executionOwner(context), context.executionId);
     const tool = context.step.kind === 'mcp' ? context.step.tool.toolName : 'MCP';
     const decision = new Promise<boolean>(resolve => this.directPermissions.set(id, { sessionId: context.sessionId, executionId: context.executionId, callId, resolve }));
     const abort = () => { this.directPermissions.get(id)?.resolve(false); };
@@ -775,7 +859,7 @@ export class WorkflowExecutionService {
       ...attemptIdentity(context), subagentId: id, callId, tool, direct: true,
       details, scope, context: relayContext(execution, context.step.id, attempt, context.invocationId),
     });
-    this.savePrivate(context.sessionId, context.executionId, view);
+    this.savePrivate(executionOwner(context), context.executionId, view);
     if (context.signal.aborted) abort();
     let decided = false;
     try {
@@ -791,29 +875,29 @@ export class WorkflowExecutionService {
       this.directPermissions.delete(id);
       this.dropRelays(request => request.subagentId === id, !decided);
       view.permissions = view.permissions.filter(prompt => prompt.subagentId !== id);
-      this.savePrivate(context.sessionId, context.executionId, view);
+      this.savePrivate(executionOwner(context), context.executionId, view);
     }
   }
 
   private async mcp(context: ExecutorContext): Promise<Json> {
     if (context.step.kind !== 'mcp') throw new Error('Invalid MCP step');
     const expected = context.step.tool;
-    this.checkMcp(context.sessionId, expected);
+    this.checkMcp(executionOwner(context), expected);
     validateJsonSchema(expected.inputSchema, context.input);
     if (!context.input || typeof context.input !== 'object' || Array.isArray(context.input)) throw new Error('MCP arguments must be an object');
     assertNoSecrets(context.input, this.host.workflowMcpCredentials(), true);
-    await this.mcpPermission(context);
-    this.checkMcp(context.sessionId, expected);
+    if (context.permission === 'ask') await this.mcpPermission(await this.attachContext(context));
+    this.checkMcp(executionOwner(context), expected);
     context.signal.throwIfAborted();
     const isolationMode = this.runtimeSnapshots.get(context.executionId)?.isolationMode ?? 'bubblewrap';
-    const session = await this.host.openWorkflowMcp(context.sessionId, expected.connectionId, isolationMode);
+    const session = await this.openMcp(executionOwner(context), expected.connectionId, isolationMode, context.signal);
     const abort = () => { void session.dispose(); };
     context.signal.addEventListener('abort', abort, { once: true });
     const values = () => [...(this.secretValues.get(context.executionId) ?? []), ...this.host.workflowMcpCredentials()];
-    const view = this.privateView(context.sessionId, context.executionId);
+    const view = this.privateView(executionOwner(context), context.executionId);
     const activity = (text: string) => {
       this.appendActivity(context, view, { type: 'notice', level: 'info', text }, context.step.id);
-      this.savePrivate(context.sessionId, context.executionId, view);
+      this.savePrivate(executionOwner(context), context.executionId, view);
     };
     try {
       await session.open();
@@ -821,7 +905,7 @@ export class WorkflowExecutionService {
       const tool = session.tools().find(tool => tool.definition.name === expected.toolName && tool.connectionId === expected.connectionId);
       if (session.status()[0]?.state !== 'connected' || !tool) throw new Error('MCP tool unavailable. Sign in in MCP Settings or reconfigure the original server; retry manually.');
       if (tool.serverIdentity !== expected.serverIdentity || !sameSchema(tool.definition.inputSchema, expected.inputSchema) || !sameSchema(tool.definition.outputSchema, expected.outputSchema)) throw new Error('MCP tool schema changed. Reselect the tool; this execution cannot retarget it.');
-      this.checkMcp(context.sessionId, expected);
+      this.checkMcp(executionOwner(context), expected);
       activity('Calling MCP directly. No model or tokens. Cancellation is not rollback; remote effects may already occur.');
       const result = await tool.call(context.input, context.signal, context.step.timeoutMs ?? 60_000);
       const output = boundedMcpValue({ structuredContent: result.structuredContent ?? null, content: result.content });
@@ -833,8 +917,9 @@ export class WorkflowExecutionService {
     finally { context.signal.removeEventListener('abort', abort); await session.dispose(); }
   }
 
-  private async agent(context: ExecutorContext): Promise<Json> {
-    if (context.step.kind !== 'agent') throw new Error('Invalid Agent step');
+  private async agent(incoming: ExecutorContext & { sessionId: string }): Promise<Json> {
+    if (incoming.step.kind !== 'agent') throw new Error('Invalid Agent step');
+    const context = { ...incoming, step: this.checkAgent(incoming.sessionId, incoming.step) };
     const resolvedInstructions = context.step.instructions;
     const backend = this.host.workflowSession(context.sessionId).session;
     if (!backend?.startWorkflowSubagent) throw new Error('Workflow Backend Session is unavailable');
@@ -858,7 +943,7 @@ export class WorkflowExecutionService {
     for (const [alias, reference] of Object.entries(context.step.secrets ?? {})) aliases[alias] = this.secrets.resolve(reference, context.signal);
     const values = uniqueCredentials([...(this.secretValues.get(context.executionId) ?? []), ...Object.values(aliases)]);
     const id = randomUUID();
-    const view = this.privateView(context.sessionId, context.executionId);
+    const view = this.privateView(executionOwner(context), context.executionId);
     const key = spendKey(context.step.id, context.invocationId);
     const priorSpend = view.stepSpend[key];
     const requestIds = new Map<string, string>();
@@ -908,7 +993,7 @@ export class WorkflowExecutionService {
           view.stepSpend[key] = sumSpend([...(priorSpend ? [priorSpend] : []), event.spend]);
           view.spend = sumSpend(Object.values(view.stepSpend));
         }
-        this.savePrivate(context.sessionId, context.executionId, view);
+        this.savePrivate(executionOwner(context), context.executionId, view);
         if (event.type === 'spend' && view.spend) this.host.workflowSpend(context.sessionId, context.executionId, view.spend);
       },
     });
@@ -941,7 +1026,7 @@ export class WorkflowExecutionService {
       this.dropRelays(request => request.subagentId === id);
       view.enquiries = view.enquiries.filter(item => item.subagentId !== id);
       view.permissions = view.permissions.filter(item => item.subagentId !== id);
-      this.savePrivate(context.sessionId, context.executionId, view);
+      this.savePrivate(executionOwner(context), context.executionId, view);
     }
   }
 
@@ -963,17 +1048,50 @@ export class WorkflowExecutionService {
   }
 
   private watch(record: WorkflowExecution): void {
-    void this.scheduler.wait(record.sessionId, record.id).then(result => {
+    const publication = this.scheduler.wait(executionOwner(record), record.id).then(result => {
       const credentials = this.secretValues.get(record.id) ?? [];
-      this.publishResult(result, credentials);
+      return this.publishScheduledResult(result, credentials);
     }).catch(() => {}).finally(() => {
-      if (this.scheduler.hasPendingDeadline(record.sessionId, record.id)) return;
+      const owner = executionOwner(record);
+      if (this.scheduler.get(owner, record.id).status === 'running' || this.scheduler.hasPendingDeadline(owner, record.id)) return;
       this.snapshots.delete(record.id);
       this.secretValues.delete(record.id);
     });
+    if (record.occurrenceId) {
+      const owner = executionOwner(record);
+      const publications = this.scheduledPublications.get(owner) ?? new Set<Promise<void>>();
+      this.scheduledPublications.set(owner, publications);
+      publications.add(publication);
+      const settled = () => {
+        publications.delete(publication);
+        if (!publications.size) this.scheduledPublications.delete(owner);
+      };
+      void publication.then(settled, settled);
+    }
+  }
+
+  private async publishScheduledResult(result: WorkflowExecution, credentials: readonly string[]) {
+    if (result.occurrenceId && result.status === 'recovery-required' && !result.sessionId) {
+      try {
+        const sessionId = await this.resources.occurrence(executionOwner(result)).attach();
+        this.scheduler.associate(result.occurrenceId, result.id, sessionId);
+        result = this.scheduler.get(executionOwner(result), result.id);
+      } catch {}
+    }
+    try {
+      if (result.occurrenceId) await this.onScheduledResult?.(result);
+      if (result.sessionId) this.publishResult(result, credentials);
+    } finally {
+      if (result.occurrenceId) {
+        const owner = executionOwner(result);
+        const current = this.scheduler.get(owner, result.id);
+        if (current.status !== 'running' && current.status !== 'recovery-required' && !this.scheduler.hasPendingDeadline(owner, result.id)) await this.resources.close(owner);
+      }
+    }
   }
 
   private publishResult(result: WorkflowExecution, knownCredentials: readonly string[] = []): void {
+    if (!result.sessionId) return;
     if (!result.testStepId && ['recovery-required', 'completed', 'completed-with-recovery', 'cancelled'].includes(result.status)) {
       this.requestNaming(result.sessionId, result.id, () => {
         const { results, errors } = outcomeNamingData(result);
@@ -1038,15 +1156,16 @@ export class WorkflowExecutionService {
 
   private privatePath(sessionId: string, executionId: string): string {
     if (![sessionId, executionId].every(value => /^[a-zA-Z0-9_-]+$/.test(value))) throw new Error('Invalid execution identity');
-    return join(this.store.stateRoot, 'sessions', sessionId, 'workflow-activity', executionId + '.json');
+    const record = this.scheduler.get(sessionId, executionId);
+    return join(this.store.ownerPath(executionOwner(record)), 'workflow-activity', executionId + '.json');
   }
 
   private savePrivate(sessionId: string, executionId: string, view: PrivateView): void {
     const path = this.privatePath(sessionId, executionId);
-    const directoryPath = join(this.store.stateRoot, 'sessions', sessionId, 'workflow-activity');
+    const directoryPath = join(this.store.ownerPath(executionOwner(this.scheduler.get(sessionId, executionId))), 'workflow-activity');
     if (!existsSync(directoryPath)) {
-      mkdirSync(directoryPath, { mode: 0o700 });
-      const parent = openSync(join(this.store.stateRoot, 'sessions', sessionId), 'r');
+      mkdirSync(directoryPath, { recursive: true, mode: 0o700 });
+      const parent = openSync(this.store.ownerPath(executionOwner(this.scheduler.get(sessionId, executionId))), 'r');
       try { fsyncSync(parent); } finally { closeSync(parent); }
     }
     const fd = openSync(path + '.tmp', 'w', 0o600);
@@ -1055,132 +1174,4 @@ export class WorkflowExecutionService {
     const directory = openSync(directoryPath, 'r');
     try { fsyncSync(directory); } finally { closeSync(directory); }
   }
-}
-
-export class WorkflowConflict extends Error { constructor() { super('Workflow decision or slot is no longer available'); } }
-
-function sameProject(project: string, scope: string): boolean {
-  try { return realpathSync(project) === scope; } catch { return false; }
-}
-
-function redact<T>(value: T, secrets: string[]): T { return redactCredentials(value, secrets); }
-
-function redactEvent<T extends BackendEvent | { type: 'spend'; spend: Spend }>(event: T, secrets: string[], publicId: (id: string) => string): T {
-  const visit = (item: unknown, path: string[] = []): unknown => {
-    if (typeof item === 'string') {
-      const key = path.at(-1)!;
-      if (path.length === 1 && ['type', 'state', 'on', 'decision', 'reason', 'level', 'trigger', 'effort'].includes(key)) return item;
-      if (['id', 'callId', 'askId', 'subagentId', 'turnId'].includes(key) && (path.length === 1 || path[0] === 'producer')) return publicId(item);
-      return redact(item, secrets);
-    }
-    if (Array.isArray(item)) return item.map(value => visit(value, path));
-    if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, value]) => [key,
-      path.length === 0 && ['input', 'update', 'result'].includes(key) ? redact(value, secrets) : visit(value, [...path, key]),
-    ]));
-    return item;
-  };
-  return visit(event) as T;
-}
-
-function withConfirmedNoControlOff(definition: WorkflowDefinition, models: readonly ModelInfo[]): WorkflowDefinition {
-  let changed = false;
-  const steps = definition.steps.map(step => {
-    if (step.kind !== 'agent') return step;
-    const model = models.find(candidate => candidate.id === step.model);
-    if (!model || (model.effortLevels?.length ?? 0) > 0 || step.effort === 'off') return step;
-    changed = true;
-    return { ...step, effort: 'off' as const };
-  });
-  return changed ? { ...definition, steps } : definition;
-}
-
-function publicStep({ secrets, ...step }: WorkflowStep) { return step; }
-
-function publicDefinition(definition: WorkflowDefinition) {
-  return { ...definition, steps: definition.steps.map(publicStep) };
-}
-
-function publicExecutionData(record: WorkflowExecution) {
-  const corrections = (updates: WorkflowExecution['definitionUpdates']) => updates?.map(update => ({ ...update, previousStep: publicStep(update.previousStep), nextStep: publicStep(update.nextStep) }));
-  return {
-    ...record,
-    definition: publicDefinition(record.definition),
-    definitionUpdates: corrections(record.definitionUpdates),
-    retainedDefinitions: record.retainedDefinitions && Object.fromEntries(Object.entries(record.retainedDefinitions).map(([id, definition]) => [id, publicDefinition(definition)])),
-    invocations: record.invocations && Object.fromEntries(Object.entries(record.invocations).map(([id, invocation]) => [id, { ...invocation, definitionUpdates: corrections(invocation.definitionUpdates) }])),
-  };
-}
-
-function assertNoSecrets(value: unknown, secrets: string[], checkKeys = false): void {
-  const visit = (item: unknown): boolean => {
-    if (typeof item === 'string') return redact(item, secrets) !== item;
-    if (Array.isArray(item)) return item.some(visit);
-    return !!item && typeof item === 'object' && Object.entries(item).some(([key, value]) => (checkKeys && visit(key)) || visit(value));
-  };
-  if (visit(value)) throw new Error('Saved workflow data cannot contain secret values');
-}
-
-function safeError(error: unknown, values: string[]): Error {
-  const message = redact(error instanceof Error ? error.message : String(error), values);
-  return error instanceof WorkflowStepError ? new WorkflowStepError(message, error.partialOutput === undefined ? undefined : redact(error.partialOutput, values)) : new Error(message);
-}
-
-function outcomeNamingData(record: WorkflowExecution): { results: unknown; errors: unknown } {
-  const stepNames = new Map(record.definition.steps.map(step => [step.id, step.name]));
-  function* results() {
-    for (const id in record.steps) {
-      const output = record.steps[id]!.output;
-      if (output !== undefined) yield { step: stepNames.get(id) ?? id, output };
-    }
-  }
-  function* errors() {
-    for (const id in record.steps) for (const attempt of record.steps[id]!.attempts) {
-      if (attempt.error !== undefined) yield {
-        step: stepNames.get(id) ?? id, attempt: attempt.number, error: attempt.error,
-        ...(attempt.partialOutput === undefined ? {} : { partialOutput: attempt.partialOutput }),
-      };
-    }
-  }
-  return {
-    results: record.result === undefined ? results() : record.result,
-    errors: errors(),
-  };
-}
-
-function uniqueCredentials(values: readonly string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
-}
-
-function relayContext(record: WorkflowExecution, stepId: string, attempt: number, invocationId?: string): string {
-  const step = record.definition.steps.find(item => item.id === stepId);
-  return `Workflow “${record.definition.name}” · Step “${step?.name ?? stepId}” · Attempt ${attempt}${invocationId ? ` · Invocation ${invocationId}` : ''}${record.testStepId ? ' · Step test' : ''}`;
-}
-
-function relaySignal(request: AbortSignal, parent?: AbortSignal): AbortSignal {
-  return parent ? AbortSignal.any([request, parent]) : request;
-}
-
-function selectWorkflowInvocation(root: WorkflowExecution, invocationId?: string): WorkflowExecution {
-  return invocationId === undefined ? root : { ...invocationExecution(root, invocationId), id: root.id };
-}
-
-function attemptIdentity(context: ExecutorContext): { stepId: string; attempt: number; invocationId?: string } {
-  return { stepId: context.step.id, attempt: context.attempt ?? 1, ...(context.invocationId === undefined ? {} : { invocationId: context.invocationId }) };
-}
-
-function spendKey(stepId: string, invocationId?: string): string {
-  return invocationId === undefined ? stepId : JSON.stringify([invocationId, stepId]);
-}
-
-function sumSpend(values: Spend[]): Spend {
-  const result: Spend = { tokens: 0, cached: 0, costUSD: 0, models: [] };
-  for (const value of values) {
-    result.tokens += value.tokens; result.cached += value.cached; result.costUSD += value.costUSD;
-    for (const model of value.models) {
-      const existing = result.models.find(item => item.id === model.id);
-      if (existing) { existing.tokens += model.tokens; existing.cached += model.cached; existing.costUSD += model.costUSD; }
-      else result.models.push({ ...model });
-    }
-  }
-  return result;
 }

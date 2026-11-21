@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { it } from "node:test";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { SessionHost } from "../../src/daemon/host.ts";
 import { gate, piFixture, until, userText } from "./pi-fixture.ts";
 
@@ -114,6 +115,28 @@ it("does not start inference when disposal races prompt preflight", { timeout: 1
   const turn = session.prompt("Late prompt");
   await session.dispose();
   await turn;
+  assert.equal(fixture.requests.length, 0);
+});
+
+it("cancels a prompt disposed during an asynchronous authentication check", { timeout: 15_000 }, async (t) => {
+  const checking = gate();
+  const hold = gate();
+  t.after(() => hold.release());
+  const fixture = await piFixture(t, () => ({ text: "Must not run" }));
+  const session = await fixture.create();
+  const runtime = (session as unknown as { session: AgentSession }).session.modelRuntime;
+  const checkAuth = runtime.checkAuth.bind(runtime);
+  runtime.hasConfiguredAuth = () => false;
+  runtime.checkAuth = async (...args) => {
+    checking.release();
+    await hold.promise;
+    return checkAuth(...args);
+  };
+  const turn = session.prompt("Late prompt");
+  await checking.promise;
+  const disposal = session.dispose();
+  hold.release();
+  await Promise.all([turn, disposal]);
   assert.equal(fixture.requests.length, 0);
 });
 

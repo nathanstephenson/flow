@@ -11,6 +11,7 @@ import type { AutoCompaction } from "../../protocol/settings.ts";
 import type { WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
 import { PiSession } from "./index.ts";
 import { piAcceptsWorkflowEffort, piEffortLevels } from "./effort-capabilities.ts";
+import { findPiModel, piModelUnavailable } from "./model-selection.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
 import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { PiEnquiries } from "./enquiries.ts";
@@ -96,11 +97,11 @@ export class PiWorkflowSubagent implements WorkflowSubagentHandle {
     let compacting = false;
     try {
       controller.signal.throwIfAborted();
-      const model = parent.modelRuntime.getAvailableSnapshot().find((model) => `${model.provider}/${model.id}` === options.modelId);
-      if (!model) throw new Error(`Unknown workflow model: ${options.modelId}`);
+      const model = findPiModel(parent.modelRuntime.getAvailableSnapshot(), options.modelId);
+      if (!model) throw new Error(piModelUnavailable(options.modelId, "Unknown workflow model"));
       if (!["ask", "auto-accept"].includes(options.permissionMode)) throw new Error("Unsupported workflow permission mode");
       const scope = parent.sessionManager.getCwd();
-      const settingsManager = SettingsManager.inMemory({ retry: { enabled: false } });
+      const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, cacheWarming: "streaming" });
       const skillContext = options.skill
         ? `The leading Skill invocation is expanded as the user prompt. Follow it together with the mapped workflow input below.\n\nMapped workflow input (JSON):\n${JSON.stringify(options.input)}\n\nWorkflow constraints:${options.instructions.slice(options.skill.invocation.length)}`
         : options.instructions;

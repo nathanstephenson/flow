@@ -4,7 +4,7 @@ import type { WorkflowParent } from "../workflow-tools.ts";
 import type { WorkflowBuilder } from "../workflow-builder.ts";
 import type { SessionTools } from "../session-tools.ts";
 import type { EffortLevel, PermissionDecision } from "../../protocol/events.ts";
-import { WorkerRpc, errorText } from "./rpc.ts";
+import { WorkerRpc, errorText, waitForAbort } from "./rpc.ts";
 import { snapshot, type CreateMetadata, type McpToolMetadata, type WorkflowMetadata, type SessionSnapshot } from "./protocol.ts";
 import { killWorkerTree } from "./launcher.ts";
 import { encodeFrame, frameDecoder } from "./frames.ts";
@@ -39,11 +39,21 @@ export function runWorker(): void {
     writeFrame(encodeFrame(message), (error) => { if (error) void stop(); });
   };
   const rpc = new WorkerRpc(send, async (method, args, signal) => {
+    if (method === "mcp.initialize") {
+      signal.throwIfAborted();
+      if (creating || closing) throw new Error('Worker already initialized');
+      creating = true;
+      const options = args[0] as import('./protocol.ts').McpOnlyMetadata;
+      localMcp = new McpSession(options.connections, options.scope, undefined, true, undefined, undefined, undefined, 'none', undefined,
+        (connectionId, refresh) => rpc.call('mcp.token', [connectionId, refresh]));
+      localMcp.connectTimeoutMs = 120_000;
+      return;
+    }
     if (method === "create") {
       const ready = performance.now();
       if (creating || closing) throw new Error("Backend worker already initialized");
       creating = true;
-      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, sessionToolsEnabled, workflowBuilderInstructions, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
+      const { mcpTools, mcpConnectionIds, mcpSandbox, workflowEnabled, sessionToolsEnabled, workflowBuilderInstructions, piAuth, backendModule, backend: backendName = "pi", ...options } = args[0] as CreateMetadata;
       const workflowBuilder: WorkflowBuilder | undefined = workflowBuilderInstructions === undefined ? undefined : {
         instructions: workflowBuilderInstructions,
         read: (path) => rpc.call("workflowBuilder.read", [path]),
@@ -83,8 +93,19 @@ export function runWorker(): void {
         throw new Error(`Backend "${backendName}" is not available in this build: ${errorText(error)}`);
       }
       const imported = performance.now();
+      let initialAuth = piAuth;
       session = await backend.create({
         ...options,
+        ...(piAuth ? { piAuth: {
+          snapshot: async (signal?: AbortSignal) => {
+            signal?.throwIfAborted();
+            if (!initialAuth) return rpc.call('pi.auth.snapshot', [], signal);
+            const metadata = initialAuth;
+            initialAuth = undefined;
+            return metadata;
+          },
+          resolve: (providerId: string, signal?: AbortSignal) => rpc.call('pi.auth.resolve', [providerId], signal),
+        } } : {}),
         ...(workflowBuilder ? { workflowBuilder } : {
           ...(localMcp ? { mcp: localMcp }
             : mcpTools ? { mcp: { connections: (mcpConnectionIds ?? []).map((id) => ({ id })), tools: () => tools } as unknown as McpSession } : {}),
@@ -107,25 +128,26 @@ export function runWorker(): void {
       setImmediate(() => process.stdout.end(() => process.exit(0)));
       return;
     }
-    if (!session || closing) throw new Error("Backend worker is not running");
+    if (closing || (!session && (!localMcp || !method.startsWith('mcp.')))) throw new Error("Worker is not running");
     let result: unknown;
     switch (method) {
-      case "prompt": result = await session.prompt(args[0] as string, args[1] as PromptAttachment[] | undefined); break;
-      case "abort": result = await session.abort(); break;
-      case "setModel": result = await session.setModel(args[0] as string); break;
-      case "setEffort": result = await session.setEffort(args[0] as EffortLevel); break;
+      case "prompt": result = await session!.prompt(args[0] as string, args[1] as PromptAttachment[] | undefined, args[2] as string | undefined); break;
+      case "abort": result = await session!.abort(); break;
+      case "setModel": result = await session!.setModel(args[0] as string); break;
+      case "setEffort": result = await session!.setEffort(args[0] as EffortLevel); break;
       case "setPermissionMode": {
         const mode = args[0];
         if (mode !== "ask" && mode !== "auto" && mode !== "always") throw new Error("Invalid permission mode");
-        if (!session.setPermissionMode) throw new Error("Permission mode changes are not supported");
-        result = await session.setPermissionMode(mode);
+        if (!session!.setPermissionMode) throw new Error("Permission mode changes are not supported");
+        result = await session!.setPermissionMode(mode);
         break;
       }
-      case "compact": result = await session.compact?.(args[0] as string | undefined); break;
-      case "skills": result = await session.skills?.(); break;
-      case "answerEnquiry": result = await session.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
-      case "answerPermission": result = await session.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
-      case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session.refreshMcp?.(); break;
+      case "compact": result = await session!.compact?.(args[0] as string | undefined); break;
+      case "rewindFiles": if (!session!.rewindFiles) throw new Error("File rewind is not supported"); result = await session!.rewindFiles(args[0] as string); break;
+      case "skills": result = await session!.skills?.(); break;
+      case "answerEnquiry": result = await session!.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
+      case "answerPermission": result = await session!.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
+      case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session!.refreshMcp?.(); break;
       case "mcp.open": {
         if (!localMcp) throw new Error("No sandbox MCP clients");
         const opening = localMcpOpening ?? localMcp.open();
@@ -137,23 +159,26 @@ export function runWorker(): void {
       case "mcp.retry": if (!localMcp) throw new Error("No sandbox MCP clients"); await localMcp.retry(args[0] as string); result = localMcp.status(); break;
       case "mcp.direct": {
         if (!localMcp) throw new Error("No sandbox MCP clients");
+        signal.throwIfAborted();
         const id = args[0] as string;
-        if (localMcp.status().find((state) => state.id === id)?.state !== "connected") await localMcp.retry(id).catch(() => {});
+        if (localMcp.status().find((state) => state.id === id)?.state !== "connected") await waitForAbort(localMcp.retry(id).catch(() => {}), signal);
+        signal.throwIfAborted();
         result = { status: localMcp.status().find((state) => state.id === id) ?? { id, state: "failed", tools: 0 },
           tools: localMcp.tools().filter((tool) => tool.connectionId === id).map(({ call: _, ...tool }) => tool) };
         break;
       }
       case "mcp.callTool": {
+        signal.throwIfAborted();
         const tool = localMcp?.tools().find((entry) => entry.name === args[0]);
         if (!tool) throw new Error("Unknown MCP tool");
         result = await tool.call(args[1] as Record<string, unknown>, signal, args[2] as number | undefined);
         break;
       }
       case "workflow.start": {
-        if (!session.startWorkflowSubagent) throw new Error("Workflow Subagents are not supported");
+        if (!session!.startWorkflowSubagent) throw new Error("Workflow Subagents are not supported");
         const id = args[0] as string;
         if (workflows.has(id)) throw new Error("Duplicate workflow handle");
-        const handle = session.startWorkflowSubagent({ ...(args[1] as WorkflowMetadata), emit: (activity) => rpc.notify("workflow.event", { id, activity }) });
+        const handle = session!.startWorkflowSubagent({ ...(args[1] as WorkflowMetadata), emit: (activity) => rpc.notify("workflow.event", { id, activity }) });
         workflows.set(id, handle);
         void handle.done.then(
           (value) => rpc.notify("workflow.done", { id, value }),
@@ -166,7 +191,7 @@ export function runWorker(): void {
       case "workflow.cancel": result = await workflows.get(args[0] as string)?.cancel(); break;
       default: throw new Error(`Unknown worker method: ${method}`);
     }
-    rpc.notify("snapshot", publishSnapshot());
+    if (session) rpc.notify("snapshot", publishSnapshot());
     return result;
   }, () => {});
 

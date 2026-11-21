@@ -31,9 +31,9 @@ export class SharedSandbox {
   roots(): string[] {
     const projectRoot = this.projectRoot();
     if (!projectRoot) throw new Error(`${sandboxUnavailable().message}: a shared sandbox needs a Project Root`);
-    const worktrees = join(this.stateRoot, "worktrees"), sessions = join(this.stateRoot, "sessions");
-    for (const path of [worktrees, sessions]) mkdirSync(path, { recursive: true });
-    return [realpathSync(projectRoot), realpathSync(worktrees), workflowBuilderFolder(), realpathSync(sessions)];
+    const worktrees = join(this.stateRoot, "worktrees"), sessions = join(this.stateRoot, "sessions"), executions = join(this.stateRoot, "workflow-schedules", "executions");
+    for (const path of [worktrees, sessions, executions]) mkdirSync(path, { recursive: true });
+    return [realpathSync(projectRoot), realpathSync(worktrees), workflowBuilderFolder(), realpathSync(sessions), realpathSync(executions)];
   }
 
   /** Single-flight: creates the VM when none fits the mounts and every session that holds it can be evicted. */
