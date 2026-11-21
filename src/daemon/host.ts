@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks } from "./pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
 import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
@@ -2479,6 +2479,8 @@ export class SessionHost {
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, setPullRequestDraft(this.record(command.sessionId).scope, command.input));
       case "rerun_pull_request_checks":
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, rerunPullRequestChecks(this.record(command.sessionId).scope, command.input));
+      case "pull_request_check_log":
+        return await checkLog(this.record(command.sessionId).scope, command.pr, command.jobId);
       case "stack_status":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
       case "prepare_stack":

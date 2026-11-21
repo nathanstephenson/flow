@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { it } from "node:test";
 import { transformSync } from "esbuild";
+import { checkDraftBlock, threadDraftBlock } from "../web/src/presentation/pull-request.ts";
 
 function managedStack(branches: { name: string; pr?: { number: number; state?: string; title?: string; url?: string } | undefined; isMerged?: boolean }[]) {
   const members = branches.map((branch, index) => ({ ...branch, isCurrent: index === branches.length - 1, isMerged: branch.isMerged ?? false, isQueued: false, needsRebase: false, ...(branch.pr ? { pr: { ...branch.pr, state: branch.pr.state ?? "OPEN" } } : {}) }));
@@ -101,6 +102,12 @@ it("refreshes PR data without remounting comment drafts from Changes", async () 
   const after = find(render(), "PullRequestPane");
   assert.equal(after.key, before.key);
   assert.equal(after.props.revision, before.props.revision + 1);
+});
+
+it("gives the Pull request tab the Add to Draft callback", () => {
+  const pane = component("git-pane", async () => undefined);
+  const onAddToDraft = () => {};
+  assert.equal(find(pane.render("GitPane", { sessionId: "session", onAddToDraft }), "PullRequestPane").props.onAddToDraft, onAddToDraft);
 });
 
 it("refreshes local Git State and forces one pull request poll from the header Refresh", async () => {
@@ -209,11 +216,13 @@ function prPane(details: Record<string, unknown> = prDetails(), read?: () => Pro
     if (write) return write(input);
     if (input.type === "suggest_git_text") return { title: "Suggested", body: "Suggested body" };
   }, { document });
-  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {} };
+  const added: string[] = [];
+  const draft = { result: "added" };
+  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {}, onAddToDraft(block: string) { added.push(block); return draft.result; } };
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
-  return { calls, render, flush, load, document, listeners, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
+  return { calls, render, flush, load, document, listeners, added, draft, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
 }
 const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
 
@@ -243,6 +252,91 @@ it("shows one re-run button for each failed GitHub Actions run", async () => {
   assert.equal(buttons.length, 2);
   buttons[0]!.props.onClick();
   assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "rerun_pull_request_checks", sessionId: "session", input: { pr: prRef, runId: 7 } }]);
+});
+
+const checkRow = (tree: Element, name: string) => findAll(find(section(tree, "checks"), "ul"), "li").find(node => textContent(find(node, "a")) === name)!;
+const rowStatus = (row: Element) => textContent(find(row, "span", node => node.props.role === "status"));
+
+it("adds a review thread to the Draft and sends nothing", async () => {
+  const thread = { ...prDetails().threads[1], isOutdated: true, comments: [{ id: "C2", author: "alice", body: "Rename this.", url: "https://github.com/c2", createdAt: "2025-01-03" }] };
+  const { render, load, flush, added, writes } = prPane(prDetails({ threads: [thread] }));
+  await load();
+  const item = () => find(render(), "AccordionItem", node => node.props.value === "T_open");
+  findButton(item(), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(added, [threadDraftBlock(thread as never)]);
+  assert.deepEqual(writes(), []);
+  assert.equal(rowStatus(item()), "Added to Draft.");
+  findButton(item(), "Add to Draft").props.onClick();
+  assert.equal(added.length, 2);
+});
+
+it("reads the log of a failed Actions check once, then adds it to the Draft", async () => {
+  let answer!: (value: unknown) => void;
+  const { render, load, flush, added, writes } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? new Promise(resolve => { answer = resolve; }) : Promise.resolve());
+  await load();
+  const check = prDetails().checks[1]!;
+  findButton(checkRow(render(), "test a"), "Add to Draft").props.onClick();
+  findButton(checkRow(render(), "test a"), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "pull_request_check_log", sessionId: "session", pr: prRef, jobId: 2 }]);
+  assert.equal(findButton(checkRow(render(), "test a"), "Add to Draft").props.disabled, true);
+  assert.deepEqual(added, []);
+  answer({ text: "error: failed", truncated: true });
+  await flush();
+  assert.deepEqual(added, [checkDraftBlock(check, { text: "error: failed", truncated: true })]);
+  assert.equal(rowStatus(checkRow(render(), "test a")), "Added to Draft.");
+  assert.throws(() => findButton(checkRow(render(), "lint"), "Add to Draft"));
+});
+
+it("adds a check that is not a GitHub Actions job with its name and URL only", async () => {
+  const { render, load, flush, added, writes } = prPane();
+  await load();
+  findButton(checkRow(render(), "external"), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(writes(), []);
+  assert.deepEqual(added, ["Failed check: external\nURL: https://ci.example.com/1"]);
+  assert.equal(rowStatus(checkRow(render(), "external")), "Added to Draft without a log. This check is not a GitHub Actions job.");
+});
+
+it("adds nothing and shows the daemon's message when it refuses the log read", async () => {
+  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.reject(new Error("The branch's pull request has changed. Reload it before continuing.")) : Promise.resolve());
+  await load();
+  findButton(checkRow(render(), "deploy"), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(added, []);
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "Error: The branch's pull request has changed. Reload it before continuing.");
+  assert.equal(findButton(checkRow(render(), "deploy"), "Add to Draft").props.disabled, false);
+});
+
+it("keeps each Add to Draft status element mounted before the first message", async () => {
+  const { render, load } = prPane();
+  await load();
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "");
+  assert.equal(rowStatus(find(render(), "AccordionItem", node => node.props.value === "T_open")), "");
+});
+
+for (const [result, message] of [["question", "Answer the question first. Then add to the Draft."], ["locked", "This Agent Session cannot take a message. Nothing was added."]] as const) it(`says why nothing was added when the composer answers ${result}`, async () => {
+  const { render, load, flush, draft } = prPane();
+  await load();
+  draft.result = result;
+  const item = () => find(render(), "AccordionItem", node => node.props.value === "T_open");
+  findButton(item(), "Add to Draft").props.onClick();
+  await flush();
+  assert.equal(rowStatus(item()), message);
+  findButton(checkRow(render(), "external"), "Add to Draft").props.onClick();
+  await flush();
+  assert.equal(rowStatus(checkRow(render(), "external")), message);
+});
+
+it("adds a check with its name and URL only when the log cannot be read", async () => {
+  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.resolve(null) : Promise.resolve());
+  await load();
+  findButton(checkRow(render(), "deploy"), "Add to Draft").props.onClick();
+  await flush();
+  assert.deepEqual(added, [checkDraftBlock(prDetails().checks[3]!)]);
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "Added to Draft without a log. The job log could not be read or is too large.");
+  assert.throws(() => find(render(), "p", node => node.props.role === "alert"));
 });
 
 it("keeps typed reply and comment text across a reload", async () => {
@@ -406,7 +500,7 @@ it("disables every action while a write is in flight", async () => {
   findButton(render(), "Convert to draft").props.onClick();
   const buttons = findAll(render(), "Button");
   assert.ok(buttons.length >= 9);
-  for (const button of buttons) assert.equal(button.props.disabled, true, textContent(button.props.children));
+  for (const button of buttons) assert.equal(Boolean(button.props.disabled), textContent(button.props.children) !== "Add to Draft", textContent(button.props.children));
   for (const field of findAll(render(), "Textarea")) assert.equal(field.props.disabled, true);
   release();
   await flush();

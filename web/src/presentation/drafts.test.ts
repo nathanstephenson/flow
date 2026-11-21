@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  appendDraftText,
   pruneDrafts,
   replaceDraft,
   type Draft,
@@ -118,5 +119,21 @@ describe("pruning the Drafts of Agent Sessions that are gone", () => {
 
     assert.deepEqual(drafts, {});
     assert.deepEqual(revoke, ["blob:a"]);
+  });
+});
+
+describe("appending a block to a Draft", () => {
+  it("gives an empty Draft the block as is", () => {
+    assert.equal(appendDraftText("", "block"), "block");
+  });
+
+  it("puts one blank line between the typed text and the block", () => {
+    assert.equal(appendDraftText("typed", "block"), "typed\n\nblock");
+    assert.equal(appendDraftText("typed\n", "block"), "typed\n\nblock");
+    assert.equal(appendDraftText("typed\n\n", "block"), "typed\n\nblock");
+  });
+
+  it("adds the same block again", () => {
+    assert.equal(appendDraftText(appendDraftText("", "block"), "block"), "block\n\nblock");
   });
 });
