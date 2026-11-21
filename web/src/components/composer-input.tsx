@@ -134,12 +134,9 @@ export function ComposerInput({
         }),
       append: (block) => {
         const text = editor.state.doc.toString();
-        const next = appendDraftText(text, block);
-        editor.dispatch({
-          changes: { from: text.length, insert: next.slice(text.length) },
-          effects: EditorView.scrollIntoView(next.length, { y: "nearest" }),
-        });
         editor.focus();
+        editor.dispatch({ changes: { from: text.length, insert: appendDraftText(text, block).slice(text.length) } });
+        editor.dispatch({ effects: EditorView.scrollIntoView(editor.state.doc.length, { y: "nearest" }) });
       },
     };
 

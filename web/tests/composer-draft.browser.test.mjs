@@ -110,6 +110,15 @@ for (const browserName of browsers) describe(`${browserName}: Composer Add to Dr
     assert.deepEqual(await page.evaluate(() => window.sent), []);
   });
 
+  it("scrolls the input so the end of the appended block is visible", async () => {
+    const block = Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n");
+    for (const _ of [1, 2]) {
+      await page.evaluate(block => window.append(block), block);
+      await page.waitForTimeout(200);
+      assert.ok(await page.locator(".cm-scroller").evaluate(element => element.scrollHeight > element.clientHeight && element.scrollTop + element.clientHeight >= element.scrollHeight - 10));
+    }
+  });
+
   for (const status of ["dormant", "running"]) it(`appends while the Agent Session is ${status}`, async () => {
     await page.evaluate(status => window.renderStatus(status), status);
     await page.evaluate(() => { window.append("one"); window.append("two"); });
