@@ -13,14 +13,14 @@ import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
 type Tab = "Changes" | "Stack" | "PR";
-type Reads = { changes: number; pullRequest: number; mount: number };
+type Reads = { changes: number; stack: number; pullRequest: number; mount: number };
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
 
 export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
   const { connection } = useHost();
   const git = useGitState(sessionId);
-  const [reads, setReads] = useState<Reads>({ changes: 0, pullRequest: 0, mount: 0 });
+  const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
   const [view, setView] = useState<ChangesView>("uncommitted");
   const [step, setStep] = useState<Step>();
   const [busy, setBusy] = useState(false);
@@ -69,7 +69,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   }
 
   function refresh() {
-    reread("changes", "pullRequest");
+    reread("changes", "stack", "pullRequest");
     void run(() => connection.command({ type: "refresh_git", sessionId, pullRequest: true }));
   }
 
@@ -147,7 +147,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>
-        <StackPane key={sessionId} sessionId={sessionId} git={git} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("mount"); }} />
+        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("mount"); }} />
       </TabsContent>
       <TabsContent value="PR" keepMounted>
         <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onAddToDraft={onAddToDraft} />

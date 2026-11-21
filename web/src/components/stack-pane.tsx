@@ -20,13 +20,17 @@ function stateLine(branch: Branch): string {
   ].join(" · ");
 }
 
+function stackKey(view: StackView | undefined): string {
+  return JSON.stringify(view && [view.trunk, view.currentBranch, view.branches.map(branch => [branch.name, branch.pr?.number, branch.pr?.state, branch.isMerged, branch.isQueued, branch.needsRebase])]);
+}
+
 function moved(list: string[], from: number, to: number): string[] {
   const next = [...list];
   next.splice(to, 0, ...next.splice(from, 1));
   return next;
 }
 
-export function StackPane({ sessionId, git, disabled = false, onChange, onAvailable }: { sessionId: string; git?: GitState | undefined; disabled?: boolean; onChange: () => void; onAvailable?: (available: boolean) => void }) {
+export function StackPane({ sessionId, git, refresh = 0, disabled = false, onChange, onAvailable }: { sessionId: string; git?: GitState | undefined; refresh?: number; disabled?: boolean; onChange: () => void; onAvailable?: (available: boolean) => void }) {
   const { connection } = useHost();
   const [status, setStatus] = useState<StackStatus>();
   const [available, setAvailable] = useState(false);
@@ -40,16 +44,21 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
   const [output, setOutput] = useState("");
   const [syncFailed, setSyncFailed] = useState(false);
   const requestGeneration = useRef(0);
-  const gitKey = JSON.stringify([git?.branch, git?.head, git?.pr ?? null]);
+  const loadedBranch = useRef(git?.branch);
+  const gitKey = JSON.stringify([git?.branch, git?.head, git?.pr?.number, git?.pr?.state]);
 
   function load(): Promise<void> {
     const generation = ++requestGeneration.current;
-    setStatus(undefined);
-    setReview(undefined);
+    if (loadedBranch.current !== git?.branch) {
+      setStatus(undefined);
+      setReview(undefined);
+    }
+    loadedBranch.current = git?.branch;
     return connection.command<StackStatus>({ type: "stack_status", sessionId }).then(value => {
       if (generation !== requestGeneration.current) return;
       setReadError("");
       setStatus(value);
+      setReview(current => current && stackKey(current.view) === stackKey(value.view) ? current : undefined);
       setAvailable(value.available);
       setForm(current => value.create ? current?.current === value.create.current ? current : initialForm(value.create) : undefined);
     }, failure => { if (generation === requestGeneration.current) setReadError(String(failure)); });
@@ -57,17 +66,16 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
   useEffect(() => {
     void load();
     return () => { requestGeneration.current++; };
-  }, [connection, sessionId, gitKey]);
+  }, [connection, sessionId, gitKey, refresh]);
   const visible = available || Boolean(readError);
   useEffect(() => { onAvailable?.(visible); }, [visible, onAvailable]);
 
-  async function run(action?: StackInput["action"], input: Omit<StackInput, "action"> = {}) {
+  async function run(action: StackInput["action"], input: Omit<StackInput, "action"> = {}) {
     setBusy(true);
     setError("");
     setOutput("");
     try {
-      if (!action) await load();
-      else if ((action === "submit" || action === "sync") && !input.token) {
+      if ((action === "submit" || action === "sync") && !input.token) {
         setReview(await connection.command<StackReview>({ type: "prepare_stack", sessionId, action }));
       } else {
         setReview(undefined);
@@ -81,10 +89,8 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
       setReview(undefined);
       setError(String(failure));
       if (action === "sync" && input.token) setSyncFailed(true);
-      if (action) {
-        onChange();
-        await load();
-      }
+      onChange();
+      await load();
     } finally { setBusy(false); }
   }
   async function assist() {
@@ -104,10 +110,10 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
     setOutput("");
     try {
       const escape = (text: string) => text.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-      const html = prs.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title!)}</a></div>`).join("");
+      const html = prs.map(pr => `<div><a href="${escape(pr.url!)}">${escape(pr.title ?? pr.url!)}</a></div>`).join("");
       await navigator.clipboard.write([new ClipboardItem({
         "text/html": new Blob([html], { type: "text/html" }),
-        "text/plain": new Blob([prs.map(pr => pr.title).join("\n")], { type: "text/plain" }),
+        "text/plain": new Blob([prs.map(pr => pr.title ?? pr.url).join("\n")], { type: "text/plain" }),
       })]);
       setOutput(`${label} copied.`);
     } catch (failure) { setError(`Could not copy ${label === "Stack" ? "stack" : label}: ${String(failure)}`); }
@@ -119,8 +125,7 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
   return <section aria-label="Stack" className="space-y-3">
     <div className="flex items-center gap-2">
       <h2 className="font-medium">Stack</h2>
-      <Button size="sm" variant="outline" disabled={blocked || !!review} onClick={() => void run()}>Refresh stack</Button>
-      {pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.title || !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}
+      {pullRequests.length > 0 ? <Button size="icon-sm" variant="outline" aria-label="Copy stack" title="Copy stack" disabled={busy || pullRequests.some(pr => !pr.url)} onClick={() => void copyLinks()}><Copy aria-hidden="true" /></Button> : null}
     </div>
     {error || readError ? <p role="alert">{error || readError}</p> : null}
     {output ? <pre role="status" className="whitespace-pre-wrap text-xs">{output}</pre> : null}
@@ -133,7 +138,7 @@ export function StackPane({ sessionId, git, disabled = false, onChange, onAvaila
           {branch.pr?.title ? <p className="truncate">{branch.pr.title}</p> : null}
           <p className="text-xs text-muted-foreground">{branch.pr?.url ? <a className="underline" href={safePullRequestUrl(branch.pr.url)} target="_blank" rel="noreferrer">{stateLine(branch)}</a> : stateLine(branch)}</p>
         </div>
-        {branch.pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${branch.pr.number} link`} title={`Copy PR #${branch.pr.number} link`} disabled={busy || !branch.pr.title || !branch.pr.url} onClick={() => void copyLinks([branch.pr!], `PR #${branch.pr!.number}`)}><Copy aria-hidden="true" /></Button> : null}
+        {branch.pr ? <Button size="icon-sm" variant="outline" aria-label={`Copy PR #${branch.pr.number} link`} title={`Copy PR #${branch.pr.number} link`} disabled={busy || !branch.pr.url} onClick={() => void copyLinks([branch.pr!], `PR #${branch.pr!.number}`)}><Copy aria-hidden="true" /></Button> : null}
         <Button size="sm" variant="outline" disabled={blocked || !!review || status.rebasing || branch.isCurrent} onClick={() => void run("checkout", { branches: [branch.name] })}>Switch</Button>
       </li>)}
       <li className="py-1"><span className="font-mono text-muted-foreground">{status.view.trunk}</span> <span className="text-xs text-muted-foreground">Trunk</span></li>
