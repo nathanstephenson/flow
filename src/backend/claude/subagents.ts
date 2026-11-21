@@ -1,7 +1,7 @@
-import type { TurnEndReason } from "../../protocol/events.ts";
+import type { EffortLevel, TurnEndReason } from "../../protocol/events.ts";
 
-/** What a Subagent was called and asked to do, as the spawning tool call reported it. */
-export type SubagentBrief = { name: string; description?: string };
+/** What a Subagent was called and asked to do, as the spawning tool call reported it, and what it runs on. */
+export type SubagentBrief = { name: string; description?: string; model?: string; effort?: EffortLevel };
 
 /** A Subagent's brief and the Subagent that spawned it, `""` for the Agent Session's own model. */
 type Spawned = { brief: SubagentBrief; parent: string };
@@ -58,6 +58,16 @@ export class Subagents {
    */
   describe(callId: string): SubagentBrief | undefined {
     return this.spawned(callId)?.brief;
+  }
+
+  /** Correct what an open or detached Subagent runs on. Answers the new brief, or undefined when nothing changed. */
+  refine(callId: string, patch: Pick<SubagentBrief, "model" | "effort">): SubagentBrief | undefined {
+    const spawned = this.spawned(callId);
+    if (spawned === undefined) return undefined;
+    const { brief } = spawned;
+    if ((patch.model ?? brief.model) === brief.model && (patch.effort ?? brief.effort) === brief.effort) return undefined;
+    spawned.brief = { ...brief, ...patch };
+    return spawned.brief;
   }
 
   /**

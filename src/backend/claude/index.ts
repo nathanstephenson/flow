@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   query,
   type EffortLevel as SdkEffortLevel,
+  type HookInput,
   type ModelInfo as SdkModelInfo,
   type Options,
   type Query,
@@ -34,7 +35,7 @@ import type {
   Spend,
   TurnEndReason,
 } from "../../protocol/events.ts";
-import { clampEffort } from "../effort.ts";
+import { clampEffort, EFFORT_ORDER } from "../effort.ts";
 import { AsyncQueue } from "./async-queue.ts";
 import { ASK_TOOL, PendingEnquiries, questionsOf } from "./enquiries.ts";
 import { claudeMcpServers, refreshClaudeMcp } from "./mcp.ts";
@@ -172,11 +173,25 @@ function promptOf(input: unknown): string | undefined {
   return typeof prompt === "string" && prompt !== "" ? prompt : undefined;
 }
 
-export function briefOf(input: unknown): SubagentBrief {
-  const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown };
+export function briefOf(input: unknown, inherited: Pick<SubagentBrief, "model" | "effort"> = {},
+  agentModels: ReadonlyMap<string, string> = new Map()): SubagentBrief {
+  const fields = (input ?? {}) as { subagent_type?: unknown; description?: unknown; model?: unknown; effort?: unknown };
   const name = typeof fields.subagent_type === "string" ? fields.subagent_type : SUBAGENT_TOOL;
   const description = typeof fields.description === "string" ? fields.description : undefined;
-  return description === undefined ? { name } : { name, description };
+  const model = typeof fields.model === "string" ? fields.model : agentModels.get(name) ?? inherited.model;
+  const effort = EFFORT_ORDER.find((known) => known === fields.effort) ?? inherited.effort;
+  return {
+    name,
+    ...(description === undefined ? {} : { description }),
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  };
+}
+
+/** The model an `Agent` result says the Subagent ran on, as the picker names it where it can. */
+export function resolvedModelOf(result: unknown, aliasOf: ReadonlyMap<string, string>): string | undefined {
+  const resolved = (result as { resolvedModel?: unknown } | null | undefined)?.resolvedModel;
+  return typeof resolved === "string" ? aliasOf.get(resolved) ?? resolved : undefined;
 }
 
 /**
@@ -255,6 +270,8 @@ class ClaudeSession implements BackendSession {
   private announced: string | undefined;
   /** Alias (`opus[1m]`) keyed by the id the SDK reports once a model is resolved. */
   private aliasOf = new Map<string, string>();
+  /** The model each agent definition names, read once per session. `inherit` is left out. */
+  private agentModels = new Map<string, string>();
   /** What the human asked for, kept apart from what is in force so a clamp is never destructive. */
   private wantedEffort: EffortLevel | undefined;
   private effort: EffortLevel | undefined;
@@ -334,12 +351,18 @@ class ClaudeSession implements BackendSession {
       mcpServers: builder ? this.parentWorkflow : toolless ? {} : { ...claudeMcpServers(options.mcp), ...this.parentWorkflow, ...this.parentSessions },
       // Pre-approval and native Auto can bypass canUseTool. Hooks run before either, so even
       // read-only session tools remain parent-only when the SDK inherits MCP into Subagents.
-      ...(!builder && !toolless && options.sessionTools ? { hooks: { PreToolUse: [{
+      ...(!builder && !toolless ? { hooks: { PreToolUse: [...(options.sessionTools ? [{
         matcher: `${SESSION_TOOL_PREFIX}.*`,
-        hooks: [async (input) => input.hook_event_name === "PreToolUse" && input.agent_id
+        hooks: [async (input: HookInput) => input.hook_event_name === "PreToolUse" && input.agent_id
           ? { hookSpecificOutput: { hookEventName: "PreToolUse" as const, permissionDecision: "deny" as const,
               permissionDecisionReason: "Agent Session tools are available only to the parent Agent Session" } }
           : {}],
+      }] : []), {
+        // A Subagent's own tool calls are the only place the CLI says which effort it settled on.
+        hooks: [async (input) => {
+          if (input.hook_event_name === "PreToolUse" && input.agent_id) this.noteSubagentEffort(input.agent_id, input.effort?.level);
+          return {};
+        }],
       }] } } : {}),
       strictMcpConfig: true,
       // NOT bypassPermissions: it auto-approves before canUseTool is consulted, and the SDK warns
@@ -402,6 +425,7 @@ class ClaudeSession implements BackendSession {
     this.stream = (backendOptions.query ?? query)({ prompt: this.inbox, options: queryOptions });
     this.pump = this.consume();
     this.modelsReady = this.loadModels();
+    void this.loadAgentModels();
     // A meter that only fills once a turn ends reads as "no window" when it is really just early.
     // Occupancy is already meaningful here: system prompt, tools and memory files are loaded
     // before anything is sent.
@@ -434,6 +458,24 @@ class ClaudeSession implements BackendSession {
     // rather than waiting for the init message that only arrives with the first turn.
     this.noteBootedModel(this.bootedModel ?? this.modelId ?? defaultModel(models));
     await this.reapplyEffort();
+  }
+
+  /** Without the list a Subagent's starting model falls back to the parent's, which the result corrects. */
+  private async loadAgentModels(): Promise<void> {
+    try {
+      const agents = await this.stream.supportedAgents();
+      this.agentModels = new Map(agents.flatMap((agent) => agent.model && agent.model !== "inherit" ? [[agent.name, agent.model]] : []));
+    } catch {
+      return;
+    }
+  }
+
+  private noteSubagentEffort(taskId: string, level: string | undefined): void {
+    const callId = this.subagents.callIdOf(taskId);
+    const effort = EFFORT_ORDER.find((known) => known === level);
+    if (callId === undefined || effort === undefined) return;
+    const refined = this.subagents.refine(callId, { effort });
+    if (refined) this.emit({ type: "subagent", subagentId: callId, ...refined, ...attribution(this.subagents.parentOf(callId)), state: "running" });
   }
 
   /**
@@ -932,7 +974,10 @@ class ClaudeSession implements BackendSession {
           // tool-name allowlist ADR 0021 refuses.
           this.calls.called(block.id, { tool: block.name, ...attribution(producer) });
           if (block.name !== SUBAGENT_TOOL) continue;
-          const brief = briefOf(block.input);
+          const brief = briefOf(block.input, this.subagents.describe(producer) ?? {
+            ...(this.modelId === undefined ? {} : { model: this.modelId }),
+            ...(this.effort === undefined ? {} : { effort: this.effort }),
+          }, this.agentModels);
           this.subagents.spawn(block.id, brief, producer);
           this.emit({ type: "subagent", subagentId: block.id, ...brief, ...attribution(producer), state: "running" });
           const prompt = promptOf(block.input);
@@ -960,7 +1005,12 @@ class ClaudeSession implements BackendSession {
             // A launch receipt, not an answer: the Subagent is only now starting work, so it gets
             // no terminal snapshot and its card stays running. What it does give up is its hold on
             // the turn, which is what keeps the Steering Queue live while it runs (ADR 0016).
+            const resolved = resolvedModelOf(sdkMessage.tool_use_result, this.aliasOf);
+            const refined = resolved === undefined ? undefined : this.subagents.refine(block.tool_use_id, { model: resolved });
             if (isAsyncLaunch(sdkMessage.tool_use_result)) {
+              if (refined) {
+                this.emit({ type: "subagent", subagentId: block.tool_use_id, ...refined, ...attribution(this.subagents.parentOf(block.tool_use_id)), state: "running" });
+              }
               const released = this.subagents.background(block.tool_use_id);
               if (released) this.endTurn(released);
               continue;

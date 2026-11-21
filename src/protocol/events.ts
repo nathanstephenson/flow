@@ -325,13 +325,14 @@ export type AgentEvent =
    *
    * `name` is the subagent's declared identity where a backend reports one and the tool name where
    * it does not, so a client always has something to print. `description` is the brief it was given.
+   * `model` and `effort` are what it resolved to, which later changes to the parent do not touch.
    *
    * Repeated on every transition, latest-wins — never a started/ended pair, so a client joining at
    * `since: N` holds a lifecycle it can complete.
    *
    * `producer` is the Subagent that spawned this one, absent for one the Agent Session spawned.
    */
-  | ({ type: "subagent"; subagentId: string; name: string; description?: string; producer?: Producer } & SubagentState)
+  | ({ type: "subagent"; subagentId: string; name: string; description?: string; model?: string; effort?: EffortLevel; producer?: Producer } & SubagentState)
   /**
    * Instructions a Subagent received from the model that spawned it: its first brief and every
    * message sent to it later. The Backend Adapter reports these, because a model sends them inside

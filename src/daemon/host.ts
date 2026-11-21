@@ -3493,13 +3493,20 @@ function openBackgroundCalls(entries: LoggedEvent[]): { callId: string; tool: st
   return [...open].map(([callId, brief]) => ({ callId, ...brief }));
 }
 
-function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string; producer?: Producer }[] {
-  const open = new Map<string, { name: string; producer?: Producer }>();
+type OpenSubagent = { name: string; model?: string; effort?: EffortLevel; producer?: Producer };
+
+function openSubagents(entries: LoggedEvent[]): ({ subagentId: string } & OpenSubagent)[] {
+  const open = new Map<string, OpenSubagent>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "subagent") continue;
     if (event.state === "running" || event.state === "waiting") {
-      open.set(event.subagentId, { name: event.name, ...(event.producer === undefined ? {} : { producer: event.producer }) });
+      open.set(event.subagentId, {
+        name: event.name,
+        ...(event.model === undefined ? {} : { model: event.model }),
+        ...(event.effort === undefined ? {} : { effort: event.effort }),
+        ...(event.producer === undefined ? {} : { producer: event.producer }),
+      });
     } else open.delete(event.subagentId);
   }
   return [...open].map(([subagentId, brief]) => ({ subagentId, ...brief }));

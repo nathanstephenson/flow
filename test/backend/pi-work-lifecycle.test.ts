@@ -158,7 +158,7 @@ it("disposes background Subagents and process trees without starting a completio
   assert.ok(Number.isSafeInteger(pid) && pid > 0, "Background Call published an invalid PID");
   await session.dispose();
   child.release();
-  assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state), ["running", "aborted"]);
+  assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state), ["running", "running", "aborted"]);
   assert.deepEqual(fixture.events.filter((event) => event.type === "background_call").map((event) => event.state), ["running", "aborted"]);
   assert.equal(fixture.events.filter((event) => event.type === "turn_started").length, 1);
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });

@@ -253,6 +253,15 @@ describe("a Subagent in the Presentation Transcript", () => {
     assert.equal(entry?.kind === "subagent" && entry.status, "complete");
   });
 
+  it("keeps the model and effort it ran with", () => {
+    const view = lifecycle(
+      { type: "subagent", subagentId: "call_1", name: "explorer", state: "running" },
+      { type: "subagent", subagentId: "call_1", name: "explorer", model: "haiku", effort: "low", state: "complete" },
+    );
+    const entry = view.entries[0];
+    assert.deepEqual(entry?.kind === "subagent" && [entry.model, entry.effort], ["haiku", "low"]);
+  });
+
   it("drops waitingOn once it is no longer waiting", () => {
     const view = lifecycle(
       { type: "subagent", subagentId: "call_1", name: "explorer", state: "waiting", on: "permission" },

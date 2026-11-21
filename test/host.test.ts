@@ -618,6 +618,15 @@ describe("a Subagent the turn left behind", () => {
     assert.ok(types.lastIndexOf("subagent") < types.indexOf("session_dormant"));
   });
 
+  it("keeps the model and effort the Subagent ran with", async () => {
+    await backend.latest.setEffort("high");
+    backend.latest.beginSubagent("explorer");
+    await host.shutdown();
+
+    const aborted = events(host, sessionId).find((event) => event.type === "subagent" && event.state === "aborted");
+    assert.deepEqual(aborted?.type === "subagent" && [aborted.model, aborted.effort], ["fake-1", "high"]);
+  });
+
   it("leaves a Subagent that finished on its own alone", async () => {
     const subagent = backend.latest.beginSubagent("explorer");
     subagent.finish("complete");

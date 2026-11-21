@@ -2,12 +2,12 @@ import { ChevronLeft } from "lucide-react";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import type { Entry } from "@client/reduce.ts";
-import { useActivityKeys, useAgentSession, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
+import { useActivityKeys, useAgentSession, useChrome, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { useNow } from "@/lib/use-now.ts";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
-import { ordered, runningCalls, subagentKeys, timing } from "@/presentation/subagent-list.ts";
+import { ordered, runningCalls, subagentKeys, subtitle as subtitleOf, timing } from "@/presentation/subagent-list.ts";
 import { ownKeys } from "@/presentation/subagent-rows.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { cn } from "@/lib/utils.ts";
@@ -107,6 +107,7 @@ function SubagentRow({
   onSelect: () => void;
 }) {
   const entry = useEntry(view, key);
+  const models = useChrome(view).capabilities?.models ?? [];
   const calls = useRunningCalls(view, keys, key);
   if (entry?.kind !== "subagent") return null;
   const waiting = entry.status === "waiting";
@@ -117,7 +118,7 @@ function SubagentRow({
   // and they usually are the same type. The type is the answer to a second question, so it sits
   // under it. Falls back to the type when no brief was recorded, rather than leading with nothing.
   const title = entry.description ?? entry.name;
-  const subtitle = entry.description === undefined ? undefined : entry.name;
+  const subtitle = subtitleOf(entry, models);
 
   return (
     <li style={{ paddingLeft: `calc(var(--spacing) * ${depth * 4})` }}>

@@ -1,6 +1,7 @@
 import type { Entry } from "../../../src/client/reduce.ts";
 import { isWithin, producerKey, subagentParents } from "../../../src/client/subagent-tree.ts";
-import { toolSummary } from "../../../src/client/tool-summary.ts";
+import { fullToolSummary, toolSummary } from "../../../src/client/tool-summary.ts";
+import type { EffortLevel } from "../../../src/protocol/events.ts";
 
 /**
  * One piece of work running beside the turn, as the Composer's card stack shows it.
@@ -11,10 +12,12 @@ import { toolSummary } from "../../../src/client/tool-summary.ts";
  * `key` is where clicking it goes: a Subagent's Entry key, which the Agents tab opens, or the key of
  * the tool row that launched a Background Call, which the transcript scrolls to. A Subagent's Call
  * carries that Subagent's key in `subagent`, because its tool row is in the Agents tab instead.
+ *
+ * `full` is the main argument of the launching tool call in full, absent when it repeats `detail`.
  */
 export type RunningWork =
-  | { kind: "agent"; key: string; name: string; detail?: string; nested: NestedWork }
-  | { kind: "call"; key: string; tool: string; detail?: string; subagent?: string };
+  | { kind: "agent"; key: string; name: string; detail?: string; full?: string; model?: string; effort?: EffortLevel; nested: NestedWork }
+  | { kind: "call"; key: string; tool: string; detail?: string; full?: string; subagent?: string };
 
 /** Running Subagents below one, at any depth, and running Background Calls it or they started. */
 export type NestedWork = { agents: number; calls: number };
@@ -40,6 +43,9 @@ export function runningWork(keys: readonly string[], getEntry: (key: string) => 
         key,
         name: entry.name,
         ...(entry.description ? { detail: entry.description } : {}),
+        ...fullOf(getEntry(`tool:${entry.id}`), entry.description),
+        ...(entry.model ? { model: entry.model } : {}),
+        ...(entry.effort ? { effort: entry.effort } : {}),
         nested: nestedWork(keys, getEntry, parents, key),
       });
     } else if (
@@ -49,10 +55,22 @@ export function runningWork(keys: readonly string[], getEntry: (key: string) => 
       const tool = getEntry(`tool:${entry.id}`);
       const detail = tool?.kind === "tool" ? toolSummary(tool.input) : undefined;
       const subagent = producerKey(entry);
-      work.push({ kind: "call", key: `tool:${entry.id}`, tool: entry.tool, ...(detail ? { detail } : {}), ...(subagent ? { subagent } : {}) });
+      work.push({
+        kind: "call",
+        key: `tool:${entry.id}`,
+        tool: entry.tool,
+        ...(detail ? { detail } : {}),
+        ...fullOf(tool, detail),
+        ...(subagent ? { subagent } : {}),
+      });
     }
   }
   return work;
+}
+
+function fullOf(tool: Entry | undefined, detail: string | undefined): { full?: string } {
+  const full = tool?.kind === "tool" ? fullToolSummary(tool.input) : undefined;
+  return full && full !== detail ? { full } : {};
 }
 
 function live(entry: Extract<Entry, { kind: "subagent" }>): boolean {
