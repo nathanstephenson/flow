@@ -8,7 +8,7 @@ import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
-import { stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
+import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
 import type { StackInput, StackReview, StackStatus } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
 import { commit } from "./commit.ts";
@@ -424,7 +424,7 @@ export class SessionHost {
     const record = this.record(sessionId);
     await this.withGitOperation(record.scope, async () => {
       const status = await stackStatus(record.scope);
-      if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
+      if (!status.rebasing) throw new Error(status.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");
   }
@@ -453,7 +453,7 @@ export class SessionHost {
     const scope = this.gitScope(sessionId);
     return this.readGit(async () => {
       const status = await stackStatus(scope);
-      if (status.view) await stackTitles(scope, status.view);
+      if (status.view && !await stackTitles(scope, status.view)) status.notice = "Pull request titles could not be read. Copy uses the links.";
       return status;
     });
   }
