@@ -366,13 +366,10 @@ function ToolCallEntryView({
  */
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
-    <div className="flex items-start gap-2 px-1.5 py-1 text-foreground">
-      <MessageCircleQuestionMark aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        {entry.questions.map((question, index) => (
-          <EnquiryQuestionView key={question.question} entry={entry} index={index} query={query} />
-        ))}
-      </div>
+    <div className="text-foreground">
+      {entry.questions.map((question, index) => (
+        <EnquiryQuestionView key={question.question} entry={entry} index={index} query={query} />
+      ))}
     </div>
   );
 }
@@ -383,7 +380,8 @@ function EnquiryQuestionView({ entry, index, query }: { entry: Of<"enquiry">; in
   const others = question.options.filter((option) => !chosen.includes(option.label)).map((option) => option.label);
   return (
     <details className="group/question">
-      <summary className="-mx-1.5 flex cursor-default items-center gap-2 rounded-md px-1.5 text-sm select-none hover:bg-muted/50">
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-sm select-none hover:bg-muted/50 cursor-tilt relative [--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]">
+        <MessageCircleQuestionMark aria-hidden className={cn("size-3.5 shrink-0 text-muted-foreground", index > 0 && "invisible")} />
         <span className="min-w-0 truncate">
           <span className="text-muted-foreground">{question.header} </span>
           {chosen.length === 0 ? (
@@ -394,7 +392,7 @@ function EnquiryQuestionView({ entry, index, query }: { entry: Of<"enquiry">; in
         </span>
         <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/question:rotate-90" />
       </summary>
-      <div className="mt-0.5 mb-1.5 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+      <div className="mt-0.5 mb-1.5 ml-7 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
         <p>
           <Highlighted text={question.question} query={query} />
         </p>
