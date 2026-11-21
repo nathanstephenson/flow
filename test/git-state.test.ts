@@ -44,14 +44,14 @@ describe("readLocal", () => {
     writeFileSync(join(path, "a file.txt"), "untracked");
     git(path, "mv", "README.md", "moved.md");
     const state = await readLocal(path);
-    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 4, ahead: 0, behind: 0, upstream: false, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
+    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 4, ahead: 0, behind: 0, upstream: false, github: true, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
     assert.equal(await readLocal(root), undefined);
   });
 
   it("reports a detached HEAD and a repository with no commits", async () => {
     const path = scope("detached");
     git(path, "switch", "--quiet", "--detach");
-    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, head: git(path, "rev-parse", "HEAD").trim() });
+    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, github: true, head: git(path, "rev-parse", "HEAD").trim() });
     const empty = unbornRepository(root, "empty");
     assert.deepEqual({ ...await readLocal(empty), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, branch: "main" });
   });
@@ -61,6 +61,15 @@ describe("readLocal", () => {
     git(path, "update-ref", "refs/remotes/origin/main", "HEAD");
     git(path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     assert.equal((await readLocal(path))?.defaultBranch, "main");
+  });
+
+  it("says whether the push remote is a github.com repository", async () => {
+    const path = scope("remotes");
+    assert.equal((await readLocal(path))?.github, true);
+    git(path, "remote", "set-url", "origin", "https://gitlab.com/test/repo.git");
+    assert.equal((await readLocal(path))?.github, undefined);
+    git(path, "remote", "remove", "origin");
+    assert.equal((await readLocal(path))?.github, undefined);
   });
 
   it("lists changed files with a fingerprint that ignores the branch name but not the files", async () => {
@@ -152,6 +161,11 @@ describe("GitStates", () => {
       await poll();
     }
     assert.deepEqual([watched.queries.length, unwatched.queries.length], [11, 2]);
+    for (const late of [30_010, 31_000]) {
+      mock.timers.tick(late);
+      await poll();
+    }
+    assert.deepEqual([watched.queries.length, unwatched.queries.length], [13, 2]);
   });
 
   it("does not poll Settled or Ended sessions and keeps their last value", async () => {
@@ -394,6 +408,45 @@ describe("GitStates", () => {
       await states.poll(sessions);
       assert.ok(reads() > 0);
       assert.equal(fake.queries.length, 4);
+    } finally { process.env.PATH = environment; }
+  });
+
+  it("reads local state again at each tick for a watched Scope only", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 0 });
+    const path = scope("repo");
+    const reads = { watched: 0, unwatched: 0 };
+    const watched = new GitStates(github().run, async (scope) => { reads.watched++; return readLocal(scope); });
+    const unwatched = new GitStates(github().run, async (scope) => { reads.unwatched++; return readLocal(scope); });
+    for (let tick = 0; tick < 3; tick++) {
+      await watched.poll([{ scope: path, lifecycle: "live", watched: true }]);
+      await unwatched.poll([{ scope: path, lifecycle: "live", watched: false }]);
+      mock.timers.tick(30_000);
+    }
+    assert.deepEqual(reads, { watched: 3, unwatched: 1 });
+  });
+
+  it("keeps a failed local read of an unwatched Scope for the 5 min interval", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 0 });
+    const path = scope("repo");
+    const bin = join(root, "bin");
+    const log = join(root, "git.log");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$@" >> '${log}'\nexec /usr/bin/git "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    let reads = 0;
+    const states = new GitStates(github().run, async () => { reads++; return undefined; });
+    const sessions = [{ scope: path, lifecycle: "live" as const, watched: false }];
+    const environment = process.env.PATH;
+    process.env.PATH = `${bin}:${environment}`;
+    try {
+      await states.poll(sessions);
+      rmSync(log, { force: true });
+      for (let tick = 0; tick < 9; tick++) {
+        mock.timers.tick(29_990);
+        await states.poll(sessions);
+      }
+      assert.equal(existsSync(log), false);
+      assert.equal(reads, 1);
     } finally { process.env.PATH = environment; }
   });
 });

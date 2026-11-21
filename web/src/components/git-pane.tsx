@@ -26,9 +26,10 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<Notice>();
-  const [available, setAvailable] = useState({ pullRequest: false, stack: false, read: false });
+  const [available, setAvailable] = useState({ pullRequest: false, stack: false });
   const [tab, setTab] = useState<Tab>("Changes");
-  const tabs: Tab[] = ["Changes", ...(available.pullRequest ? ["Pull request" as const] : []), ...(available.stack && available.read ? ["Stack" as const] : [])];
+  const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : [])];
+  if (!tabs.includes(tab)) setTab("Changes");
   const selected = tabs.includes(tab) ? tab : "Changes";
   const steps = gitSteps(git);
   const pullOffer = pullStep(git);
@@ -102,6 +103,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
           </p>
         ) : null}
         {typeof pullOffer === "object" ? <p className="text-xs text-muted-foreground">{pullOffer.diverged}</p> : null}
+        {git && !git.github ? <p className="text-xs text-muted-foreground">No GitHub remote. Commit only.</p> : null}
         {steps.length > 0 || pullOffer === "pull" ? (
           <div className="flex flex-wrap gap-2">
             {steps.map((value, index) => (
@@ -152,7 +154,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={(stack: boolean) => setAvailable(current => current.stack === stack ? current : { ...current, stack })} onChange={() => reread("mount")} />
       </TabsContent>
       <TabsContent value="Pull request" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest && current.read ? current : { ...current, pullRequest, read: true })} onAddToDraft={onAddToDraft} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );

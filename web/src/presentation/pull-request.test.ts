@@ -20,7 +20,7 @@ describe("pull request presentation", () => {
   it("says why Merge is not available", () => {
     assert.equal(mergeUnavailable({ isDraft: false, mergeMethods: ["SQUASH"] }), undefined);
     assert.equal(mergeUnavailable({ isDraft: true, mergeMethods: ["SQUASH"] }), "Merge is not available for a draft. Mark the pull request ready for review first.");
-    assert.equal(mergeUnavailable({ isDraft: false, mergeMethods: [] }), "Merge is not available. This repository allows no merge method for you.");
+    assert.equal(mergeUnavailable({ isDraft: false, mergeMethods: [] }), "You cannot merge this Pull Request in this repository.");
   });
 
   it("permits only absolute web links", () => {

@@ -1,4 +1,4 @@
-export type StackPullRequest = { number: number; url?: string; title?: string; state: string };
+export type StackPullRequest = { number: number; url?: string; title?: string; isDraft?: boolean; state: string };
 
 /** The gh-stack view used to authorize mutating actions. */
 export type StackView = {

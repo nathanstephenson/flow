@@ -1,16 +1,23 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { GitState } from "../../src/protocol/git.ts";
 import { useAgentSessions, useCommand } from "@/agent-sessions.tsx";
 
 export function useGitState(sessionId: string): { git: GitState | undefined; repository: boolean | undefined } {
   const { sessions } = useAgentSessions();
   const command = useCommand();
+  const [answer, setAnswer] = useState<{ sessionId: string; repository: boolean }>();
   useEffect(() => {
-    const refresh = () => { if (document.visibilityState === "visible") void command({ type: "refresh_git", sessionId }); };
+    let current = true;
+    const refresh = () => {
+      if (document.visibilityState === "visible") void command<{ repository: boolean }>({ type: "refresh_git", sessionId }).then(result => { if (current && result) setAnswer({ sessionId, repository: result.repository }); });
+    };
     refresh();
     document.addEventListener("visibilitychange", refresh);
-    return () => document.removeEventListener("visibilitychange", refresh);
+    return () => {
+      current = false;
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [command, sessionId]);
-  const session = sessions.find(session => session.id === sessionId);
-  return { git: session?.git, repository: session && Boolean(session.branch || session.git) };
+  const git = sessions.find(session => session.id === sessionId)?.git;
+  return { git, repository: git ? true : answer?.sessionId === sessionId ? answer.repository : undefined };
 }

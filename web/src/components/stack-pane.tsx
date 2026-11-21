@@ -14,7 +14,7 @@ type Branch = StackView["branches"][number];
 
 function stateLine(branch: Branch): string {
   return [
-    branch.pr ? `#${branch.pr.number} ${readableStatus(branch.isMerged ? "MERGED" : branch.pr.state)}` : branch.isMerged ? "Merged" : "No pull request",
+    branch.pr ? `#${branch.pr.number} ${!branch.isMerged && branch.pr.state === "OPEN" && branch.pr.isDraft ? "Draft" : readableStatus(branch.isMerged ? "MERGED" : branch.pr.state)}` : branch.isMerged ? "Merged" : "No pull request",
     ...(branch.isQueued ? ["Queued"] : []),
     ...(branch.needsRebase ? ["Needs rebase"] : []),
     ...(branch.isCurrent ? ["Current"] : []),
@@ -169,7 +169,7 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
         </Select>
       </div>
       <p className="text-muted-foreground">Create stack registers these branches in this order, then switches to the top branch. It does not commit, rebase or push.</p>
-      <Button size="sm" disabled={blocked || !form.trunk || !form.branches.length} onClick={() => void run("init", { branches: form.branches, ...(form.trunk ? { trunk: form.trunk } : {}) })}>Create stack</Button>
+      <Button size="sm" disabled={blocked || changed || !form.trunk || !form.branches.length} onClick={() => void run("init", { branches: form.branches, ...(form.trunk ? { trunk: form.trunk } : {}) })}>Create stack</Button>
     </section> : null}
 
     {!status?.rebasing && status?.view ? <>
@@ -177,12 +177,12 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
       {adding ? <form className="space-y-2" aria-label="New branch" onSubmit={(event) => { event.preventDefault(); if (!blocked && !review && names.trim()) void run("add", { branches: [names.trim()] }); }}>
         <label className="block">New branch name<Input autoFocus required value={names} onChange={(event) => setNames(event.target.value)} disabled={blocked || !!review} /></label>
         <div className="flex gap-2">
-          <Button type="submit" size="sm" variant="outline" disabled={blocked || !!review || !names.trim()}>Add branch</Button>
+          <Button type="submit" size="sm" variant="outline" disabled={blocked || changed || !!review || !names.trim()}>Add branch</Button>
           <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => { setAdding(false); setNames(""); }}>Cancel</Button>
         </div>
       </form> : null}
       <div className="flex flex-wrap gap-2">
-        {!adding ? <Button size="icon-sm" variant="outline" aria-label="New branch" title="New branch" disabled={blocked || !!review} onClick={() => setAdding(true)}><Plus aria-hidden="true" /></Button> : null}
+        {!adding ? <Button size="icon-sm" variant="outline" aria-label="New branch" title="New branch" disabled={blocked || changed || !!review} onClick={() => setAdding(true)}><Plus aria-hidden="true" /></Button> : null}
         <Button size="sm" variant="outline" disabled={blocked || changed || !!review} onClick={() => void run("rebase")}>Rebase</Button>
         <Button size="sm" disabled={blocked || changed || !!review} onClick={() => void run("submit")}>Submit stack</Button>
         <Button size="sm" variant="outline" disabled={blocked || changed || !!review} onClick={() => void run("sync")}>Sync stack</Button>

@@ -56,30 +56,52 @@ function findButton(element: Element, label: string): Element {
   return find(element, "Button", node => textContent(node.props.children) === label);
 }
 
-it("keeps Changes selected and shows Changes, Pull request, Stack, with Stack held until the first pull request read", async () => {
+it("shows Changes, Pull request, Stack in this order, each when it is available, and keeps Changes selected until a click", async () => {
   const pane = component("git-pane", async () => ({ files: [] }));
   const render = () => pane.render("GitPane", { sessionId: "session" });
   const tabs = () => find(render(), "Tabs");
   const labels = () => findAll(render(), "TabsTrigger").map(node => textContent(node.props.children));
   const panel = (label: string) => find(render(), "TabsContent", node => node.props.value === label);
-  assert.equal(tabs().props.value, "Changes");
   assert.equal(find(render(), "TabsList").props["aria-label"], "Git views");
   assert.deepEqual(labels(), ["Changes"]);
   for (const label of ["Changes", "Pull request", "Stack"]) assert.equal(panel(label).props.keepMounted, true);
   find(render(), "StackPane").props.onAvailable(true);
-  assert.deepEqual(labels(), ["Changes"]);
+  assert.deepEqual(labels(), ["Changes", "Stack"]);
   find(render(), "PullRequestPane").props.onAvailable(true);
   assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
   assert.equal(tabs().props.value, "Changes");
   find(render(), "PullRequestPane").props.onAvailable(false);
   assert.deepEqual(labels(), ["Changes", "Stack"]);
-  tabs().props.onValueChange("Stack");
-  assert.equal(tabs().props.value, "Stack");
-  find(render(), "StackPane").props.onAvailable(false);
-  assert.equal(tabs().props.value, "Changes");
-  find(render(), "PullRequestPane").props.onAvailable(true);
-  tabs().props.onValueChange("Pull request");
-  assert.equal(tabs().props.value, "Pull request");
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 0, behind: 0, upstream: true, pr: { number: 3, url: "https://github.com/test/repo/pull/3", state: "OPEN", isDraft: false, checks: "none", checksCompleted: 0, reviewDecision: null, unresolvedThreads: 0, updatedAt: "2025-01-01" } };
+  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
+  gitState = undefined;
+});
+
+it("returns to Changes and forgets the selection when the selected tab disappears", () => {
+  const pane = component("git-pane", async () => ({ files: [] }));
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  const tabs = () => find(render(), "Tabs");
+  for (const [label, name] of [["Pull request", "PullRequestPane"], ["Stack", "StackPane"]] as const) {
+    find(render(), name).props.onAvailable(true);
+    tabs().props.onValueChange(label);
+    assert.equal(tabs().props.value, label);
+    find(render(), name).props.onAvailable(false);
+    assert.equal(tabs().props.value, "Changes");
+    find(render(), name).props.onAvailable(true);
+    assert.equal(tabs().props.value, "Changes");
+    find(render(), name).props.onAvailable(false);
+  }
+});
+
+it("offers only Commit and says so when the push remote is not a GitHub repository", () => {
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 1, ahead: 1, behind: 0, upstream: true };
+  const tree = component("git-pane", async () => undefined).render("GitPane", { sessionId: "session" });
+  assert.deepEqual(findAll(find(tree, "header"), "Button").map(node => textContent(node.props.children)), ["Refresh", "Commit"]);
+  find(tree, "p", node => textContent(node) === "No GitHub remote. Commit only.");
+  gitState = { ...gitState as object, github: true };
+  const github = component("git-pane", async () => undefined).render("GitPane", { sessionId: "session" });
+  assert.equal(findAll(github, "p", node => textContent(node) === "No GitHub remote. Commit only.").length, 0);
+  gitState = undefined;
 });
 
 it("shows one plain line for a Scope that is not a Git repository, nothing before its summary arrives, and sends no Git command", () => {
@@ -346,7 +368,7 @@ it("Pull uses the Git State branch and shows only for a clean branch that is beh
 });
 
 it("offers Push and not Pull when the branch has diverged", () => {
-  gitState = { revision: "a", branch: "feature", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   const header = find(pane.render("GitPane", { sessionId: "session" }), "header");
   assert.throws(() => findButton(header, "Pull"));
@@ -356,7 +378,7 @@ it("offers Push and not Pull when the branch has diverged", () => {
 });
 
 it("tells the user to rebase or merge in the Shell when a diverged branch has no Push step", () => {
-  gitState = { revision: "a", branch: "main", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true };
+  gitState = { revision: "a", branch: "main", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   const header = find(pane.render("GitPane", { sessionId: "session" }), "header");
   assert.throws(() => findButton(header, "Push"));
@@ -655,18 +677,17 @@ it("reads again when the document becomes visible", async () => {
   assert.equal(calls.filter(call => call.type === "pull_request").length, 2);
 });
 
-it("reports no pull request when the first read fails, and keeps a shown one when a later read fails", async () => {
+it("shows the Pull request tab with the failure text when a read fails", async () => {
   let fail = true;
   const available: boolean[] = [];
-  const { props, load } = prPane(undefined, async () => { if (fail) throw new Error("409 Conflict: offline"); return prDetails(); });
+  const { props, load, render } = prPane(undefined, async () => { if (fail) throw new Error("409 Conflict: GitHub request failed: offline"); return prDetails(); });
   props.onAvailable = (value: boolean) => { available.push(value); };
   await load();
-  assert.deepEqual(available, [false]);
+  assert.deepEqual(available, [true]);
+  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "Pull request could not be read. GitHub request failed: offline");
   fail = false;
   await load(1);
-  fail = true;
-  await load(2);
-  assert.deepEqual(available, [false, true]);
+  assert.deepEqual(available, [true, true]);
 });
 
 it("prefixes only a failed read with the last-read notice", async () => {
@@ -797,7 +818,7 @@ it("Stack changes immediately replace the PR pane and keep the tab order", () =>
 
 function pushPane(replaced: string[]) {
   const calls: any[] = [];
-  gitState = { revision: "a", branch: "feature", head: "b".repeat(40), changed: 0, ahead: 1, behind: 1, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "b".repeat(40), changed: 0, ahead: 1, behind: 1, upstream: true, github: true };
   const pane = component("git-pane", async input => {
     calls.push(input);
     if (input.type === "push_state") return { branch: "feature", head: "b".repeat(40), remote: "c".repeat(40), replaced };
@@ -831,7 +852,7 @@ it("shows the commits a push replaces and pushes with replace only after confirm
 });
 
 it("shows the next step first and the other steps as secondary actions", () => {
-  gitState = { revision: "a", branch: "feature", head: "h", changed: 2, ahead: 1, behind: 0, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 2, ahead: 1, behind: 0, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   const render = () => pane.render("GitPane", { sessionId: "session" });
   assert.equal(findButton(render(), "Commit").props.variant, "default");
@@ -1090,7 +1111,7 @@ it("copies links without titles and says that the titles could not be read", asy
 });
 
 it("shows Git State and gives the PR pane the summary when the pull request summary changes", async () => {
-  gitState = { revision: "a", branch: "feature", head: "h", changed: 1, ahead: 2, behind: 0, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 1, ahead: 2, behind: 0, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   const render = () => pane.render("GitPane", { sessionId: "session" });
   render();
@@ -1276,7 +1297,7 @@ it("cancels a push replacement without pushing", async () => {
 });
 
 it("shows an alert when the push state cannot be read", async () => {
-  gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true, github: true };
   const pane = component("git-pane", async input => { if (input.type === "push_state") throw new Error("409 Conflict: No remote is configured."); });
   const render = () => pane.render("GitPane", { sessionId: "session" });
   findButton(render(), "Push").props.onClick();
@@ -1286,14 +1307,14 @@ it("shows an alert when the push state cannot be read", async () => {
 });
 
 it("offers no Push on the default branch", () => {
-  gitState = { revision: "a", branch: "main", defaultBranch: "main", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true };
+  gitState = { revision: "a", branch: "main", defaultBranch: "main", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   assert.throws(() => findButton(pane.render("GitPane", { sessionId: "session" }), "Push"));
   gitState = undefined;
 });
 
 it("sends the HEAD shown when the pull request form opened and links the created pull request", () => {
-  gitState = { revision: "a", branch: "feature", head: "h1", changed: 0, ahead: 0, behind: 0, upstream: true };
+  gitState = { revision: "a", branch: "feature", head: "h1", changed: 0, ahead: 0, behind: 0, upstream: true, github: true };
   const pane = component("git-pane", async () => undefined);
   const render = () => pane.render("GitPane", { sessionId: "session" });
   findButton(render(), "Create pull request").props.onClick();
@@ -1371,14 +1392,15 @@ it("says only which branch Switch moved to", async () => {
 });
 
 it("says why Merge is not available, near the actions", async () => {
-  for (const [extra, reason] of [[{ mergeMethods: [], isDraft: false }, /no merge method/], [{ mergeMethods: ["MERGE"], isDraft: true }, /for a draft/]] as const) {
+  const reason = (node: Element) => /^(Merge is not available for a draft|You cannot merge this Pull Request)/.test(textContent(node));
+  for (const [extra, text] of [[{ mergeMethods: [], isDraft: false }, "You cannot merge this Pull Request in this repository."], [{ mergeMethods: ["MERGE"], isDraft: true }, "Merge is not available for a draft. Mark the pull request ready for review first."]] as const) {
     const { render, load } = prPane(prDetails(extra));
     await load();
-    assert.match(textContent(find(render(), "p", node => /^Merge is not available/.test(textContent(node)))), reason);
+    assert.equal(textContent(find(render(), "p", reason)), text);
   }
   const { render, load } = prPane(prDetails({ mergeMethods: ["MERGE"], isDraft: false }));
   await load();
-  assert.equal(findAll(render(), "p", node => /^Merge is not available/.test(textContent(node))).length, 0);
+  assert.equal(findAll(render(), "p", reason).length, 0);
 });
 
 it("selects all remaining files again after a commit", async () => {
@@ -1397,4 +1419,26 @@ it("selects all remaining files again after a commit", async () => {
   await flush();
   assert.equal(checkbox("b.ts").props.checked, true);
   assert.deepEqual(find(pane.render("GitChanges", props), "GitCommitForm").props.paths, ["b.ts"]);
+});
+
+it("disables Create stack and New branch while the Scope has uncommitted changes", async () => {
+  const git = (changed: number) => ({ git: { revision: "a", branch: "feature", head: "h", changed, ahead: 0, behind: 0, upstream: true } });
+  for (const changed of [0, 2]) {
+    const create = await stackPane(async () => createStatus(), git(changed));
+    assert.equal(findButton(create.render(), "Create stack").props.disabled, changed > 0);
+    const stacked = await stackPane(async () => ({ available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "base" }, { name: "top" }]) }), git(changed));
+    assert.equal(find(stacked.render(), "Button", node => node.props["aria-label"] === "New branch").props.disabled, changed > 0);
+  }
+});
+
+it("says Draft for a draft pull request in the Stack list", async () => {
+  const { render } = await stackPane(async () => ({ available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "base", pr: { number: 7 } }, { name: "top" }]) }));
+  const draft = await stackPane(async () => {
+    const value = { available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "base", pr: { number: 7 } }, { name: "top" }]) };
+    Object.assign(value.view.branches[0]!.pr!, { isDraft: true });
+    return value;
+  });
+  const items = findAll(find(draft.render(), "ol", node => node.props["aria-label"] === "Stack branches"), "li");
+  assert.match(textContent(items[1]), /#7 Draft/);
+  assert.match(textContent(findAll(find(render(), "ol", node => node.props["aria-label"] === "Stack branches"), "li")[1]), /#7 Open/);
 });

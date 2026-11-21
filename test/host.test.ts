@@ -1761,6 +1761,18 @@ describe("SessionHost Git State", () => {
     } finally { mock.timers.reset(); await cleanup(); }
   });
 
+  it("answers refresh_git with whether the Scope is a repository and reads the branch of each Agent Session on the Scope", async () => {
+    const { scope, host, first, second, cleanup } = await gitHost();
+    const plain = mkdtempSync(join(tmpdir(), "flow-host-plain-"));
+    try {
+      git(scope, "switch", "--quiet", "-c", "moved");
+      assert.deepEqual(await host.execute({ type: "refresh_git", sessionId: first }), { repository: true });
+      for (const id of [first, second]) assert.equal(host.list().find(session => session.id === id)?.branch?.name, "moved");
+      const other = await host.create({ scope: plain, backend: "fake" });
+      assert.deepEqual(await host.execute({ type: "refresh_git", sessionId: other }), { repository: false });
+    } finally { await cleanup(); rmSync(plain, { recursive: true, force: true }); }
+  });
+
   it("commits, pushes and creates a Pull Request with real git and shows the result in Git State", async () => {
     const root = mkdtempSync(join(tmpdir(), "flow-host-flow-"));
     const environment = { ...process.env };

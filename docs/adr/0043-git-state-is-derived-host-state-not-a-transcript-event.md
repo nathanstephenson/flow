@@ -10,12 +10,14 @@ Accepted. For Git State, supersedes the reasoning in the `/api/branches` comment
 The Session Host keeps one Git State for each Scope in memory. Agent Sessions on the same Scope
 share it. `SessionSummary.git` carries a small summary: a revision, the branch, the HEAD commit, the
 default branch when it is known, the changed-file count, commits ahead of and behind the upstream,
-whether an upstream exists, and the Pull Request number, URL, state, draft flag, check status,
-count of completed checks, review decision, unresolved thread count and time of last update.
+whether an upstream exists, whether the push remote is a github.com repository, and the Pull
+Request number, URL, state, draft flag, check status, count of completed checks, review decision,
+unresolved thread count and time of last update.
 
 The host reads local state again at create, at Revive, at turn end, after each Git pane operation,
-on the `refresh_git` command, and after each tool call during a turn. Tool calls cause at most one
-read each 3 s, with one trailing read. The host does not watch the file system.
+on the `refresh_git` command, at each 30 s poll tick for a Scope that a client watches, and after
+each tool call during a turn. Tool calls cause at most one read each 3 s, with one trailing read.
+The host does not watch the file system.
 
 The daemon polls the Pull Request with one GraphQL query for each distinct base repository, head
 repository and branch across Live and Dormant Agent Sessions. A group is due each 30 s when a client
