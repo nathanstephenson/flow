@@ -111,7 +111,7 @@ it("refreshes local Git State and forces one pull request poll from the header R
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [{ type: "refresh_git", sessionId: "session", pullRequest: true }]);
 });
 
-it("gives the Stack tab the Git State and no revision counter", () => {
+it("gives the Stack tab the Git State and no Git revision", () => {
   gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 0, behind: 1, upstream: true };
   const pane = component("git-pane", async () => undefined);
   const tree = pane.render("GitPane", { sessionId: "session" });
@@ -119,6 +119,14 @@ it("gives the Stack tab the Git State and no revision counter", () => {
   assert.equal("revision" in find(tree, "StackPane").props, false);
   assert.equal(find(tree, "PullRequestPane").props.onChange, undefined);
   gitState = undefined;
+});
+
+it("reloads the Stack tab from the header Refresh", () => {
+  const pane = component("git-pane", async () => undefined);
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  const before = find(render(), "StackPane").props.refresh;
+  findButton(render(), "Refresh").props.onClick();
+  assert.equal(find(render(), "StackPane").props.refresh, before + 1);
 });
 
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
@@ -230,6 +238,38 @@ it("reviews Submit and confirms it with the review token", async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.type === "change_stack").input)), { action: "submit", token: "reviewed" });
 });
 
+it("keeps the list and an open review when the same stack is read again", async () => {
+  const { view } = managedStack([{ name: "feature", pr: { number: 3 } }]);
+  let reads = 0;
+  let resolveRead: (value: unknown) => void = () => {};
+  const { render, pane } = await stackPane(async input => {
+    if (input.type === "prepare_stack") return { token: "reviewed", action: "submit", view };
+    if (++reads === 1) return { available: true, conflicts: [], rebasing: false, view };
+    return new Promise(resolve => { resolveRead = resolve; });
+  });
+  findButton(render(), "Submit stack").props.onClick();
+  await flush();
+  pane.effects.at(-2)!();
+  assert.match(textContent(find(render(), "ol", node => node.props["aria-label"] === "Stack branches")), /feature/);
+  resolveRead({ available: true, conflicts: [], rebasing: false, view: structuredClone(view) });
+  await flush();
+  find(render(), "section", node => node.props["aria-label"] === "Confirm Stack operation");
+  pane.effects.at(-2)!();
+  resolveRead({ available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "feature", pr: { number: 4 } }]) });
+  await flush();
+  assert.throws(() => find(render(), "section", node => node.props["aria-label"] === "Confirm Stack operation"));
+});
+
+it("sends init without the current branch when it was removed", async () => {
+  const calls: any[] = [];
+  const { render } = await stackPane(async input => { calls.push(input); return input.type === "stack_status" ? createStatus() : ""; });
+  find(render(), "Button", node => node.props["aria-label"] === "Remove feature").props.onClick();
+  find(render(), "Select", node => node.props.name === "branch").props.onValueChange("second");
+  findButton(render(), "Create stack").props.onClick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.type === "change_stack").input)), { action: "init", branches: ["second"], trunk: "main" });
+});
+
 it("reads the stack again when the branch, head or pull request changes, and ignores a late response", async () => {
   const pending: ((value: unknown) => void)[] = [];
   const pane = component("stack-pane", () => new Promise(resolve => pending.push(resolve)));
@@ -244,6 +284,10 @@ it("reads the stack again when the branch, head or pull request changes, and ign
     render({ ...state, ...change });
     assert.notDeepEqual(load().deps, first);
   }
+  render({ ...state, pr: { number: 9, state: "OPEN", checks: "pending", checksCompleted: 1 } });
+  const checks = load().deps;
+  render({ ...state, pr: { number: 9, state: "OPEN", checks: "passing", checksCompleted: 4 } });
+  assert.deepEqual(load().deps, checks);
   render(state);
   load()();
   render({ ...state, head: "h2" });
@@ -938,7 +982,7 @@ for (const single of [false, true]) it(`reports clipboard failures for ${single 
   assert.match(find(pane.render("StackPane", props), "p", node => node.props.role === "alert").props.children, /Could not copy .*Permission denied/);
 });
 
-for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy without ${pr ? "PR details" : "PRs"}`, async () => {
+for (const pr of [undefined, { number: 1, state: "OPEN" }]) it(`does not copy without ${pr ? "a PR link" : "PRs"}`, async () => {
   const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false,
     ...managedStack([{ name: "base", pr }]),
   }));
@@ -967,7 +1011,7 @@ it("keeps merged members from the tracked stack visible", async () => {
   assert.throws(() => find(tree, "Button", node => node.props.children === "Create stack"));
 });
 
-it("keeps a rejected Stack status command visible as a retryable error", async () => {
+it("keeps a rejected Stack status command visible, with no Refresh of its own", async () => {
   let available = false;
   const pane = component("stack-pane", async () => { throw new Error("command rejected"); });
   const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
@@ -978,7 +1022,25 @@ it("keeps a rejected Stack status command visible as a retryable error", async (
   pane.effects.at(-1)!();
   assert.equal(available, true);
   assert.match(find(tree, "p", node => node.props.role === "alert").props.children, /command rejected/);
-  assert.equal(find(tree, "Button", node => node.props.children === "Refresh stack").props.disabled, false);
+  assert.throws(() => findButton(tree, "Refresh stack"));
+});
+
+it("copies links without titles and says that the titles could not be read", async () => {
+  let copied: any[] = [];
+  const pane = component("stack-pane", async () => ({ available: true, conflicts: [], rebasing: false, notice: "Pull request titles could not be read. Copy uses the links.",
+    ...managedStack([{ name: "base", pr: { number: 1, url: "https://github.com/test/repo/pull/1" } }]) }),
+  { Blob, ClipboardItem: class { data: any; constructor(data: any) { this.data = data; } }, navigator: { clipboard: { write: async (items: any[]) => { copied = items; } } } });
+  const props = { sessionId: "session", onChange() {} };
+  pane.render("StackPane", props);
+  pane.effects[0]!();
+  await flush();
+  assert.match(JSON.stringify(pane.render("StackPane", props)), /titles could not be read/);
+  const button = find(pane.render("StackPane", props), "Button", node => node.props["aria-label"] === "Copy stack");
+  assert.equal(button.props.disabled, false);
+  button.props.onClick();
+  await flush();
+  assert.equal(await copied[0].data["text/html"].text(), '<div><a href="https://github.com/test/repo/pull/1">https://github.com/test/repo/pull/1</a></div>');
+  assert.equal(await copied[0].data["text/plain"].text(), "https://github.com/test/repo/pull/1");
 });
 
 it("shows Git State and gives the PR pane the summary when the pull request summary changes", async () => {
