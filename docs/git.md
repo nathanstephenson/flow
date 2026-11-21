@@ -4,8 +4,9 @@
 
 The Git pane shows the next step above its tabs: Commit, Push, or Create pull request.
 
-The tabs are Changes, Pull request and Stack. Changes is selected when the pane opens. The Pull
-request and Stack tabs are added at the end when they become available, so no tab moves. In a Scope
+The tabs are Changes, Pull request and Stack, in this order. Changes is selected until you select
+another tab. The Pull request tab shows when the branch has a pull request. The Stack tab shows only
+after the first read of the pull request, so the tabs do not move when the pane opens. In a Scope
 that is not a Git repository, the pane shows only one line of text.
 
 - Commit includes only the files that you select in the Uncommitted view. Other files keep their

@@ -13,7 +13,7 @@ function managedStack(branches: { name: string; pr?: { number: number; state?: s
 
 type Element = { type: string; key?: string; props: Record<string, any> };
 let gitState: unknown;
-let repositoryState = true;
+let repositoryState: boolean | undefined = true;
 function component(file: string, command: (input: any) => Promise<any>, globals: Record<string, unknown> = {}) {
   const states: any[] = [];
   let index = 0;
@@ -56,7 +56,7 @@ function findButton(element: Element, label: string): Element {
   return find(element, "Button", node => textContent(node.props.children) === label);
 }
 
-it("keeps Changes selected and adds each tab at the end when it becomes available, so no tab moves", async () => {
+it("keeps Changes selected and shows Changes, Pull request, Stack, with Stack held until the first pull request read", async () => {
   const pane = component("git-pane", async () => ({ files: [] }));
   const render = () => pane.render("GitPane", { sessionId: "session" });
   const tabs = () => find(render(), "Tabs");
@@ -66,25 +66,23 @@ it("keeps Changes selected and adds each tab at the end when it becomes availabl
   assert.equal(find(render(), "TabsList").props["aria-label"], "Git views");
   assert.deepEqual(labels(), ["Changes"]);
   for (const label of ["Changes", "Pull request", "Stack"]) assert.equal(panel(label).props.keepMounted, true);
-  find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.equal(tabs().props.value, "Changes");
   find(render(), "StackPane").props.onAvailable(true);
+  assert.deepEqual(labels(), ["Changes"]);
+  find(render(), "PullRequestPane").props.onAvailable(true);
   assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
   assert.equal(tabs().props.value, "Changes");
-  find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
   find(render(), "PullRequestPane").props.onAvailable(false);
-  find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.deepEqual(labels(), ["Changes", "Stack", "Pull request"]);
+  assert.deepEqual(labels(), ["Changes", "Stack"]);
   tabs().props.onValueChange("Stack");
   assert.equal(tabs().props.value, "Stack");
   find(render(), "StackPane").props.onAvailable(false);
   assert.equal(tabs().props.value, "Changes");
+  find(render(), "PullRequestPane").props.onAvailable(true);
   tabs().props.onValueChange("Pull request");
   assert.equal(tabs().props.value, "Pull request");
 });
 
-it("shows one plain line and sends no Git command for a Scope that is not a Git repository", () => {
+it("shows one plain line for a Scope that is not a Git repository, nothing before its summary arrives, and sends no Git command", () => {
   repositoryState = false;
   const calls: unknown[] = [];
   const pane = component("git-pane", async input => { calls.push(input); });
@@ -94,6 +92,8 @@ it("shows one plain line and sends no Git command for a Scope that is not a Git 
   for (const type of ["Tabs", "GitChanges", "StackPane", "PullRequestPane", "Button"]) assert.equal(findAll(tree, type).length, 0, type);
   for (const effect of pane.effects) effect();
   assert.deepEqual(calls, []);
+  repositoryState = undefined;
+  assert.equal(pane.render("GitPane", { sessionId: "session" }), null);
   repositoryState = true;
 });
 
@@ -408,7 +408,7 @@ function prPane(details: Record<string, unknown> = prDetails(), read?: () => Pro
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
-  return { calls, render, flush, load, document, listeners, added, draft, props, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
+  return { calls, props, render, flush, load, document, listeners, added, draft, effects: pane.effects, writes: () => calls.filter(call => call.type !== "pull_request") };
 }
 const section = (tree: Element, value: string) => find(tree, "AccordionItem", node => node.props.value === value);
 
@@ -653,6 +653,20 @@ it("reads again when the document becomes visible", async () => {
   for (const listener of listeners.visibilitychange ?? []) listener();
   await flush();
   assert.equal(calls.filter(call => call.type === "pull_request").length, 2);
+});
+
+it("reports no pull request when the first read fails, and keeps a shown one when a later read fails", async () => {
+  let fail = true;
+  const available: boolean[] = [];
+  const { props, load } = prPane(undefined, async () => { if (fail) throw new Error("409 Conflict: offline"); return prDetails(); });
+  props.onAvailable = (value: boolean) => { available.push(value); };
+  await load();
+  assert.deepEqual(available, [false]);
+  fail = false;
+  await load(1);
+  fail = true;
+  await load(2);
+  assert.deepEqual(available, [false, true]);
 });
 
 it("prefixes only a failed read with the last-read notice", async () => {

@@ -43,6 +43,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
   const [added, setAdded] = useState<{ key: string; text: string }>();
   const readingLogs = useRef(new Set<string>());
   const latest = useRef(0);
+  const found = useRef(false);
   const summaryKey = JSON.stringify(summary ?? null);
   const seenSummary = useRef(summaryKey);
   const locked = busy || disabled;
@@ -57,10 +58,13 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
         setError(current => current?.read ? undefined : current);
         setConfirm(current => shown(current?.input) ? current : undefined);
         setEdit(current => shown(current) ? current : undefined);
+        found.current = Boolean(value);
         onAvailable?.(Boolean(value));
       },
       (failure: unknown) => {
-        if (request === latest.current) setError({ text: `Pull request could not be read. ${failureText(failure)}`, read: true });
+        if (request !== latest.current) return;
+        if (!found.current) onAvailable?.(false);
+        setError({ text: `Pull request could not be read. ${failureText(failure)}`, read: true });
       },
     );
   }
