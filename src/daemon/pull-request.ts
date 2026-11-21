@@ -210,8 +210,12 @@ export async function checkLog(scope: string, ref: PullRequestRef, jobId: number
   let log: string;
   try { log = await github(scope, ["api", `repos/${pr.repo}/actions/jobs/${jobId}/logs`, "--allow-escape-sequences"]); }
   catch { return null; }
-  const lines = log.replace(/\s+$/, "").split(/\r?\n/).map(line => line.replace(/^\ufeff?\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "").replace(/\u001b\[[0-9;?]*[A-Za-z]/g, ""));
+  const lines = log.replace(/\s+$/, "").split(/\r\n?|\n/).map(line => line
+    .replaceAll("\ufeff", "")
+    .replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, "")
+    .replace(/\u001b(?:\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, ""));
   const end = lines.findLastIndex(line => line.startsWith("##[error]")) + 1 || lines.length;
   const start = Math.max(0, end - checkLogLines);
-  return { text: lines.slice(start, end).join("\n"), truncated: start > 0 };
+  return { text: lines.slice(start, end).join("\n"), truncated: start > 0 || end < lines.length };
 }

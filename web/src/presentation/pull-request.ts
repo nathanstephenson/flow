@@ -56,12 +56,16 @@ function fenced(text: string, info: string): string {
   return `${fence}${info}\n${text}\n${fence}`;
 }
 
+function quoted(text: string): string {
+  return text.split("\n").map(line => line ? `> ${line}` : ">").join("\n");
+}
+
 export function threadDraftBlock(thread: PullRequestThread): string {
   const lead = `Review thread on ${thread.path}${thread.line === null ? "" : ` line ${thread.line}`}:${thread.isOutdated ? "\nThis thread is outdated." : ""}`;
-  return [lead, ...(thread.diffHunk ? [fenced(thread.diffHunk, "diff")] : []), ...thread.comments.map(comment => `Comment by ${comment.author}:\n${comment.body}`)].join("\n\n");
+  return [lead, ...(thread.diffHunk ? [fenced(thread.diffHunk, "diff")] : []), ...thread.comments.map(comment => `Comment by ${comment.author}:\n${quoted(comment.body)}`)].join("\n\n");
 }
 
 export function checkDraftBlock(check: PullRequestCheck, log?: PullRequestCheckLog): string {
   const lead = `Failed check: ${check.name}${check.url ? `\nURL: ${check.url}` : ""}`;
-  return log ? `${lead}\n\n${log.truncated ? "End of the job log" : "Job log"}:\n${fenced(log.text, "text")}` : lead;
+  return log ? `${lead}\n\n${log.truncated ? "Part of the job log" : "Job log"}:\n${fenced(log.text, "text")}` : lead;
 }
