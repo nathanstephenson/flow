@@ -1052,13 +1052,7 @@ function WorkStack({ running, models, onOpen }: {
                 {card.kind === "agent" ? <Bot aria-hidden className="my-px size-3.5 shrink-0" /> : <ToolIcon name={card.tool} className="my-px" />}
                 <span className="shrink-0 text-foreground/80">{card.kind === "agent" ? card.name : card.tool}</span>
                 {card.detail ? (
-                  <span
-                    className={cn(
-                      "min-w-0 truncate [overflow-wrap:anywhere] group-hover/card:line-clamp-8 group-hover/card:whitespace-normal",
-                      "group-focus-visible/card:line-clamp-8 group-focus-visible/card:whitespace-normal",
-                      card.kind === "call" && "font-mono",
-                    )}
-                  >
+                  <span className="min-w-0 truncate [overflow-wrap:anywhere] group-hover/card:line-clamp-8 group-hover/card:whitespace-normal group-focus-visible/card:line-clamp-8 group-focus-visible/card:whitespace-normal">
                     {card.detail}
                   </span>
                 ) : null}
