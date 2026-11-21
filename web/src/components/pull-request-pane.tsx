@@ -14,7 +14,7 @@ import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 import { pullRequestIndicators } from "@/presentation/git.ts";
 import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
-type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onChange?: () => void; onAddToDraft: (block: string) => AppendResult };
+type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onAddToDraft: (block: string) => AppendResult };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
 
 const notAdded: Record<Exclude<AppendResult, "added">, string> = {
@@ -29,7 +29,7 @@ function link(url: string, children: ReactNode) {
   return href ? <a className="break-words underline underline-offset-2" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onChange, onAddToDraft }: Props) {
+export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onAddToDraft }: Props) {
   const { connection } = useHost();
   const [pr, setPr] = useState<PullRequestDetails | null>();
   const [busy, setBusy] = useState(false);
@@ -268,7 +268,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
           event.preventDefault();
           if (locked) return;
           setConfirm(undefined);
-          void write({ type: "change_pull_request", sessionId, action: confirm.action, input: confirm.input }, confirm.action === "merge" ? "Pull request merged." : "Branch rebased locally. Nothing was pushed.", onChange);
+          void write({ type: "change_pull_request", sessionId, action: confirm.action, input: confirm.input }, confirm.action === "merge" ? "Pull request merged." : "Branch rebased locally. Nothing was pushed.");
         }}>
           <p>{confirm.action === "merge" ? `Merge #${pr.number} into ${confirm.input.baseBranch} on GitHub?` : `Rebase only ${pr.headRefName} locally onto the latest ${confirm.input.baseBranch}. No push or stack rebase. Requires a clean Scope. Conflicts abort the rebase.`}</p>
           {confirm.action === "merge" && confirm.input.method ? (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ChangesView, PushState } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -20,8 +20,6 @@ type Notice = { text: string; url?: string };
 export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
   const { connection } = useHost();
   const git = useGitState(sessionId);
-  const prKey = JSON.stringify(git?.pr ?? null);
-  const seenPrKey = useRef(prKey);
   const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
   const [view, setView] = useState<ChangesView>("uncommitted");
   const [step, setStep] = useState<Step>();
@@ -39,12 +37,6 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   function reread(...keys: (keyof Reads)[]) {
     setReads(current => ({ ...current, ...Object.fromEntries(keys.map(key => [key, current[key] + 1])) }));
   }
-
-  useEffect(() => {
-    if (seenPrKey.current === prKey) return;
-    seenPrKey.current = prKey;
-    reread("stack");
-  }, [prKey]);
 
   async function run(work: () => Promise<Notice | void>) {
     setBusy(true);
@@ -84,7 +76,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   function pull() {
     void run(async () => {
       await connection.command({ type: "pull_branch", sessionId, branch: git!.branch! });
-      reread("stack", "pullRequest");
+      reread("pullRequest");
     });
   }
 
@@ -155,10 +147,10 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>
-        <StackPane key={sessionId} sessionId={sessionId} revision={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("stack", "mount"); }} />
+        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("mount"); }} />
       </TabsContent>
       <TabsContent value="PR" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onChange={() => reread("stack")} onAddToDraft={onAddToDraft} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );

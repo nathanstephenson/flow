@@ -38,7 +38,7 @@ tooltip gives the words, for example "Pull Request #178. Draft. Checks passing."
 
 ## Stacked pull requests
 
-The Git tab in the browser uses `github/gh-stack` directly. It is tested with v0.1.1.
+The Stack tab uses `github/gh-stack` directly. It is tested with v0.3.0.
 
 Install and authenticate it on the Session Host machine:
 
@@ -47,7 +47,25 @@ gh extension install github/gh-stack
 gh auth login
 ```
 
-Without it, the ordinary Git controls are still available.
+Without it, the Stack tab is hidden. The ordinary Git controls are still available.
+
+The Stack tab shows only the Stack that `gh stack view` reports for the current branch. Flow does
+not infer a Stack from pull request bases or from commit ancestry, and it does not show a Stack
+that is only on GitHub or only in another clone. To show a Stack from GitHub, run
+`gh stack checkout <PR number>` in the Scope. See ADR 0044.
+
+- On a branch in a Stack, the tab lists the branches from top to bottom, then the trunk. Each row
+  shows the PR number, state and title, and "Needs rebase", "Merged" or "Queued" when they apply.
+- On a branch that is not in a Stack, the tab shows the Create stack form.
+- On the trunk of a registered Stack or the default branch, on a detached HEAD, or on a branch
+  with no commits, the tab shows one line of text.
+- The tab reads the Stack again when the branch, the head commit, or the number or state of the
+  pull request changes, and on Refresh. It keeps the shown list until the new one arrives.
+- The tab can load while an agent turn runs. Stack actions cannot.
+- Flow runs one `gh stack` command at a time for each repository, also across its worktrees.
+  `gh stack view` writes the stack metadata, so a read waits for a running Stack action, and an
+  action waits for a running read. A `gh stack` command that you run in a terminal at the same
+  time is not in this queue.
 
 Stack supports Create, Add, Switch, Submit, Sync and Rebase. Merge and stack restructuring are not
 available.
@@ -62,12 +80,14 @@ available.
 
 ### Create
 
-- Flow offers Create only for a clear chain of at least two existing local branches, linked by PR
-  head and base relationships.
-- Commit ancestry alone does not identify a stack.
-- Merged members keep their status.
-- Create registers the branches shown. It never accepts names for new branches.
-- Flow does not offer ambiguous chains, or branches that a stack already tracks.
+- Choose the trunk. The default is the default branch of the remote.
+- Add local branches that are not in a Stack. Put them in order from top to bottom with the move
+  buttons. The current branch is in the list first.
+- A branch cannot also be the trunk, and a branch can be in the list only once.
+- Create stack runs `gh stack init --base <trunk>` with the branches from bottom to top. It does not
+  create branches. It then switches to the top branch.
+- `gh stack init` does not require that each branch contains the branch below it. Rebase puts the
+  branches on top of each other.
 
 ### Switch
 
@@ -96,10 +116,16 @@ asks the agent to resolve and stage the conflicts, then to run `gh stack rebase 
 they are resolved.
 
 - This does not give permission to push, sync or merge.
-- Examine the result, then refresh Stack.
+- Examine the result, then click Refresh.
+- `gh stack` keeps one rebase state for all worktrees of a repository. Continue, Abort and Ask agent
+  are available only in the worktree where the rebase stopped. Other worktrees show "A stack rebase
+  is in progress in another worktree." and refuse Stack actions until it ends.
 
 ### Copy
 
 - **Copy stack** copies the PR titles as formatted links, from top to bottom.
 - **Copy PR link** copies one PR.
 - A plain-text paste contains only the titles.
+- If a title cannot be read, the tab says so, and Copy uses the link in place of the title.
+- Flow reads the titles with one GitHub query for all PRs of the Stack. It reads them again when a
+  PR number or state changes, and otherwise after 5 minutes.

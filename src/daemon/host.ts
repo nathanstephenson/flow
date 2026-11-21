@@ -8,8 +8,8 @@ import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
-import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
-import type { StackInput, StackReview } from "../protocol/stack.ts";
+import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
+import type { StackInput, StackReview, StackStatus } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
 import { commit } from "./commit.ts";
 import { push, pushState } from "./push.ts";
@@ -388,8 +388,8 @@ export class SessionHost {
     return this.withGitOperation(record.scope, async () => {
       this.stackReviews.delete(sessionId);
       await cleanStack(record.scope);
-      const status = await actionStackStatus(record.scope);
-      if (!status.view) throw new Error(status.problem ?? "No stack found.");
+      const status = await stackStatus(record.scope);
+      if (!status.view) throw new Error(status.notice ?? "This branch is not in a stack.");
       const review = { token: randomUUID(), action, view: status.view };
       this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
       return review;
@@ -404,7 +404,7 @@ export class SessionHost {
         this.stackReviews.delete(sessionId);
         if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
         await cleanStack(record.scope);
-        const status = await actionStackStatus(record.scope);
+        const status = await stackStatus(record.scope);
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
       }
       try {
@@ -423,8 +423,8 @@ export class SessionHost {
   async assistStack(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
     await this.withGitOperation(record.scope, async () => {
-      const status = await actionStackStatus(record.scope);
-      if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
+      const status = await stackStatus(record.scope);
+      if (!status.rebasing) throw new Error(status.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");
   }
@@ -447,6 +447,15 @@ export class SessionHost {
     } catch (error) {
       throw new CommandRefused(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private readStack(sessionId: string): Promise<StackStatus> {
+    const scope = this.gitScope(sessionId);
+    return this.readGit(async () => {
+      const status = await stackStatus(scope);
+      if (status.view && !await stackTitles(scope, status.view)) status.notice = "Pull request titles could not be read. Copy uses the links.";
+      return status;
+    });
   }
 
   private gitScope(sessionId: string): string {
@@ -2482,7 +2491,7 @@ export class SessionHost {
       case "pull_request_check_log":
         return await checkLog(this.record(command.sessionId).scope, command.pr, command.jobId);
       case "stack_status":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
+        return await this.readStack(command.sessionId);
       case "prepare_stack":
         return await this.prepareStack(command.sessionId, command.action);
       case "change_stack":

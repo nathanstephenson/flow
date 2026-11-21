@@ -376,6 +376,16 @@ populated screen. Lossy by design — it is not a Presentation Transcript, and i
 disk.
 _Avoid_: transcript, history, log, buffer
 
+**Stack**:
+An ordered list of branches on a trunk that `gh stack` registers in the repository of a Scope. The
+registration is in the common Git directory, so all worktrees of a clone share it. Flow shows only
+the Stack that `gh stack view` reports for the current branch. It does not infer a Stack from Pull
+Request bases, from commit ancestry or from stacks on GitHub, and it does not show a Stack that is
+registered only in another clone (ADR 0044). Each shown Stack permits every Stack action. To create
+a Stack, the owner chooses a trunk and an ordered list of local branches that are not in another
+Stack; the trunk cannot also be a branch of the Stack.
+_Avoid_: inferred stack, stack graph, candidate
+
 **Settings**:
 Values the Session Host reads from its state root, governing every Agent Session on the machine
 rather than one Scope. Read leniently and written strictly: a value it cannot use costs only its own
