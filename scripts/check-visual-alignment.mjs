@@ -57,7 +57,7 @@ let page = await context.newPage(); observePage(page);
 
 // A deny-by-default write guard is installed BEFORE authentication or UI mounts.
 // Even an accidental autosave/acknowledgement is a failure, not a mock success.
-const readOnlyCommands = new Set(['list', 'git_status', 'git_changes', 'git_diff', 'stack_status', 'pull_request', 'list_skills']);
+const readOnlyCommands = new Set(['list', 'refresh_git', 'git_changes', 'git_diff', 'stack_status', 'pull_request', 'list_skills']);
 await context.route('**/*', async route => {
   const request = route.request(), address = new URL(request.url()), method = request.method();
   const safeOrigin = address.origin === url.origin;
@@ -72,8 +72,8 @@ await context.route('**/*', async route => {
   if (address.pathname === '/api/command' && method === 'POST') {
     const command = request.postDataJSON();
     if (command.type === 'stack_status') return route.fulfill({ json: { result: {
-      available: false, conflicts: [], rebasing: false,
-      graph: { currentBranch: 'rail-refinement', trunk: 'main', branches: [{ name: 'rail-refinement', parent: 'main', isCurrent: true, availability: 'local' }], explicit: true },
+      available: true, conflicts: [], rebasing: false,
+      view: { trunk: 'main', currentBranch: 'rail-refinement', branches: [{ name: 'rail-refinement', isCurrent: true, isMerged: false, isQueued: false, needsRebase: false }] },
     } } });
     if (command.type === 'pull_request') return route.fulfill({ json: { result: {
       repo: 'example/fixture', id: 'visual-fixture', number: 1, url: 'https://github.com/example/fixture/pull/1',
@@ -305,7 +305,7 @@ async function dockAndGit(mode) {
   await git.focus(); await git.press('Space'); assert.equal(await git.getAttribute('aria-selected'), 'true');
   assert.ok(await git.evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).boxShadow !== 'none'));
   const views = page.getByRole('tablist', { name: 'Git views', exact: true });
-  await views.getByRole('tab', { name: 'PR', exact: true }).waitFor();
+  await views.getByRole('tab', { name: 'Pull request', exact: true }).waitFor();
   await views.getByRole('tab', { name: 'Changes', exact: true }).click();
   // Refresh is a read-only handler, unlike Commit/Push/Pull. Wait for both optional
   // views' discovery before measuring a three-way strip.

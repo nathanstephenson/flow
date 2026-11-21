@@ -8,15 +8,16 @@ import type { GitFile, GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
 import type { PullRequestRef } from "../protocol/pull-request.ts";
 
-export type LocalGitState = Omit<GitState, "pr">;
-export type PolledSession = { scope: string; lifecycle: SessionLifecycle; watched: boolean };
+type LocalGitState = Omit<GitState, "pr">;
+type PolledSession = { scope: string; lifecycle: SessionLifecycle; watched: boolean };
 
 const READ_INTERVAL_MS = 3_000;
 const WATCHED_POLL_MS = 30_000;
 const UNWATCHED_POLL_MS = 5 * 60_000;
+const POLL_JITTER_MS = 5_000;
 const pathOffsets: Record<string, number> = { "1": 8, u: 10, "?": 1 };
 
-export type StatusRead = { local: LocalGitState; fingerprint: string; files: GitFile[] };
+type StatusRead = { local: LocalGitState; fingerprint: string; files: GitFile[] };
 
 export async function readStatus(scope: string): Promise<StatusRead> {
   const status = await run(scope, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"], GIT_READ_TIMEOUT_MS);
@@ -56,6 +57,11 @@ export async function readLocal(scope: string): Promise<LocalGitState | undefine
 
 type Entry = { local: LocalGitState | undefined; pr: PullRequestSummary | undefined; prRef: PullRequestRef | undefined; prBase: string | undefined; prBranch: string | undefined; lastRead: number; generation: number; trailing: ReturnType<typeof setTimeout> | undefined };
 type Group = { scopes: string[]; repository: Repository; branch: string; watched: boolean; forced: boolean };
+type Target = { readAt: number; branch: string | undefined; repository: Repository | undefined };
+
+function due(elapsed: number, watched: boolean): boolean {
+  return elapsed >= (watched ? WATCHED_POLL_MS : UNWATCHED_POLL_MS) - POLL_JITTER_MS;
+}
 
 export class GitStates {
   private readonly entries = new Map<string, Entry>();
@@ -63,6 +69,7 @@ export class GitStates {
   private readonly results = new Map<string, PullRequestSummary | undefined>();
   private readonly bases = new Map<string, string | undefined>();
   private readonly refs = new Map<string, PullRequestRef | undefined>();
+  private readonly targets = new Map<string, Target>();
 
   private readonly github: Gh;
   private readonly read: (scope: string) => Promise<LocalGitState | undefined>;
@@ -131,12 +138,10 @@ export class GitStates {
     }
     const groups = new Map<string, Group>();
     for (const [scope, watched] of scopes) {
-      if (!isRepository(scope)) continue;
-      if (!this.entries.get(scope)?.local) await this.refresh(scope);
+      const cached = this.targets.get(scope);
+      const target = cached && !watched && scope !== forced && !due(now - cached.readAt, false) && this.entries.get(scope)?.local?.branch === cached.branch ? cached : await this.target(scope, now);
       const entry = this.entry(scope);
-      const branch = await head(scope);
-      const name = branch.ok && !branch.value.detached ? branch.value.name : undefined;
-      const repository = name === undefined ? undefined : await resolveRepository(scope, name, this.github).catch(() => undefined);
+      const { branch: name, repository } = target;
       if (!name || !repository) {
         entry.pr = undefined;
         continue;
@@ -153,8 +158,7 @@ export class GitStates {
     for (const key of this.bases.keys()) if (!groups.has(key)) this.bases.delete(key);
     for (const key of this.refs.keys()) if (!groups.has(key)) this.refs.delete(key);
     for (const [key, group] of groups) {
-      const due = group.forced || now - (this.polledAt.get(key) ?? -Infinity) >= (group.watched ? WATCHED_POLL_MS : UNWATCHED_POLL_MS);
-      if (due) {
+      if (group.forced || due(now - (this.polledAt.get(key) ?? -Infinity), group.watched)) {
         this.polledAt.set(key, now);
         const found = await resolvePullRequest(group.scopes[0]!, group.repository, group.branch, this.github).then(pr => ({ pr }), () => undefined);
         if (found) {
@@ -176,5 +180,16 @@ export class GitStates {
       this.entries.delete(scope);
     }
     releaseRepositories(kept);
+  }
+
+  private async target(scope: string, now: number): Promise<Target> {
+    const target: Target = { readAt: now, branch: undefined, repository: undefined };
+    this.targets.set(scope, target);
+    if (!isRepository(scope)) return target;
+    if (!this.entries.get(scope)?.local) await this.refresh(scope);
+    const branch = await head(scope);
+    target.branch = branch.ok && !branch.value.detached ? branch.value.name : undefined;
+    target.repository = target.branch === undefined ? undefined : await resolveRepository(scope, target.branch, this.github).catch(() => undefined);
+    return target;
   }
 }

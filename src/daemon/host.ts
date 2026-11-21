@@ -2476,8 +2476,10 @@ export class SessionHost {
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
       case "change_pull_request":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
-      case "pull_request":
-        return await pullRequest(this.record(command.sessionId).scope, this.gitStates.pullRequestRef(this.record(command.sessionId).scope));
+      case "pull_request": {
+        const scope = this.record(command.sessionId).scope;
+        return await this.readGit(() => pullRequest(scope, this.gitStates.pullRequestRef(scope)));
+      }
       case "comment_pull_request":
         return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
       case "resolve_pull_request_thread":

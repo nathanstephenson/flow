@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, mock } from "node:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, repository } from "./git-fixture.ts";
+import { git, githubRemote, repository } from "./git-fixture.ts";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { AgentEvent } from "../src/protocol/events.ts";
-import type { GitChanges } from "../src/protocol/git.ts";
+import type { GitChanges, PushState } from "../src/protocol/git.ts";
 import type { Command } from "../src/protocol/commands.ts";
 
 function events(host: SessionHost, id: string): AgentEvent[] {
@@ -1759,6 +1759,47 @@ describe("SessionHost Git State", () => {
       backend.latest.completeTurn();
       await settled(2);
     } finally { mock.timers.reset(); await cleanup(); }
+  });
+
+  it("commits, pushes and creates a Pull Request with real git and shows the result in Git State", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-flow-"));
+    const environment = { ...process.env };
+    const scope = repository(root, "repo", ["feature"]);
+    githubRemote(root, scope);
+    git(scope, "push", "--quiet", "origin", "main");
+    git(scope, "remote", "set-head", "origin", "main");
+    git(scope, "switch", "--quiet", "feature");
+    const bin = join(root, "bin");
+    const created = join(root, "created");
+    mkdirSync(bin);
+    const pull = { id: "PR_7", number: 7, url: "https://github.com/test/repo/pull/7", title: "Add work", baseRefName: "main", headRefOid: "", state: "OPEN", isDraft: true, reviewDecision: null, updatedAt: "2026-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [] }, reviewThreads: { nodes: [] } };
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
+const { existsSync, writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const out = value => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
+if (args[0] === "repo") out({ id: "R_repo", defaultBranchRef: { name: "main" }, isFork: false, parent: null });
+if (args[0] === "pr" && args[1] === "create") { writeFileSync(${JSON.stringify(created)}, ""); out(${JSON.stringify(pull.url)} + "\\n"); }
+if (args[0] === "api") out({ data: { repository: { pullRequests: { nodes: existsSync(${JSON.stringify(created)}) ? [${JSON.stringify(pull)}] : [] } } } });
+`);
+    chmodSync(join(bin, "gh"), 0o755);
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+    const host = new SessionHost();
+    host.registerBackend(new FakeBackend());
+    try {
+      const sessionId = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "work.txt"), "work\n");
+      const { fingerprint } = await host.execute({ type: "git_changes", sessionId, view: "uncommitted" }) as GitChanges;
+      await host.execute({ type: "commit", sessionId, fingerprint: fingerprint!, paths: ["work.txt"], message: "Add work" });
+      const state = await host.execute({ type: "push_state", sessionId }) as PushState;
+      await host.execute({ type: "push", sessionId, head: state.head });
+      assert.equal(await host.execute({ type: "create_pull_request", sessionId, head: state.head, title: "Add work", body: "", draft: true }), pull.url);
+      const summary = host.list().find(session => session.id === sessionId)?.git;
+      assert.deepEqual({ branch: summary?.branch, head: summary?.head, changed: summary?.changed, ahead: summary?.ahead, upstream: summary?.upstream, pr: summary?.pr?.number }, { branch: "feature", head: state.head, changed: 0, ahead: 0, upstream: true, pr: 7 });
+    } finally {
+      await host.shutdown();
+      process.env = environment;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reads changes and diffs during a turn and refuses an unknown path", async () => {

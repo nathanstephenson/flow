@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox.tsx";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import { DiffText } from "@/components/diff-text.tsx";
 import { GitCommitForm } from "@/components/git-commit-form.tsx";
-import { diffHunks, diffNotice, noChanges } from "@/presentation/git.ts";
+import { diffHunks, diffNotice, failureText, noChanges } from "@/presentation/git.ts";
 
 type Diffs = Record<string, GitDiff | { error: string }>;
 
@@ -35,7 +35,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
     const request = (requests.current[key] ?? 0) + 1;
     requests.current[key] = request;
     const store = (value: Diffs[string]) => { if (requests.current[key] === request) setDiffs(current => ({ ...current, [key]: value })); };
-    void connection.command<GitDiff>({ type: "git_diff", sessionId, view, path }).then(store, (failure: unknown) => store({ error: String(failure) }));
+    void connection.command<GitDiff>({ type: "git_diff", sessionId, view, path }).then(store, (failure: unknown) => store({ error: failureText(failure) }));
   }
 
   useEffect(() => {
@@ -50,7 +50,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
         setOpen(current => current.filter(listed));
         for (const path of open.filter(listed)) readDiff(path);
       },
-      (failure: unknown) => { if (!cancelled) setError(String(failure)); },
+      (failure: unknown) => { if (!cancelled) setError(failureText(failure)); },
     );
     return () => { cancelled = true; };
   }, [connection, sessionId, view, revision]);
@@ -118,7 +118,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
             branchName={branchName}
             onMessage={setMessage}
             onBranchName={setBranchName}
-            onCommitted={onCommitted}
+            onCommitted={(commit) => { setExcluded([]); onCommitted(commit); }}
           />
         ) : null}
       </>}
