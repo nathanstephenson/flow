@@ -105,3 +105,29 @@ it("refuses a replacement when the remote moved after the preview", async () => 
   assert.equal(remote(), moved);
   await assert.rejects(push(repo, { head, replace: "not a commit" }, github), /Invalid/);
 });
+
+it("does not push tags with push.followTags", async () => {
+  const head = work("one");
+  git(repo, "config", "push.followTags", "true");
+  git(repo, "tag", "-a", "-m", "tag", "v1");
+  await push(repo, { head }, github);
+  assert.equal(git(bare, "tag"), "");
+});
+
+it("refuses a replacement when the remote branch was deleted after the preview", async () => {
+  const { replaced, head } = await diverge();
+  git(bare, "update-ref", "-d", "refs/heads/feature");
+  await assert.rejects(push(repo, { head, replace: replaced }, github), /stale|rejected/);
+  assert.throws(() => remote());
+});
+
+it("pushes a branch whose upstream is the default branch to its own name", async () => {
+  git(repo, "push", "--quiet", "origin", "main");
+  git(repo, "fetch", "--quiet", "origin");
+  git(repo, "switch", "--quiet", "-c", "tracking", "--track", "origin/main");
+  const head = work("tracked");
+  const main = git(bare, "rev-parse", "refs/heads/main").trim();
+  await push(repo, { head }, github);
+  assert.equal(git(bare, "rev-parse", "refs/heads/main").trim(), main);
+  assert.equal(git(bare, "rev-parse", "refs/heads/tracking").trim(), head);
+});

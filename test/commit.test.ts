@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, githubRemote, repository, unbornRepository } from "./git-fixture.ts";
 import { commit } from "../src/daemon/commit.ts";
-import { snapshot } from "../src/daemon/changes.ts";
+import { readStatus } from "../src/daemon/git-state.ts";
+import { resolveRepository } from "../src/daemon/repository.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
 const pull = { id: "PR_1", number: 3, url: "https://github.com/test/repo/pull/3", title: "Old", baseRefName: "main", state: "CLOSED", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: "2025-01-02", headRepository: { id: "R_repo" }, commits: { nodes: [] }, reviewThreads: { nodes: [] } };
@@ -20,7 +21,7 @@ let root: string;
 let repo: string;
 let bare: string;
 let environment: NodeJS.ProcessEnv;
-beforeEach(() => {
+beforeEach(async () => {
   environment = { ...process.env };
   pulls = [];
   root = mkdtempSync(join(tmpdir(), "flow-commit-"));
@@ -28,6 +29,7 @@ beforeEach(() => {
   git(repo, "config", "user.name", "Test");
   git(repo, "config", "user.email", "test@example.com");
   bare = githubRemote(root, repo);
+  await resolveRepository(repo, undefined, github);
 });
 afterEach(() => {
   process.env = environment;
@@ -44,9 +46,13 @@ function committed(): string[] {
   return git(repo, "diff-tree", "-r", "--name-only", "--no-commit-id", "--root", "HEAD").trim().split("\n");
 }
 async function commitPaths(paths: string[], options: { branch?: string; message?: string; fingerprint?: string } = {}) {
-  const fingerprint = options.fingerprint ?? (await snapshot(repo)).fingerprint;
+  const fingerprint = options.fingerprint ?? (await readStatus(repo)).fingerprint;
   return commit(repo, { fingerprint, paths, message: options.message ?? "Add work", ...(options.branch ? { branch: options.branch } : {}) }, github);
 }
+function porcelain(): string {
+  return git(repo, "status", "--porcelain=v2", "--untracked-files=all");
+}
+const failing: Gh = async () => { throw new Error("GitHub request failed: offline"); };
 function hook(name: string, script: string) {
   const path = join(repo, ".git", "hooks", name);
   writeFileSync(path, `#!/bin/sh\n${script}\n`);
@@ -139,7 +145,7 @@ it("makes the first commit in a repository with no commits", async () => {
   git(empty, "config", "user.email", "test@example.com");
   writeFileSync(join(empty, "first.txt"), "first\n");
   writeFileSync(join(empty, "later.txt"), "later\n");
-  const id = await commit(empty, { fingerprint: (await snapshot(empty)).fingerprint, paths: ["first.txt"], message: "First" }, github);
+  const id = await commit(empty, { fingerprint: (await readStatus(empty)).fingerprint, paths: ["first.txt"], message: "First" }, github);
   assert.equal(git(empty, "rev-parse", "HEAD").trim(), id);
   assert.equal(git(empty, "status", "--porcelain=v1", "--untracked-files=all"), "?? later.txt\n");
 });
@@ -179,8 +185,8 @@ it("commits a submodule pointer change as an ordinary entry", async () => {
 it("refuses a commit when the changes differ from the list that was read", async () => {
   git(repo, "switch", "--quiet", "feature");
   write("new.txt", "first\n");
-  const { fingerprint } = await snapshot(repo);
-  write("new.txt", "other\n");
+  const { fingerprint } = await readStatus(repo);
+  write("new.txt", "changed\n");
   await assert.rejects(commitPaths(["new.txt"], { fingerprint }), /Read the list again/);
   await assert.rejects(commitPaths(["missing.txt"]), /not in the list/);
   assert.equal(git(repo, "rev-list", "--count", "HEAD").trim(), "1");
@@ -192,7 +198,7 @@ it("runs hooks and reports a hook that changed the committed files", async () =>
   hook("pre-commit", "echo 'hook refused' >&2\nexit 1");
   await assert.rejects(commitPaths(["new.txt"]), /hook refused/);
   hook("pre-commit", "echo extra > extra.txt\ngit add extra.txt");
-  await assert.rejects(commitPaths(["new.txt"]), /hooks changed the committed files/);
+  await assert.rejects(commitPaths(["new.txt"]), /does not contain exactly the selected files/);
 });
 
 it("reports a hook that changed the commit parent", async () => {
@@ -202,7 +208,7 @@ it("reports a hook that changed the commit parent", async () => {
   git(repo, "commit", "--quiet", "-m", "feature");
   write("new.txt", "new\n");
   hook("post-commit", 'replacement=$(git commit-tree HEAD^{tree} -p HEAD^ -p main -m replacement)\ngit update-ref HEAD "$replacement"');
-  await assert.rejects(commitPaths(["new.txt"]), /hooks changed the commit parent/);
+  await assert.rejects(commitPaths(["new.txt"]), /parent is not the commit/);
 });
 
 it("refuses a commit during a conflict or a Git operation", async () => {
@@ -218,4 +224,93 @@ it("refuses a commit during a conflict or a Git operation", async () => {
   write("new.txt", "new\n");
   mkdirSync(join(repo, ".git", "rebase-merge"));
   await assert.rejects(commitPaths(["new.txt"]), /Finish the current Git operation/);
+});
+
+it("leaves the index and working tree as before when the commit fails", async () => {
+  git(repo, "switch", "--quiet", "feature");
+  write("new.txt", "new\n");
+  write("README.md", "changed\n");
+  write("staged.txt", "staged\n");
+  git(repo, "add", "staged.txt");
+  const before = porcelain();
+  hook("pre-commit", "exit 1");
+  await assert.rejects(commitPaths(["new.txt", "README.md"]));
+  assert.equal(porcelain(), before);
+  hook("pre-commit", "exit 0");
+  hook("commit-msg", "echo 'bad message' >&2\nexit 1");
+  await assert.rejects(commitPaths(["new.txt", "README.md"]), /bad message/);
+  assert.equal(porcelain(), before);
+});
+
+it("knows the default branch from the local remote HEAD when GitHub fails", async () => {
+  const other = join(root, "other");
+  mkdirSync(other);
+  const clone = repository(other, "clone");
+  git(clone, "config", "user.name", "Test");
+  git(clone, "config", "user.email", "test@example.com");
+  git(clone, "remote", "add", "origin", "git@github.com:test/other.git");
+  writeFileSync(join(clone, "new.txt"), "new\n");
+  const attempt = async () => commit(clone, { fingerprint: (await readStatus(clone)).fingerprint, paths: ["new.txt"], message: "Add" }, failing);
+  await assert.rejects(attempt(), /default branch of origin is not known/);
+  git(clone, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(clone, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+  await assert.rejects(attempt(), /main is the default branch/);
+  assert.equal(git(clone, "rev-list", "--count", "HEAD").trim(), "1");
+});
+
+it("refuses a commit when a file changes while the commit is prepared", async () => {
+  git(repo, "switch", "--quiet", "feature");
+  write("new.txt", "new\n");
+  const fingerprint = (await readStatus(repo)).fingerprint;
+  const saving: Gh = async (scope, args) => {
+    if (args[1] === "graphql") write("new.txt", "saved during the commit\n");
+    return github(scope, args);
+  };
+  await assert.rejects(commit(repo, { fingerprint, paths: ["new.txt"], message: "Add", branch: "feat/saved" }, saving), /Read the list again/);
+  assert.equal(git(repo, "rev-list", "--count", "HEAD").trim(), "1");
+});
+
+it("says the commit does not contain the selected files when a file has no change against HEAD", async () => {
+  git(repo, "switch", "--quiet", "feature");
+  write("README.md", "staged\n");
+  git(repo, "add", "README.md");
+  write("README.md", "# test\n");
+  write("new.txt", "new\n");
+  assert.match(status(), /^MM README.md/m);
+  await assert.rejects(commitPaths(["README.md", "new.txt"]), (error: Error) => /does not contain exactly the selected files/.test(error.message) && !/hook/i.test(error.message));
+});
+
+it("commits a staged deletion, a move and a name with a bracket", async () => {
+  git(repo, "switch", "--quiet", "feature");
+  write("gone.txt", "gone\n");
+  write("old.txt", "old\n");
+  git(repo, "add", "gone.txt", "old.txt");
+  git(repo, "commit", "--quiet", "-m", "files");
+  git(repo, "rm", "--quiet", "gone.txt");
+  git(repo, "mv", "old.txt", "moved.txt");
+  write("a[1].txt", "bracket\n");
+  write("a1.txt", "other\n");
+  await commitPaths(["gone.txt", "old.txt", "moved.txt", "a[1].txt"]);
+  assert.deepEqual(committed().sort(), ["a[1].txt", "gone.txt", "moved.txt", "old.txt"]);
+  assert.equal(status(), "?? a1.txt\n");
+});
+
+it("refuses a rename when an open pull request exists", async () => {
+  git(repo, "switch", "--quiet", "feature");
+  pulls = [{ ...pull, state: "OPEN", closedAt: null }];
+  write("new.txt", "new\n");
+  await assert.rejects(commitPaths(["new.txt"], { branch: "feat/other" }), /cannot be renamed/);
+});
+
+for (const operation of ["rebase", "cherry-pick"]) it(`refuses a commit during a ${operation}`, async () => {
+  git(repo, "switch", "--quiet", "feature");
+  write("README.md", "feature\n");
+  git(repo, "commit", "--quiet", "-am", "feature");
+  git(repo, "switch", "--quiet", "-c", "other", "main");
+  write("README.md", "other\n");
+  git(repo, "commit", "--quiet", "-am", "other");
+  assert.throws(() => operation === "rebase" ? git(repo, "rebase", "--quiet", "feature") : git(repo, "cherry-pick", "feature"));
+  write("README.md", "resolved\n");
+  git(repo, "add", "README.md");
+  await assert.rejects(commitPaths(["README.md"]), /Finish the current Git operation/);
 });

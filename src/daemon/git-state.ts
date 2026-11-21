@@ -3,8 +3,8 @@ import { lstat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { releaseRepositories, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
-import type { GitState, PullRequestSummary } from "../protocol/git.ts";
+import { localRepository, releaseRepositories, resolvePullRequest, resolveRepository, type Repository } from "./repository.ts";
+import type { GitFile, GitState, PullRequestSummary } from "../protocol/git.ts";
 import type { SessionLifecycle } from "../protocol/commands.ts";
 
 export type LocalGitState = Omit<GitState, "pr">;
@@ -13,16 +13,21 @@ export type PolledSession = { scope: string; lifecycle: SessionLifecycle; watche
 const READ_INTERVAL_MS = 3_000;
 const WATCHED_POLL_MS = 30_000;
 const UNWATCHED_POLL_MS = 5 * 60_000;
-const pathOffsets: Record<string, number> = { "1": 8, "2": 9, u: 10, "?": 1 };
+const pathOffsets: Record<string, number> = { "1": 8, u: 10, "?": 1 };
 
-export async function readLocal(scope: string): Promise<LocalGitState | undefined> {
-  const status = await run(scope, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"], GIT_READ_TIMEOUT_MS);
-  if (!status.ok) return undefined;
-  const records = status.value.split("\0");
-  const revision = createHash("sha256").update(status.value);
+export type StatusRead = { local: LocalGitState; fingerprint: string; files: GitFile[] };
+
+export async function readStatus(scope: string): Promise<StatusRead> {
+  const status = await run(scope, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"], GIT_READ_TIMEOUT_MS);
+  if (!status.ok) throw new Error(status.failure.message.includes("ENOENT") ? "Git is missing. Install git on the Session Host." : status.failure.message);
+  const records = status.value.split("\0").filter(Boolean);
+  const revision = createHash("sha256");
+  const fingerprint = createHash("sha256");
   const state: Omit<LocalGitState, "revision"> = { changed: 0, ahead: 0, behind: 0, upstream: false };
-  for (let index = 0; index < records.length; index++) {
-    const record = records[index]!;
+  const files: GitFile[] = [];
+  for (const record of records) {
+    revision.update(`${record}\0`);
+    if (!/^# branch\.(head|upstream|ab) /.test(record)) fingerprint.update(`${record}\0`);
     const counts = /^# branch\.ab \+(\d+) -(\d+)$/.exec(record);
     if (counts) Object.assign(state, { upstream: true, ahead: Number(counts[1]), behind: Number(counts[2]) });
     const branch = /^# branch\.head (.+)$/.exec(record)?.[1];
@@ -31,12 +36,21 @@ export async function readLocal(scope: string): Promise<LocalGitState | undefine
     if (oid) state.head = oid;
     const offset = pathOffsets[record[0] ?? ""];
     if (offset === undefined || record[1] !== " ") continue;
+    const path = record.split(" ").slice(offset).join(" ");
     state.changed += 1;
-    const stat = await lstat(resolve(scope, record.split(" ").slice(offset).join(" "))).catch(() => undefined);
+    files.push({ status: record[0] === "?" ? "??" : record.slice(2, 4).replaceAll(".", " "), path });
+    const stat = await lstat(resolve(scope, path)).catch(() => undefined);
     revision.update(`\0${stat?.mtimeMs}\0${stat?.size}`);
-    if (record[0] === "2") index += 1;
+    fingerprint.update(`\0${stat?.mtimeMs}\0${stat?.size}`);
   }
-  return { revision: revision.digest("hex").slice(0, 16), ...state };
+  return { local: { revision: revision.digest("hex").slice(0, 16), ...state }, fingerprint: fingerprint.digest("hex"), files };
+}
+
+export async function readLocal(scope: string): Promise<LocalGitState | undefined> {
+  const read = await readStatus(scope).catch(() => undefined);
+  if (!read) return undefined;
+  const defaultBranch = (await localRepository(scope, read.local.branch).catch(() => undefined))?.defaultBranches[0];
+  return { ...read.local, ...(defaultBranch ? { defaultBranch } : {}) };
 }
 
 type Entry = { local: LocalGitState | undefined; pr: PullRequestSummary | undefined; prBase: string | undefined; prBranch: string | undefined; lastRead: number; generation: number; trailing: ReturnType<typeof setTimeout> | undefined };

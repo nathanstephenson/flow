@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, mock } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
@@ -1827,6 +1827,44 @@ describe("SessionHost Git State", () => {
       }
     });
   }
+
+  it("refuses Git pane commands in a Scope that is not a repository root", async () => {
+    const { scope, host, cleanup } = await gitHost();
+    try {
+      mkdirSync(join(scope, "sub"));
+      writeFileSync(join(scope, "sub", "a.txt"), "a\n");
+      const id = await host.create({ scope: join(scope, "sub"), backend: "fake" });
+      for (const command of [
+        { type: "git_changes", sessionId: id, view: "uncommitted" },
+        { type: "git_diff", sessionId: id, view: "uncommitted", path: "a.txt" },
+        { type: "commit", sessionId: id, fingerprint: "x", paths: ["a.txt"], message: "Add" },
+        { type: "push_state", sessionId: id },
+        { type: "push", sessionId: id, head: "x" },
+        { type: "create_pull_request", sessionId: id, head: "x", title: "Add", body: "", draft: true },
+      ] satisfies Command[]) await assert.rejects(host.execute(command), /not a Git repository/, command.type);
+      assert.equal(git(scope, "rev-list", "--count", "HEAD").trim(), "1");
+    } finally { await cleanup(); }
+  });
+
+  it("sends only the selected files to the Summary Model", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost({ summaryModel: () => ({ backend: "fake", modelId: "fake-2", automatic: false }) });
+    host.registerBackend(backend);
+    try {
+      const id = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "chosen.txt"), "chosen content\n");
+      writeFileSync(join(scope, "other.txt"), "other content\n");
+      backend.autoReply = JSON.stringify({ message: "Add chosen" });
+      await host.execute({ type: "suggest_git_text", sessionId: id, kind: "commit", paths: ["chosen.txt"] });
+      assert.match(backend.latest.prompts[0]!, /chosen content/);
+      assert.doesNotMatch(backend.latest.prompts[0]!, /other/);
+    } finally {
+      await host.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("tells other Agent Sessions in the Scope when a commit creates a branch", async () => {
     const { scope, backend, host, first, second, cleanup } = await gitHost();

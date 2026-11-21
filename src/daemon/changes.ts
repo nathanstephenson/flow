@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { lstat, readFile, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { resolveRepository } from "./repository.ts";
+import { localRepository, resolveRepository } from "./repository.ts";
+import { readStatus } from "./git-state.ts";
 import { localStack, localStacks, stackParent } from "./stack-metadata.ts";
 import type { ChangesView, GitChanges, GitDiff, GitFile } from "../protocol/git.ts";
 
@@ -21,8 +20,7 @@ export async function git(scope: string, args: string[], write = false): Promise
 }
 
 export async function files(scope: string): Promise<GitFile[]> {
-  const raw = await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
-  return raw.split("\0").filter(Boolean).map((line) => ({ status: line.slice(0, 2), path: line.slice(3) }));
+  return (await readStatus(scope)).files;
 }
 
 export async function baseRef(scope: string, remote: string, branch: string, preferLocal: boolean): Promise<string | undefined> {
@@ -102,45 +100,17 @@ export async function diff(scope: string, view: ChangesView, path: string, pullR
   return { text: await git(scope, ["--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", ...range, "--", path]) };
 }
 
-export type Snapshot = { fingerprint: string; state: string; files: GitFile[]; commit?: string };
-
-export async function snapshot(scope: string): Promise<Snapshot> {
-  const current = await head(scope);
-  if (!current.ok) throw new Error(current.failure.message.includes("ENOENT") ? "Git is missing. Install git on the Session Host." : current.failure.message);
-  const commit = await run(scope, ["rev-parse", "--verify", "--quiet", "HEAD"], GIT_READ_TIMEOUT_MS);
-  const listed = await files(scope);
-  const staged = await git(scope, ["diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev", "--no-color"]);
-  const working = await git(scope, ["diff", "--raw", "-z", "--no-renames", "--no-abbrev", "--no-color"]);
-  const content = createHash("sha256");
-  for (const file of listed) {
-    const path = resolve(scope, file.path);
-    const stat = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
-      throw error;
-    });
-    content.update(JSON.stringify({ path: file.path, mode: stat?.mode, size: stat?.size }));
-    if (stat?.isSymbolicLink()) content.update(await readlink(path));
-    else if (stat?.isFile()) for await (const chunk of createReadStream(path)) content.update(chunk);
-  }
-  const state = createHash("sha256").update(JSON.stringify({ commit: commit.ok ? commit.value : undefined, listed, staged, working, content: content.digest("hex") })).digest("hex");
-  const fingerprint = createHash("sha256").update(JSON.stringify({ branch: current.value, state })).digest("hex");
-  return { fingerprint, state, files: listed, ...(commit.ok ? { commit: commit.value.trim() } : {}) };
-}
-
 export async function canNameBranch(scope: string, branch: string, remote: string, pullRequest: boolean): Promise<boolean> {
   if (pullRequest) return false;
   if ((await localStacks(scope)).some(stack => stack.trunk.branch === branch || stack.branches.some(item => item.branch === branch))) return false;
   return !(await run(scope, ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], GIT_READ_TIMEOUT_MS)).ok;
 }
 
-export async function commitContext(scope: string, pullRequest: (branch: string) => boolean, github: Gh = gh): Promise<Pick<GitChanges, "fingerprint" | "branch" | "defaultBranch" | "canRename">> {
-  const { fingerprint } = await snapshot(scope);
-  const current = await head(scope);
-  const branch = current.ok && !current.value.detached ? current.value.name : undefined;
-  const repository = await resolveRepository(scope, branch, github).catch(() => undefined);
-  const defaultBranch = repository?.base.defaultBranch;
-  const canRename = Boolean(branch && repository && branch !== defaultBranch && await canNameBranch(scope, branch, repository.remote, pullRequest(branch)));
-  return { fingerprint, ...(branch ? { branch } : {}), ...(defaultBranch ? { defaultBranch } : {}), canRename };
+export async function commitContext(scope: string, branch: string | undefined, pullRequest: (branch: string) => boolean): Promise<Pick<GitChanges, "branch" | "defaultBranch" | "canRename">> {
+  const repository = await localRepository(scope, branch).catch(() => undefined);
+  const defaultBranch = repository?.defaultBranches[0];
+  const canRename = Boolean(branch && repository?.github && defaultBranch && !repository.defaultBranches.includes(branch) && await canNameBranch(scope, branch, repository.remote, pullRequest(branch)));
+  return { ...(branch ? { branch } : {}), ...(defaultBranch ? { defaultBranch } : {}), canRename };
 }
 
 export async function changesText(scope: string, view: ChangesView, paths: string[] | undefined, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<string> {

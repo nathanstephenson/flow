@@ -13,7 +13,7 @@ import type { StackInput, StackReview } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
 import { commit } from "./commit.ts";
 import { push, pushState } from "./push.ts";
-import { GitStates } from "./git-state.ts";
+import { GitStates, readStatus } from "./git-state.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
@@ -449,17 +449,25 @@ export class SessionHost {
     }
   }
 
+  private gitScope(sessionId: string): string {
+    const scope = this.record(sessionId).scope;
+    if (!isRepository(scope)) throw new CommandRefused("This Scope is not a Git repository.");
+    return scope;
+  }
+
   private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
-    const scope = this.record(command.sessionId).scope;
+    const scope = this.gitScope(command.sessionId);
     const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
     return this.readGit(async () => {
       if (command.type === "git_diff") return await diff(scope, command.view, command.path, base);
-      const listed = await changes(scope, command.view, base);
-      return command.view === "branch" ? listed : { ...listed, ...await commitContext(scope, branch => this.gitStates.hasPullRequest(scope, branch)) };
+      if (command.view === "branch") return await changes(scope, command.view, base);
+      const read = await readStatus(scope);
+      return { files: read.files, commits: [], fingerprint: read.fingerprint, ...await commitContext(scope, read.local.branch, branch => this.gitStates.hasPullRequest(scope, branch)) };
     });
   }
 
   async commit(sessionId: string, input: CommitInput): Promise<string> {
+    this.gitScope(sessionId);
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
       const before = await head(record.scope);
@@ -2481,11 +2489,11 @@ export class SessionHost {
       case "commit":
         return await this.commit(command.sessionId, { fingerprint: command.fingerprint, paths: command.paths, message: command.message, ...(command.branch === undefined ? {} : { branch: command.branch }) });
       case "push_state":
-        return await this.readGit(() => pushState(this.record(command.sessionId).scope));
+        return await this.readGit(() => pushState(this.gitScope(command.sessionId)));
       case "push":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, push(this.record(command.sessionId).scope, { head: command.head, ...(command.replace === undefined ? {} : { replace: command.replace }) })));
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, push(this.record(command.sessionId).scope, { head: command.head, ...(command.replace === undefined ? {} : { replace: command.replace }) })));
       case "create_pull_request":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, createPullRequest(this.record(command.sessionId).scope, { head: command.head, title: command.title, body: command.body, draft: command.draft === true })));
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, createPullRequest(this.record(command.sessionId).scope, { head: command.head, title: command.title, body: command.body, draft: command.draft === true })));
       case "suggest_git_text":
         return await this.suggestGitText(command.sessionId, command.kind, command.paths);
       case "switch_branch":

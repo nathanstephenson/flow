@@ -69,6 +69,7 @@ export type GitState = {
   revision: string;
   branch?: string;
   head?: string;
+  defaultBranch?: string;
   changed: number;
   ahead: number;
   behind: number;

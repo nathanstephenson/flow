@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
-import { GitStates, readLocal } from "../src/daemon/git-state.ts";
+import { GitStates, readLocal, readStatus } from "../src/daemon/git-state.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
 let root: string;
@@ -44,7 +44,7 @@ describe("readLocal", () => {
     writeFileSync(join(path, "a file.txt"), "untracked");
     git(path, "mv", "README.md", "moved.md");
     const state = await readLocal(path);
-    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 3, ahead: 0, behind: 0, upstream: false, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
+    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 4, ahead: 0, behind: 0, upstream: false, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
     assert.equal(await readLocal(root), undefined);
   });
 
@@ -56,6 +56,24 @@ describe("readLocal", () => {
     assert.deepEqual({ ...await readLocal(empty), revision: undefined }, { revision: undefined, changed: 0, ahead: 0, behind: 0, upstream: false, branch: "main" });
   });
 
+  it("reads the default branch from the local remote HEAD", async () => {
+    const path = scope("default");
+    git(path, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    assert.equal((await readLocal(path))?.defaultBranch, "main");
+  });
+
+  it("lists changed files with a fingerprint that ignores the branch name but not the files", async () => {
+    const path = scope("fingerprint");
+    writeFileSync(join(path, "new.txt"), "new");
+    const first = await readStatus(path);
+    assert.deepEqual(first.files, [{ status: "??", path: "new.txt" }]);
+    git(path, "switch", "--quiet", "-c", "other");
+    assert.equal((await readStatus(path)).fingerprint, first.fingerprint);
+    writeFileSync(join(path, "new.txt"), "newer");
+    assert.notEqual((await readStatus(path)).fingerprint, first.fingerprint);
+  });
+
   it("reports ahead and behind against the upstream", async () => {
     const remote = repository(root, "remote");
     const path = join(root, "clone");
@@ -64,7 +82,7 @@ describe("readLocal", () => {
     git(path, "commit", "--quiet", "--allow-empty", "-m", "local two");
     git(remote, "commit", "--quiet", "--allow-empty", "-m", "remote");
     git(path, "fetch", "--quiet");
-    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true, branch: "main", head: git(path, "rev-parse", "HEAD").trim() });
+    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true, branch: "main", defaultBranch: "main", head: git(path, "rev-parse", "HEAD").trim() });
   });
 
   it("changes revision when a changed file changes again", async () => {
