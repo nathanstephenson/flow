@@ -128,7 +128,7 @@ describe("resolvePullRequest", () => {
     const threads = { nodes: [{ isResolved: false }, { isResolved: true }, { isResolved: false }] };
     assert.deepEqual(await resolvePullRequest(repo, resolved, "feature", github([pull({ isDraft: true, reviewDecision: "CHANGES_REQUESTED", reviewThreads: threads })]).run), {
       repo: "base/repo", id: "PR_open", number: 7, url: "https://github.com/base/repo/pull/7", title: "Change", baseBranch: "main", headRefOid: "a".repeat(40), state: "OPEN",
-      isDraft: true, checks: "passing", reviewDecision: "CHANGES_REQUESTED", unresolvedThreads: 2, updatedAt: "2025-01-01",
+      isDraft: true, checks: "passing", checksCompleted: 0, reviewDecision: "CHANGES_REQUESTED", unresolvedThreads: 2, updatedAt: "2025-01-01",
     });
     const checks = async (rollup: unknown) => (await resolvePullRequest(repo, resolved, "feature", github([pull({ commits: { nodes: rollup === undefined ? [] : [{ commit: { statusCheckRollup: rollup } }] } })]).run))?.checks;
     assert.equal(await checks({ state: "FAILURE" }), "failing");
@@ -137,6 +137,9 @@ describe("resolvePullRequest", () => {
     assert.equal(await checks({ state: "EXPECTED" }), "pending");
     assert.equal(await checks(null), "none");
     assert.equal(await checks(undefined), "none");
+    const contexts = { checkRunCountsByState: [{ state: "SUCCESS", count: 2 }, { state: "IN_PROGRESS", count: 1 }, { state: "QUEUED", count: 3 }, { state: "FAILURE", count: 1 }, { state: "WAITING", count: 1 }, { state: "PENDING", count: 1 }], statusContextCountsByState: [{ state: "PENDING", count: 1 }, { state: "EXPECTED", count: 2 }, { state: "ERROR", count: 1 }] };
+    const completed = await resolvePullRequest(repo, resolved, "feature", github([pull({ commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING", contexts } } }] } })]).run);
+    assert.equal(completed?.checksCompleted, 4);
   });
 });
 

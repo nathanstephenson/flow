@@ -60,6 +60,7 @@ export type PullRequestSummary = {
   state: "OPEN" | "CLOSED" | "MERGED";
   isDraft: boolean;
   checks: CheckStatus;
+  checksCompleted: number;
   reviewDecision: string | null;
   unresolvedThreads: number;
   updatedAt: string;

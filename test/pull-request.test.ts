@@ -50,6 +50,22 @@ test("each pull request write polls Git State once for its Scope, and reads run 
   } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
 });
 
+test("refresh_git forces one pull request poll only when asked", async () => {
+  const path = await mkdtemp(join(tmpdir(), "flow-pr-refresh-"));
+  execFileSync("git", ["init", "-b", "feature"], { cwd: path });
+  const host = new SessionHost();
+  host.registerBackend(new FakeBackend());
+  const polls: (string | undefined)[] = [];
+  host.pollGitState = async (forced?: string) => { polls.push(forced); };
+  try {
+    const sessionId = await host.create({ scope: path });
+    await host.execute({ type: "refresh_git", sessionId });
+    assert.deepEqual(polls, []);
+    await host.execute({ type: "refresh_git", sessionId, pullRequest: true });
+    assert.deepEqual(polls, [path]);
+  } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
+});
+
 test("reads a pull request with 3 threads and 5 checks in one gh call", async () => {
   const path = await scope();
   try {
@@ -258,6 +274,74 @@ test("re-runs the failed jobs of one run in the base repository, and refuses a b
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+test("pages a thread on a later page whose comments also have a next page", async () => {
+  const path = await scope();
+  try {
+    const { github, calls } = mock({ more: "nested" });
+    await resolveRepository(path, "feature", github);
+    calls.length = 0;
+    const pr = await pullRequest(path, ref, github);
+    assert.equal(calls.length, 3);
+    assert.match(calls[2]!.join(" "), /PullRequestReviewThread\{comments\(first:100,after/);
+    assert.ok(calls[2]!.includes("id=PRRT_more"));
+    assert.deepEqual(pr?.threads.map(thread => [thread.id, thread.comments.length]), [["PRRT_0", 1], ["PRRT_more", 2]]);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("a known closed pull request is shown until the next poll, even when the resolver now gives another open one", async () => {
+  const path = await scope();
+  try {
+    const { github, calls } = mock({ state: "CLOSED", candidates: [{ ...open, id: "PR_two", number: 2 }] });
+    await resolveRepository(path, "feature", github);
+    calls.length = 0;
+    const pr = await pullRequest(path, ref, github);
+    assert.equal(pr?.id, ref.id);
+    assert.equal(pr?.state, "CLOSED");
+    assert.equal(calls.length, 1);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("a known pull request from another head repository is read again through the resolver", async () => {
+  const path = await scope();
+  try {
+    const { github, calls } = mock({ headRepositoryId: "R_other" });
+    await resolveRepository(path, "feature", github);
+    calls.length = 0;
+    assert.equal((await pullRequest(path, ref, github))?.id, ref.id);
+    assert.equal(calls.length, 3);
+    assert.match(calls[1]!.join(" "), /headRefName:\$branch/);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("refuses a reply to, or a resolve of, a thread of another pull request before any mutation", async () => {
+  const path = await scope();
+  try {
+    for (const write of [
+      (github: Gh) => commentPullRequest(path, { pr: ref, body: "text", threadId: "PRRT_1" }, github),
+      (github: Gh) => resolvePullRequestThread(path, { pr: ref, threadId: "PRRT_1", resolved: true }, github),
+      (github: Gh) => resolvePullRequestThread(path, { pr: ref, threadId: "PRRT_1", resolved: false }, github),
+    ]) {
+      const other = mock({ threadPr: "PR_two" });
+      await assert.rejects(write(other.github), /not on this pull request/);
+      assert.equal(other.mutations.length, 0);
+      const same = mock();
+      await write(same.github);
+      assert.ok(same.calls.some(call => call.join(" ").includes("PullRequestReviewThread{pullRequest") && call.includes("thread=PRRT_1")));
+      assert.equal(same.mutations.length, 1);
+    }
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("refuses a re-run of a run that is not for the current head", async () => {
+  const path = await scope();
+  try {
+    const stale = mock({ runSha: "b".repeat(40) });
+    await assert.rejects(rerunPullRequestChecks(path, { pr: ref, runId: 123 }, stale.github), /not for the current head/);
+    assert.ok(stale.calls.some(call => call[0] === "api" && call[1] === "repos/base/repo/actions/runs/123"));
+    assert.ok(!stale.calls.some(call => call[0] === "run"));
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("Rebase rejects dirty state, existing Git operations and stale PR heads before fetching", async () => {
   const path = await scope();
   try {
@@ -270,6 +354,23 @@ test("Rebase rejects dirty state, existing Git operations and stale PR heads bef
     await rm(join(path, ".git/rebase-merge"), { recursive: true });
     for (const options of [{ headOid: "b".repeat(40) }, { baseBranch: "other" }, { state: "CLOSED" }]) await assert.rejects(changePullRequest(path, "rebase", actionInput, mock(options).github), /changed/);
   } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+for (const later of [{ headRefOid: "b".repeat(40) }, { baseRefName: "other" }, { id: "PR_two" }]) test(`refuses a rebase when the pull request changes during the fetch: ${Object.keys(later)[0]}`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "flow-pr-rebase-"));
+  try {
+    const remote = repository(root, "remote", ["feature"]);
+    const path = join(root, "local");
+    git(root, "clone", "--quiet", remote, path);
+    git(path, "switch", "feature");
+    git(path, "remote", "set-url", "origin", "git@github.com:fork/repo.git");
+    git(path, "config", `url.${remote}.insteadOf`, "https://github.com/base/repo.git");
+    await writeFile(join(remote, "README.md"), "base change\n");
+    git(remote, "commit", "--quiet", "-am", "base change");
+    const before = git(path, "rev-parse", "HEAD").trim();
+    await assert.rejects(changePullRequest(path, "rebase", actionInput, mock({ later }).github), /changed/);
+    assert.equal(git(path, "rev-parse", "HEAD").trim(), before);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 for (const conflict of [false, true]) test(`rebases only the current branch without push; conflicts=${conflict}`, async () => {
@@ -361,7 +462,7 @@ const repositoryView = (args: string[]) => JSON.stringify(args[2] === "base/repo
   ? { id: "R_base", defaultBranchRef: { name: "main" }, isFork: false }
   : { id: "R_source", defaultBranchRef: { name: "main" }, isFork: true, parent: { name: "repo", owner: { login: "base" } } });
 const entry = { id: "C_one", author: { login: "user" }, body: "![image](url)", url: "url", createdAt: "2025-01-01", diffHunk: "@@ -1 +1 @@" };
-type Options = { candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" };
+type Options = { candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" | "nested"; threadPr?: string; runSha?: string; later?: object; headRepositoryId?: string };
 function mock(options: Options = {}) {
   const mutations: string[][] = [];
   const calls: string[][] = [];
@@ -370,16 +471,18 @@ function mock(options: Options = {}) {
   const checks = options.checkNodes ?? Array.from({ length: options.checks ?? 1 }, (_, index) => ({ name: `check ${index}`, status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: `https://github.com/base/repo/actions/runs/9/job/${index}` }));
   const details = {
     ...ref, url: open.url, title: "Change", body: entry.body, state: options.state ?? "OPEN", isDraft: options.draft ?? false, reviewDecision: null, author: { login: "user" },
-    headRefName: "feature", headRefOid: "a".repeat(40), headRepository: { id: "R_source", nameWithOwner: "fork/repo" }, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", locked: options.locked ?? false,
+    headRefName: "feature", headRefOid: "a".repeat(40), headRepository: { id: options.headRepositoryId ?? "R_source", nameWithOwner: "fork/repo" }, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", locked: options.locked ?? false,
     repository: { isArchived: options.archived ?? false, viewerPermission: options.permission ?? "READ", mergeCommitAllowed: options.methods?.includes("MERGE") ?? false, squashMergeAllowed: options.methods?.includes("SQUASH") ?? false, rebaseMergeAllowed: options.methods?.includes("REBASE") ?? false },
     comments: connection([entry], options.more === "comments"),
     reviews: connection([{ ...entry, state: "APPROVED" }], options.more === "reviews"),
-    reviewThreads: connection(threads, options.more === "threads"),
+    reviewThreads: connection(threads, options.more === "threads" || options.more === "nested"),
     commits: { nodes: [{ commit: { statusCheckRollup: { id: "rollup", contexts: connection(checks, options.more === "checks") } } }] },
   };
+  let resolved = 0;
   const github: Gh = async (_, args) => {
     calls.push(args);
     if (args[0] === "auth" || args[0] === "run") return "";
+    if (args[0] === "api" && args[1]?.startsWith("repos/")) return JSON.stringify({ head_sha: options.runSha ?? "a".repeat(40) });
     if (args[0] === "repo") return repositoryView(args);
     const query = args.find(value => value.startsWith("query="))!;
     let data: unknown;
@@ -387,10 +490,11 @@ function mock(options: Options = {}) {
       mutations.push(args);
       if (options.fail) return JSON.stringify({ errors: [{ message: "denied" }] });
       data = { result: {} };
-    } else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: { nodes: options.candidates ?? [{ ...open, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefOid: options.headOid ?? open.headRefOid, baseRefName: options.baseBranch ?? "main" }] } } };
+    } else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: { nodes: options.candidates ?? [{ ...open, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefOid: options.headOid ?? open.headRefOid, baseRefName: options.baseBranch ?? "main", ...(resolved++ && options.later) }] } } };
+    else if (query.includes("PullRequestReviewThread{pullRequest")) data = { node: { pullRequest: { id: options.threadPr ?? ref.id } } };
     else if (query.includes("after:$cursor")) {
       const field = /\{(\w+)\(first:100,after/.exec(query)![1]!;
-      data = { node: { [field]: connection([field === "reviewThreads" ? { ...threads[0], id: "PRRT_more" } : field === "contexts" ? checks[0] : entry]) } };
+      data = { node: { [field]: connection([field === "reviewThreads" ? { ...threads[0], id: "PRRT_more", comments: connection([entry], options.more === "nested") } : field === "contexts" ? checks[0] : entry]) } };
     } else data = { node: options.elsewhere && args.includes(`id=${options.elsewhere}`) ? { ...details, id: options.elsewhere, headRefName: "elsewhere" } : details };
     return JSON.stringify({ data });
   };

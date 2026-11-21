@@ -159,7 +159,7 @@ export class GitStates {
         if (found) {
           this.bases.set(key, found.pr?.state === "OPEN" ? found.pr.baseBranch : undefined);
           this.refs.set(key, found.pr && { repo: found.pr.repo, number: found.pr.number, id: found.pr.id });
-          this.results.set(key, found.pr && { number: found.pr.number, url: found.pr.url, state: found.pr.state, isDraft: found.pr.isDraft, checks: found.pr.checks, reviewDecision: found.pr.reviewDecision, unresolvedThreads: found.pr.unresolvedThreads, updatedAt: found.pr.updatedAt });
+          this.results.set(key, found.pr && { number: found.pr.number, url: found.pr.url, state: found.pr.state, isDraft: found.pr.isDraft, checks: found.pr.checks, checksCompleted: found.pr.checksCompleted, reviewDecision: found.pr.reviewDecision, unresolvedThreads: found.pr.unresolvedThreads, updatedAt: found.pr.updatedAt });
         }
       }
       if (!this.results.has(key)) continue;

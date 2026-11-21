@@ -140,6 +140,8 @@ export async function changePullRequest(scope: string, action: "rebase" | "merge
   }
   await git(scope, ["fetch", "--no-tags", baseUrl, `refs/heads/${pr.baseBranch}`]);
   const base = await git(scope, ["rev-parse", "FETCH_HEAD"]);
+  const latest = await target(scope, input.pr, github);
+  if (latest.state !== "OPEN" || latest.headRefOid !== input.headOid || latest.baseBranch !== input.baseBranch) throw new Error("The pull request has changed. Reload it before rebasing.");
   const branch = await head(scope);
   if (!branch.ok || branch.value.detached || branch.value.name !== pr.branch || await git(scope, ["rev-parse", "HEAD"]) !== before) throw new Error("The branch has changed. Reload it before rebasing.");
   await cleanStack(scope);
@@ -150,18 +152,25 @@ export async function changePullRequest(scope: string, action: "rebase" | "merge
   }
 }
 
+async function requireThread(scope: string, pr: ResolvedPullRequest, thread: string, github: Gh): Promise<void> {
+  const data = await api<{ node: { pullRequest?: { id: string } } | null }>(scope, github, "query($thread:ID!){node(id:$thread){... on PullRequestReviewThread{pullRequest{id}}}}", { thread });
+  if (data.node?.pullRequest?.id !== pr.id) throw new Error("This review thread is not on this pull request. Reload it before continuing.");
+}
+
 export async function commentPullRequest(scope: string, input: PullRequestCommentInput, github: Gh = gh): Promise<void> {
   validate(input?.pr);
   if (typeof input.body !== "string" || !input.body.trim() || (input.threadId !== undefined && !validId(input.threadId))) throw new Error("Invalid comment input.");
   const pr = await target(scope, input.pr, github);
-  if (input.threadId !== undefined) await api(scope, github, "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}", { id: input.threadId, body: input.body });
-  else await api(scope, github, "mutation($id:ID!,$body:String!){addComment(input:{subjectId:$id,body:$body}){commentEdge{node{id}}}}", { id: pr.id, body: input.body });
+  if (input.threadId !== undefined) {
+    await requireThread(scope, pr, input.threadId, github);
+    await api(scope, github, "mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id}}}", { id: input.threadId, body: input.body });
+  } else await api(scope, github, "mutation($id:ID!,$body:String!){addComment(input:{subjectId:$id,body:$body}){commentEdge{node{id}}}}", { id: pr.id, body: input.body });
 }
 
 export async function resolvePullRequestThread(scope: string, input: PullRequestThreadInput, github: Gh = gh): Promise<void> {
   validate(input?.pr);
   if (!validId(input.threadId) || typeof input.resolved !== "boolean") throw new Error("Invalid thread input.");
-  await target(scope, input.pr, github);
+  await requireThread(scope, await target(scope, input.pr, github), input.threadId, github);
   const operation = input.resolved ? "resolveReviewThread" : "unresolveReviewThread";
   await api(scope, github, `mutation($id:ID!){${operation}(input:{threadId:$id}){thread{id}}}`, { id: input.threadId });
 }
@@ -185,5 +194,7 @@ export async function rerunPullRequestChecks(scope: string, input: PullRequestRe
   validate(input?.pr);
   if (!Number.isSafeInteger(input.runId) || input.runId < 1) throw new Error("Invalid run ID.");
   const pr = await target(scope, input.pr, github);
+  const run = JSON.parse(await github(scope, ["api", `repos/${pr.repo}/actions/runs/${input.runId}`])) as { head_sha?: string };
+  if (run.head_sha !== pr.headRefOid) throw new Error("This run is not for the current head of the pull request. Reload it before you re-run checks.");
   await github(scope, ["run", "rerun", String(input.runId), "--failed", "--repo", pr.repo]);
 }

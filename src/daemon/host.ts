@@ -2488,7 +2488,9 @@ export class SessionHost {
       case "assist_stack":
         return await this.assistStack(command.sessionId);
       case "refresh_git":
-        return await this.gitStates.refresh(this.record(command.sessionId).scope);
+        await this.gitStates.refresh(this.record(command.sessionId).scope);
+        if (command.pullRequest === true) await this.pollGitState(this.record(command.sessionId).scope);
+        return;
       case "git_changes":
       case "git_diff":
         return await this.readChanges(command);

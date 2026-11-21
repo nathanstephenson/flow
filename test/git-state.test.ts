@@ -18,7 +18,7 @@ function scope(name: string): string {
 }
 
 const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", baseRefName: "parent", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
-const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
+const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", checksCompleted: 0, reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
 
 function github() {
   const queries: string[][] = [];

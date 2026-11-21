@@ -5,7 +5,7 @@ import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, p
 const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
 const { branch: _branch, ...detached } = local;
 const { head: _head, ...unborn } = local;
-const pr = { number: 12, url: "https://github.com/test/repo/pull/12", state: "OPEN" as const, isDraft: false, checks: "pending" as const, reviewDecision: null, unresolvedThreads: 0, updatedAt: "2025-01-01" };
+const pr = { number: 12, url: "https://github.com/test/repo/pull/12", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 0, reviewDecision: null, unresolvedThreads: 0, updatedAt: "2025-01-01" };
 
 it("shows the branch, ahead, behind and the pull request state and checks", () => {
   assert.equal(branchLine(local), "feature");

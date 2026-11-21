@@ -213,7 +213,7 @@ export type Command =
   | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
   | { type: "change_stack"; sessionId: string; input: StackInput }
   | { type: "assist_stack"; sessionId: string }
-  | { type: "refresh_git"; sessionId: string }
+  | { type: "refresh_git"; sessionId: string; pullRequest?: boolean }
   | { type: "git_changes"; sessionId: string; view: ChangesView }
   | { type: "git_diff"; sessionId: string; view: ChangesView; path: string }
   | ({ type: "commit"; sessionId: string } & CommitInput)

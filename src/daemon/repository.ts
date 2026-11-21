@@ -15,9 +15,16 @@ type RepositoryView = { id?: string; defaultBranchRef?: { name: string } | null;
 type Candidate = {
   id: string; number: number; url: string; title: string; baseRefName: string; headRefOid: string; state: PullRequestSummary["state"]; isDraft: boolean; reviewDecision: string | null;
   updatedAt: string; closedAt: string | null; headRepository: { id: string } | null;
-  commits: { nodes: { commit: { statusCheckRollup: { state: string } | null } }[] };
+  commits: { nodes: { commit: { statusCheckRollup: { state: string; contexts?: Counts } | null } }[] };
   reviewThreads: { nodes: { isResolved: boolean }[] };
 };
+
+type Counts = { checkRunCountsByState: { state: string; count: number }[]; statusContextCountsByState: { state: string; count: number }[] };
+const unfinished = ["IN_PROGRESS", "PENDING", "QUEUED", "WAITING", "REQUESTED", "EXPECTED"];
+
+function completed(counts: Counts | undefined): number {
+  return [...counts?.checkRunCountsByState ?? [], ...counts?.statusContextCountsByState ?? []].filter(entry => !unfinished.includes(entry.state)).reduce((sum, entry) => sum + entry.count, 0);
+}
 
 const identities = new Map<string, Pick<Repository, "head" | "base">>();
 
@@ -105,7 +112,7 @@ function checks(rollup: { state: string } | null | undefined): CheckStatus {
 export async function resolvePullRequest(scope: string, repository: Repository, branch: string, github: Gh = gh): Promise<ResolvedPullRequest | undefined> {
   const [owner, name] = repository.base.repo.split("/");
   const data = await api<{ repository: { pullRequests: { nodes: Candidate[] } } }>(scope, github,
-    "query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){pullRequests(headRefName:$branch,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number url title baseRefName headRefOid state isDraft reviewDecision updatedAt closedAt headRepository{id} commits(last:1){nodes{commit{statusCheckRollup{state}}}} reviewThreads(first:100){nodes{isResolved}}}}}}",
+    "query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){pullRequests(headRefName:$branch,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number url title baseRefName headRefOid state isDraft reviewDecision updatedAt closedAt headRepository{id} commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}}}}} reviewThreads(first:100){nodes{isResolved}}}}}}",
     { owner: owner!, name: name!, branch });
   const matches = data.repository.pullRequests.nodes.filter(pr => pr.headRepository?.id === repository.head.id);
   matches.sort((a, b) => Number(b.state === "OPEN") - Number(a.state === "OPEN") || (b.closedAt ?? b.updatedAt).localeCompare(a.closedAt ?? a.updatedAt));
@@ -113,7 +120,7 @@ export async function resolvePullRequest(scope: string, repository: Repository, 
   if (!pr) return undefined;
   return {
     repo: repository.base.repo, id: pr.id, number: pr.number, url: pr.url, title: pr.title, baseBranch: pr.baseRefName, headRefOid: pr.headRefOid, state: pr.state, isDraft: pr.isDraft,
-    checks: checks(pr.commits.nodes[0]?.commit.statusCheckRollup), reviewDecision: pr.reviewDecision,
+    checks: checks(pr.commits.nodes[0]?.commit.statusCheckRollup), checksCompleted: completed(pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts), reviewDecision: pr.reviewDecision,
     unresolvedThreads: pr.reviewThreads.nodes.filter(thread => !thread.isResolved).length, updatedAt: pr.updatedAt,
   };
 }
