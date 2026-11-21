@@ -84,17 +84,17 @@ async function checkGit(viewport, screenshotSuffix) {
   if (process.env.FLOW_EXPECT_PR) await list.getByRole("tab", { name: "PR", exact: true }).waitFor();
   else await page.waitForTimeout(500);
   const labels = await list.getByRole("tab").allTextContents();
-  assert.equal(labels[0], "Diff");
-  assert.deepEqual(labels, labels.filter((label) => ["Diff", "Stack", "PR"].includes(label)));
-  assert.equal(labels.join(",").includes("PR,Stack"), false, "Git tabs must stay in Diff / Stack / PR order");
-  const selected = labels.includes("PR") ? "PR" : "Diff";
+  assert.equal(labels[0], "Changes");
+  assert.deepEqual(labels, labels.filter((label) => ["Changes", "Stack", "PR"].includes(label)));
+  assert.equal(labels.join(",").includes("PR,Stack"), false, "Git tabs must stay in Changes / Stack / PR order");
+  const selected = labels.includes("PR") ? "PR" : "Changes";
   await assertSelected(page, list, selected);
   await assertFits(page, list);
 
   if (labels.length > 1) {
     await list.getByRole("tab", { name: selected }).focus();
     await page.keyboard.press("Home");
-    await assertSelected(page, list, "Diff");
+    await assertSelected(page, list, "Changes");
     await page.keyboard.press("End");
     await assertSelected(page, list, labels.at(-1));
     await page.keyboard.press("ArrowLeft");
@@ -102,15 +102,15 @@ async function checkGit(viewport, screenshotSuffix) {
     await page.keyboard.press("ArrowRight");
     await assertSelected(page, list, labels.at(-1));
   }
-  if (labels.at(-1) !== "Diff") await list.getByRole("tab", { name: "Diff" }).click();
+  if (labels.at(-1) !== "Changes") await list.getByRole("tab", { name: "Changes" }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await page.getByRole("tab", { name: "Diff", exact: true }).waitFor();
+  await page.getByRole("tab", { name: "Changes", exact: true }).waitFor();
   for (const tab of await list.getByRole("tab").all()) {
     assert.equal(await tab.isDisabled(), true, "Publish should lock every Git tab");
   }
   if (labels.length > 1) {
     await list.getByRole("tab", { name: labels.at(-1) }).click({ force: true });
-    assert.equal(await list.getByRole("tab", { name: "Diff" }).getAttribute("aria-selected"), "true", "a disabled Git tab must not activate");
+    assert.equal(await list.getByRole("tab", { name: "Changes" }).getAttribute("aria-selected"), "true", "a disabled Git tab must not activate");
   }
   await page.reload({ waitUntil: "domcontentloaded" });
   await list.waitFor();

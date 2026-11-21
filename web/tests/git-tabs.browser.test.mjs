@@ -38,7 +38,8 @@ const bundle = await build({
       build.onLoad({ filter: /\/host\.tsx$/ }, () => ({
         contents: `
           const connection = {
-            async command() {
+            async command({ type }) {
+              if (type === 'git_changes') return { files: [], commits: [] };
               return { repository: true, branch: { name: 'feature', detached: false }, files: [] };
             },
           };
@@ -119,12 +120,12 @@ describe('GitPane tab selection material', () => {
       assert.notEqual(active.background, 'rgba(0, 0, 0, 0)');
       assert.notEqual(active.color, inactive.color);
 
-      for (const selected of ['Diff', 'Stack', 'PR', 'Diff']) {
+      for (const selected of ['Changes', 'Stack', 'PR', 'Changes']) {
         await tab(selected).click();
         await composer.focus();
         await composer.hover();
         assert.equal((await face(list)).background, 'rgba(0, 0, 0, 0)');
-        for (const name of ['Diff', 'Stack', 'PR']) {
+        for (const name of ['Changes', 'Stack', 'PR']) {
           assert.equal(await tab(name).getAttribute('aria-selected'), String(name === selected));
           assert.equal(await page.getByRole('tabpanel', { name, exact: true }).isVisible(), name === selected);
           const style = await face(tab(name));
@@ -143,7 +144,7 @@ describe('GitPane tab selection material', () => {
         await inactiveReference.hover();
         const hoveredReference = await face(inactiveReference);
         assert.notEqual(hoveredReference.background, inactive.background);
-        const other = selected === 'Diff' ? 'Stack' : 'Diff';
+        const other = selected === 'Changes' ? 'Stack' : 'Changes';
         await tab(other).hover();
         assert.equal((await face(tab(other))).background, hoveredReference.background);
         assert.equal(await tab(selected).getAttribute('aria-selected'), 'true');

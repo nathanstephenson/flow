@@ -47,6 +47,12 @@ export type BranchList = {
   truncated?: true;
 };
 
+import type { GitFile } from "./publish.ts";
+
+export type ChangesView = "uncommitted" | "branch";
+export type GitChanges = { files: GitFile[]; commits: string[]; base?: string };
+export type GitDiff = { text: string } | { binary: true } | { tooLarge: true };
+
 export type CheckStatus = "passing" | "failing" | "pending" | "none";
 
 export type PullRequestSummary = {

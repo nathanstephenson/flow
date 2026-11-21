@@ -19,3 +19,8 @@ export async function localStacks(scope: string): Promise<LocalStack[]> {
 export async function localStack(scope: string, branch: string): Promise<LocalStack | undefined> {
   return (await localStacks(scope)).find(s => s.branches.some(b => b.branch === branch));
 }
+
+export function stackParent(stack: LocalStack, branch: string): string {
+  const index = stack.branches.findIndex(b => b.branch === branch);
+  return stack.branches.slice(0, index).filter(b => !b.pullRequest?.merged).at(-1)?.branch ?? stack.trunk.branch;
+}

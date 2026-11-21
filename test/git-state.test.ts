@@ -17,7 +17,7 @@ function scope(name: string): string {
   return path;
 }
 
-const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
+const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", baseRefName: "parent", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
 const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
 
 function github() {
@@ -136,6 +136,18 @@ describe("GitStates", () => {
     await states.poll([{ scope: path, lifecycle: "settled", watched: true }, { scope: path, lifecycle: "ended", watched: true }]);
     assert.equal(fake.queries.length, 1);
     assert.deepEqual(states.summary(path)?.pr, summary);
+  });
+
+  it("keeps the base branch of an open pull request only", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    assert.equal(states.pullRequestBase(path), undefined);
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
+    assert.equal(states.pullRequestBase(path), "parent");
+    fake.state.pulls = [{ ...pull, state: "MERGED" }];
+    await states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
+    assert.equal(states.pullRequestBase(path), undefined);
   });
 
   it("keeps the last value when a poll fails and clears it when the pull request is gone", async () => {
