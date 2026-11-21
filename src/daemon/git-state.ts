@@ -180,6 +180,7 @@ export class GitStates {
       clearTimeout(entry.trailing);
       this.entries.delete(scope);
     }
+    for (const scope of this.targets.keys()) if (!kept.has(scope)) this.targets.delete(scope);
     releaseRepositories(kept);
   }
 

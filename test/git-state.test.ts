@@ -306,6 +306,16 @@ describe("GitStates", () => {
     assert.equal(fake.views.length, 1);
   });
 
+  it("releases the poll target of a Scope with no Agent Session", async () => {
+    const states = new GitStates(github().run);
+    const path = scope("repo");
+    const targets = (states as unknown as { targets: Map<string, unknown> }).targets;
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(targets.size, 1);
+    await states.poll([]);
+    assert.equal(targets.size, 0);
+  });
+
   it("releases the poll time and result of a group that has no Scope", async () => {
     const fake = github();
     const states = new GitStates(fake.run);
