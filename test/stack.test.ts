@@ -305,7 +305,7 @@ it("reports a gh stack view failure that is not the no-stack answer", async () =
   await assert.rejects(stackStatus(repo, async (_scope, args) => { if (args[1] === "view") throw new Error("GitHub request failed: HTTP 502"); return ""; }), /HTTP 502/);
 });
 
-it("reads Pull Request titles with one query and not again when nothing changed", async () => {
+it("reads Pull Request titles with one query and not again when nothing changed for 5 minutes", async () => {
   git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
   const queries: string[] = [];
   const github = async (_scope: string, args: string[]) => {
@@ -330,6 +330,12 @@ it("reads Pull Request titles with one query and not again when nothing changed"
   changed.branches[1]!.pr!.state = "MERGED";
   await stackTitles(repo, changed, github);
   assert.equal(queries.length, 2);
+  const now = Date.now;
+  try {
+    Date.now = () => now() + 5 * 60_000 + 1;
+    await stackTitles(repo, structuredClone(changed), github);
+    assert.equal(queries.length, 3);
+  } finally { Date.now = now; }
 });
 
 it("keeps the stack without titles when the title query fails", async () => {
