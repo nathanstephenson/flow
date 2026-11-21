@@ -30,6 +30,12 @@ describe("the work running beside a turn", () => {
     ]);
   });
 
+  it("gives a Call's command in full", () => {
+    const command = `npm test -- ${"--reporter=spec ".repeat(10)}`.trim();
+    const long = new Map([...byKey, ["tool:c1", { kind: "tool", id: "c1", name: "Bash", input: { command }, status: "complete" } as Entry]]);
+    assert.deepEqual(runningWork([...long.keys()], (key) => long.get(key))[0], { kind: "call", key: "tool:c1", tool: "Bash", detail: command });
+  });
+
   it("is empty when nothing is running", () => {
     assert.deepEqual(runningWork(["subagent:s2", "background_call:c2"], (key) => byKey.get(key)), []);
   });

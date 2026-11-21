@@ -1,5 +1,5 @@
 import { ArrowUp, Bot, Loader2, Square, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import { attachPasted } from "@/attachments.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
@@ -983,7 +983,9 @@ function useCardTransitions(running: readonly RunningWork[]): { card: Card; leav
  * The Subagents and Background Calls running beside the turn, as cards stacked behind the panel's
  * top edge: each one shows a single line, and each further back is a little narrower, so the stack
  * reads as depth rather than as a list. The newest is nearest the panel. Hovered or focused, a card
- * grows upwards over the cards behind it to show all of its detail, so the stack does not move.
+ * grows upwards to show all of its detail, and the cards behind it move up by the same amount so
+ * they stay on its top edge. They move by `translate`, not by layout, so the panel keeps its height
+ * and the transcript does not move.
  *
  * A card slides up from behind the one in front as it appears, and back behind it as it finishes:
  * its height grows from the part that is always tucked away, so everything above it moves with it
@@ -995,8 +997,15 @@ function WorkStack({ running, models, onOpen }: {
   onOpen: ((work: RunningWork) => void) | undefined;
 }) {
   const cards = useCardTransitions(running);
+  const [open, setOpen] = useState<{ key: string; extra: number }>();
   if (cards.length === 0) return null;
   const depthOf = (index: number) => cards.slice(index).filter(({ leaving }) => !leaving).length;
+  const openIndex = cards.findIndex(({ card, leaving }) => !leaving && card.key === open?.key);
+  const track = (key: string) => (event: SyntheticEvent<HTMLElement>) => {
+    const button = event.currentTarget;
+    const extra = button.offsetHeight - (button.parentElement?.offsetHeight ?? 0);
+    setOpen((current) => button.matches(":hover, :focus-visible") ? { key, extra } : current?.key === key ? undefined : current);
+  };
 
   return (
     <ul aria-label="Running beside this turn" className="flex flex-col">
@@ -1006,10 +1015,14 @@ function WorkStack({ running, models, onOpen }: {
           aria-hidden={leaving || undefined}
           // Tucked 0.75rem behind the card in front, with 1.75rem showing; narrower with depth.
           className={cn(
-            "relative -mb-3 transition-[height,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+            "relative -mb-3 transition-[height,opacity,margin,translate] duration-200 ease-out motion-reduce:transition-none",
             leaving ? "pointer-events-none h-3 opacity-0" : "pointer-events-auto h-10 opacity-100 starting:h-3 starting:opacity-0",
           )}
-          style={{ marginInline: `${Math.max(1, depthOf(index)) * 0.5}rem`, zIndex: index }}
+          style={{
+            marginInline: `${Math.max(1, depthOf(index)) * 0.5}rem`,
+            zIndex: index,
+            ...(index < openIndex && open ? { translate: `0 -${open.extra}px` } : {}),
+          }}
         >
           {card.kind === "more" ? (
             <p className="h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 py-1.5 text-xs leading-4 text-muted-foreground shadow-sm">
@@ -1020,6 +1033,10 @@ function WorkStack({ running, models, onOpen }: {
               type="button"
               tabIndex={leaving ? -1 : undefined}
               onClick={() => onOpen?.(card)}
+              onPointerEnter={track(card.key)}
+              onPointerLeave={track(card.key)}
+              onFocus={track(card.key)}
+              onBlur={track(card.key)}
               aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
               className={cn(
                 "group/card cursor-tilt absolute inset-x-0 bottom-0 h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 pt-1.5 pb-3",
@@ -1034,7 +1051,8 @@ function WorkStack({ running, models, onOpen }: {
                 {card.detail ? (
                   <span
                     className={cn(
-                      "min-w-0 truncate [overflow-wrap:anywhere] group-hover/card:whitespace-normal group-focus-visible/card:whitespace-normal",
+                      "min-w-0 truncate [overflow-wrap:anywhere] group-hover/card:line-clamp-8 group-hover/card:whitespace-normal",
+                      "group-focus-visible/card:line-clamp-8 group-focus-visible/card:whitespace-normal",
                       card.kind === "call" && "font-mono",
                     )}
                   >

@@ -45,18 +45,27 @@ const ARGUMENTS: readonly Argument[] = [
  * passes its backend's arguments through), so every access is narrowed rather than trusted.
  */
 export function toolSummary(input: unknown): string | undefined {
+  return summarise(input, MAX);
+}
+
+/** The same argument as `toolSummary`, unclipped, for a card that has room to wrap it. */
+export function fullToolSummary(input: unknown): string | undefined {
+  return summarise(input, Infinity);
+}
+
+function summarise(input: unknown, max: number): string | undefined {
   if (!input || typeof input !== "object") return undefined;
   const record = input as Record<string, unknown>;
 
   for (const argument of ARGUMENTS) {
     const value = record[argument.key];
     if (argument.shape === "questions") {
-      const asked = clipQuestions(value);
+      const asked = clipQuestions(value, max);
       if (asked !== undefined) return asked;
       continue;
     }
     if (typeof value !== "string" || value.trim() === "") continue;
-    return argument.shape === "path" ? clipPath(value.trim()) : clipText(value);
+    return argument.shape === "path" ? clipPath(value.trim(), max) : clipText(value, max);
   }
 
   // The fallback: a tool nobody here has heard of, whose input is a single string, is describing
@@ -64,7 +73,7 @@ export function toolSummary(input: unknown): string | undefined {
   // nothing rather than pick.
   const strings = Object.values(record).filter((value): value is string => typeof value === "string");
   const only = strings.length === 1 ? strings[0] : undefined;
-  return only && only.trim() !== "" ? clipText(only) : undefined;
+  return only && only.trim() !== "" ? clipText(only, max) : undefined;
 }
 
 /**
@@ -77,7 +86,7 @@ export function toolSummary(input: unknown): string | undefined {
  * The front-ends suppress this row where an Enquiry Entry stands beside it, so what this actually
  * serves is the case where one does not: a Subagent's Enquiry, seen from the Agents tab.
  */
-function clipQuestions(value: unknown): string | undefined {
+function clipQuestions(value: unknown, max: number): string | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
   const first = value[0];
   if (!first || typeof first !== "object") return undefined;
@@ -86,17 +95,17 @@ function clipQuestions(value: unknown): string | undefined {
   const rest = value.length - 1;
   // Clipped after the count is appended, not before, so the whole précis obeys MAX rather than
   // MAX-plus-however-long-the-suffix-turned-out-to-be.
-  return clipText(rest > 0 ? `${asked} (+${rest} more)` : asked);
+  return clipText(rest > 0 ? `${asked} (+${rest} more)` : asked, max);
 }
 
 /** Whitespace collapsed so a heredoc or a multi-line prompt still occupies one line. */
-function clipText(value: string): string {
+function clipText(value: string, max: number): string {
   const text = value.replace(/\s+/g, " ").trim();
-  return text.length <= MAX ? text : `${text.slice(0, MAX - 1)}…`;
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
-function clipPath(path: string): string {
+function clipPath(path: string, max: number): string {
   // The tail of a path is what identifies the file; the leading directories are what a reader can
   // afford to lose, which is the opposite of how everything else here truncates.
-  return path.length <= MAX ? path : `…${path.slice(-(MAX - 1))}`;
+  return path.length <= max ? path : `…${path.slice(-(max - 1))}`;
 }

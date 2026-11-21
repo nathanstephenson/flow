@@ -1,5 +1,5 @@
 import type { Entry } from "../../../src/client/reduce.ts";
-import { toolSummary } from "../../../src/client/tool-summary.ts";
+import { fullToolSummary } from "../../../src/client/tool-summary.ts";
 import type { EffortLevel } from "../../../src/protocol/events.ts";
 
 /**
@@ -39,7 +39,7 @@ export function runningWork(keys: readonly string[], getEntry: (key: string) => 
       keys.indexOf(`tool:${entry.id}`) < lastMessage
     ) {
       const tool = getEntry(`tool:${entry.id}`);
-      const detail = tool?.kind === "tool" ? toolSummary(tool.input) : undefined;
+      const detail = tool?.kind === "tool" ? fullToolSummary(tool.input) : undefined;
       work.push({ kind: "call", key: `tool:${entry.id}`, tool: entry.tool, ...(detail ? { detail } : {}) });
     }
   }
