@@ -185,7 +185,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
                 return (
                   <li key={index} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                     {link(check.url, check.name)}
-                    <span className="flex items-center gap-2">
+                    <span className="ml-auto flex items-center gap-2">
                       {failedCheck(check) ? <Button size="xs" variant="outline" disabled={readingLogs.current.has(key)} onClick={() => void addCheck(key, check, ref)}>Add to Draft</Button> : null}
                       <span>{readableStatus(check.status)}</span>
                     </span>
