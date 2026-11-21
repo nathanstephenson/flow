@@ -69,6 +69,22 @@ it('serves host-derived call contracts and preserves saved contracts until expli
   } finally { await running.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+it('rejects saving direct and indirect recursive Workflow calls', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-call-cycle-'));
+  const workflows = new WorkflowStore(root);
+  const running = await serve({ host: new SessionHost(), token: 'test-token', assets: {}, workflows });
+  const request = (path: string, method = 'GET', body?: unknown) => fetch(running.url + path, { method, headers: { authorization: 'Bearer test-token' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const b: WorkflowDefinition = { version: 1, id: 'b', name: 'B', backend: 'fake', inputSchema: { type: 'object', fields: {} }, steps: [{ id: 'inner', name: 'Inner', kind: 'typescript', code: 'return 1', outputSchema: { type: 'number' } }], edges: [] };
+  const contract = async (id: string) => (await (await request('/api/workflow-catalogue')).json() as ReturnType<typeof workflowCatalogue>).workflows.find(item => item.id === id)!.contract;
+  const caller = async (definition: WorkflowDefinition, target: string): Promise<WorkflowDefinition> => ({ ...definition, steps: [{ id: 'call', name: 'Call', kind: 'workflow', workflowId: target, contract: await contract(target), mapping: { kind: 'object', fields: {} } }] });
+  try {
+    workflows.saveDefinition(b);
+    assert.equal((await request('/api/workflows/a', 'PUT', await caller({ ...b, id: 'a', name: 'A' }, 'b'))).status, 200);
+    assert.equal((await request('/api/workflows/b', 'PUT', await caller(b, 'a'))).status, 400);
+    assert.equal((await request('/api/workflows/b', 'PUT', await caller(b, 'b'))).status, 400);
+  } finally { await running.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 it('serves private machine-wide workflow and secret CRUD through authenticated HTTP', async () => {
   const root = mkdtempSync(join(tmpdir(), 'flow-workflow-api-'));
   const secrets = new SecretStore(root);

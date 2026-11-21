@@ -340,17 +340,19 @@ export class WorkflowScheduler {
   }
 
   private reconcile(active: ActiveExecution): void {
-    for (const call of active.calls.values()) this.reconcile(call.child);
-    if (!occupied(active.record)) return;
-    for (const [id, state] of Object.entries(active.record.steps)) {
-      if (state.status !== 'running' || active.calls.has(id)) continue;
-      state.status = 'interrupted';
-      const attempt = state.attempts.at(-1)!;
-      attempt.error = { kind: 'interrupted', message: 'Execution was interrupted; effects may already have occurred' };
-      attempt.finishedAt ??= Date.now();
+    if (occupied(active.record)) {
+      for (const [id, state] of Object.entries(active.record.steps)) {
+        if (state.status !== 'running' || active.calls.has(id)) continue;
+        state.status = 'interrupted';
+        const attempt = state.attempts.at(-1)!;
+        attempt.error = { kind: 'interrupted', message: 'Execution was interrupted; effects may already have occurred' };
+        attempt.finishedAt ??= Date.now();
+      }
+      active.record.status = 'recovery-required';
+      active.stopped = !!active.parent?.stopped || Object.values(active.record.steps).some(state => state.status === 'interrupted');
+      for (const id of active.calls.keys()) this.armCall(active, id);
     }
-    active.record.status = 'recovery-required';
-    active.stopped = true;
+    for (const call of active.calls.values()) this.reconcile(call.child);
   }
 
   private releaseCancelledCall(active: ActiveExecution, stepId: string): void {
@@ -578,7 +580,9 @@ export class WorkflowScheduler {
     else {
       const terminals = active.graph.order.filter(step => active.record.steps[step.id]!.status === 'completed' && (active.record.testStepId || !active.graph.outgoing.get(step.id)!.some(edge => this.edgeState(active, edge) === 'selected')));
       active.record.result = terminals.length === 1 ? active.record.steps[terminals[0]!.id]!.output! : Object.fromEntries(terminals.map(step => [step.name, active.record.steps[step.id]!.output!]));
-      active.record.status = Object.values(active.record.loops ?? {}).some(loop => loop.grants.length) || Object.values((active.root ?? active).record.invocations ?? {}).some(invocation => invocation.status === 'completed-with-recovery') || states.some(([, state]) => state.attempts.some(attempt => attempt.error || attempt.action !== 'execute')) ? 'completed-with-recovery' : 'completed';
+      const invocations = (active.root ?? active).record.invocations ?? {};
+      const descends = (id?: string): boolean => id !== undefined && (id === active.record.id || descends(invocations[id]!.parentInvocationId));
+      active.record.status = Object.values(active.record.loops ?? {}).some(loop => loop.grants.length) || Object.values(invocations).some(invocation => invocation.status === 'completed-with-recovery' && (!active.parent || descends(invocation.parentInvocationId))) || states.some(([, state]) => state.attempts.some(attempt => attempt.error || attempt.action !== 'execute')) ? 'completed-with-recovery' : 'completed';
       active.record.finishedAt = Date.now();
     }
     this.persist(active);

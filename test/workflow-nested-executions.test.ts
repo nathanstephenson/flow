@@ -497,6 +497,38 @@ test('call timeout includes time waiting for inner recovery', async t => {
   assert.equal(done.result, 9);
 });
 
+test('restored call deadlines stop the subtree and take the timeout path', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000 });
+  const f = fixture(t, async context => { if (context.step.id === 'inner') throw new Error('recover me'); return 9; });
+  const child = definition('child', [leaf('inner')]);
+  f.store.saveDefinition(child);
+  const parent = definition('parent', [{ ...call('call', child), timeoutMs: 80 }, leaf('handler')], [{ id: 'timeout', from: 'call', to: 'handler', outcome: 'timeout' }]);
+  const started = f.scheduler.start(parent, session, {});
+  assert.equal((await f.scheduler.wait(session.sessionId, started.id)).status, 'recovery-required');
+  await f.scheduler.interrupt(session.sessionId, started.id);
+  const restored = new WorkflowScheduler(f.store, f.executors);
+  assert.equal(restored.hasPendingDeadline(session.sessionId, started.id), true);
+  t.mock.timers.tick(80);
+  const done = await restored.wait(session.sessionId, started.id);
+  assert.equal(done.status, 'completed-with-recovery');
+  assert.equal(done.result, 9);
+  assert.equal(Object.values(done.invocations!)[0]!.status, 'cancelled');
+});
+
+test('a clean invocation completes without recovery from an earlier sibling invocation', async t => {
+  let fail = true;
+  const f = fixture(t, async context => { if (context.step.id === 'broken' && fail) throw new Error('stop'); return 1; });
+  const bad = definition('bad', [leaf('broken')]);
+  const later = definition('later', [leaf('clean')]);
+  f.store.saveDefinition(bad); f.store.saveDefinition(later);
+  const started = f.scheduler.start(definition('parent', [call('cb', bad), { ...call('cl', later), mapping: { kind: 'object', fields: {} } }], [{ id: 'next', from: 'cb', to: 'cl', outcome: 'success' }]), session, {});
+  const blocked = await f.scheduler.wait(session.sessionId, started.id);
+  fail = false;
+  f.scheduler.recover(session, started.id, { kind: 'retry', stepId: 'broken', invocationId: Object.keys(blocked.invocations!)[0]! });
+  const done = await f.scheduler.wait(session.sessionId, started.id);
+  assert.equal(Object.values(done.invocations!).find(invocation => invocation.definitionId === 'later')!.status, 'completed');
+});
+
 test('selected-call testing runs its subtree, not root siblings or successors', async t => {
   const seen: string[] = [];
   const f = fixture(t, async context => { seen.push(context.step.id); return 1; });
