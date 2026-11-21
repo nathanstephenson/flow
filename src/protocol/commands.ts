@@ -2,7 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
 import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
-import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
+import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRerunInput, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput } from "./stack.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -206,11 +206,14 @@ export type Command =
   | { type: "change_pull_request"; sessionId: string; action: "rebase" | "merge"; input: PullRequestActionInput }
   | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
   | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
+  | { type: "edit_pull_request"; sessionId: string; input: PullRequestEditInput }
+  | { type: "set_pull_request_draft"; sessionId: string; input: PullRequestDraftInput }
+  | { type: "rerun_pull_request_checks"; sessionId: string; input: PullRequestRerunInput }
   | { type: "stack_status"; sessionId: string }
   | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
   | { type: "change_stack"; sessionId: string; input: StackInput }
   | { type: "assist_stack"; sessionId: string }
-  | { type: "refresh_git"; sessionId: string }
+  | { type: "refresh_git"; sessionId: string; pullRequest?: boolean }
   | { type: "git_changes"; sessionId: string; view: ChangesView }
   | { type: "git_diff"; sessionId: string; view: ChangesView; path: string }
   | ({ type: "commit"; sessionId: string } & CommitInput)

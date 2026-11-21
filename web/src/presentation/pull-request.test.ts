@@ -1,15 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checksSummary, PullRequestLoader, pullRequestKey, readableStatus, safePullRequestUrl, type PullRequestLoadState } from "./pull-request.ts";
+import { checksSummary, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl } from "./pull-request.ts";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
+const check = (name: string, status: string, runId?: number) => ({ name, status, url: "", ...(runId === undefined ? {} : { runId, jobId: 1 }) });
 
 describe("pull request presentation", () => {
+  it("matches a loaded pull request to a summary by update time, state and checks", () => {
+    const thread = (isResolved: boolean) => ({ id: "T", path: "a.ts", line: 1, isOutdated: false, isResolved, viewerCanReply: true, viewerCanResolve: true, viewerCanUnresolve: true, diffHunk: "", comments: [] });
+    const loaded = { number: 4, updatedAt: "u1", state: "OPEN" as const, isDraft: false, reviewDecision: null, threads: [thread(false), thread(true)], checks: [check("a", "SUCCESS"), check("b", "IN_PROGRESS")] };
+    const summary = { number: 4, url: "", updatedAt: "u1", state: "OPEN" as const, isDraft: false, checks: "pending" as const, checksCompleted: 1, reviewDecision: null, unresolvedThreads: 1 };
+    assert.equal(matchesSummary(loaded, summary), true);
+    assert.equal(matchesSummary(loaded, undefined), false);
+    for (const change of [{ number: 5 }, { updatedAt: "u2" }, { state: "MERGED" as const }, { isDraft: true }, { checks: "failing" as const }, { checksCompleted: 2 }, { unresolvedThreads: 0 }, { reviewDecision: "APPROVED" }]) assert.equal(matchesSummary(loaded, { ...summary, ...change }), false);
+    assert.equal(matchesSummary({ ...loaded, checks: [] }, { ...summary, checks: "none", checksCompleted: 0 }), true);
+    assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "FAILURE")] }, { ...summary, checks: "failing", checksCompleted: 2 }), true);
+    assert.equal(matchesSummary({ ...loaded, checks: [check("a", "SUCCESS"), check("b", "SKIPPED")] }, { ...summary, checks: "passing", checksCompleted: 2 }), true);
+  });
+
   it("permits only absolute web links", () => {
     assert.equal(safePullRequestUrl("https://github.com/a/b/pull/1"), "https://github.com/a/b/pull/1");
     assert.equal(safePullRequestUrl("http://example.com"), "http://example.com/");
@@ -17,96 +24,14 @@ describe("pull request presentation", () => {
   });
   it("summarises CI without treating unknown checks as passing", () => {
     assert.equal(checksSummary([]), "No checks reported.");
-    assert.equal(checksSummary([{ conclusion: "SUCCESS" }, { state: "ERROR" }, { status: "IN_PROGRESS" }, { status: "COMPLETED" }]), "1 passed · 1 failed · 1 pending · 1 unknown");
+    assert.equal(checksSummary([check("a", "SUCCESS"), check("b", "ERROR"), check("c", "IN_PROGRESS"), check("d", "COMPLETED")]), "1 passed · 1 failed · 1 pending · 1 unknown");
     assert.equal(readableStatus("CHANGES_REQUESTED"), "Changes requested");
-    assert.notEqual(pullRequestKey({ repo: "a/b", number: 1, id: "one" }), pullRequestKey({ repo: "a/b", number: 2, id: "two" }));
   });
-});
-
-describe("pull request requests", () => {
-  it("does not overlap polls or writes", async () => {
-    const pending = deferred<string>();
-    let reads = 0, writes = 0;
-    const loader = new PullRequestLoader(() => { reads++; return pending.promise; }, () => {});
-    const first = loader.refresh();
-    await loader.refresh();
-    await loader.write(async () => { writes++; }, "Posted", () => {});
-    assert.equal(reads, 1);
-    assert.equal(writes, 0);
-    pending.resolve("first");
-    await first;
+  it("orders failing checks first, then pending, then the others", () => {
+    assert.deepEqual(orderedChecks([check("pass", "SUCCESS"), check("wait", "QUEUED"), check("fail", "FAILURE"), check("odd", "COMPLETED"), check("error", "TIMED_OUT")]).map(value => value.name), ["fail", "error", "wait", "pass", "odd"]);
   });
-  it("retains old data after refresh failure", async () => {
-    let state!: PullRequestLoadState<string>;
-    let fail = false;
-    const loader = new PullRequestLoader(async () => { if (fail) throw new Error("offline"); return "old"; }, (next) => { state = next; });
-    await loader.refresh();
-    fail = true;
-    await loader.refresh();
-    assert.equal(state.value, "old");
-    assert.match(state.error, /offline/);
-    assert.equal(state.busy, false);
-  });
-  it("ignores responses after disposal and cannot start more requests", async () => {
-    const pending = deferred<string>();
-    const states: PullRequestLoadState<string>[] = [];
-    const loader = new PullRequestLoader(() => pending.promise, (next) => states.push(next));
-    const request = loader.refresh();
-    loader.dispose();
-    const count = states.length;
-    pending.resolve("old session");
-    await request;
-    await loader.refresh();
-    await loader.write(async () => { assert.fail("disposed write"); }, "Posted", () => {});
-    assert.equal(states.length, count);
-  });
-  it("clears a confirmed draft even if refresh fails and prevents double posts", async () => {
-    let state!: PullRequestLoadState<string>;
-    const pending = deferred<void>();
-    let draft = "comment", writes = 0;
-    const loader = new PullRequestLoader<string>(async () => { throw new Error("offline"); }, (next) => { state = next; });
-    const action = async () => { writes++; await pending.promise; };
-    const post = loader.write(action, "Comment posted.", () => { draft = ""; });
-    await loader.write(action, "Comment posted.", () => { draft = ""; });
-    pending.resolve();
-    await post;
-    assert.equal(writes, 1);
-    assert.equal(draft, "");
-    assert.equal(state.success, "Comment posted.");
-    assert.match(state.error, /offline/);
-  });
-  it("keeps requests locked through the refresh after a post", async () => {
-    const pending = deferred<string>();
-    let reads = 0;
-    const loader = new PullRequestLoader(() => { reads++; return pending.promise; }, () => {});
-    const post = loader.write(async () => {}, "Posted", () => {});
-    await Promise.resolve();
-    await loader.refresh();
-    await loader.write(async () => { assert.fail("overlapping write"); }, "Posted", () => {});
-    assert.equal(reads, 1);
-    pending.resolve("updated");
-    await post;
-  });
-  it("retains the draft when a post fails", async () => {
-    let draft = "comment";
-    const loader = new PullRequestLoader(async () => "pr", () => {});
-    await loader.write(async () => { throw new Error("denied"); }, "Posted", () => { draft = ""; });
-    assert.equal(draft, "comment");
-  });
-  it("rejects actions from a replaced pull request", async () => {
-    let current = "first";
-    const loader = new PullRequestLoader(async () => current, () => {});
-    await loader.refresh();
-    current = "second";
-    await loader.refresh();
-    await loader.write(async () => { assert.fail("stale action"); }, "Posted", () => {}, (value) => value === "first");
-  });
-  it("does not refresh or clear a draft after an unmounted write completes", async () => {
-    const pending = deferred<void>();
-    const loader = new PullRequestLoader(async () => { assert.fail("disposed refresh"); }, () => {});
-    const post = loader.write(() => pending.promise, "Posted", () => { assert.fail("disposed draft"); });
-    loader.dispose();
-    pending.resolve();
-    await post;
+  it("groups failed checks by GitHub Actions run, once per run", () => {
+    assert.deepEqual(failedRuns([check("a", "FAILURE", 7), check("b", "FAILURE", 7), check("c", "CANCELLED", 8), check("d", "SUCCESS", 9), check("e", "FAILURE"), check("f", "QUEUED", 10)]), [{ runId: 7, names: ["a", "b"] }, { runId: 8, names: ["c"] }]);
+    assert.deepEqual(failedRuns([check("d", "SUCCESS", 9)]), []);
   });
 });
