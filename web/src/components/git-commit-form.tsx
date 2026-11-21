@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import type { GitText, GitTextKind } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -12,13 +12,15 @@ type Props = {
   branch: string | undefined;
   defaultBranch: string | undefined;
   canRename: boolean;
+  message: string;
+  branchName: string;
+  onMessage: Dispatch<SetStateAction<string>>;
+  onBranchName: Dispatch<SetStateAction<string>>;
   onCommitted: (commit: string) => void;
 };
 
-export function GitCommitForm({ sessionId, paths, fingerprint, branch, defaultBranch, canRename, onCommitted }: Props) {
+export function GitCommitForm({ sessionId, paths, fingerprint, branch, defaultBranch, canRename, message, branchName: name, onMessage: setMessage, onBranchName: setName, onCommitted }: Props) {
   const { connection } = useHost();
-  const [message, setMessage] = useState("");
-  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const newBranch = branch === undefined || branch === defaultBranch;

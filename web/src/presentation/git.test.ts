@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, nextStep, noChanges, pullRequestLine } from "./git.ts";
+import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestLine } from "./git.ts";
 
 const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
 const { branch: _branch, ...detached } = local;
@@ -17,20 +17,24 @@ it("shows the branch, ahead, behind and the pull request state and checks", () =
   assert.equal(pullRequestLine({ ...pr, state: "MERGED" }), "PR #12 · Merged · Checks pending");
 });
 
-it("chooses the next Git step and keeps the other steps that apply", () => {
-  const clean = { ...local, ahead: 0, behind: 0 };
-  assert.equal(nextStep(undefined, "main"), undefined);
-  assert.equal(nextStep({ ...clean, changed: 2 }, "main"), "commit");
-  assert.deepEqual(gitSteps({ ...clean, changed: 2, ahead: 1 }, "main"), ["commit", "push"]);
-  assert.equal(nextStep({ ...clean, upstream: false }, "main"), "push");
-  assert.equal(nextStep({ ...clean, ahead: 1 }, "main"), "push");
-  assert.equal(nextStep(clean, "main"), "pull_request");
-  assert.equal(nextStep({ ...clean, pr: { ...pr, state: "MERGED" } }, "main"), "pull_request");
-  assert.equal(nextStep({ ...clean, pr }, "main"), undefined);
-  assert.equal(nextStep({ ...clean, branch: "main", ahead: 1 }, "main"), undefined);
-  assert.equal(nextStep({ ...clean, branch: "main", changed: 1 }, "main"), "commit");
-  assert.equal(nextStep({ ...detached, ahead: 0, behind: 0, upstream: false }, "main"), undefined);
-  assert.equal(nextStep({ ...unborn, ahead: 0, behind: 0, upstream: false }, undefined), undefined);
+it("lists the Git steps that apply, the next step first", () => {
+  const clean = { ...local, defaultBranch: "main", ahead: 0, behind: 0 };
+  assert.deepEqual(gitSteps(undefined), []);
+  assert.deepEqual(gitSteps({ ...clean, changed: 2 }), ["commit", "pull_request"]);
+  assert.deepEqual(gitSteps({ ...clean, changed: 2, ahead: 1 }), ["commit", "push"]);
+  assert.deepEqual(gitSteps({ ...clean, upstream: false }), ["push"]);
+  assert.deepEqual(gitSteps({ ...clean, ahead: 1 }), ["push"]);
+  assert.deepEqual(gitSteps({ ...clean, ahead: 1, behind: 2 }), ["push"]);
+  assert.deepEqual(gitSteps({ ...clean, behind: 2 }), ["pull_request"]);
+  assert.deepEqual(gitSteps(clean), ["pull_request"]);
+  assert.deepEqual(gitSteps({ ...clean, pr: { ...pr, state: "CLOSED" } }), ["pull_request"]);
+  assert.deepEqual(gitSteps({ ...clean, pr: { ...pr, state: "MERGED" } }), ["pull_request"]);
+  assert.deepEqual(gitSteps({ ...clean, pr }), []);
+  assert.deepEqual(gitSteps({ ...clean, pr: { ...pr, isDraft: true } }), []);
+  assert.deepEqual(gitSteps({ ...clean, branch: "main", ahead: 1, upstream: false }), []);
+  assert.deepEqual(gitSteps({ ...clean, branch: "main", changed: 1 }), ["commit"]);
+  assert.deepEqual(gitSteps({ ...detached, ahead: 0, behind: 0, upstream: false }), []);
+  assert.deepEqual(gitSteps({ ...unborn, ahead: 0, behind: 0, upstream: false }), []);
 });
 
 it("names diffs that have no text and empty views", () => {

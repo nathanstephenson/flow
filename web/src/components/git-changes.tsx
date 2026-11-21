@@ -15,14 +15,16 @@ type Props = {
   revision: string;
   view: ChangesView;
   onViewChange: (view: ChangesView) => void;
-  onDefaultBranch: (branch: string | undefined) => void;
   onCommitted: (commit: string) => void;
 };
 
-export function GitChanges({ sessionId, revision, view, onViewChange, onDefaultBranch, onCommitted }: Props) {
+export function GitChanges({ sessionId, revision, view, onViewChange, onCommitted }: Props) {
   const { connection } = useHost();
-  const [changes, setChanges] = useState<Changes>();
+  const [read, setRead] = useState<{ view: ChangesView; changes: Changes }>();
+  const changes = read?.view === view ? read.changes : undefined;
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [message, setMessage] = useState("");
+  const [branchName, setBranchName] = useState("");
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
   const [diffs, setDiffs] = useState<Diffs>({});
@@ -42,10 +44,9 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onDefaultB
       (value) => {
         if (cancelled) return;
         const listed = (path: string) => value.files.some(file => file.path === path);
-        setChanges(value);
+        setRead({ view, changes: value });
         setError("");
-        if (view === "uncommitted") onDefaultBranch(value.defaultBranch);
-        setExcluded(current => current.filter(listed));
+        if (view === "uncommitted") setExcluded(current => current.filter(listed));
         setOpen(current => current.filter(listed));
         for (const path of open.filter(listed)) readDiff(path);
       },
@@ -61,7 +62,6 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onDefaultB
         onValueChange={(value: ChangesView) => {
           onViewChange(value);
           setOpen([]);
-          setChanges(undefined);
           setError("");
         }}
       >
@@ -114,6 +114,10 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onDefaultB
             branch={changes.branch}
             defaultBranch={changes.defaultBranch}
             canRename={changes.canRename === true}
+            message={message}
+            branchName={branchName}
+            onMessage={setMessage}
+            onBranchName={setBranchName}
             onCommitted={onCommitted}
           />
         ) : null}

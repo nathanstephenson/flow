@@ -13,6 +13,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.t
 
 type Tab = "Changes" | "Stack" | "PR";
 type Reads = { changes: number; stack: number; pullRequest: number; mount: number };
+type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
+type Notice = { text: string; url?: string };
 
 export function GitPane({ sessionId }: { sessionId: string }) {
   const { connection } = useHost();
@@ -21,18 +23,16 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const seenPrKey = useRef(prKey);
   const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
   const [view, setView] = useState<ChangesView>("uncommitted");
-  const [defaultBranch, setDefaultBranch] = useState<string>();
-  const [step, setStep] = useState<"replace" | "pull_request">();
-  const [pushing, setPushing] = useState<PushState>();
+  const [step, setStep] = useState<Step>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<Notice>();
   const [hasPr, setHasPr] = useState(false);
   const [hasStack, setHasStack] = useState(false);
   const [tab, setTab] = useState<Tab>();
   const tabs: Tab[] = ["Changes", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
   const selected = tab === "Changes" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Changes";
-  const steps = gitSteps(git, defaultBranch);
+  const steps = gitSteps(git);
 
   function reread(...keys: (keyof Reads)[]) {
     setReads(current => ({ ...current, ...Object.fromEntries(keys.map(key => [key, current[key] + 1])) }));
@@ -44,11 +44,11 @@ export function GitPane({ sessionId }: { sessionId: string }) {
     reread("stack", "pullRequest");
   }, [prKey]);
 
-  async function run(work: () => Promise<string | void>) {
+  async function run(work: () => Promise<Notice | void>) {
     setBusy(true);
     setError("");
-    setNotice("");
-    try { setNotice(await work() ?? ""); }
+    setNotice(undefined);
+    try { setNotice(await work() ?? undefined); }
     catch (failure) { setError(String(failure)); }
     finally { setBusy(false); }
   }
@@ -56,22 +56,21 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   async function push(state: PushState, replace?: string) {
     await connection.command({ type: "push", sessionId, head: state.head, ...(replace ? { replace } : {}) });
     setStep(undefined);
-    return `Pushed ${state.branch}.`;
+    return { text: `Pushed ${state.branch}.` };
   }
 
   function open(value: GitStep) {
     setError("");
-    setNotice("");
+    setNotice(undefined);
     if (value === "commit") {
       setStep(undefined);
       setTab("Changes");
       setView("uncommitted");
-    } else if (value === "pull_request") setStep("pull_request");
+    } else if (value === "pull_request") setStep({ kind: "pull_request", head: git!.head! });
     else void run(async () => {
       const state = await connection.command<PushState>({ type: "push_state", sessionId });
       if (state.replaced.length === 0) return push(state);
-      setPushing(state);
-      setStep("replace");
+      setStep({ kind: "replace", state });
     });
   }
 
@@ -115,25 +114,25 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           </div>
         ) : null}
         {error ? <p role="alert">{error}</p> : null}
-        {notice ? <p role="status">{notice}</p> : null}
+        {notice ? <p role="status" className="break-all">{notice.text}{notice.url ? <> <a className="underline" href={safePullRequestUrl(notice.url)} target="_blank" rel="noreferrer">{notice.url}</a></> : null}</p> : null}
       </header>
-      {step === "replace" && pushing ? (
+      {step?.kind === "replace" ? (
         <section aria-label="Confirm push" className="space-y-3 border-t pt-3">
           <h2 className="font-medium">Replace remote commits</h2>
-          <p>The remote branch {pushing.branch} has commits that this branch does not have. The push replaces them:</p>
-          <ul className="space-y-0.5 font-mono text-xs">{pushing.replaced.map(commit => <li key={commit} className="truncate">{commit}</li>)}</ul>
+          <p>The remote branch {step.state.branch} has commits that this branch does not have. The push replaces them:</p>
+          <ul className="space-y-0.5 font-mono text-xs">{step.state.replaced.map(commit => <li key={commit} className="truncate">{commit}</li>)}</ul>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" disabled={busy} onClick={() => setStep(undefined)}>Cancel</Button>
-            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void run(() => push(pushing, pushing.remote))}>Replace and push</Button>
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void run(() => push(step.state, step.state.remote))}>Replace and push</Button>
           </div>
         </section>
       ) : null}
-      {step === "pull_request" && git?.head ? (
+      {step?.kind === "pull_request" ? (
         <GitPullRequestForm
           sessionId={sessionId}
-          head={git.head}
+          head={step.head}
           onCancel={() => setStep(undefined)}
-          onCreated={(url) => { setStep(undefined); setNotice(`Pull request created: ${url}`); }}
+          onCreated={(url) => { setStep(undefined); setNotice({ text: "Pull request created:", url }); }}
         />
       ) : null}
       <div>
@@ -149,8 +148,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
           revision={`${git?.revision}:${reads.changes}`}
           view={view}
           onViewChange={setView}
-          onDefaultBranch={setDefaultBranch}
-          onCommitted={(commit) => setNotice(`Committed ${commit.slice(0, 7)}.`)}
+          onCommitted={(commit) => setNotice({ text: `Committed ${commit.slice(0, 7)}.` })}
         />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>

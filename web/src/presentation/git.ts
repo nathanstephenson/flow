@@ -3,17 +3,13 @@ import type { ChangesView, GitDiff, GitState, PullRequestSummary } from "../../.
 export type GitStep = "commit" | "push" | "pull_request";
 export const stepLabels: Record<GitStep, string> = { commit: "Commit", push: "Push", pull_request: "Create pull request" };
 
-export function gitSteps(git: GitState | undefined, defaultBranch: string | undefined): GitStep[] {
+export function gitSteps(git: GitState | undefined): GitStep[] {
   if (!git) return [];
   const steps: GitStep[] = git.changed > 0 ? ["commit"] : [];
-  if (!git.branch || !git.head || git.branch === defaultBranch) return steps;
+  if (!git.branch || !git.head || git.branch === git.defaultBranch) return steps;
   if (!git.upstream || git.ahead > 0) steps.push("push");
   else if (git.pr?.state !== "OPEN") steps.push("pull_request");
   return steps;
-}
-
-export function nextStep(git: GitState | undefined, defaultBranch: string | undefined): GitStep | undefined {
-  return gitSteps(git, defaultBranch)[0];
 }
 
 export function branchLine(git: GitState): string {

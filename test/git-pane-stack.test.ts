@@ -236,7 +236,10 @@ it("shows the next step first and the other steps as secondary actions", () => {
 function commitForm(props: Record<string, unknown>, suggestion: Record<string, string> = {}) {
   const calls: any[] = [];
   const pane = component("git-commit-form", async input => { calls.push(input); return input.type === "commit" ? "d".repeat(40) : { [input.kind === "branch" ? "branch" : "message"]: suggestion[input.kind === "branch" ? "branch" : "message"] }; });
-  const all = { sessionId: "session", paths: ["a.ts"], fingerprint: "f", branch: "feature", defaultBranch: "main", canRename: false, onCommitted() {}, ...props };
+  const all: Record<string, any> = { sessionId: "session", paths: ["a.ts"], fingerprint: "f", branch: "feature", defaultBranch: "main", canRename: false, message: "", branchName: "", onCommitted() {}, ...props };
+  const set = (key: string) => (value: any) => { all[key] = typeof value === "function" ? value(all[key]) : value; };
+  all.onMessage = set("message");
+  all.onBranchName = set("branchName");
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   return { calls, flush, render: () => pane.render("GitCommitForm", all) };
 }
@@ -634,7 +637,7 @@ function changesPane() {
   return { calls, pane, flush, plain, list: (files: typeof listed) => { listed = files; }, diffs: () => calls.filter(call => call.type === "git_diff") };
 }
 function changesProps(revision: string) {
-  const props: Record<string, unknown> = { sessionId: "session", revision, view: "uncommitted", onDefaultBranch() {}, onCommitted() {} };
+  const props: Record<string, unknown> = { sessionId: "session", revision, view: "uncommitted", onCommitted() {} };
   props.onViewChange = (view: string) => { props.view = view; };
   return props;
 }
@@ -735,4 +738,112 @@ it("closes a row when its file leaves the list and reads no diff for it", async 
   }
   assert.deepEqual(plain(find(pane.render("GitChanges", props), "Accordion").props.value), ["a.ts"]);
   assert.deepEqual(diffs().map(call => call.path), ["a.ts", "b.ts", "a.ts", "a.ts"]);
+});
+
+it("keeps an unchecked file unchecked across a revision change and the Branch view, and selects new files", async () => {
+  const { pane, flush, list } = changesPane();
+  const props = changesProps("a");
+  const render = () => pane.render("GitChanges", props);
+  const reread = async () => { render(); pane.effects.at(-1)!(); await flush(); };
+  await reread();
+  const box = (path: string) => find(render(), "Checkbox", node => node.props["aria-label"] === `Commit ${path}`);
+  box("b.ts").props.onCheckedChange(false);
+  props.revision = "b";
+  await reread();
+  assert.equal(box("b.ts").props.checked, false);
+  list([{ status: "A ", path: "a.ts" }]);
+  find(render(), "Tabs").props.onValueChange("branch");
+  await reread();
+  list([{ status: " M", path: "a.ts" }, { status: "??", path: "b.ts" }, { status: "??", path: "c.ts" }]);
+  find(render(), "Tabs").props.onValueChange("uncommitted");
+  await reread();
+  assert.equal(box("b.ts").props.checked, false);
+  assert.equal(box("c.ts").props.checked, true);
+  assert.deepEqual(find(render(), "GitCommitForm").props.paths, ["a.ts", "c.ts"]);
+});
+
+it("keeps the commit text across a view switch and shows no stale list after a view change", async () => {
+  const { pane, flush } = changesPane();
+  const props = changesProps("a");
+  const render = () => pane.render("GitChanges", props);
+  render(); pane.effects.at(-1)!(); await flush();
+  find(render(), "GitCommitForm").props.onMessage("Keep this");
+  find(render(), "GitCommitForm").props.onBranchName("feat/keep");
+  props.view = "branch";
+  assert.throws(() => find(render(), "Checkbox"));
+  assert.throws(() => find(render(), "GitCommitForm"));
+  render(); pane.effects.at(-1)!(); await flush();
+  props.view = "uncommitted";
+  render(); pane.effects.at(-1)!(); await flush();
+  assert.equal(find(render(), "GitCommitForm").props.message, "Keep this");
+  assert.equal(find(render(), "GitCommitForm").props.branchName, "feat/keep");
+});
+
+it("cancels a push replacement without pushing", async () => {
+  const { calls, flush, render } = pushPane(["ccccccc remote work"]);
+  findButton(render(), "Push").props.onClick();
+  await flush();
+  findButton(find(render(), "section", node => node.props["aria-label"] === "Confirm push"), "Cancel").props.onClick();
+  assert.throws(() => find(render(), "section", node => node.props["aria-label"] === "Confirm push"));
+  assert.equal(calls.filter(call => call.type === "push").length, 0);
+  gitState = undefined;
+});
+
+it("shows an alert when the push state cannot be read", async () => {
+  gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true };
+  const pane = component("git-pane", async input => { if (input.type === "push_state") throw new Error("offline"); });
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  findButton(render(), "Push").props.onClick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /offline/);
+  gitState = undefined;
+});
+
+it("offers no Push on the default branch", () => {
+  gitState = { revision: "a", branch: "main", defaultBranch: "main", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true };
+  const pane = component("git-pane", async () => undefined);
+  assert.throws(() => findButton(pane.render("GitPane", { sessionId: "session" }), "Push"));
+  gitState = undefined;
+});
+
+it("sends the HEAD shown when the pull request form opened and links the created pull request", () => {
+  gitState = { revision: "a", branch: "feature", head: "h1", changed: 0, ahead: 0, behind: 0, upstream: true };
+  const pane = component("git-pane", async () => undefined);
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  findButton(render(), "Create pull request").props.onClick();
+  gitState = { ...gitState as object, head: "h2" };
+  assert.equal(find(render(), "GitPullRequestForm").props.head, "h1");
+  find(render(), "GitPullRequestForm").props.onCreated("https://github.com/test/repo/pull/6");
+  const link = find(find(render(), "p", node => node.props.role === "status"), "a");
+  assert.equal(link.props.href, "https://github.com/test/repo/pull/6");
+  assert.match(find(render(), "p", node => node.props.role === "status").props.className, /break-all/);
+  gitState = undefined;
+});
+
+it("fills the pull request title from the first branch commit and sends the form", async () => {
+  const calls: any[] = [];
+  let fail = false;
+  const pane = component("git-pull-request-form", async input => {
+    calls.push(input);
+    if (input.type === "git_changes") return { files: [], commits: ["bbb Second change", "aaa First change"] };
+    if (fail) throw new Error("GitHub refused");
+    return "https://github.com/test/repo/pull/6";
+  });
+  const created: string[] = [];
+  const props = { sessionId: "session", head: "h1", onCreated: (url: string) => created.push(url), onCancel() {} };
+  const render = () => pane.render("GitPullRequestForm", props);
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  render(); pane.effects.at(-1)!(); await flush();
+  assert.equal(find(render(), "Input").props.value, "First change");
+  find(render(), "Textarea").props.onChange({ target: { value: "Body" } });
+  find(render(), "Switch").props.onCheckedChange(false);
+  fail = true;
+  find(render(), "form").props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /GitHub refused/);
+  fail = false;
+  find(render(), "form").props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), { type: "create_pull_request", sessionId: "session", head: "h1", title: "First change", body: "Body", draft: false });
+  assert.deepEqual(created, ["https://github.com/test/repo/pull/6"]);
 });
