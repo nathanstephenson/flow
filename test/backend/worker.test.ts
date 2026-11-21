@@ -312,3 +312,23 @@ test("installed Pi SDK operates across the worker boundary with isolated state",
   assert.equal(f.requests.length, 1);
   await session.dispose();
 });
+
+async function lostWorker(t: TestContext, prompt: string, options: { diagnosticsWindowMs?: number } = {}) {
+  const scope = await mkdtemp(join(tmpdir(), "flow-worker-lost-"));
+  const events: BackendEvent[] = [];
+  const session = await new WorkerBackend({ backendModule, isolationMode: () => "none", ...options })
+    .create({ scope, emit: (event) => events.push(event) });
+  t.after(async () => { await session.dispose(); await rm(scope, { recursive: true, force: true }); });
+  await session.prompt(prompt);
+  await until(() => events.some((event) => event.type === "notice"));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  return events.filter((event) => event.type === "notice").map((event) => (event as { text: string }).text);
+}
+
+test("worker exit reports the exit and its stderr, not the SDK shadowing warning or a disconnect", async (t) => {
+  assert.deepEqual(await lostWorker(t, "sandbox-lost"), ["Backend worker exited (1): error: context canceled"]);
+});
+
+test("worker exit reports only recent stderr", async (t) => {
+  assert.deepEqual(await lostWorker(t, "stale-stderr", { diagnosticsWindowMs: 200 }), ["Backend worker exited (1): recent output"]);
+});

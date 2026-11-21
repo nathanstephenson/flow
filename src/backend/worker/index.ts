@@ -327,7 +327,8 @@ class WorkerSession implements BackendSession {
     }, (name, value) => this.notify(name, value));
     this.worker.onMessage((message) => this.rpc.receive(message), (error) => this.fail(error));
     child.once("error", (error) => this.fail(error));
-    child.stdout?.once("close", () => this.fail(new Error("Backend worker disconnected")));
+    child.stdout?.once("close", () => void Promise.race([this.worker.exited, new Promise((resolve) => setTimeout(resolve, 1000).unref())])
+      .then(() => this.fail(new Error("Backend worker disconnected"))));
     child.once("exit", (code, signal) => this.fail(new Error(`Backend worker exited (${signal ?? code ?? "unknown"})${this.worker.diagnostics() ? `: ${this.worker.diagnostics()}` : ""}`)));
   }
 
