@@ -13,6 +13,7 @@ function managedStack(branches: { name: string; pr?: { number: number; state?: s
 
 type Element = { type: string; key?: string; props: Record<string, any> };
 let gitState: unknown;
+let repositoryState = true;
 function component(file: string, command: (input: any) => Promise<any>, globals: Record<string, unknown> = {}) {
   const states: any[] = [];
   let index = 0;
@@ -29,7 +30,7 @@ function component(file: string, command: (input: any) => Promise<any>, globals:
     };
     if (name === "react/jsx-runtime") return require(name);
     if (name === "@/host.tsx") return { useHost: () => ({ connection: { command } }) };
-    if (name === "@/git-state.ts") return { useGitState: () => gitState };
+    if (name === "@/git-state.ts") return { useGitState: () => ({ git: gitState, repository: repositoryState }) };
     if (name === "@/presentation/git.ts") return require("../web/src/presentation/git.ts");
     if (name === "@/presentation/pull-request.ts") return require("../web/src/presentation/pull-request.ts");
     return new Proxy({}, { get: (_target, key) => key });
@@ -55,34 +56,61 @@ function findButton(element: Element, label: string): Element {
   return find(element, "Button", node => textContent(node.props.children) === label);
 }
 
-it("uses shared mounted Git tabs, defaults to PR, preserves explicit choices and falls back", async () => {
-  const pane = component("git-pane", async () => ({ repository: true, files: [] }));
-  const props = { sessionId: "session" };
-  const render = () => pane.render("GitPane", props);
-  render();
-  await Promise.resolve();
+it("keeps Changes selected and adds each tab at the end when it becomes available, so no tab moves", async () => {
+  const pane = component("git-pane", async () => ({ files: [] }));
+  const render = () => pane.render("GitPane", { sessionId: "session" });
   const tabs = () => find(render(), "Tabs");
-  const tab = (label: string) => find(render(), "TabsTrigger", node => node.props.value === label);
+  const labels = () => findAll(render(), "TabsTrigger").map(node => textContent(node.props.children));
   const panel = (label: string) => find(render(), "TabsContent", node => node.props.value === label);
   assert.equal(tabs().props.value, "Changes");
   assert.equal(find(render(), "TabsList").props["aria-label"], "Git views");
-  assert.throws(() => tab("PR"));
-  assert.throws(() => tab("Stack"));
-  for (const label of ["Changes", "Stack", "PR"]) assert.equal(panel(label).props.keepMounted, true);
+  assert.deepEqual(labels(), ["Changes"]);
+  for (const label of ["Changes", "Pull request", "Stack"]) assert.equal(panel(label).props.keepMounted, true);
   find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.equal(tabs().props.value, "PR");
+  assert.equal(tabs().props.value, "Changes");
   find(render(), "StackPane").props.onAvailable(true);
+  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
+  assert.equal(tabs().props.value, "Changes");
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
+  find(render(), "PullRequestPane").props.onAvailable(false);
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  assert.deepEqual(labels(), ["Changes", "Stack", "Pull request"]);
   tabs().props.onValueChange("Stack");
   assert.equal(tabs().props.value, "Stack");
   find(render(), "StackPane").props.onAvailable(false);
   assert.equal(tabs().props.value, "Changes");
-  tabs().props.onValueChange("Changes");
-  find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.equal(tabs().props.value, "Changes");
-  tabs().props.onValueChange("PR");
-  assert.equal(tabs().props.value, "PR");
-  find(render(), "PullRequestPane").props.onAvailable(false);
-  assert.equal(tabs().props.value, "Changes");
+  tabs().props.onValueChange("Pull request");
+  assert.equal(tabs().props.value, "Pull request");
+});
+
+it("shows one plain line and sends no Git command for a Scope that is not a Git repository", () => {
+  repositoryState = false;
+  const calls: unknown[] = [];
+  const pane = component("git-pane", async input => { calls.push(input); });
+  const tree = pane.render("GitPane", { sessionId: "session" });
+  assert.equal(textContent(tree), "This Scope is not a Git repository.");
+  assert.equal(findAll(tree, "p", node => node.props.role === "alert").length, 0);
+  for (const type of ["Tabs", "GitChanges", "StackPane", "PullRequestPane", "Button"]) assert.equal(findAll(tree, type).length, 0, type);
+  for (const effect of pane.effects) effect();
+  assert.deepEqual(calls, []);
+  repositoryState = true;
+});
+
+it("sends exactly the Changes, Stack and Pull request reads when it opens on a repository Scope", async () => {
+  const calls: string[] = [];
+  const command = async (input: any) => { calls.push(input.type); return input.type === "stack_status" ? { available: false, conflicts: [], rebasing: false } : input.type === "pull_request" ? null : { files: [], commits: [] }; };
+  const pane = component("git-pane", command);
+  const tree = pane.render("GitPane", { sessionId: "session" });
+  for (const effect of pane.effects) effect();
+  const document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+  for (const [file, name] of [["git-changes", "GitChanges"], ["stack-pane", "StackPane"], ["pull-request-pane", "PullRequestPane"]] as const) {
+    const child = component(file, command, { document });
+    child.render(name, find(tree, name).props);
+    for (const effect of child.effects) effect();
+  }
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.deepEqual(calls, ["git_changes", "stack_status", "pull_request"]);
 });
 
 it("refreshes PR data without remounting comment drafts from Changes", async () => {
@@ -458,12 +486,12 @@ it("adds a check that is not a GitHub Actions job with its name and URL only", a
 });
 
 it("adds nothing and shows the daemon's message when it refuses the log read", async () => {
-  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.reject(new Error("The branch's pull request has changed. Reload it before continuing.")) : Promise.resolve());
+  const { render, load, flush, added } = prPane(undefined, undefined, input => input.type === "pull_request_check_log" ? Promise.reject(new Error("409 Conflict: The branch's pull request has changed. Reload it before continuing.")) : Promise.resolve());
   await load();
   findButton(checkRow(render(), "deploy"), "Add to Draft").props.onClick();
   await flush();
   assert.deepEqual(added, []);
-  assert.equal(rowStatus(checkRow(render(), "deploy")), "Error: The branch's pull request has changed. Reload it before continuing.");
+  assert.equal(rowStatus(checkRow(render(), "deploy")), "The branch's pull request has changed. Reload it before continuing.");
   assert.equal(findButton(checkRow(render(), "deploy"), "Add to Draft").props.disabled, false);
 });
 
@@ -629,14 +657,14 @@ it("reads again when the document becomes visible", async () => {
 
 it("prefixes only a failed read with the last-read notice", async () => {
   let fail = false;
-  const { render, load, flush } = prPane(undefined, async () => { if (fail) throw new Error("offline"); return prDetails(); }, async () => { throw new Error("denied"); });
+  const { render, load, flush } = prPane(undefined, async () => { if (fail) throw new Error("409 Conflict: offline"); return prDetails(); }, async () => { throw new Error("409 Conflict: denied"); });
   await load();
   findButton(render(), "Convert to draft").props.onClick();
   await flush();
-  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "Error: denied");
+  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "denied");
   fail = true;
   await load(1);
-  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^Showing the last pull request read\. Pull request could not be read\. Error: offline$/);
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^Showing the last pull request read\. Pull request could not be read\. offline$/);
 });
 
 it("keeps typed comment text and shows the error when the comment fails", async () => {
@@ -666,7 +694,7 @@ it("disables every action while a write is in flight", async () => {
 });
 
 it("shows an alert and keeps the typed title and body when Suggest fails", async () => {
-  const { render, load, flush } = prPane(undefined, undefined, async () => { throw new Error("no model"); });
+  const { render, load, flush } = prPane(undefined, undefined, async () => { throw new Error("409 Conflict: no model"); });
   await load();
   findButton(render(), "Edit").props.onClick();
   const form = () => find(render(), "form", node => node.props["aria-label"] === "Edit pull request");
@@ -674,7 +702,7 @@ it("shows an alert and keeps the typed title and body when Suggest fails", async
   find(form(), "Textarea").props.onChange({ target: { value: "Typed body" } });
   findButton(render(), "Suggest").props.onClick();
   await flush();
-  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^No suggestion\. Error: no model$/);
+  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /^No suggestion\. no model$/);
   assert.equal(find(form(), "Input").props.value, "Typed title");
   assert.equal(find(form(), "Textarea").props.value, "Typed body");
 });
@@ -741,12 +769,16 @@ it("keeps the newest pull request read when an older response arrives last", asy
   assert.doesNotMatch(overview, /Oldest/);
 });
 
-it("Stack changes immediately replace the PR pane", () => {
+it("Stack changes immediately replace the PR pane and keep the tab order", () => {
   const pane = component("git-pane", async () => undefined);
-  const before = pane.render("GitPane", { sessionId: "session" });
+  const render = () => pane.render("GitPane", { sessionId: "session" });
+  find(render(), "PullRequestPane").props.onAvailable(true);
+  find(render(), "StackPane").props.onAvailable(true);
+  const before = render();
   find(before, "StackPane").props.onChange();
-  const after = pane.render("GitPane", { sessionId: "session" });
+  const after = render();
   assert.notEqual(find(before, "PullRequestPane").key, find(after, "PullRequestPane").key);
+  assert.deepEqual(findAll(after, "TabsTrigger").map(node => node.props.value), ["Changes", "Pull request", "Stack"]);
 });
 
 function pushPane(replaced: string[]) {
@@ -1013,7 +1045,7 @@ it("keeps merged members from the tracked stack visible", async () => {
 
 it("keeps a rejected Stack status command visible, with no Refresh of its own", async () => {
   let available = false;
-  const pane = component("stack-pane", async () => { throw new Error("command rejected"); });
+  const pane = component("stack-pane", async () => { throw new Error("409 Conflict: command rejected"); });
   const props = { sessionId: "session", onChange() {}, onAvailable: (value: boolean) => { available = value; } };
   pane.render("StackPane", props);
   pane.effects[0]!();
@@ -1021,7 +1053,7 @@ it("keeps a rejected Stack status command visible, with no Refresh of its own", 
   const tree = pane.render("StackPane", props);
   pane.effects.at(-1)!();
   assert.equal(available, true);
-  assert.match(find(tree, "p", node => node.props.role === "alert").props.children, /command rejected/);
+  assert.equal(find(tree, "p", node => node.props.role === "alert").props.children, "command rejected");
   assert.throws(() => findButton(tree, "Refresh stack"));
 });
 
@@ -1231,11 +1263,11 @@ it("cancels a push replacement without pushing", async () => {
 
 it("shows an alert when the push state cannot be read", async () => {
   gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 1, behind: 0, upstream: true };
-  const pane = component("git-pane", async input => { if (input.type === "push_state") throw new Error("offline"); });
+  const pane = component("git-pane", async input => { if (input.type === "push_state") throw new Error("409 Conflict: No remote is configured."); });
   const render = () => pane.render("GitPane", { sessionId: "session" });
   findButton(render(), "Push").props.onClick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
-  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /offline/);
+  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "No remote is configured.");
   gitState = undefined;
 });
 
@@ -1266,7 +1298,7 @@ it("fills the pull request title from the first branch commit and sends the form
   const pane = component("git-pull-request-form", async input => {
     calls.push(input);
     if (input.type === "git_changes") return { files: [], commits: ["bbb Second change", "aaa First change"] };
-    if (fail) throw new Error("GitHub refused");
+    if (fail) throw new Error("409 Conflict: GitHub refused");
     return "https://github.com/test/repo/pull/6";
   });
   const created: string[] = [];
@@ -1280,10 +1312,75 @@ it("fills the pull request title from the first branch commit and sends the form
   fail = true;
   find(render(), "form").props.onSubmit({ preventDefault() {} });
   await flush();
-  assert.match(textContent(find(render(), "p", node => node.props.role === "alert")), /GitHub refused/);
+  assert.equal(textContent(find(render(), "p", node => node.props.role === "alert")), "GitHub refused");
   fail = false;
   find(render(), "form").props.onSubmit({ preventDefault() {} });
   await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), { type: "create_pull_request", sessionId: "session", head: "h1", title: "First change", body: "Body", draft: false });
   assert.deepEqual(created, ["https://github.com/test/repo/pull/6"]);
+});
+
+it("shows only the host's message when the Changes list or a commit is refused", async () => {
+  const refusal = () => Promise.reject(new Error("409 Conflict: This Scope has uncommitted changes."));
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  const changes = component("git-changes", refusal);
+  const props = changesProps("a");
+  changes.render("GitChanges", props);
+  changes.effects.at(-1)!();
+  await flush();
+  assert.equal(textContent(find(changes.render("GitChanges", props), "p", node => node.props.role === "status")), "This Scope has uncommitted changes.");
+  const form = component("git-commit-form", refusal);
+  const all: Record<string, unknown> = { sessionId: "session", paths: ["a.ts"], fingerprint: "f", branch: "feature", defaultBranch: "main", canRename: false, message: "Add a", branchName: "", onMessage() {}, onBranchName() {}, onCommitted() {} };
+  find(form.render("GitCommitForm", all), "form").props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.equal(textContent(find(form.render("GitCommitForm", all), "p", node => node.props.role === "alert")), "This Scope has uncommitted changes.");
+});
+
+it("disables Switch, Rebase, Submit stack and Sync stack while the Scope has uncommitted changes", async () => {
+  const status = { available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "base" }, { name: "top" }]) };
+  for (const changed of [0, 2]) {
+    const { render } = await stackPane(async () => status, { git: { revision: "a", branch: "top", head: "h", changed, ahead: 0, behind: 0, upstream: true } });
+    for (const label of ["Rebase", "Submit stack", "Sync stack"]) assert.equal(findButton(render(), label).props.disabled, changed > 0, label);
+    const base = findAll(find(render(), "ol", node => node.props["aria-label"] === "Stack branches"), "li")[1]!;
+    assert.equal(findButton(base, "Switch").props.disabled, changed > 0);
+    find(render(), "p", node => /^Switching requires a clean Scope/.test(textContent(node)));
+  }
+});
+
+it("says only which branch Switch moved to", async () => {
+  const status = { available: true, conflicts: [], rebasing: false, ...managedStack([{ name: "base" }, { name: "top" }]) };
+  const { render } = await stackPane(async input => input.type === "change_stack" ? "Switched to branch 'base'\nYour branch is up to date with 'origin/base'." : status);
+  const base = findAll(find(render(), "ol", node => node.props["aria-label"] === "Stack branches"), "li")[1]!;
+  findButton(base, "Switch").props.onClick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(textContent(find(render(), "pre", node => node.props.role === "status")), "Switched to base.");
+});
+
+it("says why Merge is not available, near the actions", async () => {
+  for (const [extra, reason] of [[{ mergeMethods: [], isDraft: false }, /no merge method/], [{ mergeMethods: ["MERGE"], isDraft: true }, /for a draft/]] as const) {
+    const { render, load } = prPane(prDetails(extra));
+    await load();
+    assert.match(textContent(find(render(), "p", node => /^Merge is not available/.test(textContent(node)))), reason);
+  }
+  const { render, load } = prPane(prDetails({ mergeMethods: ["MERGE"], isDraft: false }));
+  await load();
+  assert.equal(findAll(render(), "p", node => /^Merge is not available/.test(textContent(node))).length, 0);
+});
+
+it("selects all remaining files again after a commit", async () => {
+  const { pane, flush, list } = changesPane();
+  const props = changesProps("a");
+  pane.render("GitChanges", props);
+  pane.effects.at(-1)!();
+  await flush();
+  const checkbox = (path: string) => find(pane.render("GitChanges", props), "Checkbox", node => node.props["aria-label"] === `Commit ${path}`);
+  checkbox("b.ts").props.onCheckedChange(false);
+  find(pane.render("GitChanges", props), "GitCommitForm").props.onCommitted("d".repeat(40));
+  list([{ status: "??", path: "b.ts" }]);
+  props.revision = "b";
+  pane.render("GitChanges", props);
+  pane.effects.at(-1)!();
+  await flush();
+  assert.equal(checkbox("b.ts").props.checked, true);
+  assert.deepEqual(find(pane.render("GitChanges", props), "GitCommitForm").props.paths, ["b.ts"]);
 });

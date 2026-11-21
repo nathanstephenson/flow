@@ -129,7 +129,7 @@ describe("GitStates", () => {
     assert.deepEqual(states.summary(second)?.pr, summary);
   });
 
-  it("polls each 30 s when watched and each 5 min otherwise", async () => {
+  it("polls a watched group at each 30 s tick and an unwatched group at each tenth tick, with timer jitter", async () => {
     mock.timers.enable({ apis: ["Date"], now: 0 });
     const watched = github();
     const unwatched = github();
@@ -141,15 +141,17 @@ describe("GitStates", () => {
       await unwatchedStates.poll([{ scope: path, lifecycle: "live", watched: false }]);
     };
     await poll();
-    mock.timers.tick(29_999);
+    mock.timers.tick(20_000);
     await poll();
     assert.deepEqual([watched.queries.length, unwatched.queries.length], [1, 1]);
-    mock.timers.tick(1);
+    mock.timers.tick(9_999);
     await poll();
     assert.deepEqual([watched.queries.length, unwatched.queries.length], [2, 1]);
-    mock.timers.tick(270_000);
-    await poll();
-    assert.deepEqual([watched.queries.length, unwatched.queries.length], [3, 2]);
+    for (let tick = 0; tick < 9; tick++) {
+      mock.timers.tick(29_990);
+      await poll();
+    }
+    assert.deepEqual([watched.queries.length, unwatched.queries.length], [11, 2]);
   });
 
   it("does not poll Settled or Ended sessions and keeps their last value", async () => {
@@ -353,6 +355,45 @@ describe("GitStates", () => {
       rmSync(log);
       await states.poll([{ scope: path, lifecycle: "live", watched: true }, { scope: path, lifecycle: "dormant", watched: false }], path);
       assert.equal(readFileSync(log, "utf8").split("\n").length, single);
+    } finally { process.env.PATH = environment; }
+  });
+
+  it("reads git for an unwatched Scope only when its 5 min interval is due, a poll is forced or a local read saw a new branch", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 0 });
+    const path = scope("repo");
+    const bin = join(root, "bin");
+    const log = join(root, "git.log");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$@" >> '${log}'\nexec /usr/bin/git "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const sessions = [{ scope: path, lifecycle: "live" as const, watched: false }];
+    const reads = () => { const count = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0; rmSync(log, { force: true }); return count; };
+    const environment = process.env.PATH;
+    process.env.PATH = `${bin}:${environment}`;
+    try {
+      await states.poll(sessions);
+      assert.ok(reads() > 0);
+      for (let tick = 0; tick < 9; tick++) {
+        mock.timers.tick(29_990);
+        await states.poll(sessions);
+        assert.equal(reads(), 0);
+      }
+      assert.deepEqual(states.summary(path)?.pr, summary);
+      mock.timers.tick(29_990);
+      await states.poll(sessions);
+      assert.ok(reads() > 0);
+      assert.equal(fake.queries.length, 2);
+      await states.poll(sessions, path);
+      assert.ok(reads() > 0);
+      assert.equal(fake.queries.length, 3);
+      git(path, "switch", "--quiet", "-c", "other");
+      await states.refresh(path);
+      reads();
+      await states.poll(sessions);
+      assert.ok(reads() > 0);
+      assert.equal(fake.queries.length, 4);
     } finally { process.env.PATH = environment; }
   });
 });

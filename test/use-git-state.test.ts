@@ -34,3 +34,20 @@ it("sends refresh_git on mount only when visible and again when the document bec
   effects[0]!();
   assert.equal(sent.length, 2);
 });
+
+it("reports a Scope as not a Git repository only when its summary has no branch and no Git State", () => {
+  const module = { exports: {} as Record<string, (sessionId: string) => unknown> };
+  let sessions: unknown[] = [];
+  const code = transformSync(readFileSync(new URL("../web/src/git-state.ts", import.meta.url), "utf8"), { loader: "ts", format: "cjs" }).code;
+  runInNewContext(code, { module, exports: module.exports, require: (name: string) => {
+    if (name === "react") return { useEffect: () => {} };
+    if (name === "@/agent-sessions.tsx") return { useAgentSessions: () => ({ sessions }), useCommand: () => async () => {} };
+    return createRequire(import.meta.url)(name);
+  } });
+  const repository = () => (module.exports.useGitState!("session") as { repository: boolean }).repository;
+  assert.equal(repository(), true);
+  sessions = [{ id: "session" }];
+  assert.equal(repository(), false);
+  sessions = [{ id: "session", branch: { name: "main" } }];
+  assert.equal(repository(), true);
+});

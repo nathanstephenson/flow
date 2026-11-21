@@ -8,9 +8,10 @@ Accepted. For Git State, supersedes the reasoning in the `/api/branches` comment
 ## Decision
 
 The Session Host keeps one Git State for each Scope in memory. Agent Sessions on the same Scope
-share it. `SessionSummary.git` carries a small summary: a revision, the changed-file count, commits
-ahead of and behind the upstream, whether an upstream exists, and the Pull Request number, URL,
-state, draft flag, check status, review decision and unresolved thread count.
+share it. `SessionSummary.git` carries a small summary: a revision, the branch, the HEAD commit, the
+default branch when it is known, the changed-file count, commits ahead of and behind the upstream,
+whether an upstream exists, and the Pull Request number, URL, state, draft flag, check status,
+count of completed checks, review decision, unresolved thread count and time of last update.
 
 The host reads local state again at create, at Revive, at turn end, after each Git pane operation,
 on the `refresh_git` command, and after each tool call during a turn. Tool calls cause at most one
@@ -18,8 +19,11 @@ read each 3 s, with one trailing read. The host does not watch the file system.
 
 The daemon polls the Pull Request with one GraphQL query for each distinct base repository, head
 repository and branch across Live and Dormant Agent Sessions. A group is due each 30 s when a client
-has the stream of one of its sessions open, and each 5 min otherwise. Settled and Ended sessions are
-not polled and keep the last value. A failed poll keeps the last value.
+has the stream of one of its sessions open, and each 5 min otherwise. The due test allows 5 s for
+timer delay, so each 30 s tick polls a watched group. A Scope that no client watches reads its
+branch and remote again only when its 5 min interval is due, when a poll is forced for it, or when
+a local read finds a new branch. Settled and Ended sessions are not polled and keep the last value.
+A failed poll keeps the last value.
 
 One resolver maps a Scope to its push remote, head repository, base repository and Pull Request.
 The order of remotes is: branch pushRemote, `remote.pushDefault`, branch remote, `origin`, the sole

@@ -59,3 +59,7 @@ export function diffHunks(text: string): string | undefined {
 export function noChanges(view: ChangesView): string {
   return view === "branch" ? "No changes on this branch." : "No uncommitted changes.";
 }
+
+export function failureText(failure: unknown): string {
+  return (failure instanceof Error ? failure.message : String(failure)).replace(/^\d{3} [^:]*: /, "");
+}

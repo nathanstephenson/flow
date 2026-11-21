@@ -11,8 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea.tsx";
 import { PullRequestIcon } from "@/components/pull-request-indicators.tsx";
 import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
-import { pullRequestIndicators } from "@/presentation/git.ts";
-import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
+import { failureText, pullRequestIndicators } from "@/presentation/git.ts";
+import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
 type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onAddToDraft: (block: string) => AppendResult };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
@@ -60,7 +60,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
         onAvailable?.(Boolean(value));
       },
       (failure: unknown) => {
-        if (request === latest.current) setError({ text: `Pull request could not be read. ${String(failure)}`, read: true });
+        if (request === latest.current) setError({ text: `Pull request could not be read. ${failureText(failure)}`, read: true });
       },
     );
   }
@@ -87,7 +87,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
       done?.();
       setNotice(success);
       read();
-    } catch (failure) { setError({ text: String(failure), read: false }); }
+    } catch (failure) { setError({ text: failureText(failure), read: false }); }
     finally { setBusy(false); }
   }
 
@@ -97,7 +97,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     try {
       const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId, kind: "pull_request" });
       setEdit(current => current && { ...current, ...(text.title ? { title: text.title } : {}), ...(text.body ? { body: text.body } : {}) });
-    } catch (failure) { setError({ text: `No suggestion. ${String(failure)}`, read: false }); }
+    } catch (failure) { setError({ text: `No suggestion. ${failureText(failure)}`, read: false }); }
     finally { setBusy(false); }
   }
 
@@ -113,7 +113,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     setAdded({ key, text: "Reading the job log…" });
     let log: PullRequestCheckLog | null;
     try { log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", sessionId, pr, jobId: check.jobId }); }
-    catch (failure) { return setAdded({ key, text: String(failure) }); }
+    catch (failure) { return setAdded({ key, text: failureText(failure) }); }
     finally { readingLogs.current.delete(key); }
     if (log) addToDraft(key, checkDraftBlock(check, log));
     else addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. The job log could not be read or is too large.");
@@ -249,18 +249,20 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
 
   const open = pr?.state === "OPEN";
   const actionInput = pr ? { pr: { repo: pr.repo, number: pr.number, id: pr.id }, headOid: pr.headRefOid, baseBranch: pr.baseRefName } : undefined;
+  const mergeReason = pr && mergeUnavailable(pr);
   return (
     <section aria-label="Pull request" className="min-w-0 space-y-3">
-      {pr && open && actionInput ? (
+      {pr && open && actionInput ? (<>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={locked || !!confirm || pr.isDraft || pr.mergeMethods.length === 0} onClick={() => setConfirm({ action: "merge", input: { ...actionInput, method: pr.mergeMethods[0]! } })}>Merge</Button>
+          <Button size="sm" disabled={locked || !!confirm || !!mergeReason} onClick={() => setConfirm({ action: "merge", input: { ...actionInput, method: pr.mergeMethods[0]! } })}>Merge</Button>
           <Button size="sm" variant="outline" disabled={locked || !!confirm} onClick={() => setConfirm({ action: "rebase", input: actionInput })}>Rebase</Button>
           <Button size="sm" variant="outline" disabled={locked || !!edit} onClick={() => setEdit({ pr: actionInput.pr, title: pr.title, body: pr.body })}>Edit</Button>
           <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "set_pull_request_draft", sessionId, input: { pr: actionInput.pr, draft: !pr.isDraft } }, pr.isDraft ? "Marked ready for review." : "Converted to draft.")}>
             {pr.isDraft ? "Ready for review" : "Convert to draft"}
           </Button>
         </div>
-      ) : null}
+        {mergeReason ? <p className="text-xs text-muted-foreground">{mergeReason}</p> : null}
+      </>) : null}
       {error ? <p role="alert">{error.read && pr ? "Showing the last pull request read. " : ""}{error.text}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {pr && confirm ? (

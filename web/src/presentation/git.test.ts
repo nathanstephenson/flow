@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestIndicators, pullRequestLine, pullStep } from "./git.ts";
+import { branchLine, diffHunks, diffNotice, failureText, gitStateLine, gitSteps, noChanges, pullRequestIndicators, pullRequestLine, pullStep } from "./git.ts";
 
 const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
 const { branch: _branch, ...detached } = local;
@@ -76,4 +76,11 @@ it("gives the pull request state and check status an icon, a tone and words", ()
   assert.equal(pullRequestIndicators({ ...pr, checks: "none" }).checks, undefined);
   assert.equal(pullRequestIndicators({ ...pr, number: 178, isDraft: true, checks: "passing" }).text, "Pull Request #178. Draft. Checks passing.");
   assert.equal(pullRequestIndicators({ ...pr, state: "MERGED", checks: "none" }).text, "Pull Request #12. Merged. No checks.");
+});
+
+it("shows only the host's message of a failed command", () => {
+  assert.equal(failureText(new Error("409 Conflict: This Scope has uncommitted changes.")), "This Scope has uncommitted changes.");
+  assert.equal(failureText(new Error("500 Internal Server Error")), "500 Internal Server Error");
+  assert.equal(failureText(new Error("Could not reach the Session Host.")), "Could not reach the Session Host.");
+  assert.equal(failureText("409 Conflict: Refused: try again."), "Refused: try again.");
 });

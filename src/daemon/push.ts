@@ -1,7 +1,6 @@
 import { head, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
-import { git } from "./changes.ts";
 import { gh, type Gh } from "./github.ts";
-import { resolveRepository, type Repository } from "./repository.ts";
+import { git, resolveRepository, type Repository } from "./repository.ts";
 import type { PushInput, PushState } from "../protocol/git.ts";
 
 const credentials = ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"];
