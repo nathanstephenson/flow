@@ -1006,7 +1006,7 @@ function WorkStack({ running, models, onOpen }: {
   const openIndex = cards.findIndex(({ card, leaving }) => !leaving && card.key === open?.key);
   const track = (key: string) => (event: SyntheticEvent<HTMLElement>) => {
     const button = event.currentTarget;
-    const extra = button.offsetHeight - (button.parentElement?.offsetHeight ?? 0);
+    const extra = button.scrollHeight + button.offsetHeight - button.clientHeight - (button.parentElement?.offsetHeight ?? 0);
     setOpen((current) => button.matches(":hover, :focus-visible") ? { key, extra } : current?.key === key ? undefined : current);
   };
 
@@ -1041,11 +1041,13 @@ function WorkStack({ running, models, onOpen }: {
               onFocus={track(card.key)}
               onBlur={track(card.key)}
               aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
+              style={open?.key === card.key ? { height: `calc(100% + ${open.extra}px)` } : undefined}
               className={cn(
-                "group/card cursor-tilt absolute inset-x-0 bottom-0 h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 pt-1.5 pb-3",
-                "text-left text-xs leading-4 text-muted-foreground shadow-sm outline-none hover:h-auto hover:pb-4.5 hover:text-foreground",
-                "focus-visible:h-auto focus-visible:pb-4.5 focus-visible:border-ring focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30",
-                "[--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]",
+                "group/card absolute inset-x-0 bottom-0 h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 pt-1.5 pb-3",
+                "text-left text-xs leading-4 text-muted-foreground shadow-sm outline-none hover:pb-4.5 hover:text-foreground",
+                "transition-[height,scale,box-shadow,color] duration-200 ease-out motion-reduce:transition-none",
+                "hover:scale-[1.005] hover:shadow-[0_6px_16px_-6px_rgb(0_0_0/0.35)]",
+                "focus-visible:pb-4.5 focus-visible:border-ring focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30",
               )}
             >
               <span className="flex items-start gap-2">
