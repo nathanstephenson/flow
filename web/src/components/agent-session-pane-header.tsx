@@ -125,22 +125,21 @@ export function AgentSessionPaneHeader({
             </>
           )}
           <span className="truncate font-medium">{title}</span>
+          {pr ? (
+            <span className="ml-0.5 flex shrink-0 items-center gap-1.5 text-xs">
+              <a
+                className="rounded-sm font-mono text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
+                href={safePullRequestUrl(pr.url)}
+                aria-label={`Pull Request #${pr.number}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                #{pr.number}
+              </a>
+              <PullRequestIndicators pr={pr} className="-translate-y-[0.33px]" />
+            </span>
+          ) : null}
         </span>
-
-        {pr ? (
-          <span className="flex shrink-0 items-center gap-1.5 text-xs">
-            <a
-              className="rounded-sm font-mono text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
-              href={safePullRequestUrl(pr.url)}
-              aria-label={`Pull Request #${pr.number}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              #{pr.number}
-            </a>
-            <PullRequestIndicators pr={pr} />
-          </span>
-        ) : null}
 
         <div className="ml-auto flex items-center gap-1.5">
           {docks ? (

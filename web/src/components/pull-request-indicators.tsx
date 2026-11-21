@@ -18,11 +18,11 @@ export function PullRequestIcon({ indicator, className }: { indicator: PullReque
   return <Icon aria-hidden className={cn("shrink-0", tones[indicator.tone], className)} />;
 }
 
-export function PullRequestIndicators({ pr }: { pr: PullRequestSummary }) {
+export function PullRequestIndicators({ pr, className }: { pr: PullRequestSummary; className?: string }) {
   const { state, checks, text } = pullRequestIndicators(pr);
   return (
     <Tooltip>
-      <TooltipTrigger render={<span className="flex shrink-0 items-center gap-0.5" />}>
+      <TooltipTrigger render={<span className={cn("flex shrink-0 items-center gap-0.5", className)} />}>
         <PullRequestIcon indicator={state} className="size-3!" />
         {checks ? <PullRequestIcon indicator={checks} className="size-3!" /> : null}
         <span className="sr-only">{text}</span>
