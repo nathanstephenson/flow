@@ -72,6 +72,6 @@ export function checkDraftBlock(check: PullRequestCheck, log?: PullRequestCheckL
 
 export function mergeUnavailable(pr: Pick<PullRequestDetails, "isDraft" | "mergeMethods">): string | undefined {
   if (pr.isDraft) return "Merge is not available for a draft. Mark the pull request ready for review first.";
-  if (pr.mergeMethods.length === 0) return "Merge is not available. This repository allows no merge method for you.";
+  if (pr.mergeMethods.length === 0) return "You cannot merge this Pull Request in this repository.";
   return undefined;
 }

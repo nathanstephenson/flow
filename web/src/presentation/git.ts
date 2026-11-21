@@ -6,7 +6,7 @@ export const stepLabels: Record<GitStep, string> = { commit: "Commit", push: "Pu
 export function gitSteps(git: GitState | undefined): GitStep[] {
   if (!git) return [];
   const steps: GitStep[] = git.changed > 0 ? ["commit"] : [];
-  if (!git.branch || !git.head || git.branch === git.defaultBranch) return steps;
+  if (!git.github || !git.branch || !git.head || git.branch === git.defaultBranch) return steps;
   if (!git.upstream || git.ahead > 0) steps.push("push");
   else if (git.pr?.state !== "OPEN") steps.push("pull_request");
   return steps;
@@ -61,5 +61,5 @@ export function noChanges(view: ChangesView): string {
 }
 
 export function failureText(failure: unknown): string {
-  return (failure instanceof Error ? failure.message : String(failure)).replace(/^\d{3} [^:]*: /, "");
+  return (failure instanceof Error ? failure.message : String(failure)).replace(/^\d{3}(?: [^:]*)?: /, "");
 }

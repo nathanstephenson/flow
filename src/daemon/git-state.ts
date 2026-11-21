@@ -51,13 +51,14 @@ export async function readStatus(scope: string): Promise<StatusRead> {
 export async function readLocal(scope: string): Promise<LocalGitState | undefined> {
   const read = await readStatus(scope).catch(() => undefined);
   if (!read) return undefined;
-  const defaultBranch = (await localRepository(scope, read.local.branch).catch(() => undefined))?.defaultBranches[0];
-  return { ...read.local, ...(defaultBranch ? { defaultBranch } : {}) };
+  const repository = await localRepository(scope, read.local.branch).catch(() => undefined);
+  const defaultBranch = repository?.defaultBranches[0];
+  return { ...read.local, ...(repository?.github ? { github: true as const } : {}), ...(defaultBranch ? { defaultBranch } : {}) };
 }
 
 type Entry = { local: LocalGitState | undefined; pr: PullRequestSummary | undefined; prRef: PullRequestRef | undefined; prBase: string | undefined; prBranch: string | undefined; lastRead: number; generation: number; trailing: ReturnType<typeof setTimeout> | undefined };
 type Group = { scopes: string[]; repository: Repository; branch: string; watched: boolean; forced: boolean };
-type Target = { readAt: number; branch: string | undefined; repository: Repository | undefined };
+type Target = { readAt: number; localBranch: string | undefined; branch: string | undefined; repository: Repository | undefined };
 
 function due(elapsed: number, watched: boolean): boolean {
   return elapsed >= (watched ? WATCHED_POLL_MS : UNWATCHED_POLL_MS) - POLL_JITTER_MS;
@@ -139,7 +140,7 @@ export class GitStates {
     const groups = new Map<string, Group>();
     for (const [scope, watched] of scopes) {
       const cached = this.targets.get(scope);
-      const target = cached && !watched && scope !== forced && !due(now - cached.readAt, false) && this.entries.get(scope)?.local?.branch === cached.branch ? cached : await this.target(scope, now);
+      const target = cached && !watched && scope !== forced && !due(now - cached.readAt, false) && this.entries.get(scope)?.local?.branch === cached.localBranch ? cached : await this.target(scope, watched, now);
       const entry = this.entry(scope);
       const { branch: name, repository } = target;
       if (!name || !repository) {
@@ -182,11 +183,12 @@ export class GitStates {
     releaseRepositories(kept);
   }
 
-  private async target(scope: string, now: number): Promise<Target> {
-    const target: Target = { readAt: now, branch: undefined, repository: undefined };
+  private async target(scope: string, watched: boolean, now: number): Promise<Target> {
+    const target: Target = { readAt: now, localBranch: undefined, branch: undefined, repository: undefined };
     this.targets.set(scope, target);
     if (!isRepository(scope)) return target;
-    if (!this.entries.get(scope)?.local) await this.refresh(scope);
+    if (watched || !this.entries.get(scope)?.local) await this.refresh(scope);
+    target.localBranch = this.entries.get(scope)?.local?.branch;
     const branch = await head(scope);
     target.branch = branch.ok && !branch.value.detached ? branch.value.name : undefined;
     target.repository = target.branch === undefined ? undefined : await resolveRepository(scope, target.branch, this.github).catch(() => undefined);

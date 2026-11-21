@@ -5,9 +5,13 @@
 The Git pane shows the next step above its tabs: Commit, Push, or Create pull request.
 
 The tabs are Changes, Pull request and Stack, in this order. Changes is selected until you select
-another tab. The Pull request tab shows when the branch has a pull request. The Stack tab shows only
-after the first read of the pull request, so the tabs do not move when the pane opens. In a Scope
-that is not a Git repository, the pane shows only one line of text.
+another tab. If the selected tab goes away, Changes is selected again. The Pull request tab shows
+when the branch has a pull request or when the pull request cannot be read; the tab then shows the
+error. The Stack tab shows when `gh stack` is available. In a Scope that the Session Host reports
+is not a Git repository, the pane shows only one line of text.
+
+Push and Create pull request need a push remote that is a github.com repository. Without one, the
+header shows "No GitHub remote. Commit only."
 
 - Commit includes only the files that you select in the Uncommitted view. Other files keep their
   staged and unstaged state. Git hooks run.
@@ -27,7 +31,7 @@ Resolved threads are collapsed.
 
 - Merge, Rebase, Edit, and Ready for review or Convert to draft are at the top. Merge and Rebase
   ask first. When Merge is not available, a line below the actions tells why: the pull request is
-  a draft, or the repository allows no merge method for you.
+  a draft, or you cannot merge it in this repository.
 - Refresh in the Git pane header reads the local Git State, the pull request and the open tab
   again.
 - Rebase changes only the local branch. It requires a clean Scope, aborts on a conflict and pushes
@@ -81,8 +85,8 @@ available.
 - Switching and changes require that no Agent Session in the same Scope is working, including
   background work.
 - The working tree must be clean, except to continue or abort a conflict. Flow never stashes
-  changes. Commit uncommitted files first. While Git State shows changed files, Switch, Rebase,
-  Submit stack and Sync stack are disabled.
+  changes. Commit uncommitted files first. While Git State shows changed files, Create stack, New
+  branch, Switch, Rebase, Submit stack and Sync stack are disabled.
 - Stack branches use their active parent as the review base, and as the base for new PRs.
 
 ### Create

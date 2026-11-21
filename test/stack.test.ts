@@ -338,14 +338,15 @@ it("reads Pull Request titles with one query and not again when nothing changed 
     assert.deepEqual(args.slice(0, 2), ["api", "graphql"]);
     assert.ok(args.includes("owner=test") && args.includes("name=repo"));
     queries.push(args.find(arg => arg.startsWith("query="))!);
-    return JSON.stringify({ data: { repository: { pr12: { title: "Twelve" }, pr13: { title: "Thirteen" } } } });
+    return JSON.stringify({ data: { repository: { pr12: { title: "Twelve", isDraft: true }, pr13: { title: "Thirteen", isDraft: false } } } });
   };
   const stack: StackView = { ...view, branches: [view.branches[0]!, { ...view.branches[0]!, name: "second", isCurrent: false, pr: { number: 13, url: "https://github.com/test/repo/pull/13", state: "OPEN" } }, { name: "unpublished", isCurrent: false, isMerged: false, isQueued: false, needsRebase: false }] };
   const first = structuredClone(stack);
   assert.equal(await stackTitles(repo, first, github), true);
   assert.deepEqual(first.branches.map(branch => branch.pr?.title), ["Twelve", "Thirteen", undefined]);
+  assert.deepEqual(first.branches.map(branch => branch.pr?.isDraft), [true, false, undefined]);
   assert.equal(queries.length, 1);
-  assert.match(queries[0]!, /pr12:pullRequest\(number:12\)\{title\}.*pr13:pullRequest\(number:13\)\{title\}/);
+  assert.match(queries[0]!, /pr12:pullRequest\(number:12\)\{title isDraft\}.*pr13:pullRequest\(number:13\)\{title isDraft\}/);
   const again = structuredClone(stack);
   await stackTitles(repo, again, github);
   assert.equal(again.branches[1]!.pr?.title, "Thirteen");
