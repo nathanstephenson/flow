@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestLine } from "./git.ts";
+import { branchLine, diffHunks, diffNotice, gitStateLine, gitSteps, noChanges, pullRequestLine, pullStep } from "./git.ts";
 
 const local = { revision: "r", branch: "feature", head: "0123456789abcdef", changed: 0, ahead: 2, behind: 1, upstream: true };
 const { branch: _branch, ...detached } = local;
@@ -35,6 +35,17 @@ it("lists the Git steps that apply, the next step first", () => {
   assert.deepEqual(gitSteps({ ...clean, branch: "main", changed: 1 }), ["commit"]);
   assert.deepEqual(gitSteps({ ...detached, ahead: 0, behind: 0, upstream: false }), []);
   assert.deepEqual(gitSteps({ ...unborn, ahead: 0, behind: 0, upstream: false }), []);
+});
+
+it("offers Pull only when the branch is behind, clean and not diverged", () => {
+  const clean = { ...local, ahead: 0, behind: 0 };
+  assert.equal(pullStep(undefined), undefined);
+  assert.equal(pullStep(clean), undefined);
+  assert.equal(pullStep({ ...clean, behind: 2 }), "pull");
+  assert.equal(pullStep({ ...clean, behind: 2, changed: 1 }), undefined);
+  assert.equal(pullStep({ ...detached, ahead: 0 }), undefined);
+  assert.equal(pullStep({ ...clean, ahead: 1, behind: 2 }), "diverged");
+  assert.equal(pullStep({ ...clean, ahead: 1, behind: 2, changed: 1 }), "diverged");
 });
 
 it("names diffs that have no text and empty views", () => {

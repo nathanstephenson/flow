@@ -12,6 +12,12 @@ export function gitSteps(git: GitState | undefined): GitStep[] {
   return steps;
 }
 
+export function pullStep(git: GitState | undefined): "pull" | "diverged" | undefined {
+  if (!git?.branch || git.behind === 0) return undefined;
+  if (git.ahead > 0) return "diverged";
+  return git.changed === 0 ? "pull" : undefined;
+}
+
 export function branchLine(git: GitState): string {
   return git.branch ?? `detached at ${git.head?.slice(0, 7)}`;
 }

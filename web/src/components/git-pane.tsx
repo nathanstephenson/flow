@@ -7,7 +7,7 @@ import { GitChanges } from "@/components/git-changes.tsx";
 import { GitPullRequestForm } from "@/components/git-pull-request-form.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
-import { branchLine, gitStateLine, gitSteps, pullRequestLine, stepLabels, type GitStep } from "@/presentation/git.ts";
+import { branchLine, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
 import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
@@ -33,6 +33,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
   const tabs: Tab[] = ["Changes", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
   const selected = tab === "Changes" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Changes";
   const steps = gitSteps(git);
+  const pullOffer = pullStep(git);
 
   function reread(...keys: (keyof Reads)[]) {
     setReads(current => ({ ...current, ...Object.fromEntries(keys.map(key => [key, current[key] + 1])) }));
@@ -105,12 +106,13 @@ export function GitPane({ sessionId }: { sessionId: string }) {
             {git.pr ? <a className="underline" href={safePullRequestUrl(git.pr.url)} target="_blank" rel="noreferrer">{pullRequestLine(git.pr)}</a> : null}
           </p>
         ) : null}
-        {steps.length > 0 || (git?.branch && git.behind > 0 && git.changed === 0) ? (
+        {pullOffer === "diverged" ? <p className="text-xs text-muted-foreground">This branch and its upstream have diverged.</p> : null}
+        {steps.length > 0 || pullOffer === "pull" ? (
           <div className="flex flex-wrap gap-2">
             {steps.map((value, index) => (
               <Button key={value} size="sm" variant={index === 0 ? "default" : "outline"} disabled={busy} onClick={() => open(value)}>{stepLabels[value]}</Button>
             ))}
-            {git?.branch && git.behind > 0 && git.changed === 0 ? <Button size="sm" variant="outline" disabled={busy} onClick={pull}>Pull</Button> : null}
+            {pullOffer === "pull" ? <Button size="sm" variant="outline" disabled={busy} onClick={pull}>Pull</Button> : null}
           </div>
         ) : null}
         {error ? <p role="alert">{error}</p> : null}

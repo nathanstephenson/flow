@@ -144,6 +144,16 @@ it("Pull uses the Git State branch and shows only for a clean branch that is beh
   gitState = undefined;
 });
 
+it("offers Push and not Pull when the branch has diverged", () => {
+  gitState = { revision: "a", branch: "feature", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true };
+  const pane = component("git-pane", async () => undefined);
+  const header = find(pane.render("GitPane", { sessionId: "session" }), "header");
+  assert.throws(() => findButton(header, "Pull"));
+  findButton(header, "Push");
+  assert.equal(textContent(find(header, "p", node => textContent(node).includes("diverged"))), "This branch and its upstream have diverged.");
+  gitState = undefined;
+});
+
 for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation and sends the displayed PR identity`, () => {
   const calls: any[] = [];
   const pane = component("pull-request-pane", async () => {});
