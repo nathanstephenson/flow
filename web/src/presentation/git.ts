@@ -12,9 +12,9 @@ export function gitSteps(git: GitState | undefined): GitStep[] {
   return steps;
 }
 
-export function pullStep(git: GitState | undefined): "pull" | "diverged" | undefined {
+export function pullStep(git: GitState | undefined): "pull" | { diverged: string } | undefined {
   if (!git?.branch || git.behind === 0) return undefined;
-  if (git.ahead > 0) return "diverged";
+  if (git.ahead > 0) return { diverged: gitSteps(git).includes("push") ? "This branch and its upstream have diverged." : "This branch and its upstream have diverged. Rebase or merge in the Shell." };
   return git.changed === 0 ? "pull" : undefined;
 }
 

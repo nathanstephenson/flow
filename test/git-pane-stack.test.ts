@@ -154,6 +154,16 @@ it("offers Push and not Pull when the branch has diverged", () => {
   gitState = undefined;
 });
 
+it("tells the user to rebase or merge in the Shell when a diverged branch has no Push step", () => {
+  gitState = { revision: "a", branch: "main", head: "h", defaultBranch: "main", changed: 0, ahead: 1, behind: 2, upstream: true };
+  const pane = component("git-pane", async () => undefined);
+  const header = find(pane.render("GitPane", { sessionId: "session" }), "header");
+  assert.throws(() => findButton(header, "Push"));
+  assert.throws(() => findButton(header, "Pull"));
+  assert.equal(textContent(find(header, "p", node => textContent(node).includes("diverged"))), "This branch and its upstream have diverged. Rebase or merge in the Shell.");
+  gitState = undefined;
+});
+
 for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation and sends the displayed PR identity`, () => {
   const calls: any[] = [];
   const pane = component("pull-request-pane", async () => {});

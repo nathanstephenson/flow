@@ -44,8 +44,10 @@ it("offers Pull only when the branch is behind, clean and not diverged", () => {
   assert.equal(pullStep({ ...clean, behind: 2 }), "pull");
   assert.equal(pullStep({ ...clean, behind: 2, changed: 1 }), undefined);
   assert.equal(pullStep({ ...detached, ahead: 0 }), undefined);
-  assert.equal(pullStep({ ...clean, ahead: 1, behind: 2 }), "diverged");
-  assert.equal(pullStep({ ...clean, ahead: 1, behind: 2, changed: 1 }), "diverged");
+  const diverged = { diverged: "This branch and its upstream have diverged." };
+  assert.deepEqual(pullStep({ ...clean, ahead: 1, behind: 2 }), diverged);
+  assert.deepEqual(pullStep({ ...clean, ahead: 1, behind: 2, changed: 1 }), diverged);
+  assert.deepEqual(pullStep({ ...clean, defaultBranch: "feature", ahead: 1, behind: 2 }), { diverged: "This branch and its upstream have diverged. Rebase or merge in the Shell." });
 });
 
 it("names diffs that have no text and empty views", () => {

@@ -106,7 +106,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
             {git.pr ? <a className="underline" href={safePullRequestUrl(git.pr.url)} target="_blank" rel="noreferrer">{pullRequestLine(git.pr)}</a> : null}
           </p>
         ) : null}
-        {pullOffer === "diverged" ? <p className="text-xs text-muted-foreground">This branch and its upstream have diverged.</p> : null}
+        {typeof pullOffer === "object" ? <p className="text-xs text-muted-foreground">{pullOffer.diverged}</p> : null}
         {steps.length > 0 || pullOffer === "pull" ? (
           <div className="flex flex-wrap gap-2">
             {steps.map((value, index) => (
