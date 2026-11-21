@@ -316,6 +316,24 @@ describe("GitStates", () => {
     assert.equal(targets.size, 0);
   });
 
+  it("keeps the group and Pull Request of an unwatched Scope between its 5-minute reads", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 0 });
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    const poll = () => states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    await poll();
+    for (let tick = 1; tick < 9; tick++) {
+      mock.timers.tick(30_000);
+      await poll();
+      assert.deepEqual(states.summary(path)?.pr, summary);
+    }
+    assert.equal(fake.queries.length, 1);
+    mock.timers.tick(60_000);
+    await poll();
+    assert.equal(fake.queries.length, 2);
+  });
+
   it("releases the poll time and result of a group that has no Scope", async () => {
     const fake = github();
     const states = new GitStates(fake.run);
