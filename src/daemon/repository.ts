@@ -93,6 +93,6 @@ export async function resolvePullRequest(scope: string, repository: Repository, 
   return {
     repo: repository.base.repo, id: pr.id, number: pr.number, url: pr.url, title: pr.title, state: pr.state, isDraft: pr.isDraft,
     checks: checks(pr.commits.nodes[0]?.commit.statusCheckRollup), reviewDecision: pr.reviewDecision,
-    unresolvedThreads: pr.reviewThreads.nodes.filter(thread => !thread.isResolved).length,
+    unresolvedThreads: pr.reviewThreads.nodes.filter(thread => !thread.isResolved).length, updatedAt: pr.updatedAt,
   };
 }

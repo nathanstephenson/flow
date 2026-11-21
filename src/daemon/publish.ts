@@ -141,7 +141,7 @@ export async function branchChanges(scope: string, destination: PublishTarget): 
   return { files, commits, input: `${commits.join("\n")}\n${diff}` };
 }
 
-export async function gitStatus(scope: string, github: Gh = gh): Promise<GitStatus> {
+export async function gitStatus(scope: string): Promise<GitStatus> {
   if (!isRepository(scope)) return { repository: false, files: [] };
   const status: GitStatus = { repository: true, files: [] };
   try {
@@ -150,8 +150,6 @@ export async function gitStatus(scope: string, github: Gh = gh): Promise<GitStat
     if (!branch.ok) throw new Error(branch.failure.message);
     status.branch = branch.value;
     if (branch.value.detached) throw new Error("HEAD is detached. Switch to a branch before publishing.");
-    const destination = await target(scope, branch.value.name, github);
-    if (destination.pr) status.pr = destination.pr;
   } catch (error) {
     status.problem = error instanceof Error ? error.message : String(error);
   }

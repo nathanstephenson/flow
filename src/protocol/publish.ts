@@ -13,7 +13,7 @@ export type GitStatus = {
   repository: boolean;
   branch?: Branch;
   files: GitFile[];
-  pr?: PullRequestSummary & { title: string };
+  pr?: PullRequestSummary;
   problem?: string;
 };
 export type PublishText = { commitMessage: string; title: string; body: string };

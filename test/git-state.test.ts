@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
@@ -18,7 +18,7 @@ function scope(name: string): string {
 }
 
 const pull = { id: "PR_1", number: 4, url: "https://github.com/test/repo/pull/4", title: "Change", state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] }, reviewThreads: { nodes: [{ isResolved: false }] } };
-const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1 };
+const summary = { number: 4, url: pull.url, state: "OPEN", isDraft: false, checks: "pending", reviewDecision: null, unresolvedThreads: 1, updatedAt: "2025-01-01" };
 
 function github() {
   const queries: string[][] = [];
@@ -42,7 +42,7 @@ describe("readLocal", () => {
     writeFileSync(join(path, "a file.txt"), "untracked");
     git(path, "mv", "README.md", "moved.md");
     const state = await readLocal(path);
-    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 3, ahead: 0, behind: 0, upstream: false });
+    assert.deepEqual({ ...state, revision: undefined }, { revision: undefined, changed: 3, ahead: 0, behind: 0, upstream: false, branch: "main" });
     assert.equal(await readLocal(root), undefined);
   });
 
@@ -54,7 +54,7 @@ describe("readLocal", () => {
     git(path, "commit", "--quiet", "--allow-empty", "-m", "local two");
     git(remote, "commit", "--quiet", "--allow-empty", "-m", "remote");
     git(path, "fetch", "--quiet");
-    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true });
+    assert.deepEqual({ ...await readLocal(path), revision: undefined }, { revision: undefined, changed: 0, ahead: 2, behind: 1, upstream: true, branch: "main" });
   });
 
   it("changes revision when a changed file changes again", async () => {
@@ -73,7 +73,7 @@ describe("GitStates", () => {
   it("reads at most once each 3 s with one trailing read", async () => {
     mock.timers.enable({ apis: ["setTimeout", "Date"], now: 10_000 });
     const reads: string[] = [];
-    const states = new GitStates(github().run, async (path) => { reads.push(path); return { revision: String(reads.length), changed: 0, ahead: 0, behind: 0, upstream: false }; });
+    const states = new GitStates(github().run, async (path) => { reads.push(path); return { revision: String(reads.length), changed: 0, ahead: 0, behind: 0, upstream: false, branch: undefined }; });
     states.touch("scope");
     states.touch("scope");
     states.touch("scope");
@@ -153,5 +153,74 @@ describe("GitStates", () => {
     await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
     assert.equal(states.summary(path)?.pr, undefined);
     assert.equal(fake.queries.length, 3);
+  });
+
+  it("never shows the pull request of another branch", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    const poll = () => states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
+    await poll();
+    assert.equal(states.summary(path)?.pr?.number, 4);
+    git(path, "switch", "--quiet", "-c", "other");
+    await states.refresh(path);
+    assert.equal(states.summary(path)?.pr, undefined);
+    git(path, "switch", "--quiet", "main");
+    await poll();
+    git(path, "checkout", "--quiet", "--detach");
+    await poll();
+    assert.equal(states.summary(path)?.pr, undefined);
+    git(path, "switch", "--quiet", "main");
+    await poll();
+    git(path, "remote", "set-url", "origin", "https://gitlab.com/test/repo.git");
+    await poll();
+    assert.equal(states.summary(path)?.pr, undefined);
+  });
+
+  it("gives a Scope that joins a polled group the last result at the next poll", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const first = scope("first");
+    const second = scope("second");
+    await states.poll([{ scope: first, lifecycle: "live", watched: false }]);
+    await states.poll([{ scope: first, lifecycle: "live", watched: false }, { scope: second, lifecycle: "live", watched: false }]);
+    assert.equal(fake.queries.length, 1);
+    assert.deepEqual(states.summary(second)?.pr, summary);
+  });
+
+  it("queries a forced Scope at once, ignoring the interval", async () => {
+    const fake = github();
+    const states = new GitStates(fake.run);
+    const path = scope("repo");
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    fake.state.pulls = [{ ...pull, number: 5 }];
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }]);
+    assert.equal(states.summary(path)?.pr?.number, 4);
+    await states.poll([{ scope: path, lifecycle: "live", watched: false }], path);
+    assert.equal(states.summary(path)?.pr?.number, 5);
+    assert.equal(fake.queries.length, 2);
+  });
+
+  it("reads git once per Scope and not at all outside a repository", async () => {
+    const path = scope("repo");
+    const bin = join(root, "bin");
+    const log = join(root, "git.log");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\necho "$@" >> '${log}'\nexec /usr/bin/git "$@"\n`);
+    chmodSync(join(bin, "git"), 0o755);
+    const states = new GitStates(github().run);
+    const environment = process.env.PATH;
+    process.env.PATH = `${bin}:${environment}`;
+    try {
+      await states.poll([{ scope: root, lifecycle: "live", watched: true }, { scope: root, lifecycle: "dormant", watched: false }]);
+      assert.equal(existsSync(log), false);
+      await states.poll([{ scope: path, lifecycle: "live", watched: true }]);
+      rmSync(log);
+      await states.poll([{ scope: path, lifecycle: "live", watched: true }], path);
+      const single = readFileSync(log, "utf8").split("\n").length;
+      rmSync(log);
+      await states.poll([{ scope: path, lifecycle: "live", watched: true }, { scope: path, lifecycle: "dormant", watched: false }], path);
+      assert.equal(readFileSync(log, "utf8").split("\n").length, single);
+    } finally { process.env.PATH = environment; }
   });
 });

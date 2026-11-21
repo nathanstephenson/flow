@@ -408,7 +408,7 @@ export class SessionHost {
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
       }
       try {
-        return await changeStack(record.scope, input);
+        return await this.afterPullRequestWrite(record.scope, changeStack(record.scope, input));
       } finally {
         for (const other of this.sessions.values()) {
           if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
@@ -430,12 +430,22 @@ export class SessionHost {
     await this.send(sessionId, stackConflictMessage, "now");
   }
 
-  pollGitState(): Promise<void> {
-    return this.gitStates.poll([...this.sessions.values()].map(record => ({ scope: record.scope, lifecycle: record.lifecycle, watched: record.log.watched })));
+  pollGitState(forced?: string): Promise<void> {
+    return this.gitStates.poll([...this.sessions.values()].map(record => ({ scope: record.scope, lifecycle: record.lifecycle, watched: record.log.watched })), forced);
+  }
+
+  private async afterPullRequestWrite<T>(scope: string, write: Promise<T>): Promise<T> {
+    try {
+      return await write;
+    } finally {
+      await this.pollGitState(scope);
+    }
   }
 
   async gitStatus(sessionId: string): Promise<GitStatus> {
-    return gitStatus(this.record(sessionId).scope);
+    const scope = this.record(sessionId).scope;
+    const pr = this.gitStates.summary(scope)?.pr;
+    return { ...await gitStatus(scope), ...(pr ? { pr } : {}) };
   }
 
   async preparePublish(sessionId: string): Promise<PublishReview> {
@@ -473,7 +483,7 @@ export class SessionHost {
       if (!review || review.token !== input.token || review.expires < Date.now()) throw new CommandRefused("This Publish review expired. Open Publish again.");
       this.publishReviews.delete(sessionId);
       try {
-        return await publish(record.scope, review.snapshot, review.target, input);
+        return await this.afterPullRequestWrite(record.scope, publish(record.scope, review.snapshot, review.target, input));
       } finally {
         for (const other of this.sessions.values()) {
           if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
@@ -2453,13 +2463,13 @@ export class SessionHost {
       case "pull_branch":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
       case "change_pull_request":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => changePullRequest(this.record(command.sessionId).scope, command.action, command.input));
+        return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
       case "pull_request":
         return await pullRequest(this.record(command.sessionId).scope);
       case "comment_pull_request":
-        return await commentPullRequest(this.record(command.sessionId).scope, command.input);
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
       case "resolve_pull_request_thread":
-        return await resolvePullRequestThread(this.record(command.sessionId).scope, command.input);
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, resolvePullRequestThread(this.record(command.sessionId).scope, command.input));
       case "stack_status":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
       case "prepare_stack":

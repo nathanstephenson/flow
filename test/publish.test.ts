@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
@@ -60,12 +60,22 @@ afterEach(() => {
 });
 
 describe("Git Publish", () => {
-  it("keeps local changed files and branch when GitHub is unavailable", async () => {
+  it("reads Git status locally without calling GitHub", async () => {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    executable(join(bin, "gh"), `touch '${join(root, "gh-called")}'`);
+    process.env.PATH = `${bin}:${environment.PATH}`;
     writeFileSync(join(repo, "a\nfile.txt"), "untracked");
-    const status = await gitStatus(repo, async () => { throw new Error("GitHub CLI is missing"); });
-    assert.equal(status.branch?.name, "main");
-    assert.deepEqual(status.files, [{ path: "a\nfile.txt", status: "??" }]);
-    assert.match(status.problem!, /CLI is missing/);
+    const host = new SessionHost();
+    host.registerBackend(new FakeBackend());
+    try {
+      const id = await host.create({ scope: repo });
+      const status = await host.execute({ type: "git_status", sessionId: id }) as Awaited<ReturnType<typeof gitStatus>>;
+      assert.equal(status.branch?.name, "main");
+      assert.deepEqual(status.files, [{ path: "a\nfile.txt", status: "??" }]);
+      assert.equal(status.problem, undefined);
+      assert.equal(existsSync(join(root, "gh-called")), false);
+    } finally { await host.shutdown(); }
     assert.deepEqual(await gitStatus(root), { repository: false, files: [] });
   });
 

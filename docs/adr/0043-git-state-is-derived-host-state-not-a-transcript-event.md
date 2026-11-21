@@ -41,5 +41,6 @@ identity is cached for each Scope, remote and push URL.
 ## Consequences
 
 Git State is lost when the Session Host stops. It is read again at create and Revive, and for a
-Dormant Agent Session at the next poll. "Behind" uses the last fetched upstream ref. The unresolved thread count uses the first 100
-threads. A browser tab that is hidden keeps its stream open, so its sessions poll each 30 s.
+Dormant Agent Session at the next poll. "Behind" uses the last fetched upstream ref. The unresolved
+thread count uses the first 100 threads. A browser tab that is hidden keeps its stream open, so its
+sessions poll each 30 s.

@@ -57,6 +57,7 @@ export type PullRequestSummary = {
   checks: CheckStatus;
   reviewDecision: string | null;
   unresolvedThreads: number;
+  updatedAt: string;
 };
 
 export type GitState = {
