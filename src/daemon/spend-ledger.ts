@@ -7,7 +7,12 @@ type Reading = SpendTotal & { at: string; source: SpendSource; key: string; scop
 type Delta = SpendTotal & { at: number; source: SpendSource; model: string };
 
 const HOUR = 60 * 60 * 1000;
-const WINDOWS: Record<SpendWindowName, number> = { day: 24 * HOUR, week: 168 * HOUR, month: 720 * HOUR, lifetime: Infinity };
+const DAY = 24 * HOUR;
+const WINDOWS: Record<SpendWindowName, { span: number; bucket: number }> = {
+  day: { span: DAY, bucket: HOUR }, week: { span: 7 * DAY, bucket: 6 * HOUR }, month: { span: 30 * DAY, bucket: DAY }, lifetime: { span: Infinity, bucket: 0 },
+};
+const LIFETIME_BUCKETS = [DAY, 7 * DAY, 30 * DAY];
+const MAX_BARS = 60;
 
 export class SpendLedger {
   private readonly path: string;
@@ -52,7 +57,7 @@ export class SpendLedger {
   }
 
   summary(now = Date.now()): SpendSummary {
-    const entries = Object.entries(WINDOWS).map(([name, span]) => [name, this.window(now - span)]);
+    const entries = Object.entries(WINDOWS).map(([name, { span, bucket }]) => [name, this.window(now, span, bucket)]);
     return Object.fromEntries(entries) as SpendSummary;
   }
 
@@ -69,11 +74,21 @@ export class SpendLedger {
     });
   }
 
-  private window(since: number): SpendWindow {
-    const result: SpendWindow = { tokens: 0, cached: 0, costUSD: 0, models: [], sources: [] };
+  private window(now: number, span: number, bucket: number): SpendWindow {
+    const since = now - span;
+    const start = Number.isFinite(since) ? since : this.deltas.reduce((earliest, delta) => Math.min(earliest, delta.at), now);
+    const size = bucket || LIFETIME_BUCKETS.find(size => (now - start) / size <= MAX_BARS) || LIFETIME_BUCKETS.at(-1)!;
+    const count = Math.max(1, Math.ceil((now - start) / size));
+    const first = now - count * size;
+    const result: SpendWindow = {
+      tokens: 0, cached: 0, costUSD: 0, models: [], sources: [],
+      buckets: Array.from({ length: count }, (_, index) => ({ start: new Date(first + index * size).toISOString(), models: [] })),
+    };
     for (const delta of this.deltas) {
       if (delta.at < since) continue;
       add(result, delta);
+      const { models } = result.buckets[Math.min(count - 1, Math.max(0, Math.floor((delta.at - first) / size)))]!;
+      add(find(models, model => model.id === delta.model, () => ({ id: delta.model, tokens: 0, cached: 0, costUSD: 0 })), delta);
       add(find(result.models, model => model.id === delta.model, () => ({ id: delta.model, tokens: 0, cached: 0, costUSD: 0 })), delta);
       add(find(result.sources, source => source.source === delta.source, () => ({ source: delta.source, tokens: 0, cached: 0, costUSD: 0 })), delta);
     }

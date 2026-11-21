@@ -87,6 +87,30 @@ describe("Spend Ledger", () => {
     assert.deepEqual([summary.day.costUSD, summary.week.costUSD, summary.month.costUSD, summary.lifetime.costUSD], [8, 12, 14, 15]);
   });
 
+  it("puts each change in a time bucket of its window", () => {
+    const ledger = ready();
+    const now = Date.now();
+    ledger.record("session", "a", undefined, spend(1), new Date(now - 90 * 60 * 1000).toISOString());
+    ledger.record("session", "a", undefined, spend(3), new Date(now - 1000).toISOString());
+
+    const { day, week, month, lifetime } = ledger.summary(now);
+    assert.deepEqual([day.buckets.length, week.buckets.length, month.buckets.length], [24, 28, 30]);
+    assert.equal(day.buckets[22]!.models[0]!.costUSD, 1);
+    assert.equal(day.buckets[23]!.models[0]!.costUSD, 2);
+    assert.equal(Date.parse(day.buckets[0]!.start), now - DAY);
+    assert.equal(lifetime.buckets.length, 1);
+  });
+
+  it("makes lifetime buckets weekly when daily would be too many", () => {
+    const ledger = ready();
+    const now = Date.now();
+    ledger.record("session", "a", undefined, spend(1), new Date(now - 100 * DAY).toISOString());
+
+    const { buckets } = ledger.summary(now).lifetime;
+    assert.equal(buckets.length, 15);
+    assert.equal(Date.parse(buckets[1]!.start) - Date.parse(buckets[0]!.start), 7 * DAY);
+  });
+
   it("drops a torn final line and keeps writing after it", () => {
     ready().record("session", "a", undefined, spend(1));
     appendFileSync(join(root, "spend-ledger.jsonl"), '{"at":');
