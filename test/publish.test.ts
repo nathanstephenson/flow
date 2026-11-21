@@ -4,24 +4,27 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
-import { gitStatus, snapshot, target, branchChanges, publish, canNameBranch, gh, type Gh } from "../src/daemon/publish.ts";
+import { gitStatus, snapshot, target, branchChanges, publish, canNameBranch } from "../src/daemon/publish.ts";
+import { gh, type Gh } from "../src/daemon/github.ts";
 import { summarisePublish, suggestedBranch } from "../src/daemon/summariser.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
-import type { PublishInput, PullRequest } from "../src/protocol/publish.ts";
+import type { PublishInput } from "../src/protocol/publish.ts";
 
 const text = { commitMessage: "Add reviewed files", title: "Add reviewed files", body: "Changes for review." };
 const input: PublishInput = { ...text, token: "test", branch: "feature/test" };
-const pr: PullRequest = { number: 1, url: "https://github.com/test/repo/pull/1", title: "Existing", isDraft: true, reviewDecision: "APPROVED", statusCheckRollup: [{ name: "test", conclusion: "SUCCESS" }] };
+const pr = { number: 1, url: "https://github.com/test/repo/pull/1", title: "Existing", isDraft: true, reviewDecision: "APPROVED" };
 
-function github(options: { pr?: PullRequest; repoId?: string | null; headRepository?: { id?: string; nameWithOwner?: string } | null; fork?: boolean; createError?: boolean; branchExists?: boolean } = {}): { calls: string[][]; run: Gh } {
+function github(options: { pr?: typeof pr; state?: string; repoId?: string | null; headRepository?: { id?: string } | null; fork?: boolean; createError?: boolean; branchExists?: boolean } = {}): { calls: string[][]; run: Gh } {
   const calls: string[][] = [];
   return { calls, run: async (_scope, args) => {
     calls.push(args);
     if (args[0] === "auth") return "";
+    if (args[1] === "graphql") return JSON.stringify({ data: { repository: { pullRequests: { nodes: options.pr ? [{ ...options.pr, id: "PR_1", state: options.state ?? "OPEN", updatedAt: "2025-01-01", closedAt: null, headRepository: options.headRepository === undefined ? { id: "R_repo" } : options.headRepository, commits: { nodes: [] }, reviewThreads: { nodes: [] } }] : [] } } } });
     if (args[0] === "api") return JSON.stringify(options.branchExists ? [{ ref: "refs/heads/feature/test" }] : []);
-    if (args[0] === "repo") return JSON.stringify({ id: options.repoId === undefined ? "R_repo" : options.repoId, defaultBranchRef: { name: "main" }, isFork: options.fork ?? false });
-    if (args[1] === "list") return JSON.stringify(options.pr ? [{ ...options.pr, headRepository: options.headRepository === undefined ? { id: "R_repo" } : options.headRepository }] : []);
+    if (args[0] === "repo" && args[2] === "base/repo") return JSON.stringify({ id: "R_base", defaultBranchRef: { name: "develop" }, isFork: false });
+    if (args[0] === "repo") return JSON.stringify({ id: options.repoId === undefined ? "R_repo" : options.repoId, defaultBranchRef: { name: "main" }, isFork: options.fork ?? false, parent: options.fork ? { name: "repo", owner: { login: "base" } } : null });
+    if (args[1] === "list") return JSON.stringify(options.pr ? [options.pr] : []);
     if (options.createError) throw new Error("GitHub request failed: unavailable");
     return "https://github.com/test/repo/pull/1\n";
   } };
@@ -74,32 +77,29 @@ describe("Git Publish", () => {
     assert.ok(mock.calls.find((args) => args[0] === "repo")?.at(-1)?.split(",").includes("id"));
   });
 
-  it("accepts renamed repositories with matching IDs", async () => {
-    const destination = await target(repo, "feature/existing", github({ pr, headRepository: { id: "R_repo", nameWithOwner: "new-owner/new-name" } }).run);
-    assert.equal(destination.pr?.number, pr.number);
-  });
-
-  it("refuses different repository IDs even when names match", async () => {
-    await assert.rejects(target(repo, "feature/existing", github({ pr, headRepository: { id: "R_other", nameWithOwner: "test/repo" } }).run), /different head repository/);
-  });
-
-  it("reports unverifiable PR sources when repository IDs are missing", async () => {
-    for (const options of [{ repoId: null }, { repoId: "" }, { headRepository: null }, { headRepository: {} }, { headRepository: { id: "" } }, { repoId: null, headRepository: null }]) {
-      await assert.rejects(target(repo, "feature/existing", github({ pr, ...options }).run), /Cannot verify PR source/);
+  it("ignores pull requests from other head repositories and closed pull requests", async () => {
+    for (const options of [{ headRepository: { id: "R_other" } }, { headRepository: null }, { state: "MERGED" }]) {
+      assert.equal((await target(repo, "feature/existing", github({ pr, ...options }).run)).pr, undefined);
     }
   });
 
-  it("refuses detached and unborn HEAD, forks and ambiguous remotes", async () => {
+  it("refuses repositories without an ID", async () => {
+    await assert.rejects(target(repo, "feature/existing", github({ pr, repoId: null }).run), /did not return the ID/);
+  });
+
+  it("refuses detached and unborn HEAD", async () => {
     await assert.rejects(snapshot(unbornRepository(root, "unborn")), /no commits/);
     git(repo, "checkout", "--detach", "--quiet");
     await assert.rejects(snapshot(repo), /detached/);
-    git(repo, "switch", "main");
-    await assert.rejects(target(repo, "main", github({ fork: true }).run), /Fork publishing/);
+  });
+
+  it("targets the parent of a fork and accepts several remotes and a separate push URL", async () => {
+    const fork = await target(repo, "main", github({ fork: true }).run);
+    assert.deepEqual([fork.repo, fork.head, fork.defaultBranch], ["base/repo", "test/repo", "develop"]);
     git(repo, "remote", "add", "other", "git@github.com:other/repo.git");
-    await assert.rejects(target(repo, "main", github().run), /exactly one remote/);
-    git(repo, "remote", "remove", "other");
+    assert.equal((await target(repo, "main", github().run)).remote, "origin");
     git(repo, "config", "remote.origin.pushurl", "git@github.com:other/repo.git");
-    await assert.rejects(target(repo, "main", github().run), /Fetch and push/);
+    assert.equal((await target(repo, "main", github().run)).url, "git@github.com:other/repo.git");
   });
 
   it("allows a leftover REBASE_HEAD but refuses active rebase state", async () => {
@@ -189,7 +189,7 @@ describe("Git Publish", () => {
       if (protection === "stack" || protection === "trunk") writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: protection === "trunk" ? reviewed.branch : "main" }, branches: protection === "stack" ? [{ branch: reviewed.branch }] : [] }] }));
       const mock = github(protection === "pr" ? { pr } : {});
       const run: Gh = async (scope, args) => {
-        if (protection === "remote" && args[0] === "api") return JSON.stringify([{ ref: `refs/heads/${reviewed.branch}` }]);
+        if (protection === "remote" && args[0] === "api" && args[1] !== "graphql") return JSON.stringify([{ ref: `refs/heads/${reviewed.branch}` }]);
         if (protection === "closed-pr" && args.includes("all")) return JSON.stringify([{ number: 3 }]);
         return mock.run(scope, args);
       };
@@ -447,7 +447,7 @@ describe("Session Host Publish guards", () => {
   function installGh() {
     const bin = join(root, "bin");
     mkdirSync(bin);
-    executable(join(bin, "gh"), `case "$1 $2" in\n'auth status') exit 0;;\napi\\ *) echo '[]';;\n'repo view') echo '{"defaultBranchRef":{"name":"main"},"isFork":false}';;\n'pr list') echo '[]';;\n'pr create') echo 'https://github.com/test/repo/pull/1';;\nesac`);
+    executable(join(bin, "gh"), `case "$1 $2" in\n'auth status') exit 0;;\n'api graphql') echo '{"data":{"repository":{"pullRequests":{"nodes":[]}}}}';;\napi\\ *) echo '[]';;\n'repo view') echo '{"id":"R_repo","defaultBranchRef":{"name":"main"},"isFork":false}';;\n'pr list') echo '[]';;\n'pr create') echo 'https://github.com/test/repo/pull/1';;\nesac`);
     process.env.PATH = `${bin}:${environment.PATH}`;
   }
 

@@ -46,3 +46,24 @@ export type BranchList = {
   /** Set when the list was cut short, the same courtesy `DirectoryMatches` extends. */
   truncated?: true;
 };
+
+export type CheckStatus = "passing" | "failing" | "pending" | "none";
+
+export type PullRequestSummary = {
+  number: number;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  checks: CheckStatus;
+  reviewDecision: string | null;
+  unresolvedThreads: number;
+};
+
+export type GitState = {
+  revision: string;
+  changed: number;
+  ahead: number;
+  behind: number;
+  upstream: boolean;
+  pr?: PullRequestSummary;
+};

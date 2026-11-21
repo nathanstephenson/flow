@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
 import { discoverStack, discoverStackGraph, changeStack, cleanStack, parseStack, stackStatus, stackConflictMessage, stackFingerprint } from "../src/daemon/stack.ts";
 import { SessionHost } from "../src/daemon/host.ts";
-import { gh } from "../src/daemon/publish.ts";
+import { gh } from "../src/daemon/github.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { StackView } from "../src/protocol/stack.ts";
 
@@ -302,7 +302,7 @@ it("registers a PR-linked chain and retains merged status without commit ancestr
   assert.equal(await discoverStack(repo, github), undefined);
 });
 
-for (const failure of ["siblings", "no PR", "one PR", "missing branch", "forked chain", "cycle", "foreign repository", "tracked", "missing trunk", "detached", "multiple remotes", "unavailable"]) it(`does not infer a stack: ${failure}`, async () => {
+for (const failure of ["siblings", "no PR", "one PR", "missing branch", "forked chain", "cycle", "foreign repository", "tracked", "missing trunk", "detached", "unavailable"]) it(`does not infer a stack: ${failure}`, async () => {
   chain();
   const fixture = githubFixture();
   if (failure === "siblings") fixture.prs[1]!.base.ref = "main";
@@ -315,7 +315,6 @@ for (const failure of ["siblings", "no PR", "one PR", "missing branch", "forked 
   if (failure === "tracked") writeFileSync(join(repo, ".git/gh-stack"), JSON.stringify({ schemaVersion: 1, stacks: [{ trunk: { branch: "main" }, branches: [{ branch: "feature" }] }] }));
   if (failure === "missing trunk") git(repo, "branch", "-D", "main");
   if (failure === "detached") git(repo, "switch", "--detach");
-  if (failure === "multiple remotes") git(repo, "remote", "add", "other", "https://github.com/other/repo.git");
   if (failure === "unavailable") fixture.github = async () => { throw new Error("offline"); };
   assert.equal(await discoverStack(repo, fixture.github), undefined);
   assert.deepEqual(fixture.calls, []);

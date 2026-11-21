@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GitFile, GitStatus, PublishReview, PublishResult } from "../../../src/protocol/publish.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -7,10 +7,15 @@ import { Textarea } from "@/components/ui/textarea.tsx";
 import { StackPane } from "@/components/stack-pane.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { gitStateLine } from "@/presentation/git.ts";
+import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
 export function GitPane({ sessionId }: { sessionId: string }) {
   const { connection } = useHost();
+  const git = useGitState(sessionId);
+  const prKey = JSON.stringify(git?.pr ?? null);
+  const seenPrKey = useRef(prKey);
   const [status, setStatus] = useState<GitStatus>();
   const [review, setReview] = useState<PublishReview>();
   const [branch, setBranch] = useState("");
@@ -55,7 +60,14 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       (failure: unknown) => { if (!cancelled) setError(String(failure)); },
     );
     return () => { cancelled = true; };
-  }, [connection, sessionId]);
+  }, [connection, sessionId, git?.revision]);
+
+  useEffect(() => {
+    if (seenPrKey.current === prKey) return;
+    seenPrKey.current = prKey;
+    setStackRevision(value => value + 1);
+    setPrRefreshRevision(value => value + 1);
+  }, [prKey]);
 
   async function refresh(discover = false) {
     if (discover) {
@@ -131,7 +143,8 @@ export function GitPane({ sessionId }: { sessionId: string }) {
       {error ? <p role="alert">{error}</p> : null}
       <TabsContent value="Diff" keepMounted className="space-y-4">
       <div className="grid grid-cols-3 gap-0">
-        <strong className="col-span-3 min-w-0 truncate pb-2.5">{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
+        <strong className="col-span-3 min-w-0 truncate">{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
+        <p className="col-span-3 min-w-0 truncate pb-2.5 text-xs text-muted-foreground">{git ? gitStateLine(git) : null}</p>
         <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
         <Button size="sm" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}><span className="truncate">{busy ? "Please wait…" : "Publish"}</span></Button>
         <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>

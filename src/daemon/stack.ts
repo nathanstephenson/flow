@@ -2,7 +2,8 @@ import { localStack, localStacks, type LocalStack } from "./stack-metadata.ts";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { gh, repositoryTarget, type Gh } from "./publish.ts";
+import { repositoryTarget } from "./publish.ts";
+import { gh, type Gh } from "./github.ts";
 import { head, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { stackDisplayGraph, type StackCandidate, type StackGraph, type StackGraphBranch, type StackInput, type StackPullRequest, type StackStatus, type StackView } from "../protocol/stack.ts";
 

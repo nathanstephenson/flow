@@ -1,4 +1,4 @@
-import type { Branch } from "./git.ts";
+import type { Branch, PullRequestSummary } from "./git.ts";
 
 export type GitFile = { path: string; status: string };
 export type PullRequest = {
@@ -13,7 +13,7 @@ export type GitStatus = {
   repository: boolean;
   branch?: Branch;
   files: GitFile[];
-  pr?: PullRequest;
+  pr?: PullRequestSummary & { title: string };
   problem?: string;
 };
 export type PublishText = { commitMessage: string; title: string; body: string };
@@ -26,7 +26,7 @@ export type PublishReview = PublishText & {
   baseBranch?: string;
   committedFiles: GitFile[];
   commits: string[];
-  pr?: PullRequest;
+  pr?: PullRequestSummary & { title: string };
   warning?: string;
 };
 export type PublishInput = PublishText & { token: string; branch?: string; ready?: boolean };

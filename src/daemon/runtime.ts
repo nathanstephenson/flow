@@ -72,10 +72,13 @@ export async function startRuntime(options: {
     let running: RunningServer | undefined;
     let oidc: OidcGate | undefined;
     let sweep: ReturnType<typeof setInterval> | undefined;
+    let gitPoll: ReturnType<typeof setInterval> | undefined;
+    let gitPolling: Promise<void> | undefined;
     let reaping = Promise.resolve();
     let stopping: Promise<void> | undefined;
     const stop = (): Promise<void> => stopping ??= (async () => {
       clearInterval(sweep);
+      clearInterval(gitPoll);
       const scheduledErrors: unknown[] = [];
       try { await workflowSchedules?.stopAdmission(); } catch (error) { scheduledErrors.push(error); }
       try { await workflowExecutions?.stopScheduled(); } catch (error) { scheduledErrors.push(error); }
@@ -131,6 +134,10 @@ export async function startRuntime(options: {
       });
     }, 60 * 60 * 1000);
     sweep.unref();
+    gitPoll = setInterval(() => {
+      gitPolling ??= host.pollGitState().finally(() => { gitPolling = undefined; });
+    }, 30_000);
+    gitPoll.unref();
     host.onSessionClosed(sessionId => shells.killFor(sessionId));
     const token = readOrCreateToken(root);
     oidc = await createOidcGateFromEnv(root);

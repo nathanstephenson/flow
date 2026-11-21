@@ -1,35 +1,12 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readlink, access } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { resolve } from "node:path";
-import { promisify } from "node:util";
 import { head, isRepository, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
-import type { GitFile, GitStatus, PublishInput, PublishResult, PullRequest } from "../protocol/publish.ts";
+import type { GitFile, GitStatus, PublishInput, PublishResult } from "../protocol/publish.ts";
+import { gh, type Gh } from "./github.ts";
+import { resolvePullRequest, resolveRepository, type ResolvedPullRequest } from "./repository.ts";
 import { localStack, localStacks } from "./stack-metadata.ts";
-
-const exec = promisify(execFile);
-export type Gh = (scope: string, args: string[]) => Promise<string>;
-
-export const gh: Gh = async (scope, args) => {
-  try {
-    return (await exec("gh", args, {
-      cwd: scope,
-      timeout: GIT_WRITE_TIMEOUT_MS,
-      maxBuffer: 2 << 20,
-      env: { ...process.env, GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0", ...(args[0] === "stack" ? { GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" } : {}) },
-    })).stdout;
-  } catch (error) {
-    const failure = error as { code?: string | number; stdout?: string; stderr?: string; message?: string };
-    if (failure.code === "ENOENT") throw new Error("GitHub CLI is missing. Install gh on the Session Host.");
-    const detail = (args[0] === "stack" ? [failure.stdout, failure.stderr].filter(Boolean).join("\n").trim() : failure.stderr?.trim()) || failure.message || "Unknown error";
-    const requestFailed = /HTTP (?:429|5\d\d)|connection|timed? out|network|TLS|certificate|could not resolve/i.test(detail);
-    if ((failure.code === 4 && args[0] !== "stack") || (args[0] === "auth" && !requestFailed)) {
-      throw new Error(`GitHub authentication failed. Run gh auth login on the Session Host. ${detail}`);
-    }
-    throw new Error(`GitHub request failed: ${detail}`);
-  }
-};
 
 async function git(scope: string, args: string[], write = false): Promise<string> {
   const result = await run(scope, args, write ? GIT_WRITE_TIMEOUT_MS : GIT_READ_TIMEOUT_MS);
@@ -48,7 +25,7 @@ export type PublishSnapshot = {
   branch: string;
   commit: string;
 };
-export type PublishTarget = { remote: string; url: string; repo: string; defaultBranch: string; baseBranch?: string; pr?: PullRequest };
+export type PublishTarget = { remote: string; url: string; repo: string; head: string; defaultBranch: string; baseBranch?: string; pr?: ResolvedPullRequest };
 
 async function files(scope: string): Promise<GitFile[]> {
   const raw = await git(scope, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
@@ -111,39 +88,19 @@ export async function snapshot(scope: string): Promise<PublishSnapshot & { input
 }
 
 export async function repositoryTarget(scope: string, github: Gh = gh) {
-  const remotes = (await git(scope, ["remote"])).trim().split("\n").filter(Boolean);
-  if (remotes.length === 0) throw new Error("No remote is configured. Add a GitHub remote before publishing.");
-  if (remotes.length !== 1) throw new Error("Publish requires exactly one remote. Select and publish the remote with Git directly.");
-  const remote = remotes[0]!;
-  const urls = (await git(scope, ["remote", "get-url", "--all", remote])).trim().split("\n");
-  const pushes = (await git(scope, ["remote", "get-url", "--push", "--all", remote])).trim().split("\n");
-  if (urls.length !== 1 || pushes.length !== 1 || pushes[0] !== urls[0]) {
-    throw new Error("Fetch and push remotes differ or are ambiguous. Publish with Git directly.");
-  }
-  const url = urls[0]!;
-  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url);
-  if (!match) throw new Error("This remote is not a supported github.com repository URL.");
-  const repo = match[1]!;
-  await github(scope, ["auth", "status", "--hostname", "github.com"]);
-  const info = JSON.parse(await github(scope, ["repo", "view", repo, "--json", "id,defaultBranchRef,isFork"])) as { id?: string; defaultBranchRef?: { name: string }; isFork: boolean };
-  if (info.isFork) throw new Error("Fork publishing is not supported. Publish with gh directly to select the base repository.");
-  if (!info.defaultBranchRef?.name) throw new Error("GitHub has no default branch. Create it before publishing.");
-  return { remote, url, repo, defaultBranch: info.defaultBranchRef.name, id: info.id };
+  const repository = await resolveRepository(scope, undefined, github);
+  return { remote: repository.remote, url: repository.url, repo: repository.base.repo, defaultBranch: repository.base.defaultBranch, id: repository.base.id };
 }
 
 export async function target(scope: string, branch: string, github: Gh = gh): Promise<PublishTarget> {
-  const { remote, url, repo, defaultBranch, id } = await repositoryTarget(scope, github);
-  const prs = JSON.parse(await github(scope, ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number,url,title,isDraft,reviewDecision,statusCheckRollup,headRepository"])) as (PullRequest & { headRepository?: { id?: string } })[];
-  if (prs.length > 1) throw new Error("More than one pull request matches this branch. Publish with gh directly.");
-  const pr = prs[0];
+  const repository = await resolveRepository(scope, branch, github);
+  const { remote, url } = repository;
+  const repo = repository.base.repo;
+  const head = repository.head.repo;
+  const defaultBranch = repository.base.defaultBranch;
+  const resolved = await resolvePullRequest(scope, repository, branch, github);
+  const pr = resolved?.state === "OPEN" ? resolved : undefined;
   if (pr && branch === defaultBranch) throw new Error("The default branch already heads a pull request. Publish with gh directly to select the intended branch.");
-  if (pr) pr.statusCheckRollup ??= [];
-  if (pr && (!id || !pr.headRepository?.id)) {
-    throw new Error("Cannot verify PR source: GitHub did not return repository IDs. Publish with gh directly.");
-  }
-  if (pr && pr.headRepository?.id !== id) {
-    throw new Error("The pull request uses a different head repository. Publish with gh directly.");
-  }
   const stack = await localStack(scope, branch);
   let baseBranch: string | undefined;
   if (stack) {
@@ -152,11 +109,11 @@ export async function target(scope: string, branch: string, github: Gh = gh): Pr
     const index = stack.branches.findIndex(b => b.branch === branch);
     baseBranch = stack.branches.slice(0, index).filter(b => !b.pullRequest?.merged).at(-1)?.branch ?? stack.trunk.branch;
   }
-  return { remote, url, repo, defaultBranch, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
+  return { remote, url, repo, head, defaultBranch, ...(baseBranch ? { baseBranch } : {}), ...(pr ? { pr } : {}) };
 }
 
 async function remoteBranchExists(scope: string, destination: PublishTarget, branch: string, github: Gh): Promise<boolean> {
-  const refs = JSON.parse(await github(scope, ["api", `repos/${destination.repo}/git/matching-refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`])) as { ref: string }[];
+  const refs = JSON.parse(await github(scope, ["api", `repos/${destination.head}/git/matching-refs/heads/${branch.split("/").map(encodeURIComponent).join("/")}`])) as { ref: string }[];
   return refs.some(ref => ref.ref === `refs/heads/${branch}`);
 }
 
@@ -252,7 +209,7 @@ export async function publish(scope: string, reviewed: PublishSnapshot, destinat
     result.pushed = true;
     if (destination.pr) result.url = destination.pr.url;
     else {
-      result.url = (await github(scope, ["pr", "create", "--repo", destination.repo, "--base", destination.baseBranch ?? destination.defaultBranch, "--head", branch, "--title", input.title, "--body", input.body, ...(input.ready === true ? [] : ["--draft"])] )).trim();
+      result.url = (await github(scope, ["pr", "create", "--repo", destination.repo, "--base", destination.baseBranch ?? destination.defaultBranch, "--head", `${destination.head.split("/")[0]}:${branch}`, "--title", input.title, "--body", input.body, ...(input.ready === true ? [] : ["--draft"])] )).trim();
     }
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);

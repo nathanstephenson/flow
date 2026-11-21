@@ -12,6 +12,7 @@ import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeSta
 import type { StackInput, StackReview } from "../protocol/stack.ts";
 import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
 import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
+import { GitStates } from "./git-state.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
@@ -341,6 +342,7 @@ export class SessionHost {
   private readonly summarySpare = new SummaryModelSpare();
   private readonly stackReviews = new Map<string, { review: StackReview; fingerprint: string; expires: number }>();
   private readonly gitOperations = new Set<string>();
+  private readonly gitStates = new GitStates();
   private readonly closingScopes = new Set<string>();
   private readonly publishReviews = new Map<string, { token: string; expires: number; snapshot: PublishSnapshot; target: PublishTarget }>();
 
@@ -376,6 +378,7 @@ export class SessionHost {
       throw new CommandRefused(error instanceof Error ? error.message : String(error));
     } finally {
       this.gitOperations.delete(key);
+      void this.gitStates.refresh(scope);
     }
   }
 
@@ -425,6 +428,10 @@ export class SessionHost {
       if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");
+  }
+
+  pollGitState(): Promise<void> {
+    return this.gitStates.poll([...this.sessions.values()].map(record => ({ scope: record.scope, lifecycle: record.lifecycle, watched: record.log.watched })));
   }
 
   async gitStatus(sessionId: string): Promise<GitStatus> {
@@ -751,6 +758,7 @@ export class SessionHost {
         // lifting an Ended row back out of Filed away.
         const input = record.lifecycle === "live" ? newestAt(parentInput, workflowInput) : undefined;
         const outcome = record.latestOutcome;
+        const git = this.gitStates.summary(record.scope);
         const unread = outcome !== undefined && outcome.version > record.readAttentionVersion;
         const attention: SessionAttention | undefined = input
           ? {
@@ -786,6 +794,7 @@ export class SessionHost {
           lastSeq: record.log.lastSeq,
           ...(record.capabilities ? { capabilities: record.capabilities } : {}),
           ...(record.branch ? { branch: record.branch } : {}),
+          ...(git ? { git } : {}),
           ...(record.worktree ? { worktree: true as const } : {}),
           ...(record.session || existsSync(record.scope) ? {} : {
             scopeMissing: true as const,
@@ -1831,7 +1840,7 @@ export class SessionHost {
   private async refreshBranch(record: SessionRecord): Promise<void> {
     if (!isRepository(record.scope)) return;
     const generation = (record.branchGeneration += 1);
-    const found = await head(record.scope);
+    const [found] = await Promise.all([head(record.scope), this.gitStates.refresh(record.scope)]);
     // A repository git cannot answer about is left as it was: this runs off the critical path, and
     // there is no reader to tell.
     if (!found.ok) return;
@@ -2461,6 +2470,8 @@ export class SessionHost {
         return await this.assistStack(command.sessionId);
       case "git_status":
         return await this.gitStatus(command.sessionId);
+      case "refresh_git":
+        return await this.gitStates.refresh(this.record(command.sessionId).scope);
       case "prepare_publish":
         return await this.preparePublish(command.sessionId);
       case "publish":
@@ -3092,6 +3103,8 @@ export class SessionHost {
       if (!record.turnInFlight) record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       record.turnInFlight = true;
     }
+
+    if (event.type === "tool_ended" && record.turnInFlight) this.gitStates.touch(record.scope);
 
     if (event.type === "turn_ended") {
       record.turnGeneration = (record.turnGeneration ?? 0) + 1;
