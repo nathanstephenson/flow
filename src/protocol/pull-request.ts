@@ -49,3 +49,4 @@ export type PullRequestThreadInput = { pr: PullRequestRef; threadId: string; res
 export type PullRequestEditInput = { pr: PullRequestRef; title: string; body: string };
 export type PullRequestDraftInput = { pr: PullRequestRef; draft: boolean };
 export type PullRequestRerunInput = { pr: PullRequestRef; runId: number };
+export type PullRequestCheckLog = { text: string; truncated: boolean };

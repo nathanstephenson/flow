@@ -16,7 +16,7 @@ type Reads = { changes: number; stack: number; pullRequest: number; mount: numbe
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
 
-export function GitPane({ sessionId }: { sessionId: string }) {
+export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => void }) {
   const { connection } = useHost();
   const git = useGitState(sessionId);
   const prKey = JSON.stringify(git?.pr ?? null);
@@ -157,7 +157,7 @@ export function GitPane({ sessionId }: { sessionId: string }) {
         <StackPane key={sessionId} sessionId={sessionId} revision={reads.stack} disabled={busy} onAvailable={setHasStack} onChange={() => { setHasPr(false); reread("stack", "mount"); }} />
       </TabsContent>
       <TabsContent value="PR" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onChange={() => reread("stack")} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={setHasPr} onChange={() => reread("stack")} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );

@@ -25,7 +25,7 @@ import { sessionProject } from "@/presentation/session-project.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
-import { Composer } from "@/components/composer.tsx";
+import { Composer, type ComposerHandle } from "@/components/composer.tsx";
 import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
@@ -35,6 +35,7 @@ import type { RewindRestore } from "../../../src/protocol/events.ts";
 import { TranscriptView } from "@/components/transcript-view.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { useSidebar } from "@/components/ui/sidebar.tsx";
+import { toast } from "@/components/ui/toaster.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -245,6 +246,12 @@ function AttachedPane({
     }
   }, [docks.layout, docks.reveal, mobile, sessionId, writeMobileView]);
 
+  const composer = useRef<ComposerHandle | null>(null);
+  const addToDraft = useCallback((block: string) => {
+    composer.current?.append(block);
+    if (mobile && mobileViewRef.current.kind !== "transcript") toast.info("Added to Draft", "Open the transcript to see the Draft.");
+  }, [mobile]);
+
   const selectMobileTab = useCallback((side: DockSide, tabId: string) => {
     docks.dispatch({ type: "activate", side, tabId });
     const key = `${side}:${tabId}`;
@@ -352,6 +359,7 @@ function AttachedPane({
       </SubagentOpenProvider>
 
       <Composer
+        handle={composer}
         key={prefill?.nonce ?? 0}
         seed={prefill?.draft}
         id={sessionId}
@@ -459,6 +467,7 @@ function AttachedPane({
           shells={shells}
           dispatch={docks.dispatch}
           mobile={mobile}
+          onAddToDraft={addToDraft}
           visible={mobile ? selectedDock?.side === "bottom" : bottomOpen}
           mobileNavigation={mobile && selectedDock?.side === "bottom" ? {
             tabId: selectedDock.tabId,
@@ -474,6 +483,7 @@ function AttachedPane({
           shells={shells}
           dispatch={docks.dispatch}
           mobile={mobile}
+          onAddToDraft={addToDraft}
           visible={mobile ? selectedDock?.side === "right" : rightOpen}
           mobileNavigation={mobile && selectedDock?.side === "right" ? {
             tabId: selectedDock.tabId,
