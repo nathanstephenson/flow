@@ -35,7 +35,7 @@ export class OccurrenceResources implements ExecutionResources {
   connections() { return this.host.scheduledConnections(this.environment.connectionIds); }
   mcp(connectionId: string, _mode: FilesystemIsolationMode, signal?: AbortSignal) { return this.environment.client(connectionId, signal); }
   sandbox() { return this.environment.vm(); }
-  attach() { return this.attached ??= this.attachment(); }
+  attach() { return this.attached ??= this.attachment().catch(error => { this.attached = undefined; throw error; }); }
   restoreAttachment(attach: () => Promise<string>) { this.attachment = attach; }
 }
 

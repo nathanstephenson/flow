@@ -202,3 +202,13 @@ for (const operation of ['cancel', 'shutdown'] as const) test(`${operation} sign
   assert.equal(f.service.hasActiveWork(), false);
   await f.service.stopAdmission();
 });
+
+test('slow validation of a schedule mutation does not delay due admission into a miss', async t => {
+  let release!: () => void, slow = false;
+  const f = fixture(t, { validate: () => slow ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve() });
+  await f.service.start(false); await f.service.create(settings, true);
+  f.time(60_000); slow = true;
+  const creating = f.service.create({ ...settings, name: 'Other' }, true), ticking = f.service.tick(); await flush();
+  f.time(100_000); release(); await Promise.all([creating, ticking]); await flush();
+  assert.deepEqual(f.store.listOccurrences().map(item => item.status), ['provisioning']); assert.equal(f.launches.length, 1);
+});

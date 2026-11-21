@@ -56,8 +56,13 @@ export class WorkflowStore {
     const directory = join(stateRoot, 'workflow-schedules', 'executions');
     const occurrences: ExecutionOwner[] = existsSync(directory) ? readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => ({ kind: 'occurrence', occurrenceId: entry.name })) : [];
     for (const owner of [...this.listSessionIds().map(sessionId => ({ kind: 'session' as const, sessionId })), ...occurrences]) {
+      let history: string;
+      try { history = this.historyPath(owner); } catch { console.error('Workflow Execution owner directory is invalid. Directory retained for manual review.'); continue; }
       this.owners.set(this.ownerIndexKey(owner), owner);
-      for (const id of ids(this.historyPath(owner))) this.index(this.readExecution(owner, id));
+      for (const id of ids(history)) {
+        try { this.index(this.readExecution(owner, id)); }
+        catch { console.error('Workflow Execution checkpoint is invalid. File retained for manual review.'); }
+      }
     }
   }
 

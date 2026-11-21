@@ -201,6 +201,7 @@ test('deleted owners do not add historical traversal to owner or association que
 });
 
 test('corrupt owned state remains an error without breaking unrelated local queries', t => {
+  t.mock.method(console, 'error', () => {});
   const { root, store } = fixture(t);
   store.saveExecution(record('manual', { version: 1, sessionId: 'parent' }));
   const unrelated = record('unrelated', { version: 2, occurrenceId: 'other', sessionId: 'other-parent' });
@@ -213,15 +214,31 @@ test('corrupt owned state remains an error without breaking unrelated local quer
     assert.throws(() => restored.listExecutions('occurrence-other'));
     assert.throws(() => restored.listExecutions('other-parent'));
   }
-  assert.throws(() => new WorkflowStore(root));
+  assert.equal(new WorkflowStore(root).listExecutions('parent').length, 1);
+});
+
+test('startup skips unreadable checkpoints and invalid owner directories, retaining them on disk', t => {
+  const logs = t.mock.method(console, 'error', () => {});
+  const { root, store } = fixture(t);
+  store.saveExecution(record('manual', { version: 1, sessionId: 'parent' }));
+  const broken = record('broken', { version: 2, occurrenceId: 'broken' });
+  store.saveExecution(broken); writeFileSync(checkpoint(root, broken), '{corrupt');
+  const invalid = join(root, 'workflow-schedules', 'executions', 'x.bak'); fs.mkdirSync(join(invalid, 'workflows'), { recursive: true });
+  const restored = new WorkflowStore(root);
+  assert.deepEqual(restored.listExecutions('parent').map(execution => execution.id), ['manual']);
+  assert.ok(restored.listOwnerIds().includes('parent'));
+  assert.equal(readFileSync(checkpoint(root, broken), 'utf8'), '{corrupt'); assert.ok(existsSync(invalid));
+  new WorkflowScheduler(restored, {});
+  assert.equal(logs.mock.callCount(), 3);
 });
 
 test('startup rejects checkpoint identity mismatches instead of indexing another owner', t => {
+  const logs = t.mock.method(console, 'error', () => {});
   const { root, store } = fixture(t);
   const execution = record('scheduled', { version: 2, occurrenceId: 'due', sessionId: 'parent' });
   store.saveExecution(execution);
   writeFileSync(checkpoint(root, execution), JSON.stringify({ ...execution, occurrenceId: 'different' }));
-  assert.throws(() => new WorkflowStore(root), /identity/);
+  assert.deepEqual(new WorkflowStore(root).listExecutions('parent'), []); assert.equal(logs.mock.callCount(), 1);
 });
 
 test('scheduler startup reads only owner records, not session-associated duplicates', t => {
