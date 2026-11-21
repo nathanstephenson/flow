@@ -83,7 +83,9 @@ export class WorkflowScheduler {
     this.executors = executors;
     this.onResume = onResume;
     for (const owner of store.listOwners()) {
-      for (const record of store.listOwnedExecutions(owner)) {
+      let records: WorkflowExecution[];
+      try { records = store.listOwnedExecutions(owner); } catch { console.error('Workflow Execution owner records are invalid. Files retained for manual review.'); continue; }
+      for (const record of records) {
         if (!occupied(record)) continue;
         if (this.slots.has(executionOwnerKey(owner))) throw new Error('Multiple workflow executions occupy one execution owner');
         const active = this.install(record);

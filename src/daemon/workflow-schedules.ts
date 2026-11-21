@@ -211,14 +211,15 @@ export class WorkflowScheduleService {
       }
     }
   }
-  create(settings: WorkflowScheduleSettings, enabled: boolean): Promise<WorkflowSchedule> {
-    return this.serial(async () => { await this.driver.validate(settings); const saved = createSchedule(settings, this.now(), enabled); this.store.saveSchedule(saved); return saved; });
+  async create(settings: WorkflowScheduleSettings, enabled: boolean): Promise<WorkflowSchedule> {
+    await this.driver.validate(settings);
+    return this.serial(() => { const saved = createSchedule(settings, this.now(), enabled); this.store.saveSchedule(saved); return saved; });
   }
-  update(id: string, revision: number, settings: WorkflowScheduleSettings, enabled: boolean): Promise<WorkflowSchedule> {
-    return this.serial(async () => {
+  async update(id: string, revision: number, settings: WorkflowScheduleSettings, enabled: boolean): Promise<WorkflowSchedule> {
+    await this.driver.validate(settings);
+    return this.serial(() => {
       const current = this.store.getSchedule(id);
       if (current.revision !== revision) throw new ScheduleRevisionConflict();
-      await this.driver.validate(settings);
       const saved = editSchedule(current, settings, enabled, this.now());
       this.store.saveSchedule(saved, revision); return saved;
     });
