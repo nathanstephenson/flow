@@ -12,10 +12,14 @@ export function SpendChart({ window, order, measure, onMeasure }: {
   measure: SpendMeasure;
   onMeasure: (measure: SpendMeasure) => void;
 }) {
-  const { series, bars, max } = spendChart(window, order, measure);
+  const { series, points, max } = spendChart(window, order, measure);
   const format = (value: number) => measure === "costUSD" ? money(value) : compactTokens(value);
-  const size = bars.length > 1 ? Date.parse(bars[1]!.start) - Date.parse(bars[0]!.start) : 24 * 60 * 60 * 1000;
-  const labelled = [0, Math.floor((bars.length - 1) / 2), bars.length - 1];
+  const size = points.length > 1 ? Date.parse(points[1]!.start) - Date.parse(points[0]!.start) : 24 * 60 * 60 * 1000;
+  const labelled = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+  const step = 100 / Math.max(1, points.length - 1);
+  const x = (index: number) => points.length === 1 ? 50 : index * step;
+  const y = (value: number) => 100 - (value / max) * 100;
+  const valueOf = (point: (typeof points)[number], id: string) => point.segments.find((segment) => segment.id === id)?.value ?? 0;
   return (
     <section aria-label="Spend over time" className="grid gap-3">
       <div className="flex items-start justify-between gap-3">
@@ -44,47 +48,63 @@ export function SpendChart({ window, order, measure, onMeasure }: {
           {[0, 0.5, 1].map((share) => (
             <div key={share} aria-hidden className="absolute inset-x-0 border-t border-border" style={{ top: `${share * 100}%` }} />
           ))}
-          <div className="absolute inset-0 flex items-end gap-[2px]">
-            {bars.map((bar) => (
-              <Tooltip key={bar.start}>
-                <TooltipTrigger render={<div className="flex h-full min-w-0 flex-1 flex-col-reverse gap-[2px] hover:bg-muted/60" />}>
-                  {bar.segments.map((segment, index) => (
-                    <div
-                      key={segment.id}
-                      className={index === bar.segments.length - 1 ? "rounded-t-[4px]" : undefined}
-                      style={{ height: `${(segment.value / max) * 100}%`, background: segment.color }}
-                    />
-                  ))}
-                </TooltipTrigger>
-                <TooltipContent>
-                  <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
-                    <span className="col-span-2 font-medium">{bucketLabel(bar.start, size)}</span>
-                    <span className="text-muted-foreground">Total</span>
-                    <span className="text-right tabular-nums">{format(bar.total)}</span>
-                    {bar.segments.map((segment) => (
-                      <span key={segment.id} className="contents">
-                        <span className="flex items-center gap-1.5 font-mono text-xs">
-                          <span aria-hidden className="size-2 rounded-sm" style={{ background: segment.color }} />
-                          {segment.id}
-                        </span>
-                        <span className="text-right text-xs tabular-nums">{format(segment.value)}</span>
-                      </span>
-                    ))}
-                  </span>
-                </TooltipContent>
-              </Tooltip>
+          <svg aria-hidden className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {series.map((item) => (
+              <polyline
+                key={item.id}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={2}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+                points={points.map((point, index) => `${x(index)},${y(valueOf(point, item.id))}`).join(" ")}
+              />
             ))}
-          </div>
+          </svg>
+          {points.map((point, index) => (
+            <Tooltip key={point.start}>
+              <TooltipTrigger
+                render={<div className="group absolute inset-y-0" style={{ left: `${x(index) - step / 2}%`, width: `${step}%` }} />}
+              >
+                <div aria-hidden className="absolute inset-y-0 left-1/2 hidden border-l border-muted-foreground/50 group-hover:block" />
+                {point.segments.map((segment) => (
+                  <div
+                    key={segment.id}
+                    aria-hidden
+                    className={`absolute left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-background ${points.length === 1 ? "" : "hidden group-hover:block"}`}
+                    style={{ top: `${y(segment.value)}%`, background: segment.color }}
+                  />
+                ))}
+              </TooltipTrigger>
+              <TooltipContent>
+                <span className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+                  <span className="col-span-2 font-medium">{bucketLabel(point.start, size)}</span>
+                  <span className="text-muted-foreground">Total</span>
+                  <span className="text-right tabular-nums">{format(point.total)}</span>
+                  {point.segments.map((segment) => (
+                    <span key={segment.id} className="contents">
+                      <span className="flex items-center gap-1.5 font-mono text-xs">
+                        <span aria-hidden className="size-2 rounded-sm" style={{ background: segment.color }} />
+                        {segment.id}
+                      </span>
+                      <span className="text-right text-xs tabular-nums">{format(segment.value)}</span>
+                    </span>
+                  ))}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          ))}
         </div>
       </div>
       <div aria-hidden className="relative ml-12 h-4 text-xs text-muted-foreground">
-        {bars.map((bar, index) => labelled.includes(index) && (
+        {points.map((point, index) => labelled.includes(index) && (
           <span
-            key={bar.start}
+            key={point.start}
             className="absolute whitespace-nowrap"
-            style={index === 0 ? { left: 0 } : index === bars.length - 1 ? { right: 0 } : { left: "50%", transform: "translateX(-50%)" }}
+            style={index === 0 ? { left: 0 } : index === points.length - 1 ? { right: 0 } : { left: "50%", transform: "translateX(-50%)" }}
           >
-            {bucketLabel(bar.start, size)}
+            {bucketLabel(point.start, size)}
           </span>
         ))}
       </div>
