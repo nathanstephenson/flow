@@ -222,6 +222,9 @@ export type Command =
   | ({ type: "push"; sessionId: string } & PushInput)
   | ({ type: "create_pull_request"; sessionId: string } & PullRequestInput)
   | { type: "suggest_git_text"; sessionId: string; kind: GitTextKind; paths?: string[] }
+  | { type: "start_tour"; sessionId: string }
+  | { type: "tour"; sessionId: string }
+  | { type: "cancel_tour"; sessionId: string }
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
    * Move a **Scope's** checkout, with no Agent Session in it yet.

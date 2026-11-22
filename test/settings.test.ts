@@ -748,6 +748,34 @@ describe("the Default Models and the Summary Model", () => {
     assert.throws(() => store.update({ providers: { efforts: { pi: "bogus" } } } as never), /effort/i);
   });
 
+  it("stores, merges, clears and validates Tour Models per backend", () => {
+    const store = new ConfigStore(root);
+    store.update({ providers: { tours: { claude: { modelId: " sonnet ", effort: "high" } } } });
+    store.update({ providers: { tours: { pi: { modelId: "openai/gpt-5", effort: "low" } } } });
+    const reloaded = new ConfigStore(root);
+    assert.deepEqual(reloaded.tourModel("claude"), { modelId: "sonnet", effort: "high" });
+    assert.deepEqual(reloaded.tourModel("pi"), { modelId: "openai/gpt-5", effort: "low" });
+    assert.throws(() => store.update({ providers: { tours: { pi: { modelId: "x", effort: "bogus" } } } } as never), /tours.pi.effort/);
+    assert.throws(() => store.update({ providers: { tours: { pi: { modelId: "", effort: "low" } } } }), /tours.pi.modelId/);
+    assert.throws(() => store.update({ providers: { tours: { pi: { modelId: "x", effort: "low", extra: 1 } } } } as never), /extra/);
+    assert.throws(() => store.update({ providers: { tours: [] } } as never), /tours must be an object/);
+    store.update({ providers: { tours: { pi: null } } });
+    assert.equal(new ConfigStore(root).tourModel("pi"), undefined);
+    assert.deepEqual(store.tourModel("claude"), { modelId: "sonnet", effort: "high" });
+    store.update({ providers: { tours: { claude: null } } });
+    assert.equal(store.view().providers, undefined);
+  });
+
+  it("keeps valid Tour Models when disk settings contain invalid ones", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ providers: {
+      tours: { claude: { modelId: "sonnet", effort: "medium" }, pi: { modelId: "openai/gpt-5" } },
+    } }));
+    const store = new ConfigStore(root);
+    assert.deepEqual(store.tourModel("claude"), { modelId: "sonnet", effort: "medium" });
+    assert.equal(store.tourModel("pi"), undefined);
+    assert.match(store.warning ?? "", /tours.pi.effort/);
+  });
+
   it("is absent on a machine that has chosen neither", () => {
     const store = new ConfigStore(root);
 

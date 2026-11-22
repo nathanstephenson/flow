@@ -171,6 +171,8 @@ export class ConfigStore {
     return providers?.summary?.backend === backend ? providers.summary : undefined;
   };
 
+  readonly tourModel = (backend: string) => this.config.providers?.tours?.[backend];
+
   readonly defaultPermissionMode = (backend: string) => this.config.providers?.permissionModes?.[backend];
 
   readonly defaultEffort = (backend: string) => this.config.providers?.efforts?.[backend];
