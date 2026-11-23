@@ -9,7 +9,7 @@ export function PlanLimitsRow() {
   const { data } = useWorkflowResource<PlanLimits[]>("/api/plan-limits", 60_000);
   if (!data?.length) return null;
   return (
-    <section aria-label="Plan limits" className="flex gap-3 overflow-x-auto">
+    <section aria-label="Plan limits" className="flex gap-10 overflow-x-auto">
       {data.map((limits) => <PlanLimitsCard key={`${limits.backend} ${limits.provider}`} limits={limits} />)}
     </section>
   );
@@ -18,7 +18,7 @@ export function PlanLimitsRow() {
 function PlanLimitsCard({ limits }: { limits: PlanLimits }) {
   const color = limits.provider === "Codex" ? "var(--series-1)" : "var(--provider-anthropic)";
   return (
-    <div className="flex shrink-0 items-center gap-4 rounded-lg border border-border p-3">
+    <div className="flex shrink-0 items-center gap-4">
       <svg aria-hidden viewBox="0 0 48 48" className="size-20 -rotate-90">
         <Ring radius={21} width={LONG} color={color} utilization={limits.long.utilization} />
         <Ring radius={14} width={SHORT} color={color} utilization={limits.short.utilization} />
