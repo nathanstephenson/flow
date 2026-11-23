@@ -62,7 +62,7 @@ export async function startRuntime(options: {
       sandboxSharing: config.sandboxSharing, projectRoot: config.projectRoot,
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
-      defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
+      defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel, tourModel: config.tourModel,
     });
     const shells = new ShellRegistry();
     let workflowSchedules: WorkflowScheduleService | undefined;

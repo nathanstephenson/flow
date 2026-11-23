@@ -14,9 +14,10 @@ import { changes, changesText, commitContext, diff } from "./changes.ts";
 import { commit } from "./commit.ts";
 import { push, pushState } from "./push.ts";
 import { GitStates, readStatus } from "./git-state.ts";
+import { TOUR_INSTRUCTIONS, TOUR_READ_TOOLS, tourInput, tourText } from "./tour.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
-import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
+import type { AgentBackend, BackendSession, PromptAttachment, WorkflowSubagentHandle } from "../backend/types.ts";
 import {
   isAttachmentMediaType,
   mediaTypeOf,
@@ -48,7 +49,7 @@ import type {
   Skill,
   Spend,
 } from "../protocol/events.ts";
-import type { Branch, CommitInput, GitChanges, GitDiff, GitText, GitTextKind } from "../protocol/git.ts";
+import type { Branch, CommitInput, GitChanges, GitDiff, GitText, GitTextKind, TourView } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
 import {
@@ -90,6 +91,8 @@ export class CommandRefused extends Error {
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
 type QueuedMessage = { id: string; text: string; attachments: string[]; fromSessionId?: string };
+
+type Tour = { id: string; view: TourView; handle?: WorkflowSubagentHandle };
 
 type SessionRecord = {
   mcpConnectionIds?: string[];
@@ -315,6 +318,7 @@ export type SessionHostOptions = {
    * read.
    */
   summaryModel?: (backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined;
+  tourModel?: (backend: string) => { modelId: string; effort: EffortLevel } | undefined;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -345,6 +349,7 @@ export class SessionHost {
   private readonly gitOperations = new Set<string>();
   private readonly gitStates = new GitStates();
   private readonly closingScopes = new Set<string>();
+  private readonly tours = new Map<string, Tour>();
 
   private refuseGitOperation(scope: string): void {
     if (this.gitOperations.has(scopeKey(scope))) throw new CommandRefused("A Git operation is in progress in this Scope. Wait for it to finish.");
@@ -506,6 +511,70 @@ export class SessionHost {
     });
   }
 
+  tour(sessionId: string): TourView {
+    this.record(sessionId);
+    return this.tours.get(sessionId)?.view ?? { state: "idle" };
+  }
+
+  startTour(sessionId: string): TourView {
+    const record = this.record(sessionId);
+    this.dropTour(sessionId);
+    const tour: Tour = { id: randomUUID(), view: { state: "running" } };
+    this.tours.set(sessionId, tour);
+    void this.runTour(record, tour);
+    return tour.view;
+  }
+
+  cancelTour(sessionId: string): TourView {
+    this.record(sessionId);
+    this.dropTour(sessionId);
+    return { state: "idle" };
+  }
+
+  private dropTour(sessionId: string): void {
+    const tour = this.tours.get(sessionId);
+    this.tours.delete(sessionId);
+    void tour?.handle?.cancel().catch(() => undefined);
+  }
+
+  private async runTour(record: SessionRecord, tour: Tour): Promise<void> {
+    const current = () => this.tours.get(record.id) === tour;
+    let made: { branch: string; head: string; repo: string } | undefined;
+    try {
+      const { input, ...found } = await tourInput(record.scope);
+      made = found;
+      if (!current()) return;
+      tour.view = { state: "running", branch: made.branch, head: made.head };
+      if (!record.session) await this.revive(record.id);
+      const session = record.session;
+      if (!current()) return;
+      if (!session?.startWorkflowSubagent) throw new Error("This Backend Adapter cannot run a tour.");
+      const log = record.log.since(0);
+      const model = log.findLast(({ event }) => event.type === "model_changed")?.event;
+      const effort = log.findLast(({ event }) => event.type === "effort_changed")?.event;
+      const chosen = this.tourModel?.(record.backendName);
+      const modelId = chosen?.modelId ?? (model?.type === "model_changed" ? model.model.id : record.modelId);
+      if (!modelId) throw new Error("The Agent Session's model is unknown. Choose a Tour Model in Settings.");
+      tour.handle = session.startWorkflowSubagent({
+        id: tour.id, name: "Tour", instructions: TOUR_INSTRUCTIONS, input, modelId,
+        effort: chosen?.effort ?? (effort?.type === "effort_changed" ? effort.effort : record.effort) ?? "off",
+        permissionMode: "ask",
+        emit: ({ event }) => {
+          if (event.type === "permission" && event.state === "asked") {
+            queueMicrotask(() => void tour.handle?.answerPermission(event.callId, TOUR_READ_TOOLS.includes(event.tool) ? "allow" : "deny").catch(() => undefined));
+          }
+          if (event.type === "enquiry" && event.state === "asked") {
+            queueMicrotask(() => void tour.handle?.answerEnquiry(event.askId, event.questions.map(() => ["No human is available. Continue without an answer."])).catch(() => undefined));
+          }
+          if (event.type === "spend") this.workflowSpend(record.id, `tour:${tour.id}`, event.spend);
+        },
+      });
+      const text = tourText(await tour.handle.done);
+      if (current()) tour.view = { state: "done", text, ...made };
+    } catch (error) {
+      if (current()) tour.view = { state: "failed", problem: error instanceof Error ? error.message : String(error), ...(made ? { branch: made.branch, head: made.head } : {}) };
+    }
+  }
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
@@ -519,6 +588,7 @@ export class SessionHost {
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
+  private readonly tourModel: SessionHostOptions["tourModel"];
   private readonly closedListeners = new Set<(sessionId: string) => void>();
   private readonly backendFailures = new Set<Promise<void>>();
   private readonly keptListeners = new Set<
@@ -552,6 +622,7 @@ export class SessionHost {
     this.defaultEffort = options.defaultEffort;
     this.defaultPermissionMode = options.defaultPermissionMode;
     this.summaryModel = options.summaryModel;
+    this.tourModel = options.tourModel;
   }
 
   /**
@@ -2175,6 +2246,7 @@ export class SessionHost {
     const record = this.sessions.get(sessionId);
     if (!record) return;
     this.refuseGitOperation(record.scope);
+    this.dropTour(sessionId);
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "ended";
@@ -2201,6 +2273,7 @@ export class SessionHost {
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.lifecycle === "settled") return;
 
+    this.dropTour(sessionId);
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "settled";
@@ -2263,6 +2336,7 @@ export class SessionHost {
         await this.releaseWorktree(record);
         record.log.closeSubscribers();
         this.sessions.delete(record.id);
+        this.dropTour(record.id);
         this.store?.deleteSession(record.id);
         reaped.push(record.id);
       } finally {
@@ -2523,6 +2597,12 @@ export class SessionHost {
         return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, createPullRequest(this.record(command.sessionId).scope, { head: command.head, title: command.title, body: command.body, draft: command.draft === true })));
       case "suggest_git_text":
         return await this.suggestGitText(command.sessionId, command.kind, command.paths);
+      case "start_tour":
+        return this.startTour(command.sessionId);
+      case "tour":
+        return this.tour(command.sessionId);
+      case "cancel_tour":
+        return this.cancelTour(command.sessionId);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
       case "switch_scope_branch":

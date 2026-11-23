@@ -71,6 +71,9 @@ _Avoid_: slash command, action, tool
 **Skill**: A named prompt expanded by the backend at the start of a message. Unlike a Command, it enters both records as an ordinary user turn.
 _Avoid_: command, prompt template, macro
 
+**Tour**: A read-only, markdown walk through a branch's committed changes, started from the Git pane. A Subagent writes it on the Agent Session's Backend Session, and its Spend counts on the Agent Session. Unlike a Command, it does not occupy the Agent Session and does not enter the Presentation Transcript. The Session Host keeps only the latest Tour per Agent Session, in memory.
+_Avoid_: review, summary, walkthrough
+
 **Enquiry**: A tool call asking the human one to four Questions, answered once as a whole within its turn. It requests input, not authorisation. Only an Enquiry from the parent turn occupies the Agent Session.
 _Avoid_: prompt, dialog, poll, permission
 
@@ -207,6 +210,9 @@ _Avoid_: default thinking, reasoning budget
 
 **Summary Model**: Per-Backend Adapter model used to name Agent Sessions and suggest editable commit and Pull Request text through a throwaway Backend Session, outside their Spend.
 _Avoid_: naming model, title model, small model
+
+**Tour Model**: Per-Backend Adapter model and Effort used to write a Tour. When none is set, the Tour uses the Agent Session's current model and Effort.
+_Avoid_: review model
 
 **Effort**: How hard a model is asked to think, with available levels declared per model.
 _Avoid_: thinking, reasoning, budget

@@ -19,6 +19,8 @@ import {
   type SettingsPatch,
 } from "../protocol/settings.ts";
 import type { UpdateChannel } from "../protocol/update.ts";
+import type { EffortLevel } from "../protocol/events.ts";
+import { EFFORT_ORDER } from "../backend/effort.ts";
 
 /**
  * The Session Host's configuration file: `<stateRoot>/config.json`, beside daemon.json and
@@ -278,7 +280,7 @@ function patchUpdateChannel(current: UpdateChannel | undefined, value: unknown):
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown; permissionModes?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; tours?: unknown; autoCompaction?: unknown; compactionModels?: unknown; permissionModes?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -329,7 +331,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"] as const) {
+  for (const field of ["efforts", "summaries", "tours", "autoCompaction", "compactionModels", "permissionModes"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -598,7 +600,7 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "tours", "autoCompaction", "compactionModels", "permissionModes"], "providers");
 
   const next: Providers = {
     ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
@@ -607,6 +609,7 @@ function patchProviders(
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
     ...(current?.permissionModes === undefined ? {} : { permissionModes: { ...current.permissionModes } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
+    ...(current?.tours === undefined ? {} : { tours: { ...current.tours } }),
     ...(current?.defaults === undefined ? {} : { defaults: { ...current.defaults } }),
     ...(current?.summary === undefined ? {} : { summary: current.summary }),
   };
@@ -708,6 +711,28 @@ function patchProviders(
         automatic: named.automatic !== false,
       };
     }
+  }
+
+  if (patch.tours !== undefined) {
+    const entries: unknown = patch.tours;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) throw new ConfigError("providers.tours must be an object");
+    const tours = { ...next.tours };
+    for (const [backend, value] of Object.entries(entries as Record<string, unknown>)) {
+      const field = `providers.tours.${backend}`;
+      if (value === null) {
+        delete tours[backend];
+        continue;
+      }
+      if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`${field} must name a model and an effort`);
+      refuseUnknownKeys(value, ["modelId", "effort"], field);
+      const named = value as { modelId?: unknown; effort?: unknown };
+      const problem = checkModelId(named.modelId, `${field}.modelId`);
+      if (problem) throw new ConfigError(problem);
+      if (!EFFORT_ORDER.includes(named.effort as EffortLevel)) throw new ConfigError(`${field}.effort must be a valid effort`);
+      tours[backend] = { modelId: (named.modelId as string).trim(), effort: named.effort as EffortLevel };
+    }
+    if (Object.keys(tours).length) next.tours = tours;
+    else delete next.tours;
   }
 
   if (patch.permissionModes !== undefined) {

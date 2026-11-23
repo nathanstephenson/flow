@@ -85,3 +85,8 @@ export type PushInput = { head: string; replace?: string };
 export type PullRequestInput = { head: string; title: string; body: string; draft: boolean };
 export type GitTextKind = "commit" | "pull_request" | "branch";
 export type GitText = { message?: string; title?: string; body?: string; branch?: string };
+export type TourView =
+  | { state: "idle" }
+  | { state: "running"; branch?: string; head?: string }
+  | { state: "done"; text: string; branch: string; head: string; repo: string }
+  | { state: "failed"; problem: string; branch?: string; head?: string };

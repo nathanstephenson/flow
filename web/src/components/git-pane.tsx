@@ -7,12 +7,13 @@ import { GitChanges } from "@/components/git-changes.tsx";
 import { GitPullRequestForm } from "@/components/git-pull-request-form.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import type { AppendResult } from "@/components/composer.tsx";
+import { TourPane } from "@/components/tour-pane.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 import { branchLine, failureText, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
 import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
-type Tab = "Changes" | "Pull request" | "Stack";
+type Tab = "Changes" | "Pull request" | "Stack" | "Tour";
 type Reads = { changes: number; stack: number; pullRequest: number; mount: number };
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
@@ -28,7 +29,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   const [notice, setNotice] = useState<Notice>();
   const [available, setAvailable] = useState({ pullRequest: false, stack: false });
   const [tab, setTab] = useState<Tab>("Changes");
-  const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : [])];
+  const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : []), "Tour"];
   if (!tabs.includes(tab)) setTab("Changes");
   const selected = tabs.includes(tab) ? tab : "Changes";
   const steps = gitSteps(git);
@@ -155,6 +156,9 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
       </TabsContent>
       <TabsContent value="Pull request" keepMounted>
         <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
+      </TabsContent>
+      <TabsContent value="Tour" keepMounted>
+        <TourPane key={sessionId} sessionId={sessionId} />
       </TabsContent>
     </Tabs>
   );
