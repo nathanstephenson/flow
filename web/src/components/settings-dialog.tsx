@@ -1,4 +1,4 @@
-import { Cpu, FolderGit2, Keyboard, LogOut, ShieldCheck, Sliders, Type } from "lucide-react";
+import { Cpu, FolderGit2, Keyboard, LogOut, ShieldCheck, Sliders, Type, Workflow } from "lucide-react";
 import { useState, type ComponentType } from "react";
 
 import { SETTINGS_SECTIONS, type SettingsSection } from "@/presentation/route.ts";
@@ -17,7 +17,7 @@ import { useUpdates } from "@/updates.tsx";
  * the section buttons say `aria-current="page"`, as the rail does.
  */
 const SECTIONS: Record<SettingsSection, { label: string; hint: string; icon: ComponentType }> = {
-  workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Sliders },
+  workflows: { label: "Workflows", hint: "Visual workflow definitions", icon: Workflow },
   mcp: { label: "MCP", hint: "Local and remote tools", icon: Sliders },
   secrets: { label: "Secrets", hint: "Named secrets and code runtime", icon: ShieldCheck },
   general: { label: "General", hint: "Updates, retention, and this host", icon: Sliders },
