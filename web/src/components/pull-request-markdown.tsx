@@ -7,6 +7,7 @@ export function PullRequestMarkdown({ body, repo, headRefName }: { body: string;
     images: true,
     linkBase: `https://github.com/${repo}/blob/${encodeURIComponent(headRefName)}/`,
     imageBase: `https://raw.githubusercontent.com/${repo}/${encodeURIComponent(headRefName)}/`,
+    imageProxy: "/api/github-image?url=",
   }), [body, repo, headRefName]);
   return <Markdown blocks={blocks} query="" />;
 }

@@ -162,6 +162,20 @@ describe("pull request Markdown images", () => {
     assert.doesNotMatch(images("![Preview](https://example.com/a/repo/blob/ref/img.png)"), /raw.githubusercontent/);
   });
 
+  it("loads GitHub raw screenshots as raw images", () => {
+    assert.match(images("![Preview](https://github.com/o/r/raw/abc123/view.png)"), /"src":"https:\/\/raw.githubusercontent.com\/o\/r\/abc123\/view.png"/);
+  });
+
+  it("loads GitHub images through the image proxy when one is given", () => {
+    const proxied = (source: string) => JSON.stringify(parseMarkdown(source, { ...options, imageProxy: "/api/github-image?url=" }));
+    const raw = "https://raw.githubusercontent.com/o/r/abc123/view.png";
+    const attachment = "https://github.com/user-attachments/assets/0ec2d14f-f106-45c3-9095-98e5007c8f92";
+    assert.match(proxied(`![a](${raw})`), new RegExp(`"src":"/api/github-image\\?url=${encodeURIComponent(raw)}"`));
+    assert.match(proxied(`<img src="${attachment}">`), new RegExp(`"src":"/api/github-image\\?url=${encodeURIComponent(attachment)}"`));
+    assert.match(proxied("![a](https://example.com/a.png)"), /"src":"https:\/\/example.com\/a.png"/);
+    assert.match(images(`![a](${attachment})`), new RegExp(`"src":"${attachment}"`));
+  });
+
   it("reads GitHub HTML screenshots without carrying event handlers or other HTML", () => {
     const blocks = parseMarkdown('<img width="600" alt="Before &amp; after" src="https://example.com/a.png?a=1&amp;b=2" onerror="alert(1)" />', options);
     assert.deepEqual(blocks, [{ kind: "paragraph", inlines: [{ kind: "image", src: "https://example.com/a.png?a=1&b=2", alt: "Before & after" }] }]);

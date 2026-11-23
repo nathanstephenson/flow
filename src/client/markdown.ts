@@ -42,7 +42,7 @@ export type MdBlock =
   | { kind: "table"; header: MdInline[][]; rows: MdInline[][][]; align: readonly MdAlign[] }
   | { kind: "rule" };
 
-export type MarkdownOptions = { images?: boolean; linkBase?: string; imageBase?: string };
+export type MarkdownOptions = { images?: boolean; linkBase?: string; imageBase?: string; imageProxy?: string };
 
 export function parseMarkdown(text: string, options: MarkdownOptions = {}): MdBlock[] {
   if (text === "") return [];
@@ -205,12 +205,13 @@ function toImage(href: string, alt: string, raw: string, options: MarkdownOption
   const src = options.images && href.trim() ? resolveHref(href, options.imageBase) : undefined;
   if (!src || !/^https?:\/\//i.test(src)) return { kind: "text", text: raw };
   const url = new URL(src);
-  const blob = /^\/([^/]+)\/([^/]+)\/blob\/(.+)$/.exec(url.pathname);
+  const blob = /^\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/.exec(url.pathname);
   if (url.hostname === "github.com" && blob) {
     url.hostname = "raw.githubusercontent.com";
     url.pathname = `/${blob[1]}/${blob[2]}/${blob[3]}`;
   }
-  return { kind: "image", src: url.href, alt };
+  const github = url.hostname === "raw.githubusercontent.com" || (url.hostname === "github.com" && url.pathname.startsWith("/user-attachments/assets/"));
+  return { kind: "image", src: options.imageProxy && github ? `${options.imageProxy}${encodeURIComponent(url.href)}` : url.href, alt };
 }
 
 function htmlImages(text: string, options: MarkdownOptions): MdInline[] {
