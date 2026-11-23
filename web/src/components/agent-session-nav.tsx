@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -541,7 +541,15 @@ function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend }: { onNew: ()
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
       {onSchedules && <Button size="sm" variant="ghost" onClick={onSchedules}>Schedules</Button>}
-      {onSpend && <Button size="sm" variant="ghost" onClick={onSpend}>Spend</Button>}
+      {onSpend && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSpend} />}>
+            <ChartColumn aria-hidden />
+            <span className="sr-only">Spend</span>
+          </TooltipTrigger>
+          <TooltipContent>Spend</TooltipContent>
+        </Tooltip>
+      )}
       <Tooltip>
         <TooltipTrigger
           render={

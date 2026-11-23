@@ -2,7 +2,9 @@ import { useState } from "react";
 import { compactTokens, money } from "@client/context-usage.ts";
 import type { SpendSource, SpendSummary, SpendTotal, SpendWindowName } from "../../../src/protocol/spend.ts";
 import { SPEND_WINDOWS } from "../../../src/protocol/spend.ts";
+import type { SpendMeasure } from "../presentation/spend-chart.ts";
 import { SettingsGroup } from "./settings-parts.tsx";
+import { SpendChart } from "./spend-chart.tsx";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { useWorkflowResource } from "./workflow-api.ts";
 
@@ -18,11 +20,15 @@ const SOURCE_LABELS: Record<SpendSource, string> = {
 export function SpendPage() {
   const { data, error } = useWorkflowResource<SpendSummary>("/api/spend", 30_000);
   const [name, setName] = useState<SpendWindowName>("day");
+  const [measure, setMeasure] = useState<SpendMeasure>("costUSD");
   const selected = data?.[name];
   return (
     <main className="min-h-0 overflow-y-auto p-4 pt-12 sm:p-8" aria-label="Spend">
       <div className="mx-auto grid max-w-3xl gap-6">
         <h1 className="text-2xl font-semibold">Spend</h1>
+        {data && selected && (
+          <SpendChart window={selected} order={data.lifetime.models.map((model) => model.id)} measure={measure} onMeasure={setMeasure} />
+        )}
         <Tabs value={name} onValueChange={(value) => setName(value as SpendWindowName)}>
           <TabsList aria-label="Time window" className="flex w-full">
             {SPEND_WINDOWS.map((item) => (
