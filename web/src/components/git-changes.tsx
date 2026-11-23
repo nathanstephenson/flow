@@ -6,6 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox.tsx";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import { DiffText } from "@/components/diff-text.tsx";
 import { GitCommitForm } from "@/components/git-commit-form.tsx";
+import { TourPane } from "@/components/tour-pane.tsx";
 import { diffHunks, diffNotice, failureText, noChanges } from "@/presentation/git.ts";
 
 type Diffs = Record<string, GitDiff | { error: string }>;
@@ -122,6 +123,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
           />
         ) : null}
       </>}
+      {view === "branch" ? <div className="border-t pt-3"><TourPane key={sessionId} sessionId={sessionId} /></div> : null}
     </section>
   );
 }
