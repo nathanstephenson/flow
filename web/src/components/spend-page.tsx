@@ -3,6 +3,7 @@ import { compactTokens, money } from "@client/context-usage.ts";
 import type { SpendSource, SpendSummary, SpendTotal, SpendWindowName } from "../../../src/protocol/spend.ts";
 import { SPEND_WINDOWS } from "../../../src/protocol/spend.ts";
 import type { SpendMeasure } from "../presentation/spend-chart.ts";
+import { PlanLimitsRow } from "./plan-limits.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
 import { SpendChart } from "./spend-chart.tsx";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs.tsx";
@@ -26,6 +27,7 @@ export function SpendPage() {
     <main className="min-h-0 overflow-y-auto p-4 pt-12 sm:p-8" aria-label="Spend">
       <div className="mx-auto grid max-w-3xl gap-6">
         <h1 className="text-2xl font-semibold">Spend</h1>
+        <PlanLimitsRow />
         {data && selected && (
           <SpendChart window={selected} order={data.lifetime.models.map((model) => model.id)} measure={measure} onMeasure={setMeasure} />
         )}

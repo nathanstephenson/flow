@@ -32,7 +32,7 @@ export function snapshot(session: BackendSession): SessionSnapshot {
     capabilities: session.capabilities,
     resume: session.resumeToken(),
     spend: session.spend,
-    methods: ["refreshMcp", "startWorkflowSubagent", "compact", "rewindFiles", "skills", "answerEnquiry", "answerPermission", "setPermissionMode"]
+    methods: ["refreshMcp", "startWorkflowSubagent", "compact", "rewindFiles", "skills", "planLimits", "answerEnquiry", "answerPermission", "setPermissionMode"]
       .filter((method) => typeof (session as unknown as Record<string, unknown>)[method] === "function"),
   };
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentHandle, WorkflowSubagentOptions } from "../types.ts";
+import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
 import type {
   BackendEvent,
   BackgroundCallState,
@@ -243,6 +244,12 @@ export class FakeSession implements BackendSession {
 
   async skills(): Promise<Skill[]> {
     return this.skillList;
+  }
+
+  planLimitWindows: PlanLimitWindows[] = [];
+
+  async planLimits(): Promise<PlanLimitWindows[]> {
+    return this.planLimitWindows;
   }
 
   async setEffort(effort: EffortLevel): Promise<void> {

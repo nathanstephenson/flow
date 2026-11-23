@@ -895,6 +895,60 @@ describe("listing the Skills an Agent Session offers", () => {
  * one warm session per backend (ADR 0035). It keeps the session, not the answer: `skills()` reads
  * the disk again on each ask.
  */
+describe("reading Plan Limits", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  const windows = { short: { label: "5-hour", utilization: 9 }, long: { label: "7-day", utilization: 25 }, others: [] };
+
+  beforeEach(() => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+  });
+
+  it("answers from the warm session", async () => {
+    await host.models(tmpdir());
+    backend.sessions[0]!.planLimitWindows = [windows];
+
+    assert.deepEqual(await host.planLimits(tmpdir()), [{ backend: "fake", ...windows }]);
+    assert.equal(backend.sessions.length, 1);
+  });
+
+  it("keeps a cold probe's session warm", async () => {
+    assert.deepEqual(await host.planLimits(tmpdir()), [], "a backend with no limits is left out");
+    await host.planLimits(tmpdir());
+
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]?.toolless, true);
+    assert.equal(backend.sessions[0]?.disposed, false);
+  });
+
+  it("spawns one backend for two callers asking at once", async () => {
+    backend.holdCreate = true;
+    const both = Promise.all([host.planLimits(tmpdir()), host.planLimits(tmpdir())]);
+    backend.releaseCreate();
+    await both;
+
+    assert.equal(backend.sessions.length, 1);
+  });
+
+  it("asks a cold session when the warm one throws", async () => {
+    await host.models(tmpdir());
+    backend.sessions[0]!.planLimits = async () => { throw new Error("gone"); };
+
+    assert.deepEqual(await host.planLimits(tmpdir()), []);
+    assert.equal(backend.sessions.length, 2);
+    assert.equal(backend.sessions[0]?.disposed, true);
+  });
+
+  it("leaves out an adapter with no notion of Plan Limits", async () => {
+    const plain = new SessionHost();
+    plain.registerBackend({ name: "plain", create: async (options) => Object.assign(await backend.create(options), { planLimits: undefined }) });
+
+    assert.deepEqual(await plain.planLimits(tmpdir()), []);
+  });
+});
+
 describe("listing the Skills a Scope offers", () => {
   let backend: FakeBackend;
   let host: SessionHost;

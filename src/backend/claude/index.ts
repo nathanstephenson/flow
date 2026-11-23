@@ -21,6 +21,8 @@ import {
 
 import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
 import type { AutoCompaction } from "../../protocol/settings.ts";
+import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
+import { anthropicPlanLimits } from "../plan-limits.ts";
 import { ClaudeWorkflowSubagent, spawnWorkflowProcess } from "./workflow-subagent.ts";
 import type {
   BackendEvent,
@@ -593,6 +595,12 @@ class ClaudeSession implements BackendSession {
    * That it also rescans the disk is the behaviour worth having: a human who has just written a
    * Skill opens the menu expecting to find it.
    */
+  async planLimits(): Promise<PlanLimitWindows[]> {
+    const { rate_limits } = await this.stream.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
+    const limits = anthropicPlanLimits(rate_limits);
+    return limits ? [limits] : [];
+  }
+
   async skills(): Promise<Skill[]> {
     if (this.options.workflowBuilder) return [];
     const { skills } = await this.stream.reloadSkills();
@@ -1499,3 +1507,4 @@ function sdkEffort(effort: EffortLevel | undefined): SdkEffortLevel | undefined 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
