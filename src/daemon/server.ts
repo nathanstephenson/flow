@@ -1,11 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Duplex } from "node:stream";
+import { Readable, type Duplex } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { homedir } from "node:os";
 
 import { mediaTypeOf } from "../protocol/attachments.ts";
 import type { Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
+import { gh } from "./github.ts";
+import { githubImage } from "./github-image.ts";
 import { workflowRoutes } from './workflow-routes.ts';
 import { workflowScheduleRoutes } from './workflow-schedule-routes.ts';
 import { workflowBuilderRoutes } from './workflow-builder-routes.ts';
@@ -658,6 +662,21 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
   const attachmentMatch = /^\/api\/sessions\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname);
   if (request.method === "GET" && attachmentMatch) {
     sendAttachment(response, options.store, attachmentMatch[1] ?? "", attachmentMatch[2] ?? "");
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/github-image") {
+    const image = await githubImage(url.searchParams.get("url") ?? "", () => gh(homedir(), ["auth", "token"])).catch(() => null);
+    if (!image?.body) {
+      send(response, 404, { error: "Image not found." });
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": image.headers.get("content-type") ?? "",
+      "x-content-type-options": "nosniff",
+      "cache-control": "private, max-age=300",
+    });
+    Readable.fromWeb(image.body as WebReadableStream).pipe(response);
     return;
   }
 
