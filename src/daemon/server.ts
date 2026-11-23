@@ -516,9 +516,10 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
    *
    * Its own endpoint rather than more of `/api/config`, and a query rather than state, for the
    * reason `/api/directories` is (ADR 0011): the answer changes outside Flow — a `git
-   * branch` in a terminal, a `git fetch` — so there is nothing worth folding into the document
+   * branch` in a terminal, a `git fetch` — so the list of branches is not folded into the document
    * every client polls, and a cache would need a filesystem watcher in order to be more often
-   * wrong.
+   * wrong. The Git State of an Agent Session's Scope is different: the Session Host holds it and
+   * reads it again at known points, and `SessionSummary.git` carries it (ADR 0043).
    *
    * Answers for a *Scope* rather than for an Agent Session, because the New Agent Session view
    * has to ask before there is a session to ask about: picking the branch to cut a worktree from

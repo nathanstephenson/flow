@@ -134,6 +134,21 @@ test('a missing occurrence checkpoint does not prevent reconciliation or future-
   assert.ok(saved.getSchedule(schedule.id).nextDue! > Date.now());
 });
 
+test('a corrupt occurrence checkpoint does not prevent Session Host startup', { timeout: 5000 }, async t => {
+  const f = fixture(t), store = new WorkflowScheduleStore(f.root);
+  const schedule = createSchedule({ name: 'Corrupt', workflowId: 'unused', input: {}, projectId: '/tmp', mcpConnectionIds: [],
+    timing: { kind: 'interval', value: 1, unit: 'minutes' }, concurrency: 1 }, 0, true);
+  const id = occurrenceId(schedule.id, schedule.activation, schedule.nextDue!);
+  store.claimOccurrence({ version: 1, id, scheduleId: schedule.id, activation: schedule.activation, revision: schedule.revision,
+    scheduledAt: schedule.nextDue!, createdAt: schedule.nextDue!, settings: occurrenceSettings(schedule), status: 'running', executionId: 'corrupt' });
+  const history = join(new WorkflowStore(f.root).ownerPath(`occurrence-${id}`), 'workflows');
+  mkdirSync(history, { recursive: true });
+  writeFileSync(join(history, 'corrupt.json'), '{corrupt');
+  await f.start();
+  assert.ok(f.logs.some(log => log.includes('Workflow Execution checkpoint is invalid')));
+  rmSync(join(history, 'corrupt.json'));
+});
+
 test('an interrupted occurrence with unavailable Sandbox support retains its journal without blocking startup', { timeout: 5000 }, async t => {
   const f = fixture(t);
   const store = new WorkflowScheduleStore(f.root);

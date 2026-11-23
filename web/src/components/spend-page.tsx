@@ -14,7 +14,7 @@ const WINDOW_LABELS: Record<SpendWindowName, string> = {
 
 const SOURCE_LABELS: Record<SpendSource, string> = {
   session: "Agent Sessions", workflow: "Workflow Executions", naming: "Naming",
-  publish: "Publish text", builder: "Workflow Builder",
+  publish: "Commit and Pull Request text", builder: "Workflow Builder",
 };
 
 export function SpendPage() {

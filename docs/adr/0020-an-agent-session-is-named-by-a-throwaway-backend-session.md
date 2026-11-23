@@ -156,12 +156,13 @@ Authorisations, and the same reason.
 **A hand-typed name is still not offered.** `rename` carries no `title` field. Adding one later is
 compatible, and a field nothing sends is a field that will be wrong the day something does.
 
-## Git publish text amendment
+## Git text suggestion amendment
 
-Opening Publish also uses the Agent Session's configured Summary Model, without Default Effort,
-in a fresh tool-less Backend Session. It drafts a commit message and pull request title and body
-from local changes and branch commits. Reading Git status never prompts a model. The reader can
-edit the text before confirming; a missing or failed Summary Model leaves manual entry available.
+Suggest in the Git pane also uses the Agent Session's configured Summary Model, without Default
+Effort, in a fresh tool-less Backend Session. It writes a commit message, a branch name, or a pull
+request title and body from local changes and branch commits. Reading Git status never prompts a
+model. The text fills only empty fields and stays editable; a missing or failed Summary Model
+leaves manual entry available.
 This call is outside the Agent Session's Spend, like naming. It performs no Git writes.
 
 ## Host-start model probe amendment

@@ -1,187 +1,161 @@
-import { useEffect, useState } from "react";
-import type { GitFile, GitStatus, PublishReview, PublishResult } from "../../../src/protocol/publish.ts";
+import { useState } from "react";
+import type { ChangesView, PushState } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
-import { Input } from "@/components/ui/input.tsx";
-import { Textarea } from "@/components/ui/textarea.tsx";
 import { StackPane } from "@/components/stack-pane.tsx";
+import { GitChanges } from "@/components/git-changes.tsx";
+import { GitPullRequestForm } from "@/components/git-pull-request-form.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
+import type { AppendResult } from "@/components/composer.tsx";
 import { safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { branchLine, failureText, gitStateLine, gitSteps, pullRequestLine, pullStep, stepLabels, type GitStep } from "@/presentation/git.ts";
+import { useGitState } from "@/git-state.ts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 
-export function GitPane({ sessionId }: { sessionId: string }) {
+type Tab = "Changes" | "Pull request" | "Stack";
+type Reads = { changes: number; stack: number; pullRequest: number; mount: number };
+type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
+type Notice = { text: string; url?: string };
+
+export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
   const { connection } = useHost();
-  const [status, setStatus] = useState<GitStatus>();
-  const [review, setReview] = useState<PublishReview>();
-  const [branch, setBranch] = useState("");
-  const [ready, setReady] = useState(false);
+  const { git, repository } = useGitState(sessionId);
+  const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
+  const [view, setView] = useState<ChangesView>("uncommitted");
+  const [step, setStep] = useState<Step>();
   const [busy, setBusy] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<PublishResult>();
-  const [prRevision, setPrRevision] = useState(0);
-  const [prRefreshRevision, setPrRefreshRevision] = useState(0);
-  const [stackRevision, setStackRevision] = useState(0);
-  const [hasPr, setHasPr] = useState(false);
-  const [hasStack, setHasStack] = useState(false);
-  const [tab, setTab] = useState<"Diff" | "Stack" | "PR">();
-  const tabs: ("Diff" | "Stack" | "PR")[] = ["Diff", ...(hasStack ? ["Stack" as const] : []), ...(hasPr ? ["PR" as const] : [])];
-  const selected = tab === "Diff" || (tab === "Stack" && hasStack) || (tab === "PR" && hasPr) ? tab : tab === undefined && hasPr ? "PR" : "Diff";
+  const [notice, setNotice] = useState<Notice>();
+  const [available, setAvailable] = useState({ pullRequest: false, stack: false });
+  const [tab, setTab] = useState<Tab>("Changes");
+  const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : [])];
+  if (!tabs.includes(tab)) setTab("Changes");
+  const selected = tabs.includes(tab) ? tab : "Changes";
+  const steps = gitSteps(git);
+  const pullOffer = pullStep(git);
 
-  function changed() {
-    setReview(undefined);
-    setResult(undefined);
-    setHasPr(false);
-    setPrRevision(value => value + 1);
-    setStackRevision(value => value + 1);
-    void refresh();
+  function reread(...keys: (keyof Reads)[]) {
+    setReads(current => ({ ...current, ...Object.fromEntries(keys.map(key => [key, current[key] + 1])) }));
   }
 
-  async function pull() {
-    if (!status?.branch) return;
+  async function run(work: () => Promise<Notice | void>) {
     setBusy(true);
     setError("");
-    try {
-      await connection.command({ type: "pull_branch", sessionId, branch: status.branch.name });
-      changed();
-    } catch (failure) { setError(String(failure)); }
+    setNotice(undefined);
+    try { setNotice(await work() ?? undefined); }
+    catch (failure) { setError(failureText(failure)); }
     finally { setBusy(false); }
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    void connection.command<GitStatus>({ type: "git_status", sessionId }).then(
-      (value) => { if (!cancelled) setStatus(value); },
-      (failure: unknown) => { if (!cancelled) setError(String(failure)); },
-    );
-    return () => { cancelled = true; };
-  }, [connection, sessionId]);
-
-  async function refresh(discover = false) {
-    if (discover) {
-      setPrRefreshRevision(value => value + 1);
-      setStackRevision(value => value + 1);
-    }
-    setBusy(true);
-    setError("");
-    try { setStatus(await connection.command<GitStatus>({ type: "git_status", sessionId })); }
-    catch (failure) { setError(String(failure)); }
-    finally { setBusy(false); }
+  async function push(state: PushState, replace?: string) {
+    await connection.command({ type: "push", sessionId, head: state.head, ...(replace ? { replace } : {}) });
+    setStep(undefined);
+    return { text: `Pushed ${state.branch}.` };
   }
 
-  async function openPublish() {
-    setTab("Diff");
-    setBusy(true);
-    setOpening(true);
+  function open(value: GitStep) {
     setError("");
-    setResult(undefined);
-    try {
-      const prepared = await connection.command<PublishReview>({ type: "prepare_publish", sessionId });
-      setReview(prepared);
-      setBranch(prepared.suggestedBranch ?? "");
-      setReady(false);
-    } catch (failure) { setError(String(failure)); }
-    finally { setBusy(false); setOpening(false); }
+    setNotice(undefined);
+    if (value === "commit") {
+      setStep(undefined);
+      setTab("Changes");
+      setView("uncommitted");
+    } else if (value === "pull_request") setStep({ kind: "pull_request", head: git!.head! });
+    else void run(async () => {
+      const state = await connection.command<PushState>({ type: "push_state", sessionId });
+      if (state.replaced.length === 0) return push(state);
+      setStep({ kind: "replace", state });
+    });
   }
 
-  async function confirm() {
-    if (!review) return;
-    let confirmed = false;
-    setBusy(true);
-    setError("");
-    try {
-      const value = await connection.command<PublishResult>({ type: "publish", sessionId, input: {
-        token: review.token, commitMessage: review.commitMessage, title: review.title, body: review.body, branch, ready,
-      } });
-      confirmed = true;
-      setResult(value);
-      setReview(undefined);
-      setPrRevision(value => value + 1);
-      setStackRevision(value => value + 1);
-      setStatus(await connection.command<GitStatus>({ type: "git_status", sessionId }));
-    } catch (failure) {
-      setReview(undefined);
-      setError(confirmed ? `Git status could not refresh. ${String(failure)}` : `Publish result is not confirmed. Refresh Git status before retrying. ${String(failure)}`);
-    }
-    finally { setBusy(false); }
+  function refresh() {
+    reread("changes", "stack", "pullRequest");
+    void run(() => connection.command({ type: "refresh_git", sessionId, pullRequest: true }));
   }
+
+  function pull() {
+    void run(async () => {
+      await connection.command({ type: "pull_branch", sessionId, branch: git!.branch! });
+      reread("pullRequest");
+    });
+  }
+
+  if (repository === undefined) return null;
+  if (!repository) return <p className="px-4 pt-2 text-sm">This Scope is not a Git repository.</p>;
 
   return (
     <Tabs
       value={selected}
       onValueChange={(value) => {
-        if (!busy && review === undefined && (value === "Diff" || value === "Stack" && hasStack || value === "PR" && hasPr)) setTab(value);
+        if (!busy && tabs.includes(value)) setTab(value);
       }}
       className="min-h-0 min-w-0 space-y-4 overflow-auto px-4 pb-4 text-sm"
     >
-      <div className="pt-2">
+      <header aria-label="Git state" className="space-y-2 pt-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <strong className="min-w-0 flex-1 truncate">{git ? branchLine(git) : "Git"}</strong>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={refresh}>Refresh</Button>
+        </div>
+        {git ? (
+          <p className="flex min-w-0 flex-wrap gap-x-2 text-xs text-muted-foreground">
+            <span>{gitStateLine(git)}</span>
+            {git.pr ? <a className="underline" href={safePullRequestUrl(git.pr.url)} target="_blank" rel="noreferrer">{pullRequestLine(git.pr)}</a> : null}
+          </p>
+        ) : null}
+        {typeof pullOffer === "object" ? <p className="text-xs text-muted-foreground">{pullOffer.diverged}</p> : null}
+        {git && !git.github ? <p className="text-xs text-muted-foreground">No GitHub remote. Commit only.</p> : null}
+        {steps.length > 0 || pullOffer === "pull" ? (
+          <div className="flex flex-wrap gap-2">
+            {steps.map((value, index) => (
+              <Button key={value} size="sm" variant={index === 0 ? "default" : "outline"} disabled={busy} onClick={() => open(value)}>{stepLabels[value]}</Button>
+            ))}
+            {pullOffer === "pull" ? <Button size="sm" variant="outline" disabled={busy} onClick={pull}>Pull</Button> : null}
+          </div>
+        ) : null}
+        {error ? <p role="alert">{error}</p> : null}
+        {notice ? <p role="status" className="break-all">{notice.text}{notice.url ? <> <a className="underline" href={safePullRequestUrl(notice.url)} target="_blank" rel="noreferrer">{notice.url}</a></> : null}</p> : null}
+      </header>
+      {step?.kind === "replace" ? (
+        <section aria-label="Confirm push" className="space-y-3 border-t pt-3">
+          <h2 className="font-medium">Replace remote commits</h2>
+          <p>The remote branch {step.state.branch} has commits that this branch does not have. The push replaces them:</p>
+          <ul className="space-y-0.5 font-mono text-xs">{step.state.replaced.map(commit => <li key={commit} className="truncate">{commit}</li>)}</ul>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => setStep(undefined)}>Cancel</Button>
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void run(() => push(step.state, step.state.remote))}>Replace and push</Button>
+          </div>
+        </section>
+      ) : null}
+      {step?.kind === "pull_request" ? (
+        <GitPullRequestForm
+          sessionId={sessionId}
+          head={step.head}
+          onCancel={() => setStep(undefined)}
+          onCreated={(url) => { setStep(undefined); setNotice({ text: "Pull request created:", url }); }}
+        />
+      ) : null}
+      <div>
         <TabsList aria-label="Git views" className="flex w-full min-w-0">
           {tabs.map(value => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="min-w-0 flex-1 shrink px-2"
-              disabled={busy || review !== undefined}
-            >
-              {value}
-            </TabsTrigger>
+            <TabsTrigger key={value} value={value} className="min-w-0 flex-1 shrink px-2" disabled={busy}>{value}</TabsTrigger>
           ))}
         </TabsList>
       </div>
-      {error ? <p role="alert">{error}</p> : null}
-      <TabsContent value="Diff" keepMounted className="space-y-4">
-      <div className="grid grid-cols-3 gap-0">
-        <strong className="col-span-3 min-w-0 truncate pb-2.5">{status?.branch ? `${status.branch.name}${status.branch.detached ? " (detached)" : ""}` : "Git"}</strong>
-        <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined} onClick={() => void refresh(true)}>Refresh</Button>
-        <Button size="sm" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || Boolean(status.problem)} onClick={() => void openPublish()}><span className="truncate">{busy ? "Please wait…" : "Publish"}</span></Button>
-        <Button size="sm" variant="outline" className="h-8.5 w-full min-w-0 rounded-none" disabled={busy || review !== undefined || !status?.repository || !status.branch || status.branch.detached || status.files.length > 0 || Boolean(status.problem)} onClick={() => void pull()}>Pull</Button>
-      </div>
-      <p className="text-xs text-muted-foreground">Pull fast-forwards from the upstream branch. Local changes are never stashed.</p>
-      <h2 className="font-medium">Changed files</h2>
-      {!status ? <p>Reading Git status…</p> : !status.repository ? <p>This Scope is not a Git repository.</p> : <FileList files={status.files} />}
-      {status?.problem ? <p role="status" className="text-muted-foreground">{status.problem}</p> : null}
-      {result ? <div role="status" className="space-y-2">
-        {result.branch ? <p>Branch: {result.branch}.</p> : null}
-        <p>{result.committed ? `Committed ${result.committed.slice(0, 8)}. ` : "No new commit confirmed. "}{result.pushed ? "Pushed." : "Push not confirmed."}</p>
-        {result.url ? <a className="underline" href={safePullRequestUrl(result.url)} target="_blank" rel="noreferrer">Open pull request</a> : null}
-        {result.error ? <p>{result.error} Local Git changes, commits, and successful pushes are not undone. Refresh and open Publish to review before retrying.</p> : null}
-      </div> : null}
-      {opening || review !== undefined ? (
-        <section aria-label="Confirm Publish" className="space-y-4 border-t pt-4">
-          <h2 className="font-medium">Confirm Publish</h2>
-          <p className="text-muted-foreground">Commit all listed changes, including staged and untracked files, then push. Git hooks will run.</p>
-          {opening ? <p role="status">Reading changes and drafting publish text with the Summary Model…</p> : null}
-          {review ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void confirm(); }}>
-            <h3 className="font-medium">Files to commit</h3>
-            <FileList files={review.files} />
-            {review.commits.length > 0 ? <div className="space-y-2"><h3 className="font-medium">Committed branch changes</h3><FileList files={review.committedFiles} /><ul className="max-h-32 overflow-auto text-xs">{review.commits.map((commit) => <li key={commit}>{commit}</li>)}</ul></div> : null}
-            {review.warning ? <p role="status">{review.warning}</p> : null}
-            {review.suggestedBranch !== undefined || review.branch === review.defaultBranch ? <>
-              <label className="block space-y-1">Feature branch name<Input required value={branch} onChange={(event) => setBranch(event.target.value)} disabled={busy} /></label>
-              <p className="text-muted-foreground">{review.branch === review.defaultBranch ? `Create a feature branch from ${review.branch} when you confirm.` : `Rename ${review.branch} when you confirm. Keep its current name to skip renaming.`}</p>
-            </> : <p>Branch: {review.branch}{review.baseBranch ? ` · Base: ${review.baseBranch}` : ""}</p>}
-            <label className="block space-y-1">Commit message<Textarea required={review.files.length > 0} value={review.commitMessage} onChange={(event) => setReview({ ...review, commitMessage: event.target.value })} disabled={busy} /></label>
-            {!review.pr ? <>
-              <label className="block space-y-1">Pull request title<Input required value={review.title} onChange={(event) => setReview({ ...review, title: event.target.value })} disabled={busy} /></label>
-              <label className="block space-y-1">Pull request body<Textarea value={review.body} onChange={(event) => setReview({ ...review, body: event.target.value })} disabled={busy} /></label>
-            </> : null}
-            {review.pr ? <p>Updates #{review.pr.number}. Its title, body, and draft state will not change.</p> : <label className="flex items-center gap-2"><input type="checkbox" checked={ready} onChange={(event) => setReady(event.target.checked)} disabled={busy} />Ready for review (otherwise draft)</label>}
-            {error ? <p role="alert">{error}</p> : null}
-            <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => setReview(undefined)}>Cancel</Button><Button type="submit" disabled={busy}>{busy ? "Publishing…" : "Confirm and publish"}</Button></div>
-          </form> : null}
-        </section>
-      ) : null}
+      <TabsContent value="Changes" keepMounted className="space-y-4">
+        <GitChanges
+          sessionId={sessionId}
+          revision={`${git?.revision}:${reads.changes}`}
+          view={view}
+          onViewChange={setView}
+          onCommitted={(commit) => setNotice({ text: `Committed ${commit.slice(0, 7)}.` })}
+        />
       </TabsContent>
       <TabsContent value="Stack" keepMounted>
-        {status?.repository ? <StackPane key={sessionId} sessionId={sessionId} revision={stackRevision} disabled={busy || review !== undefined} onAvailable={setHasStack} onChange={changed} /> : null}
+        <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={(stack: boolean) => setAvailable(current => current.stack === stack ? current : { ...current, stack })} onChange={() => reread("mount")} />
       </TabsContent>
-      <TabsContent value="PR" keepMounted>
-        <PullRequestPane key={`${sessionId}:${prRevision}`} sessionId={sessionId} revision={prRefreshRevision} disabled={busy || review !== undefined} onAvailable={setHasPr} onChange={() => { setStackRevision(value => value + 1); void refresh(); }} />
+      <TabsContent value="Pull request" keepMounted>
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );
-}
-
-function FileList({ files }: { files: GitFile[] }) {
-  return files.length === 0 ? <p>No uncommitted changes. Publish pushes existing commits.</p> : <ul aria-label="Changed files" className="max-h-64 overflow-auto font-mono text-xs">{files.map((file) => <li className="break-all whitespace-pre-wrap" key={file.path}>{file.status} {file.path}</li>)}</ul>;
 }

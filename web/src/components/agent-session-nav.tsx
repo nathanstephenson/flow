@@ -16,6 +16,7 @@ import {
 } from "@/presentation/rail-sections.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
+import { PullRequestIndicators } from "@/components/pull-request-indicators.tsx";
 import { statusIndicatorColor } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -454,7 +455,8 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
         {scopeKindLabel(summary)}
         {summary.branch.detached ? ", detached at" : ""}
       </span>
-      <span className="truncate font-mono">{summary.branch.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono">{summary.branch.name}</span>
+      {summary.git?.pr ? <PullRequestIndicators pr={summary.git.pr} /> : null}
     </span>
   );
 }
