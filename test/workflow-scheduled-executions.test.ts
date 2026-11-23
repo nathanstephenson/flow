@@ -132,6 +132,22 @@ test('failed attachment retains sessionless recovery without an automatic creati
   await f.executions.cancel(`occurrence-${f.id}`, view.execution.id);
 });
 
+test('a later agent step retries attachment after an earlier attachment failed', async t => {
+  const f = await fixture(t); let calls = 0;
+  const agent = { id: 'a', name: 'A', kind: 'agent' as const, model: 'fake-1', effort: 'medium' as const, instructions: 'JSON', outputSchema: { type: 'string' as const } };
+  const graph = { ...definition, steps: [agent, { ...agent, id: 'b', name: 'B' }], edges: [{ id: 'handled', from: 'a', to: 'b', outcome: 'failure' as const }] };
+  const view = await f.executions.startScheduled({ occurrenceId: f.id, definition: graph, input: {}, scope: f.root, projectId: f.root, mcpConnectionIds: [], attach: async () => {
+    if (++calls === 1) throw new Error('unavailable');
+    return f.host.create({ scope: f.root, backend: 'fake', scheduled: { id: 'scheduled-parent', occurrenceId: f.id } });
+  } });
+  await until(() => calls === 2 || f.executions.scheduler.get(`occurrence-${f.id}`, view.execution.id).status !== 'running');
+  assert.equal(calls, 2);
+  await until(() => f.agents()[0]?.workflowSubagents.length === 1);
+  f.agents()[0]!.workflowSubagents[0]!.complete('"done"');
+  const result = await f.executions.scheduler.wait(`occurrence-${f.id}`, view.execution.id);
+  assert.equal(result.status, 'completed-with-recovery'); assert.equal(result.sessionId, 'scheduled-parent');
+});
+
 test('worktree occurrence uses a local base, adopts it on attachment and preserves dirty terminal cleanup', async t => {
   const f = await fixture(t);
   const { writeFileSync } = await import('node:fs');

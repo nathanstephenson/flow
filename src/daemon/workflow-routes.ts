@@ -31,6 +31,19 @@ function validateWorkflowContracts(definition: WorkflowDefinition, workflows: Wo
     const selected = catalogue.find(item => item.id === step.workflowId && item.backend === definition.backend);
     if (!selected || !isDeepStrictEqual(selected.contract, step.contract)) throw new Error(`Workflow step ${step.name} requires a saved host-derived contract`);
   }
+  const path = new Set<string>();
+  const visit = (current: WorkflowDefinition): void => {
+    if (path.has(current.id)) throw new Error('Recursive Workflow call');
+    path.add(current.id);
+    for (const step of current.steps) {
+      if (step.kind !== 'workflow') continue;
+      let target: WorkflowDefinition | undefined = step.workflowId === definition.id ? definition : undefined;
+      try { target ??= workflows.getDefinition(step.workflowId); } catch {}
+      if (target) visit(target);
+    }
+    path.delete(current.id);
+  };
+  visit(definition);
 }
 
 export function workflowRequestError(error: unknown, redact: (message: string) => string = message => message): string {

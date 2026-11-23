@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent 
 
 import { attachPasted } from "@/attachments.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
-import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
+import { appendDraftText, outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
 import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
 import { nestedLabel, type RunningWork } from "@/presentation/running-work.ts";
@@ -42,6 +42,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils.ts";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 
+export type AppendResult = "added" | "question" | "locked";
+export type ComposerHandle = { append: (block: string) => AppendResult };
+
+export function appendToComposer(composer: ComposerHandle | null, drafts: DraftStash, id: string, block: string): AppendResult {
+  if (composer) return composer.append(block);
+  const draft = drafts.read(id);
+  drafts.write(id, { ...draft, text: appendDraftText(draft.text, block) });
+  return "added";
+}
+
 /**
  * Where a message goes in, and what the next turn will cost to run.
  *
@@ -69,6 +79,7 @@ import { ExpandableImage } from "@/components/expandable-image.tsx";
  * spins, and a rejection puts the text back and says why.
  */
 export function Composer({
+  handle,
   id,
   chrome,
   actions,
@@ -87,6 +98,7 @@ export function Composer({
   abortDisabled = false,
   abortLabel,
 }: {
+  handle?: React.RefObject<ComposerHandle | null>;
   /**
    * What this composer's Draft is filed under, and what its listbox ids are built from — an Agent
    * Session id for a session, and a reserved key for the one on the New Agent Session view.
@@ -302,6 +314,27 @@ export function Composer({
     },
     [drafts, id],
   );
+
+  const appendState = useRef({ blocked, locked });
+  appendState.current = { blocked, locked };
+  useEffect(() => {
+    if (!handle) return;
+    handle.current = {
+      append: (block) => {
+        const relayed = relayedDraft.current;
+        if (relayed) {
+          relayedDraft.current = { ...relayed, text: appendDraftText(relayed.text, block) };
+          latest.current = relayedDraft.current;
+          return "added";
+        }
+        if (appendState.current.blocked) return "question";
+        if (appendState.current.locked) return "locked";
+        input.current?.append(block);
+        return "added";
+      },
+    };
+    return () => { handle.current = null; };
+  }, [handle]);
 
   /*
    * Returns synchronously whether the paste was ours, because that is what decides whether the

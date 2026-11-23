@@ -18,13 +18,13 @@ _Avoid_: history, log, messages
 **Conversation Context**: What the model can currently see, owned and compacted by the backend.
 _Avoid_: history, transcript, memory
 
-**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded. A Fork's Spend counts only its own work.
+**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and commit and Pull Request text are excluded. A Fork's Spend counts only its own work.
 _Avoid_: usage, cost, tokens, context
 
 **Spend Ledger**: The durable record of all billed model use on the Session Host, by Spend Source and model. It outlives Reaping.
 _Avoid_: usage log, cost history
 
-**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, Git publish text or Workflow Builder.
+**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, commit and Pull Request text or Workflow Builder.
 _Avoid_: category, kind
 
 **Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session. Work started by backgrounded work is backgrounded too.
@@ -162,6 +162,20 @@ _Avoid_: terminal, pty, console, session
 **Scrollback**: Bounded recent Shell output retained for reconnecting clients; lossy and never written to disk.
 _Avoid_: transcript, history, log
 
+### Git
+
+**Pull Request**: The GitHub pull request from the branch of a Scope, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
+_Avoid_: merge request, review, change
+
+**Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
+_Avoid_: target branch, trunk, upstream
+
+**Stack**: An ordered list of branches on a trunk, registered in the repository of a Scope. Each branch builds on the branch below it, and the lowest branch builds on the trunk. The branch below is the Base Branch of its Pull Request. A chain of Pull Request bases or of commits that is not registered is not a Stack.
+_Avoid_: inferred stack, stack graph, candidate
+
+**Git State**: The summary of a Scope that the Session Host holds and shows with each Agent Session in it: changed files, commits ahead of and behind the upstream, and the status of its Pull Request. It is derived again when needed. It is not stored and is not part of the Presentation Transcript.
+_Avoid_: git status, branch state, repository state
+
 ### Settings and models
 
 **Settings**: Session Host values governing all Agent Sessions on the machine, not one Scope.
@@ -197,7 +211,7 @@ _Avoid_: preferred model, fallback model
 **Default Effort**: Per-Backend Adapter Effort choice for new Agent Sessions when none is specified; never reapplied on Revive or inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
-**Summary Model**: Per-Backend Adapter model used to name Agent Sessions and draft editable Git publish text through a throwaway Backend Session, outside their Spend.
+**Summary Model**: Per-Backend Adapter model used to name Agent Sessions and suggest editable commit and Pull Request text through a throwaway Backend Session, outside their Spend.
 _Avoid_: naming model, title model, small model
 
 **Effort**: How hard a model is asked to think, with available levels declared per model.

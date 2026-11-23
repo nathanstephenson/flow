@@ -7,11 +7,13 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
-import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
-import type { StackInput, StackReview } from "../protocol/stack.ts";
-import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
-import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
+import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
+import type { StackInput, StackReview, StackStatus } from "../protocol/stack.ts";
+import { changes, changesText, commitContext, diff } from "./changes.ts";
+import { commit } from "./commit.ts";
+import { push, pushState } from "./push.ts";
+import { GitStates, readStatus } from "./git-state.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
 import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
@@ -46,7 +48,7 @@ import type {
   Skill,
   Spend,
 } from "../protocol/events.ts";
-import type { Branch } from "../protocol/git.ts";
+import type { Branch, CommitInput, GitChanges, GitDiff, GitText, GitTextKind } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
 import {
@@ -67,7 +69,7 @@ import { probeSkills, type HeldSession } from "./skills.ts";
 import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { SharedSandbox } from "../isolation/shared-sandbox.ts";
-import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
+import { nameInput, suggestGitText, SummaryModelSpare } from "./summariser.ts";
 import { SpendLedger } from "./spend-ledger.ts";
 import type { SpendSource, SpendSummary } from "../protocol/spend.ts";
 
@@ -344,8 +346,8 @@ export class SessionHost {
   private readonly spendLedger: SpendLedger | undefined;
   private readonly stackReviews = new Map<string, { review: StackReview; fingerprint: string; expires: number }>();
   private readonly gitOperations = new Set<string>();
+  private readonly gitStates = new GitStates();
   private readonly closingScopes = new Set<string>();
-  private readonly publishReviews = new Map<string, { token: string; expires: number; snapshot: PublishSnapshot; target: PublishTarget }>();
 
   private refuseGitOperation(scope: string): void {
     if (this.gitOperations.has(scopeKey(scope))) throw new CommandRefused("A Git operation is in progress in this Scope. Wait for it to finish.");
@@ -379,6 +381,7 @@ export class SessionHost {
       throw new CommandRefused(error instanceof Error ? error.message : String(error));
     } finally {
       this.gitOperations.delete(key);
+      void this.gitStates.refresh(scope);
     }
   }
 
@@ -388,8 +391,8 @@ export class SessionHost {
     return this.withGitOperation(record.scope, async () => {
       this.stackReviews.delete(sessionId);
       await cleanStack(record.scope);
-      const status = await actionStackStatus(record.scope);
-      if (!status.view) throw new Error(status.problem ?? "No stack found.");
+      const status = await stackStatus(record.scope);
+      if (!status.view) throw new Error(status.notice ?? "This branch is not in a stack.");
       const review = { token: randomUUID(), action, view: status.view };
       this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
       return review;
@@ -404,16 +407,15 @@ export class SessionHost {
         this.stackReviews.delete(sessionId);
         if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
         await cleanStack(record.scope);
-        const status = await actionStackStatus(record.scope);
+        const status = await stackStatus(record.scope);
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
       }
       try {
-        return await changeStack(record.scope, input);
+        return await this.afterPullRequestWrite(record.scope, changeStack(record.scope, input));
       } finally {
         for (const other of this.sessions.values()) {
           if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
           this.stackReviews.delete(other.id);
-          this.publishReviews.delete(other.id);
           await this.refreshBranch(other);
           other.pendingBranchNote = "[Flow] A Stack operation was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
         }
@@ -424,62 +426,90 @@ export class SessionHost {
   async assistStack(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
     await this.withGitOperation(record.scope, async () => {
-      const status = await actionStackStatus(record.scope);
-      if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
+      const status = await stackStatus(record.scope);
+      if (!status.rebasing) throw new Error(status.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");
   }
 
-  async gitStatus(sessionId: string): Promise<GitStatus> {
-    return gitStatus(this.record(sessionId).scope);
+  pollGitState(forced?: string): Promise<void> {
+    return this.gitStates.poll([...this.sessions.values()].map(record => ({ scope: record.scope, lifecycle: record.lifecycle, watched: record.log.watched })), forced);
   }
 
-  async preparePublish(sessionId: string): Promise<PublishReview> {
-    const record = this.record(sessionId);
-    return this.withGitOperation(record.scope, async () => {
-      this.publishReviews.delete(sessionId);
-      for (const [id, review] of this.publishReviews) if (review.expires < Date.now()) this.publishReviews.delete(id);
-      const { input: changes, ...reviewed } = await snapshot(record.scope);
-      const destination = await target(record.scope, reviewed.branch);
-      const committed = await branchChanges(record.scope, destination);
-      if (reviewed.files.length === 0 && committed.commits.length === 0 && !destination.pr) throw new CommandRefused("There are no changes to publish.");
-      let text: Awaited<ReturnType<typeof summarisePublish>> = { commitMessage: "", title: destination.pr?.title ?? "", body: "" };
-      let warning: string | undefined;
-      const model = this.summaryModel?.(record.backendName);
-      try {
-        if (!model) throw new Error("No Summary Model is configured. Choose one in Settings, or enter publish text below.");
-        text = await summarisePublish({ backend: this.backendFor(model.backend), modelId: model.modelId, text: `${changes}\nCommitted branch changes:\n${committed.input}`,
-          spent: (spend) => this.recordSpend("publish", randomUUID(), this.spendScope(record), spend) });
-      } catch (error) {
-        warning = `Enter publish text manually. ${error instanceof Error ? error.message : String(error)}`;
-      }
-      const suggestion = await canNameBranch(record.scope, reviewed.branch, destination)
-        ? text.suggestedBranch ?? suggestedBranch((record.titleSource !== "scope" ? record.title : "") || text.commitMessage || committed.commits[0]?.replace(/^[a-f0-9]+ /, "") || record.title)
-        : undefined;
-      delete text.suggestedBranch;
-      const token = randomUUID();
-      this.publishReviews.set(sessionId, { token, expires: Date.now() + 15 * 60_000, snapshot: reviewed, target: destination });
-      return { ...text, ...(suggestion ? { suggestedBranch: suggestion } : {}), token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.baseBranch ? { baseBranch: destination.baseBranch } : {}), ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
+  private async afterPullRequestWrite<T>(scope: string, write: Promise<T>): Promise<T> {
+    try {
+      return await write;
+    } finally {
+      await this.pollGitState(scope);
+    }
+  }
+
+  private async readGit<T>(read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private readStack(sessionId: string): Promise<StackStatus> {
+    const scope = this.gitScope(sessionId);
+    return this.readGit(async () => {
+      const status = await stackStatus(scope);
+      if (status.view && !await stackTitles(scope, status.view)) status.notice = "Pull request titles could not be read. Copy uses the links.";
+      return status;
     });
   }
 
-  async publish(sessionId: string, input: PublishInput): Promise<PublishResult> {
+  private gitScope(sessionId: string): string {
+    const scope = this.record(sessionId).scope;
+    if (!isRepository(scope)) throw new CommandRefused("This Scope is not a Git repository.");
+    return scope;
+  }
+
+  private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
+    const scope = this.gitScope(command.sessionId);
+    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
+    return this.readGit(async () => {
+      if (command.type === "git_diff") return await diff(scope, command.view, command.path, base);
+      if (command.view === "branch") return await changes(scope, command.view, base);
+      const read = await readStatus(scope);
+      return { files: read.files, commits: [], fingerprint: read.fingerprint, ...await commitContext(scope, read.local.branch, branch => this.gitStates.hasPullRequest(scope, branch)) };
+    });
+  }
+
+  async commit(sessionId: string, input: CommitInput): Promise<string> {
+    this.gitScope(sessionId);
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
-      const review = this.publishReviews.get(sessionId);
-      if (!review || review.token !== input.token || review.expires < Date.now()) throw new CommandRefused("This Publish review expired. Open Publish again.");
-      this.publishReviews.delete(sessionId);
+      const before = await head(record.scope);
       try {
-        return await publish(record.scope, review.snapshot, review.target, input);
+        return await commit(record.scope, input);
       } finally {
-        for (const other of this.sessions.values()) {
-          if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
-          await this.refreshBranch(other);
-          other.pendingBranchNote = "[Flow] Git publishing was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
+        const after = await head(record.scope);
+        if (after.ok && before.ok && after.value.name !== before.value.name) {
+          for (const other of this.sessions.values()) {
+            if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
+            await this.refreshBranch(other);
+            other.pendingBranchNote = `[Flow] A commit from the Git pane moved this Scope to branch ${after.value.name}. Re-read the branch and changed files before relying on earlier reads.`;
+          }
         }
       }
     });
   }
+
+  async suggestGitText(sessionId: string, kind: GitTextKind, paths?: string[]): Promise<GitText> {
+    const record = this.record(sessionId);
+    if (!["commit", "pull_request", "branch"].includes(kind) || (paths !== undefined && (!Array.isArray(paths) || paths.some(path => typeof path !== "string")))) throw new CommandRefused("Invalid suggestion request.");
+    const model = this.summaryModel?.(record.backendName);
+    if (!model) throw new CommandRefused("No Summary Model is configured. Choose one in Settings, or enter the text.");
+    return this.readGit(async () => {
+      const text = await changesText(record.scope, kind === "pull_request" ? "branch" : "uncommitted", paths, branch => this.gitStates.pullRequestBase(record.scope, branch));
+      return await suggestGitText({ backend: this.backendFor(model.backend), modelId: model.modelId, text, kind,
+        spent: (spend) => this.recordSpend("publish", randomUUID(), this.spendScope(this.record(sessionId)), spend) });
+    });
+  }
+
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
   private readonly standingAuthorisations: (() => readonly string[]) | undefined;
@@ -756,6 +786,7 @@ export class SessionHost {
         // lifting an Ended row back out of Filed away.
         const input = record.lifecycle === "live" ? newestAt(parentInput, workflowInput) : undefined;
         const outcome = record.latestOutcome;
+        const git = this.gitStates.summary(record.scope);
         const unread = outcome !== undefined && outcome.version > record.readAttentionVersion;
         const attention: SessionAttention | undefined = input
           ? {
@@ -791,6 +822,7 @@ export class SessionHost {
           lastSeq: record.log.lastSeq,
           ...(record.capabilities ? { capabilities: record.capabilities } : {}),
           ...(record.branch ? { branch: record.branch } : {}),
+          ...(git ? { git } : {}),
           ...(record.worktree ? { worktree: true as const } : {}),
           ...(record.session || existsSync(record.scope) ? {} : {
             scopeMissing: true as const,
@@ -1862,7 +1894,7 @@ export class SessionHost {
   private async refreshBranch(record: SessionRecord): Promise<void> {
     if (!isRepository(record.scope)) return;
     const generation = (record.branchGeneration += 1);
-    const found = await head(record.scope);
+    const [found] = await Promise.all([head(record.scope), this.gitStates.refresh(record.scope)]);
     // A repository git cannot answer about is left as it was: this runs off the critical path, and
     // there is no reader to tell.
     if (!found.ok) return;
@@ -2263,7 +2295,6 @@ export class SessionHost {
         await this.releaseWorktree(record);
         record.log.closeSubscribers();
         this.sessions.delete(record.id);
-        this.publishReviews.delete(record.id);
         this.store?.deleteSession(record.id);
         reaped.push(record.id);
       } finally {
@@ -2476,27 +2507,54 @@ export class SessionHost {
       case "pull_branch":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
       case "change_pull_request":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => changePullRequest(this.record(command.sessionId).scope, command.action, command.input));
-      case "pull_request":
-        return await pullRequest(this.record(command.sessionId).scope);
+        return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
+      case "pull_request": {
+        const scope = this.record(command.sessionId).scope;
+        return await this.readGit(() => pullRequest(scope, this.gitStates.pullRequestRef(scope)));
+      }
       case "comment_pull_request":
-        return await commentPullRequest(this.record(command.sessionId).scope, command.input);
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
       case "resolve_pull_request_thread":
-        return await resolvePullRequestThread(this.record(command.sessionId).scope, command.input);
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, resolvePullRequestThread(this.record(command.sessionId).scope, command.input));
+      case "edit_pull_request":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, editPullRequest(this.record(command.sessionId).scope, command.input));
+      case "set_pull_request_draft":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, setPullRequestDraft(this.record(command.sessionId).scope, command.input));
+      case "rerun_pull_request_checks":
+        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, rerunPullRequestChecks(this.record(command.sessionId).scope, command.input));
+      case "pull_request_check_log":
+        return await checkLog(this.record(command.sessionId).scope, command.pr, command.jobId);
       case "stack_status":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
+        return await this.readStack(command.sessionId);
       case "prepare_stack":
         return await this.prepareStack(command.sessionId, command.action);
       case "change_stack":
         return await this.changeStack(command.sessionId, command.input);
       case "assist_stack":
         return await this.assistStack(command.sessionId);
-      case "git_status":
-        return await this.gitStatus(command.sessionId);
-      case "prepare_publish":
-        return await this.preparePublish(command.sessionId);
-      case "publish":
-        return await this.publish(command.sessionId, command.input);
+      case "refresh_git": {
+        const scope = this.record(command.sessionId).scope;
+        if (!isRepository(scope)) {
+          await this.gitStates.refresh(scope);
+          return { repository: false };
+        }
+        await Promise.all([...this.sessions.values()].filter(other => scopeKey(other.scope) === scopeKey(scope)).map(other => this.refreshBranch(other)));
+        if (command.pullRequest === true) await this.pollGitState(scope);
+        return { repository: true };
+      }
+      case "git_changes":
+      case "git_diff":
+        return await this.readChanges(command);
+      case "commit":
+        return await this.commit(command.sessionId, { fingerprint: command.fingerprint, paths: command.paths, message: command.message, ...(command.branch === undefined ? {} : { branch: command.branch }) });
+      case "push_state":
+        return await this.readGit(() => pushState(this.gitScope(command.sessionId)));
+      case "push":
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, push(this.record(command.sessionId).scope, { head: command.head, ...(command.replace === undefined ? {} : { replace: command.replace }) })));
+      case "create_pull_request":
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, createPullRequest(this.record(command.sessionId).scope, { head: command.head, title: command.title, body: command.body, draft: command.draft === true })));
+      case "suggest_git_text":
+        return await this.suggestGitText(command.sessionId, command.kind, command.paths);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
       case "switch_scope_branch":
@@ -3127,6 +3185,8 @@ export class SessionHost {
       if (!record.turnInFlight) record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       record.turnInFlight = true;
     }
+
+    if (event.type === "tool_ended" && record.turnInFlight) this.gitStates.touch(record.scope);
 
     if (event.type === "turn_ended") {
       record.turnGeneration = (record.turnGeneration ?? 0) + 1;

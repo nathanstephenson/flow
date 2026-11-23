@@ -49,9 +49,9 @@ other thing that outlives a turn and the one this is most often mistaken for.
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
 fraction of a window, and a session routinely bills many times what its window holds. One known
-exception, stated rather than fixed (ADR 0020): naming an Agent Session or drafting Git publish text
-bills the Summary Model in a Backend Session that is thrown away, so those calls appear in no
-Agent Session's Spend.
+exception, stated rather than fixed (ADR 0020): naming an Agent Session or suggesting commit and
+Pull Request text bills the Summary Model in a Backend Session that is thrown away, so those calls
+appear in no Agent Session's Spend.
 _Avoid_: usage, cost, tokens, context
 
 **Presentation Transcript**:
@@ -172,13 +172,14 @@ Never reapplied on Revive and never inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
 **Summary Model**:
-The model the Session Host uses to name an Agent Session and draft Git publish text, chosen per
-Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's Summary Model,
-without the Default Effort. Reached through an ordinary Backend Adapter, in a throwaway Backend
-Session that holds no Presentation Transcript, runs no tools, and is disposed of when it answers —
-so it is not an Agent Session and is never Revived (ADR 0020). Git publish text and suggested branch
-names are shown for editing only when its owner opens Publish; the model never renames branches,
-commits, or pushes changes.
+The model the Session Host uses to name an Agent Session and suggest commit and Pull Request text,
+chosen per Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's
+Summary Model, without the Default Effort. Reached through an ordinary Backend Adapter, in a
+throwaway Backend Session that holds no Presentation Transcript, runs no tools, and is disposed of
+when it answers — so it is not an Agent Session and is never Revived (ADR 0020). It writes a commit
+message, a branch name, or a Pull Request title and body only when its owner clicks Suggest, and the
+text fills only empty fields. The owner commits, pushes, and creates the Pull Request as three
+separate steps; the model never renames branches, commits, or pushes changes.
 _Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:
@@ -374,6 +375,16 @@ The bounded ring of recent Shell output the Session Host keeps so a reattaching 
 populated screen. Lossy by design — it is not a Presentation Transcript, and it is never written to
 disk.
 _Avoid_: transcript, history, log, buffer
+
+**Stack**:
+An ordered list of branches on a trunk that `gh stack` registers in the repository of a Scope. The
+registration is in the common Git directory, so all worktrees of a clone share it. Flow shows only
+the Stack that `gh stack view` reports for the current branch. It does not infer a Stack from Pull
+Request bases, from commit ancestry or from stacks on GitHub, and it does not show a Stack that is
+registered only in another clone (ADR 0044). Each shown Stack permits every Stack action. To create
+a Stack, the owner chooses a trunk and an ordered list of local branches that are not in another
+Stack; the trunk cannot also be a branch of the Stack.
+_Avoid_: inferred stack, stack graph, candidate
 
 **Settings**:
 Values the Session Host reads from its state root, governing every Agent Session on the machine
