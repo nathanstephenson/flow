@@ -12,7 +12,7 @@ flow update [--force]
 
 Before you update:
 
-1. Close all CLI and TUI clients.
+1. Close all CLI clients.
 2. Stop other Session Hosts that use this installation, including hosts under other
    `FLOW_STATE_DIR` roots.
 3. Make sure that the same OIDC configuration is present.

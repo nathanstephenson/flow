@@ -190,21 +190,6 @@ try {
   await assertCodeRefused();
   await request('/api/config', { method: 'PUT', body: JSON.stringify({ workflowRuntime: { nodePath: process.execPath } }) });
 
-  const tuiExit = async () => {
-    const tui = spawn(flow, ['tui', '--backend', 'fake', '--scope', cwd], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
-    const exited = once(tui, 'close');
-    const timer = setTimeout(() => tui.kill('SIGTERM'), 15000);
-    try {
-      await once(tui.stdout, 'data');
-      const owner = JSON.parse(readFileSync(join(state, 'daemon.json'), 'utf8'));
-      if (owner.mode === 'embedded') assert.throws(() => run(flow, ['serve', 'restart']), /background-owned/);
-      tui.stdin.write('\u0003');
-      const [code] = await exited;
-      assert.equal(code, 0);
-      return owner;
-    } finally { clearTimeout(timer); tui.kill('SIGTERM'); }
-  };
-  assert.equal((await tuiExit()).instanceId, daemon.instanceId);
   assert.match(run(flow, ['serve', 'status']), new RegExp(`Running version: ${metadata.version}`));
   assert.throws(() => run(flow, ['serve', 'restart']), /background-owned/);
   await request('/api/command', { method: 'POST', body: JSON.stringify({ type: 'send', sessionId: sessions[0].id, text: 'hold turn', when: 'now' }) });
@@ -259,7 +244,7 @@ try {
     assert.equal(code, 0, errors);
     assert.deepEqual(JSON.parse(output), { output: 42 });
   } finally { clearTimeout(timer); guest.kill('SIGKILL'); }
-  console.log(`Packed install: host control, TUI ownership, version, web assets, fake backend, nested Workflows, Workflow bundle, and code runtime ${runtimeStatus.available ? 'execution/refusal' : 'fail-closed refusal'} passed.`);
+  console.log(`Packed install: host control, version, web assets, fake backend, nested Workflows, Workflow bundle, and code runtime ${runtimeStatus.available ? 'execution/refusal' : 'fail-closed refusal'} passed.`);
 } finally {
   if (host) {
     host.kill('SIGTERM');

@@ -6,13 +6,11 @@
  * component that owns it. So the map is testable under `node --test`, which is the only way a
  * shortcut table stays honest as it grows.
  *
- * Two principles it encodes, both from Part 9.6:
+ * The principle it encodes, from Part 9.6:
  *
  * - **Nothing that spends money or sends text is a single unmodified key.** `n` opens the New Agent
  *   Session dialog rather than starting one, `Enter` moves focus rather than sending, and there is
  *   deliberately no binding that sends a message or Revives an Agent Session.
- * - **Match the TUI where it already chose** (`src/tui/keys.ts`), so the two front-ends teach one
- *   muscle memory rather than two.
  */
 
 export type Binding =

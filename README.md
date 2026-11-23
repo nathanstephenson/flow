@@ -1,8 +1,8 @@
 # Flow
 
-Flow runs coding-agent sessions. You can watch and control them from a terminal or a browser.
+Flow runs coding-agent sessions. You can watch and control them from a browser, or send one prompt from the CLI.
 
-- **Local mode (v1)** — a Session Host daemon runs on loopback. A TUI and a web UI are equal clients.
+- **Local mode (v1)** — a Session Host daemon runs on loopback. The web UI is the client.
 - **Backends** — the Claude Agent SDK (on your own Claude subscription) and the pi SDK (for models
   that Claude does not serve). You choose the backend for each Agent Session.
 
@@ -46,7 +46,6 @@ flow serve
 
 `flow serve` stays in the foreground. It prints a web handoff URL
 (`http://127.0.0.1:PORT/auth?token=…`). Open that URL once in your browser.
-To use the terminal client, run `flow tui` in another terminal.
 
 To run the Session Host in the background:
 
@@ -88,7 +87,6 @@ Pi cache warming stays limited to active runs unless Pi's global `cacheWarming` 
 | Command | Action |
 | --- | --- |
 | `flow serve [--port N] [--address HOST]` | Run the Session Host in the foreground. |
-| `flow tui [--scope DIR] [--backend claude\|pi\|fake]` | Open the terminal client. It connects to a running host, or starts its own. |
 | `flow list` | List Agent Sessions. |
 | `flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"` | Send one prompt, then exit. |
 | `flow update [--force]` | Update Flow. See [Updating Flow](#updating-flow). |
@@ -102,11 +100,7 @@ flow --session <id> "What word did I ask you to remember?"   # → marmalade
 flow list
 ```
 
-Scope rules:
-
-- `flow tui` without `--scope` uses the Project Root from `config.json`. If there is no Project
-  Root, it uses the current directory.
-- A one-shot prompt always uses the current directory, unless `--scope` names a different one.
+A one-shot prompt always uses the current directory, unless `--scope` names a different one.
 
 ### Agent Sessions survive restarts
 
@@ -122,15 +116,7 @@ Creation and messaging use the existing permission policy and can incur Spend. A
 another Agent Session's human prompts. Use a fresh Worktree for concurrent edits, and inspect for
 results rather than assuming delivery means completion.
 
-### TUI keys
-
-| Key | Action |
-| --- | --- |
-| `^S` | Sessions |
-| `^P` | Models (grouped by provider) |
-| `^E` | Effort |
-| `esc` | Abort |
-| `^C` | Quit |
+### Messages during a turn
 
 If you type while the agent works, Flow queues the message. It does not interrupt the agent.
 Steering is a deliberate action.
@@ -172,7 +158,7 @@ Each state root permits one Session Host.
 flow update
 ```
 
-Before you update, close all CLI and TUI clients. Stop other Session Hosts that use this
+Before you update, close all CLI clients. Stop other Session Hosts that use this
 installation. Updates are never automatic. [docs/updating.md](docs/updating.md) gives the
 requirements, the browser update, systemd setup and the repair procedure.
 

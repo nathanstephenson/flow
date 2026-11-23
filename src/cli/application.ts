@@ -5,7 +5,6 @@ import { readHost, oidcFingerprint, type HostIdentity } from '../daemon/ownershi
 import { startRuntime } from '../daemon/runtime.ts';
 import { join, resolve } from "node:path";
 
-import { ConfigStore } from "../daemon/config-store.ts";
 import { embeddedWorkflowRuntime } from '../workflows/runtime-asset.ts';
 import { fileURLToPath } from 'node:url';
 import { getAsset, isSea } from 'node:sea';
@@ -19,7 +18,6 @@ import { authorisationLabel } from "../client/permission.ts";
 import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import type { AssetManifest } from "../web/assets.ts";
-import { runTui } from "../tui/app.ts";
 import { updateUnsupportedReason, type Installation } from './install-guard.ts';
 
 type WebUpdateSupport = {
@@ -32,14 +30,12 @@ let webUpdateSupport: WebUpdateSupport | undefined;
 const USAGE = `usage:
   flow --version                                        print the installed version
   flow update [--force]                                 update a private global npm installation
-  flow tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow serve start|status|stop|restart [--force]          control a background Session Host
   flow list                                             list Agent Sessions
   flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
                                                                one prompt, then exit
 
-  tui without --scope uses the Project Root from config.json, else this directory.
   A one-shot prompt always uses this directory unless --scope names another.`;
 
 type Daemon = { url: string; token: string };
@@ -125,20 +121,6 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (command === "tui") {
-    const { connection, stop } = await clientConnection();
-    try {
-      await runTui({
-        connection,
-        scope: values.scope ?? configuredScope() ?? process.cwd(),
-        ...(values.backend === undefined ? {} : { backend: values.backend }),
-      });
-    } finally {
-      await stop();
-    }
-    return 0;
-  }
-
   if (command === "list") {
     const { connection, stop } = await clientConnection();
     try {
@@ -157,22 +139,6 @@ async function main(): Promise<number> {
     return 1;
   }
   return await oneShot(prompt, values);
-}
-
-/**
- * The Project Root, for a client that named no Scope.
- *
- * Read straight off disk rather than asked of the daemon, because the TUI may be talking to one it
- * did not start, and `/api/config`'s `scope` falls back to *that process's* working directory —
- * which is not this reader's. Only the configured root is a safe answer to borrow; the fallback to
- * `process.cwd()` has to happen here, where the cwd is the right one.
- *
- * A one-time read rather than a read-through, and that does not contradict ADR 0009: an Agent
- * Session's Scope is fixed for its whole life, so this value is consumed the moment it is asked for
- * and there is no later one for it to go stale against.
- */
-function configuredScope(): string | undefined {
-  return new ConfigStore().projectRoot();
 }
 
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */
