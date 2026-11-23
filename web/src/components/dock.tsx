@@ -1,5 +1,5 @@
 import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Plus, SquareTerminal, X } from "lucide-react";
+import { Bot, GitBranch, Plus, SquareTerminal, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide, type DockTab } from "@/presentation/docks.ts";
 import type { MobileDetail } from "@/presentation/mobile-navigation.ts";
@@ -294,7 +294,10 @@ function ContentPicker({
           Shell
         </Button>
       )}
-      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>Git</Button>
+      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>
+        <GitBranch aria-hidden data-icon="inline-start" />
+        Git
+      </Button>
       <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseWorkflows}>Workflows</Button>
       <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseSubagents}>
         <Bot aria-hidden data-icon="inline-start" />
