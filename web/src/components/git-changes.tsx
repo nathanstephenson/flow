@@ -45,6 +45,16 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
   }
 
   useEffect(() => {
+    if (readBranchView() !== "tour") return;
+    let cancelled = false;
+    void connection.command<TourView>({ type: "tour", sessionId }).then(
+      (tour) => { if (!cancelled && tour.state !== "idle") setBranchView("tour"); },
+      () => {},
+    );
+    return () => { cancelled = true; };
+  }, [connection, sessionId]);
+
+  useEffect(() => {
     let cancelled = false;
     void connection.command<Changes>({ type: "git_changes", sessionId, view }).then(
       (value) => {
@@ -60,16 +70,6 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
     );
     return () => { cancelled = true; };
   }, [connection, sessionId, view, revision]);
-
-  useEffect(() => {
-    if (readBranchView() !== "tour") return;
-    let cancelled = false;
-    void connection.command<TourView>({ type: "tour", sessionId }).then(
-      (tour) => { if (!cancelled && tour.state !== "idle") setBranchView("tour"); },
-      () => {},
-    );
-    return () => { cancelled = true; };
-  }, [connection, sessionId]);
 
   return (
     <section aria-label="Changes" className="min-w-0 space-y-3">
