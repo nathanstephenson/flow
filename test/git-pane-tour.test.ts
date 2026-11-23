@@ -7,6 +7,8 @@ import { transformSync } from "esbuild";
 
 type Element = { type: string; key?: string; props: Record<string, any> };
 let repositoryState: boolean | undefined;
+let gitState: { changed: number } | undefined;
+const storage = new Map<string, string>();
 function component(file: string, command: (input: any) => Promise<any>) {
   const states: any[] = [];
   let index = 0;
@@ -15,7 +17,7 @@ function component(file: string, command: (input: any) => Promise<any>) {
   const module = { exports: {} as Record<string, (props: any) => Element> };
   const require = createRequire(import.meta.url);
   const code = transformSync(readFileSync(new URL(`../web/src/components/${file}.tsx`, import.meta.url), "utf8"), { loader: "tsx", format: "cjs", jsx: "automatic" }).code;
-  const window = { setTimeout: (run: () => void, delay: number) => timers.push({ run, delay }), clearTimeout() {} };
+  const window = { setTimeout: (run: () => void, delay: number) => timers.push({ run, delay }), clearTimeout() {}, localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) } };
   runInNewContext(code, { window, module, exports: module.exports, require: (name: string) => {
     if (name === "react") return {
       useState: (initial: any) => { const slot = index++; if (!(slot in states)) states[slot] = initial; return [states[slot], (value: any) => { states[slot] = typeof value === "function" ? value(states[slot]) : value; }]; },
@@ -24,7 +26,7 @@ function component(file: string, command: (input: any) => Promise<any>) {
     };
     if (name === "react/jsx-runtime") return require(name);
     if (name === "@/host.tsx") return { useHost: () => ({ connection: { command } }) };
-    if (name === "@/git-state.ts") return { useGitState: () => ({ git: undefined, repository: repositoryState }) };
+    if (name === "@/git-state.ts") return { useGitState: () => ({ git: gitState, repository: repositoryState }) };
     if (name === "@/presentation/git.ts") return require("../web/src/presentation/git.ts");
     return new Proxy({}, { get: (_target, key) => key });
   } });
@@ -64,6 +66,39 @@ it("switches between the branch diff and the Tour in the Branch view of Changes"
   assert.throws(() => find(render("uncommitted"), "TourPane"));
   branchViews("branch").props.onValueChange("diff");
   assert.throws(() => find(render("branch"), "TourPane"));
+});
+
+it("opens Changes on Branch when nothing is uncommitted", () => {
+  repositoryState = true;
+  const view = (changed: number) => {
+    gitState = { changed };
+    const pane = component("git-pane", async () => ({ files: [] }));
+    pane.render("GitPane", { sessionId: "session" });
+    return find(pane.render("GitPane", { sessionId: "session" }), "GitChanges").props.view;
+  };
+  assert.equal(view(0), "branch");
+  assert.equal(view(2), "uncommitted");
+  gitState = undefined;
+});
+
+it("reopens the remembered Tour only when the branch has a tour", async () => {
+  const shown = async (tour: { state: string }) => {
+    const pane = component("git-changes", async input => input.type === "tour" ? tour : { files: [], commits: [] });
+    const render = () => pane.render("GitChanges", { sessionId: "session", revision: "r", view: "branch", onViewChange() {}, onCommitted() {} });
+    render();
+    for (const effect of pane.effects) effect();
+    await settle();
+    try { find(render(), "TourPane"); return "tour"; } catch { return "diff"; }
+  };
+  storage.clear();
+  assert.equal(await shown({ state: "done" }), "diff");
+  const pane = component("git-changes", async () => ({ files: [], commits: [] }));
+  const tabs = find(pane.render("GitChanges", { sessionId: "session", revision: "r", view: "branch", onViewChange() {}, onCommitted() {} }), "Tabs", node => find(node, "TabsList").props["aria-label"] === "Branch views");
+  tabs.props.onValueChange("tour");
+  assert.equal(storage.get("flow.git-branch-view"), "tour");
+  assert.equal(await shown({ state: "done" }), "tour");
+  assert.equal(await shown({ state: "idle" }), "diff");
+  storage.clear();
 });
 
 it("has no top-level Tour tab", () => {
