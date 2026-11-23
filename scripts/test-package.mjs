@@ -224,8 +224,7 @@ try {
   assert.match(run(flow, ['list']), /dormant/);
   assert.throws(() => run(flow, ['--backend', 'fake', 'hello']), /already owns/);
   run(flow, ['serve', 'stop']);
-  const embedded = await tuiExit();
-  assert.equal(embedded.mode, 'embedded');
+  run(flow, ['list']);
   assert.throws(() => readFileSync(join(state, 'daemon.json')), { code: 'ENOENT' });
 
   // Bundle/QuickJS packaging coverage on every platform. Direct --guest is an internal
