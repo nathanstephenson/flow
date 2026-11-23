@@ -11,7 +11,7 @@ import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/share
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
-import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill } from "../../protocol/events.ts";
+import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill, Spend } from "../../protocol/events.ts";
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
 import { seaSdkExecutionAssets } from './assets.ts';
 import { WorkerRpc } from "./rpc.ts";
@@ -248,6 +248,7 @@ class WorkerSession implements BackendSession {
   capabilities!: Capabilities;
   get sandbox(): Sandbox | undefined { return this.launchOptions.sandboxed; }
   private resume: string | undefined;
+  spend: Spend | undefined;
   private readonly worker: ReturnType<typeof launchWorker>;
   private readonly rpc: WorkerRpc;
   private failed: Error | undefined;
@@ -395,6 +396,7 @@ class WorkerSession implements BackendSession {
   private updateSnapshot(state: SessionSnapshot) {
     this.capabilities = state.capabilities;
     this.resume = state.resume;
+    this.spend = state.spend;
   }
   private notify(name: string, value: unknown) {
     switch (name) {

@@ -30,6 +30,7 @@ export type Navigation = {
    */
   openNewAgentSession: () => void;
   openSchedules: (scheduleId?: string, occurrenceId?: string) => void;
+  openSpend: () => void;
   openSettings: (section?: SettingsSection) => void;
   /** Close the Settings Dialog. The Agent Session view behind it stays as it is. */
   leaveSettings: () => void;
@@ -64,6 +65,8 @@ export function useRoute(): Navigation {
 
   const openSchedules = useCallback((scheduleId?: string, occurrenceId?: string) => setRoute({ sessionId: undefined, schedules: true, ...(scheduleId ? { scheduleId } : {}), ...(occurrenceId ? { occurrenceId } : {}) }), []);
 
+  const openSpend = useCallback(() => setRoute({ sessionId: undefined, spend: true }), []);
+
   const openSettings = useCallback(
     (section: SettingsSection = "general") => setRoute((current) => ({ ...current, settings: section })),
     [],
@@ -74,5 +77,5 @@ export function useRoute(): Navigation {
     [],
   );
 
-  return { route, sessionId, focus, openNewAgentSession, openSchedules, openSettings, leaveSettings };
+  return { route, sessionId, focus, openNewAgentSession, openSchedules, openSpend, openSettings, leaveSettings };
 }

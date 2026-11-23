@@ -24,7 +24,7 @@ const MAX_HISTORY = 256_000;
 // A cold catalogue probe and a worker startup each have their own bounded launch window.
 const defaults = { startupMs: 120_000, idleMs: 30 * 60_000, lifetimeMs: 2 * 60 * 60_000, turnMs: 10 * 60_000, disposeMs: 5_000, maxBuilders: 8 };
 type Limits = typeof defaults;
-type Host = Pick<SessionHost, 'workflowBuilderModels' | 'createWorkflowBuilderSession'>;
+type Host = Pick<SessionHost, 'workflowBuilderModels' | 'createWorkflowBuilderSession' | 'recordSpend'>;
 type Config = Pick<ConfigStore, 'projectRoot' | 'projectInclude' | 'defaultModel' | 'defaultEffort'>;
 export interface WorkflowBuilderServiceOptions {
   host: Host;
@@ -369,7 +369,10 @@ export class WorkflowBuilderService {
       },
       emit: event => {
         if (event.type === 'context_usage') {
-          if (event.spend && entry.meterGeneration === generation) entry.view.spend = structuredClone(event.spend);
+          if (event.spend && entry.meterGeneration === generation) {
+            entry.view.spend = structuredClone(event.spend);
+            this.options.host.recordSpend('builder', entry.view.id, entry.view.scope || undefined, event.spend);
+          }
           if (!entry.closed && entry.generation === generation) this.event(entry, event);
         } else if (!entry.closed && entry.generation === generation) this.event(entry, event);
       },

@@ -21,6 +21,7 @@ import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsDialog } from "@/components/settings-dialog.tsx";
 import { WorkflowSchedulesPage } from "@/components/workflow-schedules-page.tsx";
+import { SpendPage } from "@/components/spend-page.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
@@ -58,7 +59,7 @@ export function AppShell() {
     route,
     sessionId: focusedId,
     focus,
-    openNewAgentSession, openSchedules,
+    openNewAgentSession, openSchedules, openSpend,
     openSettings,
     leaveSettings,
   } = useRoute();
@@ -148,7 +149,7 @@ export function AppShell() {
   const [landed, setLanded] = useState(false);
   useEffect(() => {
     if (landed) return;
-    if (route.schedules) {
+    if (route.schedules || route.spend) {
       setLanded(true);
       return;
     }
@@ -327,6 +328,7 @@ export function AppShell() {
             onNew={openNewAgentSession}
             onOpenSettings={openSettings}
             onSchedules={() => openSchedules()}
+            onSpend={openSpend}
           />
         </Sidebar>
 
@@ -341,7 +343,7 @@ export function AppShell() {
            * the handle itself is the affordance.
            */}
           <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
-          {route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
+          {route.spend ? <SpendPage /> : route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
             /*
              * The New Agent Session view *is* the empty state — nothing focused and "you are
              * starting one" were always the same moment. Held back until the auto-open rule above has

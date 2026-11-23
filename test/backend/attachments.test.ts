@@ -73,6 +73,7 @@ describe("what pi is handed", () => {
       },
       supportsThinking: () => false,
       getAvailableThinkingLevels: () => [],
+      getSessionStats: () => ({ tokens: { total: 0, cacheRead: 0 }, cost: 0 }),
     } as unknown as AgentSession;
     return { session, prompts };
   };

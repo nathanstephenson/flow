@@ -121,6 +121,8 @@ export interface BackendSession {
   refreshMcp?(): Promise<void>;
   startWorkflowSubagent?(options: WorkflowSubagentOptions): WorkflowSubagentHandle;
   readonly capabilities: Capabilities;
+  /** The running total reported on `context_usage`, current before `turn_ended`. */
+  readonly spend?: Spend | undefined;
   /** Opaque token allowing a later Revive to continue this Conversation Context. */
   resumeToken(): string | undefined;
   /**

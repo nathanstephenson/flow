@@ -437,6 +437,11 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/spend") {
+    send(response, 200, options.host.spendSummary());
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/config") {
     send(response, 200, {
       // The Project Root first: it is the directory this deployment is anchored to, and a client

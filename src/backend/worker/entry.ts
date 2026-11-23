@@ -115,7 +115,7 @@ export function runWorker(): void {
         emit: (event) => {
           // Models can be a large catalogue. Do not resend it for every text/tool delta, but do
           // mirror any changed state before the event that exposes it to the Session Host.
-          const changed = session && (session.capabilities !== published?.capabilities || session.resumeToken() !== published?.resume);
+          const changed = session && (session.capabilities !== published?.capabilities || session.resumeToken() !== published?.resume || session.spend !== published?.spend);
           rpc.notify("event", { event, ...(changed ? { snapshot: publishSnapshot() } : {}) });
         },
       });

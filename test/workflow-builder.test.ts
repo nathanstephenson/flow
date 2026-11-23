@@ -30,6 +30,7 @@ function fixture(overrides: Partial<WorkflowBuilderServiceOptions> = {}) {
       assert.equal(statSync(scope).isDirectory(), true);
       return { backend: 'fake', models: [{ id: 'model', effortLevels: ['low', 'high'] as Array<'low' | 'high'> }, { id: 'plain' }] };
     },
+    recordSpend: () => {},
     createWorkflowBuilderSession: async (_backend: string, options: BackendCreateOptions) => {
       starts.push(options);
       if (createWait) await createWait;
