@@ -2,8 +2,8 @@ import type { PlanLimits, PlanLimitWindow } from "../../../src/protocol/plan-lim
 import { backendLabel } from "./settings-providers.tsx";
 import { useWorkflowResource } from "./workflow-api.ts";
 
-const SHORT = "var(--series-1)";
-const LONG = "var(--series-2)";
+const SHORT = 6;
+const LONG = 3;
 
 export function PlanLimitsRow() {
   const { data } = useWorkflowResource<PlanLimits[]>("/api/plan-limits", 60_000);
@@ -16,17 +16,18 @@ export function PlanLimitsRow() {
 }
 
 function PlanLimitsCard({ limits }: { limits: PlanLimits }) {
+  const color = limits.provider === "Codex" ? "var(--series-1)" : "var(--provider-anthropic)";
   return (
     <div className="flex shrink-0 items-center gap-4 rounded-lg border border-border p-3">
       <svg aria-hidden viewBox="0 0 48 48" className="size-20 -rotate-90">
-        <Ring radius={21} width={3} color={LONG} utilization={limits.long.utilization} />
-        <Ring radius={14} width={6} color={SHORT} utilization={limits.short.utilization} />
+        <Ring radius={21} width={LONG} color={color} utilization={limits.long.utilization} />
+        <Ring radius={14} width={SHORT} color={color} utilization={limits.short.utilization} />
       </svg>
       <div className="grid gap-1 text-xs">
         <span className="text-sm font-medium">{backendLabel(limits.backend)}{limits.provider && ` · ${limits.provider}`}</span>
         <dl className="grid grid-cols-[auto_auto_auto] items-center gap-x-3 gap-y-0.5">
-          <KeyRow window={limits.short} color={SHORT} />
-          <KeyRow window={limits.long} color={LONG} />
+          <KeyRow window={limits.short} color={color} width={SHORT} />
+          <KeyRow window={limits.long} color={color} width={LONG} />
           {limits.others.map((window) => <KeyRow key={window.label} window={window} />)}
         </dl>
       </div>
@@ -44,11 +45,11 @@ function Ring({ radius, width, color, utilization }: { radius: number; width: nu
   );
 }
 
-function KeyRow({ window, color }: { window: PlanLimitWindow; color?: string }) {
+function KeyRow({ window, color, width }: { window: PlanLimitWindow; color?: string; width?: number }) {
   return (
     <>
       <dt className="flex items-center gap-1.5 text-muted-foreground">
-        <span aria-hidden className="size-2.5 rounded-sm" style={{ background: color ?? "transparent" }} />
+        <span aria-hidden className="w-3 rounded-full" style={{ height: (width ?? 0) * 2 / 3, background: color }} />
         {window.label}
       </dt>
       <dd className="text-right tabular-nums">{Math.round(window.utilization)}%</dd>

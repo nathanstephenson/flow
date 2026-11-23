@@ -56,6 +56,7 @@
   --series-3: #1baf7a;
   --series-4: #eda100;
   --series-5: #e87ba4;
+  --provider-anthropic: #d97757;
 
   --status-active: oklch(0.46 0.14 245);
   --status-awaiting: oklch(0.50 0.19 300);
@@ -124,6 +125,7 @@
   --series-3: #199e70;
   --series-4: #c98500;
   --series-5: #d55181;
+  --provider-anthropic: #d97757;
 
   --status-active: oklch(0.70 0.14 245);
   --status-awaiting: oklch(0.69 0.17 300);
