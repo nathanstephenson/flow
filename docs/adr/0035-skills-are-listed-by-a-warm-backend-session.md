@@ -19,6 +19,12 @@ warm session when:
 - a Shared Sandbox must be created again (ADR 0034);
 - the host stops.
 
+The same warm session answers Plan Limits for the Spend page. That ask uses the warm session for
+any Scope. When the slot is empty, it does one cold probe and fills the slot.
+Claude reads Plan Limits through its SDK. Pi has no such API, so it calls the Anthropic and Codex
+usage endpoints with its OAuth tokens. These are the endpoints that Claude Code and Codex CLI use.
+They are not documented and can change.
+
 The host-start model probe gives its session to an empty slot. Thus the first Skills ask for
 `projectRoot ?? cwd` after host start is warm.
 

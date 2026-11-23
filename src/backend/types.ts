@@ -1,4 +1,5 @@
 import type { AutoCompaction } from "../protocol/settings.ts";
+import type { PlanLimitWindows } from "../protocol/plan-limits.ts";
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
 import type {
   BackendEvent,
@@ -175,6 +176,7 @@ export interface BackendSession {
    * would be a second way to change state the Session Host already owns, able to disagree with it.
    */
   skills?(): Promise<Skill[]>;
+  planLimits?(): Promise<PlanLimitWindows[]>;
   /**
    * Answer an Enquiry this Backend Session is holding open.
    *

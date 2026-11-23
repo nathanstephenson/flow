@@ -145,6 +145,7 @@ export function runWorker(): void {
       case "compact": result = await session!.compact?.(args[0] as string | undefined); break;
       case "rewindFiles": if (!session!.rewindFiles) throw new Error("File rewind is not supported"); result = await session!.rewindFiles(args[0] as string); break;
       case "skills": result = await session!.skills?.(); break;
+      case "planLimits": result = await session!.planLimits?.(); break;
       case "answerEnquiry": result = await session!.answerEnquiry?.(args[0] as string, args[1] as string[][]) ?? false; break;
       case "answerPermission": result = await session!.answerPermission?.(args[0] as string, args[1] as PermissionDecision) ?? false; break;
       case "refreshMcp": if (!localMcp) updateTools(args[0] as McpToolMetadata[]); result = await session!.refreshMcp?.(); break;

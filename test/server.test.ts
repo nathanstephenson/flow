@@ -202,6 +202,13 @@ describe("Session Host transport", () => {
    * The same catalogue for a Scope with no Agent Session in it — what the New Agent Session view
    * asks, and the half `list_skills` above cannot answer because it reads a live Backend Session.
    */
+  it("answers the Plan Limits of each backend that has them", async () => {
+    const response = await fetch(`${running.url}/api/plan-limits`, { headers: { authorization: `Bearer ${token}` } });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+  });
+
   describe("the Skill catalogue for a Scope", () => {
     const get = async (path: string) =>
       await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });

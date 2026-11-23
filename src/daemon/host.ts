@@ -66,7 +66,8 @@ import { SessionLog } from "./log.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { PiModelProbeCache } from "./pi-model-cache.ts";
 import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
-import { probeSkills, type HeldSession } from "./skills.ts";
+import { probePlanLimits, probeSkills, type HeldSession } from "./skills.ts";
+import type { PlanLimits, PlanLimitWindows } from "../protocol/plan-limits.ts";
 import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { SharedSandbox } from "../isolation/shared-sandbox.ts";
@@ -340,6 +341,7 @@ export class SessionHost {
    * one dimension.
    */
   private readonly skillProbes = new Map<string, Promise<ScopeSkills>>();
+  private planLimitProbe: Promise<PlanLimits[]> | undefined;
   /**
    * One Summary Model session, booted before a naming needs it (ADR 0020).
    *
@@ -755,6 +757,29 @@ export class SessionHost {
       probeSkills(timed, scope, (held) => this.holdSkillSession(backend.name, held, true)));
   }
 
+  async planLimits(scope: string): Promise<PlanLimits[]> {
+    this.planLimitProbe ??= Promise.all([...this.backends.values()].map(async (backend) =>
+      (await this.askPlanLimits(backend, scope)).map((windows) => ({ backend: backend.name, ...windows }))))
+      .then((answers) => answers.flat())
+      .finally(() => { this.planLimitProbe = undefined; });
+    return await this.planLimitProbe;
+  }
+
+  private async askPlanLimits(backend: AgentBackend, scope: string): Promise<PlanLimitWindows[]> {
+    const warm = this.skillSessions.get(backend.name);
+    if (warm && !warm.dead) {
+      if (!warm.session.planLimits) return [];
+      try {
+        return await this.timed("planLimits", backend, true, () => warm.session.planLimits!());
+      } catch {
+        this.skillSessions.delete(backend.name);
+        void warm.session.dispose().catch(() => {});
+      }
+    }
+    return await this.timed("planLimits", backend, false, (timed) =>
+      probePlanLimits(timed, scope, (held) => this.holdSkillSession(backend.name, held, false)));
+  }
+
   /** `replace` is false for the model probe: it fills an empty or dead slot and never replaces a live one. */
   private holdSkillSession(name: string, held: HeldSession, replace: boolean): void {
     const old = this.skillSessions.get(name);
@@ -767,7 +792,7 @@ export class SessionHost {
   }
 
   /** Records `create` (time in `backend.create`), `answer` and `total` to the timings file. */
-  private async timed<T>(kind: "models" | "skills", backend: AgentBackend, warm: boolean, probe: (backend: AgentBackend) => Promise<T>): Promise<T> {
+  private async timed<T>(kind: "models" | "skills" | "planLimits", backend: AgentBackend, warm: boolean, probe: (backend: AgentBackend) => Promise<T>): Promise<T> {
     const begin = performance.now();
     let create = 0;
     const timed: AgentBackend = { name: backend.name, create: async (options) => {

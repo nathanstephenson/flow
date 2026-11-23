@@ -78,7 +78,7 @@ export function ProvidersSettings() {
   );
 }
 
-function backendLabel(backend: string): string {
+export function backendLabel(backend: string): string {
   return backend === "pi" ? "Pi" : backend === "claude" ? "Claude" : backend;
 }
 

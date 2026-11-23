@@ -21,6 +21,9 @@ _Avoid_: history, transcript, memory
 **Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and commit and Pull Request text are excluded. A Fork's Spend counts only its own work.
 _Avoid_: usage, cost, tokens, context
 
+**Plan Limit**: A subscription's share of model use in a rolling window, as a Backend Adapter reports it. Not Spend.
+_Avoid_: quota, rate limit
+
 **Spend Ledger**: The durable record of all billed model use on the Session Host, by Spend Source and model. It outlives Reaping.
 _Avoid_: usage log, cost history
 

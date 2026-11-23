@@ -41,6 +41,8 @@ import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts"
 import { PiAgentPermissions } from "./agent-permissions.ts";
 import type { AgentPermissionMode, PermissionDecision, Spend } from "../../protocol/events.ts";
 import type { SpendTotal } from "../../protocol/spend.ts";
+import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
+import { fetchAnthropicPlanLimits, fetchCodexPlanLimits } from "./plan-limits.ts";
 import { PiWork, callIdFor, resultText, textResult, type Completion, type ToolResult } from "./work.ts";
 
 /**
@@ -289,6 +291,15 @@ export class PiSession implements BackendSession {
         ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
       })),
     ];
+  }
+
+  async planLimits(): Promise<PlanLimitWindows[]> {
+    const read = async (provider: string, fetchLimits: (token: string) => Promise<PlanLimitWindows | undefined>) => {
+      const token = (await this.session.modelRuntime.getAuth(provider).catch(() => undefined))?.auth.apiKey;
+      return token ? await fetchLimits(token).catch(() => undefined) : undefined;
+    };
+    const limits = await Promise.all([read("anthropic", fetchAnthropicPlanLimits), read("openai-codex", fetchCodexPlanLimits)]);
+    return limits.filter((limit) => limit !== undefined);
   }
 
   private applyEffort(wanted: EffortLevel): void {

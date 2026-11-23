@@ -11,6 +11,7 @@ import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/share
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
 import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
+import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
 import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill, Spend } from "../../protocol/events.ts";
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
 import { seaSdkExecutionAssets } from './assets.ts';
@@ -265,6 +266,7 @@ class WorkerSession implements BackendSession {
   compact?: (instructions?: string) => Promise<void>;
   rewindFiles?: (messageId: string) => Promise<void>;
   skills?: () => Promise<Skill[]>;
+  planLimits?: () => Promise<PlanLimitWindows[]>;
   answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
   answerPermission?: (callId: string, decision: PermissionDecision) => Promise<boolean>;
   setPermissionMode?: (mode: AgentPermissionMode) => Promise<void>;
@@ -385,6 +387,7 @@ class WorkerSession implements BackendSession {
       if (methods.has("compact")) this.compact = (instructions) => this.rpc.call("compact", [instructions]);
       if (methods.has("rewindFiles")) this.rewindFiles = (messageId) => this.rpc.call("rewindFiles", [messageId]);
       if (methods.has("skills")) this.skills = () => this.rpc.call("skills");
+      if (methods.has("planLimits")) this.planLimits = () => this.rpc.call("planLimits");
       if (methods.has("answerEnquiry")) this.answerEnquiry = (id, answers) => this.rpc.call("answerEnquiry", [id, answers]);
       if (methods.has("answerPermission")) this.answerPermission = (id, decision) => this.rpc.call("answerPermission", [id, decision]);
       if (methods.has("setPermissionMode")) this.setPermissionMode = (mode) => this.rpc.call("setPermissionMode", [mode]);
