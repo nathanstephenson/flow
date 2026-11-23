@@ -21,7 +21,8 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   const { connection } = useHost();
   const { git, repository } = useGitState(sessionId);
   const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
-  const [view, setView] = useState<ChangesView>("uncommitted");
+  const [view, setView] = useState<ChangesView>();
+  if (!view && git) setView(git.changed === 0 ? "branch" : "uncommitted");
   const [step, setStep] = useState<Step>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -145,7 +146,7 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
         <GitChanges
           sessionId={sessionId}
           revision={`${git?.revision}:${reads.changes}`}
-          view={view}
+          view={view ?? "uncommitted"}
           onViewChange={setView}
           onCommitted={(commit) => setNotice({ text: `Committed ${commit.slice(0, 7)}.` })}
         />

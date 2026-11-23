@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangesView, GitChanges as Changes, GitDiff } from "../../../src/protocol/git.ts";
+import type { ChangesView, GitChanges as Changes, GitDiff, TourView } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
 import { Checkbox } from "@/components/ui/checkbox.tsx";
@@ -8,6 +8,10 @@ import { DiffText } from "@/components/diff-text.tsx";
 import { GitCommitForm } from "@/components/git-commit-form.tsx";
 import { TourPane } from "@/components/tour-pane.tsx";
 import { diffHunks, diffNotice, failureText, noChanges } from "@/presentation/git.ts";
+
+type BranchView = "diff" | "tour";
+
+const BRANCH_VIEW_KEY = "flow.git-branch-view";
 
 type Diffs = Record<string, GitDiff | { error: string }>;
 
@@ -29,7 +33,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
   const [diffs, setDiffs] = useState<Diffs>({});
-  const [branchView, setBranchView] = useState<"diff" | "tour">("diff");
+  const [branchView, setBranchView] = useState<BranchView>("diff");
   const requests = useRef<Record<string, number>>({});
 
   function readDiff(path: string) {
@@ -39,6 +43,16 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
     const store = (value: Diffs[string]) => { if (requests.current[key] === request) setDiffs(current => ({ ...current, [key]: value })); };
     void connection.command<GitDiff>({ type: "git_diff", sessionId, view, path }).then(store, (failure: unknown) => store({ error: failureText(failure) }));
   }
+
+  useEffect(() => {
+    if (readBranchView() !== "tour") return;
+    let cancelled = false;
+    void connection.command<TourView>({ type: "tour", sessionId }).then(
+      (tour) => { if (!cancelled && tour.state !== "idle") setBranchView("tour"); },
+      () => {},
+    );
+    return () => { cancelled = true; };
+  }, [connection, sessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +87,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
         </TabsList>
       </Tabs>
       {view === "branch" ? (
-        <Tabs value={branchView} onValueChange={setBranchView}>
+        <Tabs value={branchView} onValueChange={(value: BranchView) => { setBranchView(value); writeBranchView(value); }}>
           <TabsList aria-label="Branch views">
             <TabsTrigger value="diff">Diff</TabsTrigger>
             <TabsTrigger value="tour">Tour</TabsTrigger>
@@ -134,6 +148,22 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
       </>}
     </section>
   );
+}
+
+function readBranchView(): BranchView {
+  try {
+    return window.localStorage.getItem(BRANCH_VIEW_KEY) === "tour" ? "tour" : "diff";
+  } catch {
+    return "diff";
+  }
+}
+
+function writeBranchView(view: BranchView): void {
+  try {
+    window.localStorage.setItem(BRANCH_VIEW_KEY, view);
+  } catch {
+    // The view still applies for this page's lifetime.
+  }
 }
 
 function FileDiff({ path, diff }: { path: string; diff: GitDiff | { error: string } | undefined }) {
