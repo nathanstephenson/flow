@@ -1,4 +1,4 @@
-import { ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -540,16 +540,6 @@ function CollapsibleGroup({
 function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend }: { onNew: () => void; onOpenSettings: () => void; onSchedules?: (() => void) | undefined; onSpend?: (() => void) | undefined }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
-      {onSchedules && <Button size="sm" variant="ghost" onClick={onSchedules}>Schedules</Button>}
-      {onSpend && (
-        <Tooltip>
-          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSpend} />}>
-            <ChartColumn aria-hidden />
-            <span className="sr-only">Spend</span>
-          </TooltipTrigger>
-          <TooltipContent>Spend</TooltipContent>
-        </Tooltip>
-      )}
       <Tooltip>
         <TooltipTrigger
           render={
@@ -567,6 +557,24 @@ function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend }: { onNew: ()
         </TooltipTrigger>
         <TooltipContent>Settings</TooltipContent>
       </Tooltip>
+      {onSchedules && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSchedules} />}>
+            <CalendarClock aria-hidden />
+            <span className="sr-only">Schedules</span>
+          </TooltipTrigger>
+          <TooltipContent>Schedules</TooltipContent>
+        </Tooltip>
+      )}
+      {onSpend && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSpend} />}>
+            <ChartColumn aria-hidden />
+            <span className="sr-only">Spend</span>
+          </TooltipTrigger>
+          <TooltipContent>Spend</TooltipContent>
+        </Tooltip>
+      )}
 
       <Tooltip>
         <TooltipTrigger
