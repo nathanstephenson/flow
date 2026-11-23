@@ -52,11 +52,18 @@ function tour(views: any[]) {
   return { pane, sent, render };
 }
 
-it("shows the Tour only in the Branch view of Changes", () => {
+it("switches between the branch diff and the Tour in the Branch view of Changes", () => {
   const pane = component("git-changes", async () => ({ files: [], commits: [] }));
   const render = (view: string) => pane.render("GitChanges", { sessionId: "session", revision: "r", view, onViewChange() {}, onCommitted() {} });
-  assert.throws(() => find(render("uncommitted"), "TourPane"));
+  const branchViews = (view: string) => find(render(view), "Tabs", node => find(node, "TabsList").props["aria-label"] === "Branch views");
+  assert.throws(() => branchViews("uncommitted"));
+  assert.throws(() => find(render("branch"), "TourPane"));
+  branchViews("branch").props.onValueChange("tour");
   assert.equal(find(render("branch"), "TourPane").props.sessionId, "session");
+  assert.doesNotMatch(textContent(render("branch")), /Reading changes/);
+  assert.throws(() => find(render("uncommitted"), "TourPane"));
+  branchViews("branch").props.onValueChange("diff");
+  assert.throws(() => find(render("branch"), "TourPane"));
 });
 
 it("has no top-level Tour tab", () => {

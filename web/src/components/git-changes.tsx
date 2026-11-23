@@ -29,6 +29,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
   const [error, setError] = useState("");
   const [open, setOpen] = useState<string[]>([]);
   const [diffs, setDiffs] = useState<Diffs>({});
+  const [branchView, setBranchView] = useState<"diff" | "tour">("diff");
   const requests = useRef<Record<string, number>>({});
 
   function readDiff(path: string) {
@@ -71,7 +72,15 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
           <TabsTrigger value="branch">Branch</TabsTrigger>
         </TabsList>
       </Tabs>
-      {error ? <p role="status" className="text-muted-foreground">{error}</p> : !changes ? <p>Reading changes…</p> : <>
+      {view === "branch" ? (
+        <Tabs value={branchView} onValueChange={setBranchView}>
+          <TabsList aria-label="Branch views">
+            <TabsTrigger value="diff">Diff</TabsTrigger>
+            <TabsTrigger value="tour">Tour</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      ) : null}
+      {view === "branch" && branchView === "tour" ? <TourPane key={sessionId} sessionId={sessionId} /> : error ? <p role="status" className="text-muted-foreground">{error}</p> : !changes ? <p>Reading changes…</p> : <>
         {changes.base ? <p className="text-xs text-muted-foreground">Changes since {changes.base}.</p> : null}
         {changes.commits.length > 0 ? <ul aria-label="Branch commits" className="space-y-0.5 font-mono text-xs">{changes.commits.map(commit => <li key={commit} className="truncate">{commit}</li>)}</ul> : null}
         {changes.files.length === 0 ? <p>{noChanges(view)}</p> : (
@@ -123,7 +132,6 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
           />
         ) : null}
       </>}
-      {view === "branch" ? <div className="border-t pt-3"><TourPane key={sessionId} sessionId={sessionId} /></div> : null}
     </section>
   );
 }
