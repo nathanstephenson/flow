@@ -52,19 +52,24 @@ function tour(views: any[]) {
   return { pane, sent, render };
 }
 
-it("shows the Tour tab for a repository", async () => {
-  for (const repository of [true, false]) {
-    repositoryState = repository;
-    const pane = component("git-pane", async () => ({ files: [] }));
-    const render = () => pane.render("GitPane", { sessionId: "session" });
-    const tab = () => find(render(), "TabsTrigger", node => node.props.value === "Tour");
-    if (!repository) { assert.throws(tab); assert.throws(() => find(render(), "TourPane")); continue; }
-    tab();
-    find(render(), "TourPane");
-    assert.equal(find(render(), "TabsContent", node => node.props.value === "Tour").props.keepMounted, true);
-    find(render(), "Tabs").props.onValueChange("Tour");
-    assert.equal(find(render(), "Tabs").props.value, "Tour");
-  }
+it("switches between the branch diff and the Tour in the Branch view of Changes", () => {
+  const pane = component("git-changes", async () => ({ files: [], commits: [] }));
+  const render = (view: string) => pane.render("GitChanges", { sessionId: "session", revision: "r", view, onViewChange() {}, onCommitted() {} });
+  const branchViews = (view: string) => find(render(view), "Tabs", node => find(node, "TabsList").props["aria-label"] === "Branch views");
+  assert.throws(() => branchViews("uncommitted"));
+  assert.throws(() => find(render("branch"), "TourPane"));
+  branchViews("branch").props.onValueChange("tour");
+  assert.equal(find(render("branch"), "TourPane").props.sessionId, "session");
+  assert.doesNotMatch(textContent(render("branch")), /Reading changes/);
+  assert.throws(() => find(render("uncommitted"), "TourPane"));
+  branchViews("branch").props.onValueChange("diff");
+  assert.throws(() => find(render("branch"), "TourPane"));
+});
+
+it("has no top-level Tour tab", () => {
+  repositoryState = true;
+  const pane = component("git-pane", async () => ({ files: [] }));
+  assert.throws(() => find(pane.render("GitPane", { sessionId: "session" }), "TabsTrigger", node => node.props.value === "Tour"));
 });
 
 it("polls while running and renders the done tour with its sha", async () => {

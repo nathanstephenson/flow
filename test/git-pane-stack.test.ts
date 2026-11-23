@@ -63,17 +63,17 @@ it("shows Changes, Pull request, Stack in this order, each when it is available,
   const labels = () => findAll(render(), "TabsTrigger").map(node => textContent(node.props.children));
   const panel = (label: string) => find(render(), "TabsContent", node => node.props.value === label);
   assert.equal(find(render(), "TabsList").props["aria-label"], "Git views");
-  assert.deepEqual(labels(), ["Changes", "Tour"]);
+  assert.deepEqual(labels(), ["Changes"]);
   for (const label of ["Changes", "Pull request", "Stack"]) assert.equal(panel(label).props.keepMounted, true);
   find(render(), "StackPane").props.onAvailable(true);
-  assert.deepEqual(labels(), ["Changes", "Stack", "Tour"]);
+  assert.deepEqual(labels(), ["Changes", "Stack"]);
   find(render(), "PullRequestPane").props.onAvailable(true);
-  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack", "Tour"]);
+  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
   assert.equal(tabs().props.value, "Changes");
   find(render(), "PullRequestPane").props.onAvailable(false);
-  assert.deepEqual(labels(), ["Changes", "Stack", "Tour"]);
+  assert.deepEqual(labels(), ["Changes", "Stack"]);
   gitState = { revision: "a", branch: "feature", head: "h", changed: 0, ahead: 0, behind: 0, upstream: true, pr: { number: 3, url: "https://github.com/test/repo/pull/3", state: "OPEN", isDraft: false, checks: "none", checksCompleted: 0, reviewDecision: null, unresolvedThreads: 0, updatedAt: "2025-01-01" } };
-  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack", "Tour"]);
+  assert.deepEqual(labels(), ["Changes", "Pull request", "Stack"]);
   gitState = undefined;
 });
 
@@ -813,7 +813,7 @@ it("Stack changes immediately replace the PR pane and keep the tab order", () =>
   find(before, "StackPane").props.onChange();
   const after = render();
   assert.notEqual(find(before, "PullRequestPane").key, find(after, "PullRequestPane").key);
-  assert.deepEqual(findAll(after, "TabsTrigger").map(node => node.props.value), ["Changes", "Pull request", "Stack", "Tour"]);
+  assert.deepEqual(findAll(after, "TabsTrigger").map(node => node.props.value), ["Changes", "Pull request", "Stack"]);
 });
 
 function pushPane(replaced: string[]) {
