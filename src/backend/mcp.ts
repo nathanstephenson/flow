@@ -71,6 +71,7 @@ export class McpSession {
   private readonly stateRoot: string | undefined;
   private readonly isolationMode: FilesystemIsolationMode;
   private readonly expectedScopeIdentity: string | undefined;
+  private readonly scopeReadOnly: boolean;
   /** Sandbox workers: the host owns OAuth, refreshes on request and returns only access tokens. */
   private readonly hostToken: ((connectionId: string, refresh: boolean) => Promise<string>) | undefined;
   /** Sandbox workers start local servers from host paths over the VM's shared file system. */
@@ -86,8 +87,10 @@ export class McpSession {
     isolationMode: FilesystemIsolationMode = "bubblewrap",
     expectedScopeIdentity?: string,
     hostToken?: (connectionId: string, refresh: boolean) => Promise<string>,
+    scopeReadOnly = false,
   ) {
     this.hostToken = hostToken;
+    this.scopeReadOnly = scopeReadOnly;
     this.connections = structuredClone(connections);
     this.scope = scope;
     this.auth = auth;
@@ -216,6 +219,7 @@ export class McpSession {
           ...(this.protectedPaths ? { protectedPaths: this.protectedPaths } : {}),
           ...(this.stateRoot ? { stateRoot: this.stateRoot } : {}),
           credentials: "none",
+          scopeReadOnly: this.scopeReadOnly,
         });
         // Disposal can arrive while the mount/namespace probe is in flight. No spawn may
         // follow it, even when preparation succeeds after dispose() has closed the client.

@@ -34,6 +34,7 @@ export function Dock({
   dock,
   sessionId,
   shells,
+  git = true,
   dispatch,
   visible = true,
   mobile = false,
@@ -44,6 +45,7 @@ export function Dock({
   dock: DockState;
   sessionId: string;
   shells: boolean;
+  git?: boolean;
   dispatch: (action: DockAction) => void;
   visible?: boolean;
   mobile?: boolean;
@@ -163,7 +165,7 @@ export function Dock({
         {dock.tabs.length === 0 ? (
           <ContentPicker
             onChooseWorkflows={() => dispatch({ type: "open-workflows", side })}
-            onChooseGit={() => dispatch({ type: "open-git", side })}
+            {...(git ? { onChooseGit: () => dispatch({ type: "open-git", side }) } : {})}
             onChooseSubagents={() => dispatch({ type: "open-subagents", side })}
             {...(shells ? { onChooseShell: () => dispatch({ type: "open-shell", side }) } : {})}
           />
@@ -177,6 +179,7 @@ export function Dock({
               visible={visible && tab.id === active?.id}
               sessionId={sessionId}
               shells={shells}
+              git={git}
               dispatch={dispatch}
               onStatus={(status) => noteStatus(tab.id, status)}
               mobileNavigation={mobileNavigation?.tabId === tab.id ? mobileNavigation : undefined}
@@ -196,6 +199,7 @@ function DockTabPanel({
   visible,
   sessionId,
   shells,
+  git,
   dispatch,
   onStatus,
   mobileNavigation,
@@ -207,6 +211,7 @@ function DockTabPanel({
   visible: boolean;
   sessionId: string;
   shells: boolean;
+  git: boolean;
   dispatch: (action: DockAction) => void;
   onStatus: (status: ShellStatus) => void;
   mobileNavigation?: MobileDockNavigation;
@@ -271,7 +276,7 @@ function DockTabPanel({
       ) : (
         <ContentPicker
           onChooseWorkflows={() => dispatch({ type: "open-workflows", side, tabId: tab.id })}
-          onChooseGit={() => dispatch({ type: "open-git", side, tabId: tab.id })}
+          {...(git ? { onChooseGit: () => dispatch({ type: "open-git", side, tabId: tab.id }) } : {})}
           onChooseSubagents={() => dispatch({ type: "open-subagents", side, tabId: tab.id })}
           {...(shells ? { onChooseShell: () => dispatch({ type: "open-shell", side, tabId: tab.id }) } : {})}
         />
@@ -288,7 +293,7 @@ function ContentPicker({
   onChooseGit,
 }: {
   onChooseWorkflows: () => void;
-  onChooseGit: () => void;
+  onChooseGit?: () => void;
   onChooseShell?: () => void;
   onChooseSubagents: () => void;
 }) {
@@ -300,10 +305,12 @@ function ContentPicker({
           Shell
         </Button>
       )}
-      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>
-        <GitBranch aria-hidden data-icon="inline-start" />
-        Git
-      </Button>
+      {onChooseGit === undefined ? null : (
+        <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>
+          <GitBranch aria-hidden data-icon="inline-start" />
+          Git
+        </Button>
+      )}
       <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseWorkflows}>
         <Workflow aria-hidden data-icon="inline-start" />
         Workflows

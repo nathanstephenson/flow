@@ -24,6 +24,8 @@ export type PromptAttachment = {
   data: string;
 };
 
+export type ReadOnlyScope = "mounted" | "tools";
+
 export type BackendCreateOptions = {
   /** Captured policy for scheduled ownership; trusted host use only. */
   isolationMode?: import("../protocol/settings.ts").FilesystemIsolationMode;
@@ -88,6 +90,7 @@ export type BackendCreateOptions = {
    * for the two to disagree.
    */
   tools?: "none";
+  readOnly?: ReadOnlyScope;
   emit: (event: BackendEvent) => void;
   /** Fatal execution loss, not an ordinary model error. The host interrupts and makes it Dormant. */
   onFailure?: (error: Error) => void;

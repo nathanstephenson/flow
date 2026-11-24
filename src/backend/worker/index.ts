@@ -153,7 +153,8 @@ export class WorkerBackend implements AgentBackend {
     let proxy: WorkerSession | undefined;
     try {
       const auth = support.provider.claudeAuthDir && (shared || this.name === "claude") ? [support.provider.claudeAuthDir] : [];
-      const mounts = sandboxMounts([...roots ?? [scope, stateDir], ...auth], assets);
+      const readOnly = options.readOnly === "mounted";
+      const mounts = sandboxMounts([...roots ?? (readOnly ? [stateDir] : [scope, stateDir]), ...auth], readOnly ? [scope, ...assets] : assets);
       let sandbox: Sandbox, startup: Sandbox["startup"];
       if (shared) {
         const acquired = await shared.acquire(support.provider, roots![0]!, mounts, options.signal, options.evict);
@@ -161,7 +162,7 @@ export class WorkerBackend implements AgentBackend {
         cleanups.push(acquired.release);
       } else {
         sandbox = await createSandbox(support.provider, { name: `flow-${createHash("sha256").update(stateDir).digest("hex").slice(0, 16)}`,
-          workspace: scope, mounts, env: {} }, join(stateDir, "sandbox.json"), options.signal);
+          workspace: readOnly ? realpathSync(stateDir) : scope, mounts, env: {} }, join(stateDir, "sandbox.json"), options.signal);
         ({ startup } = sandbox);
         cleanups.push(() => { removed = sandbox.close().catch((error: unknown) => console.error(`Sandbox ${sandbox.name} removal failed: ${(error as Error).message}`)); });
       }
@@ -227,7 +228,8 @@ export class WorkerBackend implements AgentBackend {
     const isolation = await prepareFilesystemIsolation({ ...plan, scope: options.scope, expectedScope: resolve(options.scope),
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
-      env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets });
+      env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets,
+      scopeReadOnly: options.readOnly === "mounted" });
     let proxy: WorkerSession | undefined;
     try {
       this.assertRunning();

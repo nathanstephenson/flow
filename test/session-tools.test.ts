@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FakeBackend } from '../src/backend/fake/index.ts';
 import type { BackendCreateOptions } from '../src/backend/types.ts';
 import { SessionHost } from '../src/daemon/host.ts';
@@ -127,4 +129,22 @@ test('Presentation Transcript tool pages bound oversized entries and total respo
   assert.ok(Buffer.byteLength(JSON.stringify(page)) < 50_000);
   assert.ok(page.start > 0);
   assert.equal(page.entries.at(-1)?.index, 99);
+});
+
+test('A read-only caller creates writable sessions in a Project and read-only ones at the Project Root', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-root-'));
+  const project = mkdtempSync(join(tmpdir(), 'flow-project-'));
+  t.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); });
+  const backend = new CaptureBackend();
+  const host = new SessionHost({ projectRoot: () => root, projectPaths: () => [project] });
+  host.registerBackend(backend);
+  t.after(() => host.shutdown());
+  await host.create({ scope: root, backend: 'fake', readOnly: true });
+  const tools = backend.options[0]!.sessionTools!;
+  const readOnly = (id: string) => host.list().find(session => session.id === id)?.readOnly;
+  const { sessionId: atRoot } = await tools.create({ text: 'look' }) as { sessionId: string };
+  assert.equal(readOnly(atRoot), true);
+  const { sessionId: inProject } = await tools.create({ text: 'fix', scope: project }) as { sessionId: string };
+  assert.equal(readOnly(inProject), undefined);
+  await assert.rejects(tools.create({ text: 'x', scope: tmpdir() }), /Project Root/);
 });

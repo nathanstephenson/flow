@@ -192,3 +192,19 @@ test("disposal during asynchronous stdio preparation never starts the server and
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("stdio MCP cannot write a read-only Scope", { timeout: 30_000 }, async (t) => {
+  if (!await available(t)) return;
+  const root = mkdtempSync(join(tmpdir(), "flow-mcp-read-only-"));
+  const scope = join(root, "scope"); mkdirSync(scope);
+  const marker = join(scope, "written");
+  const mcp = new McpSession([{ ...fixture, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`] }], scope,
+    undefined, false, undefined, undefined, undefined, "bubblewrap", undefined, undefined, true);
+  try {
+    await mcp.open();
+    assert.equal(existsSync(marker), false);
+  } finally {
+    await mcp.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

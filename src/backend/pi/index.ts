@@ -17,7 +17,7 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle, ReadOnlyScope } from "../types.ts";
 import type { AutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import { piEffortLevels } from "./effort-capabilities.ts";
@@ -601,7 +601,7 @@ export class PiBackend implements AgentBackend {
     const builderTools = builder ? piWorkflowBuilderTools(builder) : [];
     const tools = builder ? builderTools.map(tool => tool.name) : options.tools === "none" ? [] : [...(this.options.tools ?? [
       ...defaults, ASK_TOOL, SUBAGENT_TOOL, ...(defaults.includes("bash") ? ["bash_output", "kill_shell"] : []),
-    ])];
+    ])].filter((name) => !readOnlyDeniedTools(options.readOnly).includes(name));
     const mcp = builder || options.tools === "none" ? undefined : options.mcp;
     const workflowTools = workflowParentTools(builder || options.tools === "none" ? undefined : options.workflow);
     const sessionTools = piSessionTools(builder || options.tools === "none" ? undefined : options.sessionTools);
@@ -683,6 +683,11 @@ export class PiBackend implements AgentBackend {
     } else piSession.noteStartingEffort();
     return piSession;
   }
+}
+
+function readOnlyDeniedTools(readOnly: ReadOnlyScope | undefined): string[] {
+  if (!readOnly) return [];
+  return ["edit", "write", ...(readOnly === "tools" ? ["bash", "bash_output", "kill_shell", "powershell"] : [])];
 }
 
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,

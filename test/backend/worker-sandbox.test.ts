@@ -31,6 +31,24 @@ test("a sandbox-mode Backend Session runs its worker through the provider and re
   assert.deepEqual(f.calls(), ["create", `exec ${spec.name} ${f.scope}`, `remove ${spec.name}`]);
 });
 
+test("a mounted read-only Scope is a read-only sandbox mount and the state folder is the workspace", async (t) => {
+  const f = fakeProvider(t);
+  const events: BackendEvent[] = [];
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, stateDir: f.state, readOnly: "mounted", emit: (event) => events.push(event) });
+  await session.prompt("read-only");
+  const event = events.findLast((event) => event.type === "message" && event.id === "read-only");
+  assert.ok(event?.type === "message");
+  assert.equal(JSON.parse(event.text).readOnly, "mounted");
+  const spec = f.spec();
+  assert.equal(spec.workspace, realpathSync(f.state));
+  assert.deepEqual(spec.additionalWorkspaces.filter((mount) => mount.path === f.scope), [{ path: f.scope, readOnly: true }]);
+  assert.ok(!spec.additionalWorkspaces.some((mount) => !mount.readOnly && mount.path === f.scope));
+  await session.dispose();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(f.calls(), ["create", `exec ${spec.name} ${f.scope}`, `remove ${spec.name}`]);
+});
+
 test("a Revive after a clean close skips the pre-create remove; a spec left by a crash does not", async (t) => {
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });

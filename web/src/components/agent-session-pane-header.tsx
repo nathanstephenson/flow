@@ -67,7 +67,8 @@ export type AgentSessionPaneHeaderProps = {
   chrome: Chrome;
   /** Absent where the host cannot open a Shell, which is how the controls disappear rather than break. */
   docks?: Docks;
-  onOpenPullRequest: () => void;
+  /** Absent for a read-only Scope, which has no Git pane, so the link opens the Pull Request itself. */
+  onOpenPullRequest?: () => void;
 };
 
 const BLUR_LAYERS = [
@@ -136,7 +137,7 @@ export function AgentSessionPaneHeader({
                 target="_blank"
                 rel="noreferrer"
                 onClick={(event) => {
-                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  if (!onOpenPullRequest || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                   event.preventDefault();
                   onOpenPullRequest();
                 }}

@@ -85,7 +85,11 @@ export function NewAgentSessionPage({
 
   const [projectPath, setProjectPath] = useState<string | undefined>(() => drafts.scope());
   const project = projects.find((candidate) => candidate.path === projectPath);
-  const scope = project?.path;
+  const projectRoot = config.projects?.root ? config.scope : undefined;
+  const readOnly = projectRoot !== undefined && projectPath === READ_ONLY_ROOT.path;
+  const scope = readOnly ? projectRoot : project?.path;
+  const isolation = config.filesystemIsolationStatus?.mode ?? config.filesystemIsolation ?? "none";
+  const enforced = isolation === "bubblewrap" || (isolation === "sandbox" && config.sandboxSharing !== "shared");
   const [chosenBackend, setBackend] = useState<string | undefined>(initialBackend);
   const backend = chosenBackend ?? resolveDefaultBackend(config.backends, config.providers?.defaultBackend) ?? "";
   const [chosenModel, setChosenModel] = useState<string | undefined>();
@@ -109,7 +113,7 @@ export function NewAgentSessionPage({
     void refresh();
   }, [refresh]);
 
-  const branches = useBranches(scope);
+  const branches = useBranches(readOnly ? undefined : scope);
   useEffect(() => {
     if (config.git !== false) branches.load();
   }, [scope, config.git]);
@@ -147,6 +151,7 @@ export function NewAgentSessionPage({
     effort,
     ...(chosenPermissionMode ? { permissionMode: chosenPermissionMode } : {}),
     inWorktree,
+    readOnly,
     repository,
     base,
   });
@@ -338,7 +343,7 @@ export function NewAgentSessionPage({
     [drafts, projectPath],
   );
 
-  const groups = groupProjects(projects);
+  const groups = groupProjects(projectRoot === undefined ? projects : [READ_ONLY_ROOT, ...projects]);
 
   return (
     <div
@@ -369,7 +374,7 @@ export function NewAgentSessionPage({
             ))}
           </TabsList>
 
-          {projects.length === 0 ? (
+          {projects.length === 0 && projectRoot === undefined ? (
             <>
               <TabsContent value="chat">
                 <NoProjects uncurated={uncurated} />
@@ -404,7 +409,7 @@ export function NewAgentSessionPage({
                   fieldRef={projectField}
                   groups={groups}
                   projects={projects}
-                  project={project}
+                  project={readOnly ? READ_ONLY_ROOT : project}
                   onPick={(picked) => {
                     setProjectPath(picked.path);
                     setCutFrom(undefined);
@@ -413,6 +418,11 @@ export function NewAgentSessionPage({
                 />
               </div>
 
+              {readOnly && !enforced ? (
+                <p className="text-center text-xs text-muted-foreground" role="note">
+                  Isolation cannot enforce read-only here. Flow removes write tools, but this is not a boundary.
+                </p>
+              ) : null}
               {capabilityProblem ? (
                 <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground" role="status">
                   <span>{capabilityProblem}</span>
@@ -545,6 +555,8 @@ export function NewAgentSessionPage({
     </div>
   );
 }
+
+const READ_ONLY_ROOT: Project = { path: "read-only-project-root", name: "<none>" };
 
 function ProjectPicker({
   fieldRef,

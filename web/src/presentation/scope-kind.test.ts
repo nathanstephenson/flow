@@ -14,6 +14,10 @@ describe("what a Scope is called", () => {
     assert.equal(scopeKindLabel({ worktree: true }), "Worktree");
   });
 
+  it("names a Read-only Scope as the read-only Project Root", () => {
+    assert.equal(scopeKindLabel({ readOnly: true }), "Read-only Project Root");
+  });
+
   // "Local checkout" would contrast with a remote one, and Flow has no such thing — so it
   // would distinguish nothing now and be wrong on the day it does.
   it("calls an ordinary Scope the Project's checkout, not a local one", () => {
@@ -23,7 +27,7 @@ describe("what a Scope is called", () => {
 
   // The hint is the whole reason the checkout is a label and the branch is a picker.
   it("says a Scope cannot be changed, whichever kind it is", () => {
-    for (const scope of [{ worktree: true } as const, {}]) {
+    for (const scope of [{ worktree: true } as const, { readOnly: true } as const, {}]) {
       assert.match(scopeKindHint(scope), /whole life/);
     }
   });

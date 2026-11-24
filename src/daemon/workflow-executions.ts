@@ -193,7 +193,7 @@ export class WorkflowExecutionService {
     this.code = {};
     this.ready = (async () => {
       try {
-        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: (sessionId) => this.host.workflowSandbox(sessionId), isolationMode: options.isolationMode, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
+        const executors = await createCodeExecutors({ ...this.filesystemPolicy(), sandbox: (sessionId) => this.host.workflowSandbox(sessionId), readOnly: (sessionId) => this.host.isReadOnly(sessionId), isolationMode: options.isolationMode, runtimePath: this.runtimePath, nodePath: options.nodePath ?? '', resolveSecret: async (name, signal) => this.secrets.resolve(name, signal) });
         if (key !== this.runtimeKey) return;
         this.code = executors;
         executors.shell.check({ id: 'probe', name: 'probe', kind: 'shell', command: 'true' }, { sessionId: 'probe', backend: 'probe', scope: '/' });
