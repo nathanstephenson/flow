@@ -301,35 +301,47 @@
   }
 }
 
-@property --creating-swell {
-  syntax: "<length>";
-  inherits: false;
-  initial-value: 0px;
+.creating-smoke {
+  --tint: color-mix(in srgb, var(--foreground) var(--creating-tint, 10%), transparent);
+  position: relative;
+  mask-image: radial-gradient(closest-side, black 35%, transparent);
 }
 
-.creating-glow {
-  --tint: color-mix(in srgb, var(--status-active) var(--creating-tint, 18%), transparent);
+.dark .creating-smoke {
+  --creating-tint: 14%;
+}
+
+.creating-smoke > span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 55%;
+  height: 40%;
   border-radius: 50%;
-  background:
-    repeating-radial-gradient(circle, transparent var(--creating-swell), var(--tint) calc(var(--creating-swell) + 20px), transparent calc(var(--creating-swell) + 40px)),
-    radial-gradient(closest-side, var(--tint), transparent);
-  mask-image: radial-gradient(closest-side, black 20%, transparent);
-  animation: creating-glow 4s linear infinite;
+  background: radial-gradient(closest-side, var(--tint), transparent);
+  opacity: 0;
+  animation: creating-puff var(--duration) ease-out var(--delay) infinite;
 }
 
-.dark .creating-glow {
-  --creating-tint: 26%;
-}
-
-@keyframes creating-glow {
-  to {
-    --creating-swell: 40px;
+@keyframes creating-puff {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--turn)) scale(0.4);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) rotate(calc(var(--turn) + 90deg)) scale(1.6);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .creating-glow {
+  .creating-smoke > span {
     animation: none;
+    opacity: 1;
+    transform: translate(-50%, -50%);
   }
 }
 

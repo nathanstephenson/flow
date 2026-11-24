@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import type { Capabilities, EffortLevel } from "../../../src/protocol/events.ts";
@@ -593,12 +593,30 @@ function ProjectPicker({
   );
 }
 
+const SMOKE_PUFFS: [x: number, y: number, turn: number, duration: number, delay: number][] = [
+  [70, -12, 10, 5.3, -0.4],
+  [38, 58, 75, 6.1, -2.2],
+  [-30, 64, 140, 4.7, -3.9],
+  [-72, 8, 200, 5.9, -1.3],
+  [-44, -56, 260, 6.7, -4.8],
+  [22, -70, 320, 5.1, -2.9],
+  [60, 40, 40, 7.3, -5.6],
+  [-62, -30, 170, 6.4, -0.9],
+];
+
 function CreatingAgentSession({ text, attachments }: { text: string; attachments: IncomingAttachment[] }) {
   return (
     <div role="status" className="absolute inset-0">
-      <div className="absolute top-1/2 left-1/2 grid -translate-1/2 place-items-center">
-        <div className="creating-glow col-start-1 row-start-1 size-64" aria-hidden />
-        <span className="col-start-1 row-start-1 text-sm text-muted-foreground">Creating Agent Session…</span>
+      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 flex-col items-center">
+        <div className="creating-smoke size-48" aria-hidden>
+          {SMOKE_PUFFS.map(([x, y, turn, duration, delay], index) => (
+            <span
+              key={index}
+              style={{ "--x": `${x}px`, "--y": `${y}px`, "--turn": `${turn}deg`, "--duration": `${duration}s`, "--delay": `${delay}s` } as CSSProperties}
+            />
+          ))}
+        </div>
+        <span className="-mt-4 text-sm text-muted-foreground">Creating Agent Session…</span>
       </div>
       <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center px-4 sm:px-6">
         <div className="flex w-full max-w-2xl flex-col gap-2">
