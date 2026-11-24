@@ -29,6 +29,8 @@ import { appendToComposer, Composer, type ComposerHandle } from "@/components/co
 import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
+import { PullRequestOpenProvider } from "@/components/pull-request-open.tsx";
+import { samePullRequest } from "@/presentation/github-link.ts";
 import { MessageActionsProvider, type MessageActions } from "@/components/message-actions.tsx";
 import type { Draft, PendingAttachment } from "@/presentation/drafts.ts";
 import type { RewindRestore } from "../../../src/protocol/events.ts";
@@ -141,6 +143,13 @@ function AttachedPane({
   // no longer knows there is a session behind it — see web/src/composer-actions.ts.
   const actions = useSessionActions(sessionId);
   const [prefill, setPrefill] = useState<{ nonce: number; draft: Draft }>();
+  const pullRequestUrl = sessions.find((session) => session.id === sessionId)?.git?.pr?.url;
+  const { dispatch } = docks;
+  const openPullRequest = useCallback((href: string) => {
+    if (pullRequestUrl === undefined || !samePullRequest(href, pullRequestUrl)) return false;
+    dispatch({ type: "open-git", pullRequest: true });
+    return true;
+  }, [dispatch, pullRequestUrl]);
   const messageActions = useMemo((): MessageActions => {
     const capabilities = chrome.capabilities;
     if (!capabilities || chrome.status === "ended") return { openSession: onOpenSession };
@@ -345,6 +354,7 @@ function AttachedPane({
       <SubagentOpenProvider
         value={(subagentKey) => docks.dispatch({ type: "open-subagents", subagentId: subagentKey })}
       >
+        <PullRequestOpenProvider value={openPullRequest}>
         <MessageActionsProvider value={messageActions}>
         <TranscriptView
           view={view}
@@ -357,6 +367,7 @@ function AttachedPane({
           onObserved={observe}
         />
         </MessageActionsProvider>
+        </PullRequestOpenProvider>
       </SubagentOpenProvider>
 
       <Composer
@@ -419,6 +430,7 @@ function AttachedPane({
         title={title}
         chrome={chrome}
         docks={mobile ? undefined : docks}
+        onOpenPullRequest={() => docks.dispatch({ type: "open-git", pullRequest: true })}
       />
 
       {mobile ? (

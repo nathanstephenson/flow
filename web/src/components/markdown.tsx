@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 
 import type { MdAlign, MdBlock, MdInline } from "@client/markdown.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
+import { useOpenPullRequest } from "@/components/pull-request-open.tsx";
 import { DiffText } from "@/components/diff-text.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -241,11 +242,16 @@ function Inline({ inline, query }: { inline: MdInline; query: string }) {
 function GitHubPill({ inline, label, query }: { inline: Extract<MdInline, { kind: "link" }>; label: string; query: string }) {
   const [only, ...rest] = inline.inlines;
   const bare = rest.length === 0 && only?.kind === "text" && only.text === inline.href;
+  const openPullRequest = useOpenPullRequest();
   return (
     <a
       href={inline.href}
       target="_blank"
       rel="noreferrer noopener"
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (openPullRequest?.(inline.href)) event.preventDefault();
+      }}
       className="inline-flex items-baseline gap-1 rounded-md bg-foreground/8 px-1 py-px align-baseline font-medium hover:bg-foreground/12 [overflow-wrap:anywhere]"
     >
       <GitHubMark className="size-3 shrink-0 self-center" />

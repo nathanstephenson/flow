@@ -30,13 +30,16 @@ export type DockSide = "bottom" | "right";
  * makes it survive a reload — the layout is what is persisted, so a selection anywhere else would
  * be forgotten every time the page is closed.
  *
+ * A `git` tab's `pullRequest` asks its pane to show the pull request once. The pane clears it, and a
+ * reload drops it, so it is a request rather than a selection.
+ *
  * The kinds take the domain word; only the visible label says "Agents".
  */
 export type DockTabContent =
   | { kind: "shell"; shellId?: string }
   | { kind: "subagents"; subagentId?: string }
   | { kind: "workflows" }
-  | { kind: "git" };
+  | { kind: "git"; pullRequest?: true };
 
 /** `content: undefined` is an unchosen tab, and unchosen is what draws the picker. */
 export type DockTab = { id: string; content: DockTabContent | undefined };
@@ -148,8 +151,15 @@ function fill(dock: Dock, tabId: string, content: DockTabContent): Dock {
   };
 }
 
-export function fillWithGit(dock: Dock, tabId: string): Dock {
-  return fill(dock, tabId, { kind: "git" });
+export function fillWithGit(dock: Dock, tabId: string, pullRequest = false): Dock {
+  return fill(dock, tabId, pullRequest ? { kind: "git", pullRequest: true } : { kind: "git" });
+}
+
+export function showedPullRequest(dock: Dock, tabId: string): Dock {
+  return {
+    ...dock,
+    tabs: dock.tabs.map((tab) => (tab.id === tabId && tab.content?.kind === "git" ? { ...tab, content: { kind: "git" } } : tab)),
+  };
 }
 
 export function fillWithShell(dock: Dock, tabId: string): Dock {

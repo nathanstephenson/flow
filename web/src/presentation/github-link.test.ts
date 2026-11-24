@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { githubLinkLabel } from "./github-link.ts";
+import { githubLinkLabel, samePullRequest } from "./github-link.ts";
 
 describe("githubLinkLabel", () => {
   it("ignores links that are not GitHub", () => {
@@ -25,5 +25,22 @@ describe("githubLinkLabel", () => {
     assert.equal(githubLinkLabel("https://github.com/acme/web/"), "acme/web");
     assert.equal(githubLinkLabel("https://github.com/acme/web/blob/main/src/a.ts"), "acme/web/blob/main/src/a.ts");
     assert.equal(githubLinkLabel("https://github.com/"), "github.com");
+  });
+});
+
+describe("samePullRequest", () => {
+  const pr = "https://github.com/acme/web/pull/42";
+
+  it("matches any page of the same pull request", () => {
+    assert.equal(samePullRequest("https://github.com/acme/web/pull/42", pr), true);
+    assert.equal(samePullRequest("https://www.github.com/Acme/Web/pull/42/files#diff-1", pr), true);
+  });
+
+  it("rejects other pull requests, issues and pages", () => {
+    assert.equal(samePullRequest("https://github.com/acme/web/pull/43", pr), false);
+    assert.equal(samePullRequest("https://github.com/acme/api/pull/42", pr), false);
+    assert.equal(samePullRequest("https://github.com/acme/web/issues/42", pr), false);
+    assert.equal(samePullRequest("https://github.com/acme/web", pr), false);
+    assert.equal(samePullRequest("not a url", pr), false);
   });
 });

@@ -67,6 +67,7 @@ export type AgentSessionPaneHeaderProps = {
   chrome: Chrome;
   /** Absent where the host cannot open a Shell, which is how the controls disappear rather than break. */
   docks?: Docks;
+  onOpenPullRequest: () => void;
 };
 
 const BLUR_LAYERS = [
@@ -83,6 +84,7 @@ export function AgentSessionPaneHeader({
   title,
   chrome,
   docks,
+  onOpenPullRequest,
 }: AgentSessionPaneHeaderProps) {
   const pr = useAgentSessions().sessions.find((session) => session.id === sessionId)?.git?.pr;
   return (
@@ -133,6 +135,11 @@ export function AgentSessionPaneHeader({
                 aria-label={`Pull Request #${pr.number}`}
                 target="_blank"
                 rel="noreferrer"
+                onClick={(event) => {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  onOpenPullRequest();
+                }}
               >
                 #{pr.number}
               </a>

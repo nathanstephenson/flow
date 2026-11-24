@@ -9,6 +9,7 @@ import {
   fillWithShell,
   fillWithSubagents,
   fillWithGit,
+  showedPullRequest,
   emptyDock,
   parseLayouts,
   pruneLayouts,
@@ -53,6 +54,18 @@ describe("Git dock tabs", () => {
     const restored = reconcileLayout(stored, []);
     assert.deepEqual(restored.right.tabs, [{ id: "git", content: { kind: "git" } }]);
     assert.equal(restored.right.activeId, "git");
+  });
+
+  it("asks an existing Git tab for its pull request once, and forgets the request on reload", () => {
+    const asked = fillWithGit(setActive(fillWithGit(withShells(1), "git"), "t1"), "git", true);
+    assert.equal(asked.tabs.length, 2);
+    assert.equal(asked.activeId, "git");
+    assert.deepEqual(asked.tabs[1]!.content, { kind: "git", pullRequest: true });
+    const stored = parseLayouts(JSON.stringify({ session: { ...defaultLayout(), right: asked } })).session!;
+    assert.deepEqual(stored.right.tabs[1]!.content, { kind: "git" });
+    const shown = showedPullRequest(setActive(asked, "t1"), "git");
+    assert.deepEqual(shown.tabs[1]!.content, { kind: "git" });
+    assert.equal(shown.activeId, "t1");
   });
 });
 
