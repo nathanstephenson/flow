@@ -2,10 +2,11 @@ import { commonGitPath, localStack, localStacks } from "./stack-metadata.ts";
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { localRepository, resolveRepository } from "./repository.ts";
+import { localRepository, mergeMethods, mergeSettingsFields, resolveRepository, type MergeSettings } from "./repository.ts";
 import { api, gh, type Gh } from "./github.ts";
 import { head, localBranches, run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
-import type { StackInput, StackStatus, StackView } from "../protocol/stack.ts";
+import { stackMergeBlock, type StackInput, type StackStatus, type StackView } from "../protocol/stack.ts";
+import type { MergeMethod } from "../protocol/pull-request.ts";
 
 async function git(scope: string, args: string[], write = false): Promise<string> {
   const result = await run(scope, args, write ? GIT_WRITE_TIMEOUT_MS : GIT_READ_TIMEOUT_MS);
@@ -56,12 +57,40 @@ export async function stackStatus(scope: string, github: Gh = gh): Promise<Stack
   if (!listed.value.includes(branch)) return { ...status, notice: "This branch has no commits yet. Commit first to create a stack." };
   const trunkNotice = `${branch} is a trunk. Switch to another branch to create a stack.`;
   if (stacks.some(stack => stack.trunk.branch === branch)) return { ...status, notice: trunkNotice };
-  try { return { ...status, view: parseStack(await runStack(scope, ["view", "--json"], github)) }; }
+  try { return { ...status, view: await withTracking(scope, parseStack(await runStack(scope, ["view", "--json"], github))) }; }
   catch (error) { if (!notInStack.test(String(error))) throw error; }
   const trunk = (await localRepository(scope, branch))?.defaultBranches.find(name => listed.value.includes(name));
   if (branch === trunk) return { ...status, notice: trunkNotice };
   const stacked = new Set(stacks.flatMap(stack => stack.branches.map(member => member.branch)));
   return { ...status, create: { current: branch, ...(trunk ? { trunk } : {}), branches: listed.value, unstacked: listed.value.filter(name => !stacked.has(name)) } };
+}
+
+async function withTracking(scope: string, view: StackView): Promise<StackView> {
+  const tracking = new Map((await git(scope, ["for-each-ref", "--format=%(refname:short)%00%(upstream)%00%(upstream:track,nobracket)", "refs/heads"])).split("\n").map(line => line.split("\0")).map(([name, upstream, track]) => [name, upstream ? track ?? "" : undefined]));
+  for (const branch of view.branches) {
+    const track = tracking.get(branch.name);
+    if (track === undefined || track === "gone") continue;
+    branch.ahead = Number(/ahead (\d+)/.exec(track)?.[1] ?? 0);
+    branch.behind = Number(/behind (\d+)/.exec(track)?.[1] ?? 0);
+  }
+  return view;
+}
+
+export async function stackMergeMethods(scope: string, view: StackView, github: Gh = gh): Promise<MergeMethod[]> {
+  const [owner, name] = (await resolveRepository(scope, view.currentBranch, github)).base.repo.split("/");
+  const { repository } = await api<{ repository: MergeSettings }>(scope, github, `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${mergeSettingsFields}}}`, { owner: owner!, name: name! });
+  return mergeMethods(repository);
+}
+
+const mergeFlags: Record<MergeMethod, string> = { MERGE: "--merge", SQUASH: "--squash", REBASE: "--rebase" };
+
+export async function mergeableStack(scope: string, github: Gh = gh): Promise<StackView> {
+  const { view, notice } = await stackStatus(scope, github);
+  if (!view) throw new Error(notice ?? "This branch is not in a stack.");
+  await stackTitles(scope, view, github);
+  const block = stackMergeBlock(view);
+  if (block) throw new Error(block);
+  return view;
 }
 
 type Title = { title: string; isDraft: boolean };
@@ -141,7 +170,7 @@ async function validateInit(scope: string, trunk: unknown, branches: string[], g
 
 export async function changeStack(scope: string, input: StackInput, github: Gh = gh): Promise<string> {
   const { action } = input;
-  if (!["init", "add", "checkout", "rebase", "continue", "abort", "submit", "sync"].includes(action)) throw new Error("Unknown Stack action.");
+  if (!["init", "add", "checkout", "rebase", "continue", "abort", "submit", "sync", "merge"].includes(action)) throw new Error("Unknown Stack action.");
   if (action === "continue" || action === "abort") {
     const state = await stackStatus(scope, github);
     if (!state.rebasing) throw new Error(state.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress.");
@@ -169,6 +198,11 @@ export async function changeStack(scope: string, input: StackInput, github: Gh =
   }
   if (action === "continue" || action === "abort") args.splice(0, 1, "rebase", `--${action}`);
   if (action === "submit") args.push("--auto");
+  if (action === "merge") {
+    if (!input.method || !Object.hasOwn(mergeFlags, input.method)) throw new Error("Invalid merge method.");
+    await mergeableStack(scope, github);
+    args.push("--yes", mergeFlags[input.method]);
+  }
   return runStack(scope, args, github);
 }
 

@@ -8,7 +8,7 @@ import { changeStack, cleanStack, parseStack, stackStatus, stackTitles, stackCon
 import { SessionHost } from "../src/daemon/host.ts";
 import { gh } from "../src/daemon/github.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
-import type { StackStatus, StackView } from "../src/protocol/stack.ts";
+import { stackMergeBlock, type StackStatus, type StackView } from "../src/protocol/stack.ts";
 
 const view: StackView = { trunk: "main", currentBranch: "feature", branches: [{ name: "feature", isCurrent: true, isMerged: false, isQueued: false, needsRebase: false, pr: { number: 12, url: "https://github.com/test/repo/pull/12", state: "OPEN" } }] };
 let root: string;
@@ -246,6 +246,59 @@ it("hides Stack and asks nothing more when gh stack is missing", async () => {
   const status = await stackStatus(repo, async (_scope, args) => { calls.push(args); throw new Error('unknown command "stack" for "gh"'); });
   assert.deepEqual(status, { available: false, conflicts: [], rebasing: false });
   assert.deepEqual(calls, [["stack", "--help"]]);
+});
+
+it("merges the whole stack with the chosen method and refuses an invalid method", async () => {
+  const calls: string[][] = [];
+  const gh = async (_scope: string, args: string[]) => { calls.push(args); return args[1] === "view" ? JSON.stringify(view) : ""; };
+  await changeStack(repo, { action: "merge", method: "SQUASH" }, gh);
+  assert.deepEqual(calls.at(-1), ["stack", "merge", "--yes", "--squash"]);
+  for (const method of [undefined, "FAST" as never]) await assert.rejects(changeStack(repo, { action: "merge", ...(method ? { method } : {}) }, gh), /Invalid merge method/);
+});
+
+it("refuses to merge a stack with a branch that has no open, ready pull request", async () => {
+  const branch = view.branches[0]!;
+  const blocked = (changes: Partial<typeof branch>) => ({ ...view, branches: [{ ...branch, ...changes }] });
+  assert.equal(stackMergeBlock(view), undefined);
+  assert.equal(stackMergeBlock(blocked({ isMerged: true, pr: { ...branch.pr!, state: "MERGED" } })), "All pull requests of this stack are merged.");
+  assert.equal(stackMergeBlock({ ...view, branches: [{ ...branch, isMerged: true, pr: { ...branch.pr!, state: "MERGED" } }, branch] }), undefined);
+  const { pr: _, ...withoutPr } = branch;
+  assert.equal(stackMergeBlock({ ...view, branches: [withoutPr] }), "feature has no pull request. Submit the stack first.");
+  assert.equal(stackMergeBlock(blocked({ pr: { ...branch.pr!, state: "CLOSED" } })), "#12 is closed.");
+  assert.equal(stackMergeBlock(blocked({ pr: { ...branch.pr!, isDraft: true } })), "#12 is a draft. Mark it ready for review first.");
+  const calls: string[][] = [];
+  const gh = async (_scope: string, args: string[]) => { calls.push(args); return args[1] === "view" ? JSON.stringify(blocked({ pr: { ...branch.pr!, isDraft: true } })) : ""; };
+  await assert.rejects(changeStack(repo, { action: "merge", method: "MERGE" }, gh), /draft/);
+  assert.ok(!calls.some(args => args[1] === "merge"));
+});
+
+it("offers only the repository's merge methods and refuses another method at confirmation", async () => {
+  const { host, id } = await hostFixture();
+  git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
+  writeFileSync(join(root, "bin/gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${root}/calls'\ncase "$*" in\n'stack --help') exit 0;;\n'stack view --json') cat '${root}/view.json';;\nauth*) exit 0;;\nrepo*) echo '{"id":"R","defaultBranchRef":{"name":"main"},"isFork":false}';;\n*mergeCommitAllowed*) echo '{"data":{"repository":{"isArchived":false,"viewerPermission":"WRITE","mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":false}}}';;\n*) echo done;;\nesac\n`);
+  try {
+    const review = await host.prepareStack(id, "merge");
+    assert.deepEqual(review.mergeMethods, ["SQUASH"]);
+    await assert.rejects(host.changeStack(id, { action: "merge", token: review.token, method: "MERGE" }), /does not permit/);
+    const fresh = await host.prepareStack(id, "merge");
+    await host.changeStack(id, { action: "merge", token: fresh.token, method: "SQUASH" });
+    assert.match(readFileSync(join(root, "calls"), "utf8"), /stack merge --yes --squash/);
+  } finally { await host.shutdown(); }
+});
+
+it("shows how far each stack branch is ahead of and behind its upstream", async () => {
+  git(repo, "remote", "add", "origin", "https://github.com/test/repo.git");
+  git(repo, "branch", "second");
+  git(repo, "switch", "--quiet", "feature");
+  git(repo, "commit", "--quiet", "--allow-empty", "-m", "remote");
+  git(repo, "update-ref", "refs/remotes/origin/feature", "HEAD");
+  git(repo, "reset", "--quiet", "--hard", "main");
+  git(repo, "commit", "--quiet", "--allow-empty", "-m", "local one");
+  git(repo, "commit", "--quiet", "--allow-empty", "-m", "local two");
+  git(repo, "branch", "--quiet", "--set-upstream-to=origin/feature");
+  const stack: StackView = { ...view, branches: [view.branches[0]!, { ...view.branches[0]!, name: "second", isCurrent: false }] };
+  const status = await stackStatus(repo, async (_scope, args) => args[1] === "view" ? JSON.stringify(stack) : "");
+  assert.deepEqual(status.view?.branches.map(branch => [branch.name, branch.ahead, branch.behind]), [["feature", 2, 1], ["second", undefined, undefined]]);
 });
 
 it("reads the registered stack of the current branch", async () => {

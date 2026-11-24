@@ -1,7 +1,7 @@
 import { run, GIT_READ_TIMEOUT_MS, GIT_WRITE_TIMEOUT_MS } from "./git.ts";
 import { api, gh, type Gh } from "./github.ts";
 import type { CheckStatus, PullRequestSummary } from "../protocol/git.ts";
-import type { PullRequestRef } from "../protocol/pull-request.ts";
+import type { MergeMethod, PullRequestRef } from "../protocol/pull-request.ts";
 
 export type Repository = {
   remote: string;
@@ -123,4 +123,18 @@ export async function resolvePullRequest(scope: string, repository: Repository, 
     checks: checks(pr.commits.nodes[0]?.commit.statusCheckRollup), checksCompleted: completed(pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts), reviewDecision: pr.reviewDecision,
     unresolvedThreads: pr.reviewThreads.nodes.filter(thread => !thread.isResolved).length, updatedAt: pr.updatedAt,
   };
+}
+
+export const writers = ["ADMIN", "MAINTAIN", "WRITE"];
+export const mergeSettingsFields = "isArchived viewerPermission mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed";
+
+export type MergeSettings = { isArchived: boolean; viewerPermission: string | null; mergeCommitAllowed: boolean; squashMergeAllowed: boolean; rebaseMergeAllowed: boolean };
+
+export function mergeMethods(repository: MergeSettings): MergeMethod[] {
+  if (repository.isArchived || !writers.includes(repository.viewerPermission ?? "")) return [];
+  return [
+    ...(repository.mergeCommitAllowed ? ["MERGE" as const] : []),
+    ...(repository.squashMergeAllowed ? ["SQUASH" as const] : []),
+    ...(repository.rebaseMergeAllowed ? ["REBASE" as const] : []),
+  ];
 }

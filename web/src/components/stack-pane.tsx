@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Plus, X } from "lucide-react";
-import type { StackCreate, StackInput, StackPullRequest, StackReview, StackStatus, StackView } from "../../../src/protocol/stack.ts";
+import { stackMergeBlock, type StackCreate, type StackInput, type StackPullRequest, type StackReview, type StackStatus, type StackView } from "../../../src/protocol/stack.ts";
+import type { MergeMethod } from "../../../src/protocol/pull-request.ts";
 import type { GitState } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
 import { failureText } from "@/presentation/git.ts";
-import { readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
+import { methodLabels, readableStatus, safePullRequestUrl } from "@/presentation/pull-request.ts";
 
 type Form = { current: string; trunk?: string; branches: string[] };
 type Branch = StackView["branches"][number];
@@ -16,6 +17,8 @@ function stateLine(branch: Branch): string {
   return [
     branch.pr ? `#${branch.pr.number} ${!branch.isMerged && branch.pr.state === "OPEN" && branch.pr.isDraft ? "Draft" : readableStatus(branch.isMerged ? "MERGED" : branch.pr.state)}` : branch.isMerged ? "Merged" : "No pull request",
     ...(branch.isQueued ? ["Queued"] : []),
+    ...(branch.ahead ? [`${branch.ahead} ahead`] : []),
+    ...(branch.behind ? [`${branch.behind} behind`] : []),
     ...(branch.needsRebase ? ["Needs rebase"] : []),
     ...(branch.isCurrent ? ["Current"] : []),
   ].join(" · ");
@@ -38,6 +41,7 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
   const [readError, setReadError] = useState("");
   const [form, setForm] = useState<Form>();
   const [review, setReview] = useState<StackReview>();
+  const [method, setMethod] = useState<MergeMethod>();
   const [names, setNames] = useState("");
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -76,8 +80,10 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
     setError("");
     setOutput("");
     try {
-      if ((action === "submit" || action === "sync") && !input.token) {
-        setReview(await connection.command<StackReview>({ type: "prepare_stack", sessionId, action }));
+      if ((action === "submit" || action === "sync" || action === "merge") && !input.token) {
+        const prepared = await connection.command<StackReview>({ type: "prepare_stack", sessionId, action });
+        setMethod(prepared.mergeMethods?.[0]);
+        setReview(prepared);
       } else {
         setReview(undefined);
         const output = await connection.command<string>({ type: "change_stack", sessionId, input: { action, ...input } });
@@ -123,6 +129,7 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
 
   const blocked = busy || disabled;
   const changed = (git?.changed ?? 0) > 0;
+  const mergeReason = status?.view && stackMergeBlock(status.view);
   if (!visible) return null;
   const addable = status?.create && form ? status.create.unstacked.filter(name => name !== form.trunk && !form.branches.includes(name)) : [];
   return <section aria-label="Stack" className="space-y-3">
@@ -186,7 +193,9 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
         <Button size="sm" variant="outline" disabled={blocked || changed || !!review} onClick={() => void run("rebase")}>Rebase</Button>
         <Button size="sm" disabled={blocked || changed || !!review} onClick={() => void run("submit")}>Submit stack</Button>
         <Button size="sm" variant="outline" disabled={blocked || changed || !!review} onClick={() => void run("sync")}>Sync stack</Button>
+        <Button size="sm" variant="outline" disabled={blocked || changed || !!review || !!mergeReason} onClick={() => void run("merge")}>Merge stack</Button>
       </div>
+      {mergeReason ? <p className="text-xs text-muted-foreground">{mergeReason}</p> : null}
     </> : status?.rebasing ? <>
       <h3>Rebase in progress</h3>
       <ul aria-label="Conflict files">{status.conflicts.map(file => <li key={file}>{file}</li>)}</ul>
@@ -198,11 +207,22 @@ export function StackPane({ sessionId, git, refresh = 0, disabled = false, onCha
     </> : null}
     {syncFailed ? <p role="status">Sync was not confirmed. On conflicts, gh stack sync restores all branches. Use Rebase to resolve conflicts locally, then review and confirm Sync again. Flow will not retry or push automatically.</p> : null}
     {review ? <section aria-label="Confirm Stack operation" className="space-y-3 border p-3">
-      <h3>Confirm {review.action === "submit" ? "Submit" : "Sync"}</h3>
-      <p>{review.action === "submit" ? "Push stack branches and create or update PRs and their bases. New PRs are drafts with automatic titles. Existing draft states stay unchanged." : "Fetch, rebase, and push stack branches. This changes local and remote branches. Conflicts restore all branches; resolve them with Rebase before a separately confirmed retry."}</p>
+      <h3>Confirm {{ submit: "Submit", sync: "Sync", merge: "Merge" }[review.action]}</h3>
+      <p>{{
+        submit: "Push stack branches and create or update PRs and their bases. New PRs are drafts with automatic titles. Existing draft states stay unchanged.",
+        sync: "Fetch, rebase, and push stack branches. This changes local and remote branches. Conflicts restore all branches; resolve them with Rebase before a separately confirmed retry.",
+        merge: `Merge all PRs of this stack into ${review.view.trunk} on GitHub in one operation. If one PR cannot merge, none merge. Local commits that are not pushed are not merged.`,
+      }[review.action]}</p>
       <ul>{review.view.branches.map(branch => <li key={branch.name}>{branch.name} · {branch.pr ? `#${branch.pr.number} ${branch.pr.state}` : "new draft PR on Submit"}{branch.isMerged || branch.isQueued ? " (merged or queued; gh stack may skip)" : ""}</li>)}</ul>
+      {review.mergeMethods && method ? <div className="flex flex-wrap items-center gap-2">
+        <span>Merge method</span>
+        <Select value={method} disabled={blocked} onValueChange={(next: MergeMethod | null) => { if (next) setMethod(next); }}>
+          <SelectTrigger size="sm" aria-label="Merge method"><SelectValue>{methodLabels[method]}</SelectValue></SelectTrigger>
+          <SelectContent>{review.mergeMethods.map(option => <SelectItem key={option} value={option}>{methodLabels[option]}</SelectItem>)}</SelectContent>
+        </Select>
+      </div> : null}
       <Button variant="outline" disabled={blocked} onClick={() => setReview(undefined)}>Cancel</Button>{" "}
-      <Button disabled={blocked} onClick={() => void run(review.action, { token: review.token })}>Confirm and {review.action}</Button>
+      <Button disabled={blocked} onClick={() => void run(review.action, { token: review.token, ...(review.action === "merge" && method ? { method } : {}) })}>Confirm and {review.action}</Button>
     </section> : null}
   </section>;
 }

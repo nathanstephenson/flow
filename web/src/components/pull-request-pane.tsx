@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea.tsx";
 import { PullRequestIcon } from "@/components/pull-request-indicators.tsx";
 import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 import { failureText, pullRequestIndicators } from "@/presentation/git.ts";
-import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
+import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, methodLabels, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
 type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onAddToDraft: (block: string) => AppendResult };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
@@ -22,7 +22,6 @@ const notAdded: Record<Exclude<AppendResult, "added">, string> = {
   locked: "This Agent Session cannot take a message. Nothing was added.",
 };
 
-const methodLabels: Record<MergeMethod, string> = { MERGE: "Merge commit", SQUASH: "Squash and merge", REBASE: "Rebase and merge" };
 
 function link(url: string, children: ReactNode) {
   const href = safePullRequestUrl(url);

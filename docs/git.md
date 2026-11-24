@@ -66,6 +66,8 @@ that is only on GitHub or only in another clone. To show a Stack from GitHub, ru
 
 - On a branch in a Stack, the tab lists the branches from top to bottom, then the trunk. Each row
   shows the PR number, state and title, and "Needs rebase", "Merged" or "Queued" when they apply.
+  It also shows how many commits the local branch is ahead of and behind its upstream, as of the
+  last fetch.
 - On a branch that is not in a Stack, the tab shows the Create stack form.
 - On the trunk of a registered Stack or the default branch, on a detached HEAD, or on a branch
   with no commits, the tab shows one line of text.
@@ -77,7 +79,7 @@ that is only on GitHub or only in another clone. To show a Stack from GitHub, ru
   action waits for a running read. A `gh stack` command that you run in a terminal at the same
   time is not in this queue.
 
-Stack supports Create, Add, Switch, Submit, Sync and Rebase. Merge and stack restructuring are not
+Stack supports Create, Add, Switch, Submit, Sync, Rebase and Merge. Stack restructuring is not
 available.
 
 ### Rules for all stack operations
@@ -86,7 +88,7 @@ available.
   background work.
 - The working tree must be clean, except to continue or abort a conflict. Flow never stashes
   changes. Commit uncommitted files first. While Git State shows changed files, Create stack, New
-  branch, Switch, Rebase, Submit stack and Sync stack are disabled.
+  branch, Switch, Rebase, Submit stack, Sync stack and Merge stack are disabled.
 - Stack branches use their active parent as the review base, and as the base for new PRs.
 
 ### Create
@@ -117,6 +119,19 @@ Submit and Sync need a fresh review of the affected branches and PRs.
 - The CLI cannot lock remote membership. Changes after the final check are still a race.
 - After a Sync conflict, use Rebase to resolve it locally. Then confirm Sync again. Flow does not
   retry or push automatically.
+
+### Merge
+
+Merge stack needs a fresh review, like Submit and Sync.
+
+- Merge stack uses `gh stack merge --yes` with the chosen merge method. GitHub merges all PRs of
+  the Stack into the trunk in one operation. If one PR cannot merge, no PR merges. If the trunk
+  uses a merge queue, GitHub adds the Stack to the queue.
+- Each branch that is not merged must have an open PR that is not a draft.
+- The review shows only the merge methods that the repository permits for you.
+- GitHub merges the PR heads on GitHub. Local commits that are not pushed are not merged. Use the
+  ahead and behind counts to find them, then Submit first.
+- Flow does not Sync after the merge.
 
 ### Rebase conflicts
 
