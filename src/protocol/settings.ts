@@ -38,6 +38,11 @@ export interface FilesystemIsolationStatus {
   sandbox: { supported: boolean; reason?: string; path?: string };
 }
 
+export type WorktreeSettings = {
+  /** The web New Agent Session page starts every Agent Session in a Worktree. */
+  always?: boolean;
+};
+
 export type Settings = {
   /** Omitted chooses Bubblewrap only when the machine's real launch probe succeeds. Never sandbox. */
   filesystemIsolation?: FilesystemIsolationMode;
@@ -47,6 +52,7 @@ export type Settings = {
   updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
+  worktrees?: WorktreeSettings;
   retention: {
     /**
      * How long a Settled Agent Session survives before it is reaped — a duration like `"1d"`, or
@@ -154,6 +160,7 @@ export type SettingsPatch = {
   updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
+  worktrees?: WorktreeSettings;
   retention?: { settled?: string };
   fonts?: { chrome?: string; monospace?: string };
   /**

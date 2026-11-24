@@ -90,7 +90,8 @@ export function NewAgentSessionPage({
   const [chosenModel, setChosenModel] = useState<string | undefined>();
   const [effort, setEffort] = useState<EffortLevel | undefined>();
   const [chosenPermissionMode, setPermissionMode] = useState<import("../../../src/protocol/events.ts").AgentPermissionMode | undefined>();
-  const [inWorktree, setInWorktree] = useState(false);
+  const alwaysWorktree = config.worktrees?.always === true;
+  const [chosenWorktree, setInWorktree] = useState(false);
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
   const projectField = useRef<HTMLLabelElement | null>(null);
@@ -108,6 +109,7 @@ export function NewAgentSessionPage({
   const head = branches.list?.head;
   const checkedOut = head?.detached ? undefined : head?.name;
   const base = cutFrom ?? checkedOut ?? "";
+  const inWorktree = alwaysWorktree || chosenWorktree;
 
   const { catalogue: models, loading: modelsLoading, problem: modelsProblem, refresh: refreshModels } = useModelCatalogue();
   const backendModels = models?.find((entry) => entry.backend === backend);
@@ -493,7 +495,7 @@ export function NewAgentSessionPage({
                 </Accordion>
               )}
 
-              {repository && config.git !== false ? (
+              {repository && config.git !== false && !alwaysWorktree ? (
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-2">
                     <input

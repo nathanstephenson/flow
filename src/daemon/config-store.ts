@@ -260,6 +260,7 @@ function settingsOf(config: Config): Settings {
     ...(config.filesystemIsolation === undefined ? {} : { filesystemIsolation: config.filesystemIsolation }),
     ...(config.sandboxSharing === undefined ? {} : { sandboxSharing: config.sandboxSharing }),
     ...(config.updateChannel === undefined ? {} : { updateChannel: config.updateChannel }),
+    ...(config.worktrees === undefined ? {} : { worktrees: config.worktrees }),
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),

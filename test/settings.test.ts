@@ -941,6 +941,28 @@ describe("sandbox sharing", () => {
   });
 });
 
+describe("worktree settings", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "flow-worktree-settings-")); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("is omitted by default and saves a choice", () => {
+    const store = new ConfigStore(root);
+    assert.equal(store.view().worktrees, undefined);
+    store.update({ worktrees: { always: true } });
+    assert.deepEqual(new ConfigStore(root).view().worktrees, { always: true });
+  });
+
+  it("warns and ignores an invalid disk value, and refuses an invalid patch", () => {
+    writeFileSync(join(root, "config.json"), JSON.stringify({ worktrees: { always: "yes" } }));
+    const store = new ConfigStore(root);
+    assert.match(store.warning ?? "", /worktrees\.always must be true or false/);
+    assert.equal(store.view().worktrees, undefined);
+    assert.throws(() => store.update({ worktrees: { always: "yes" } } as never), /worktrees\.always/);
+    assert.throws(() => store.update({ worktrees: { sometimes: true } } as never), /worktrees: unknown field sometimes/);
+  });
+});
+
 describe("update channel", () => {
   let root: string;
   beforeEach(() => { root = mkdtempSync(join(tmpdir(), "flow-update-channel-")); });
