@@ -430,6 +430,7 @@ function AttachedPane({
         title={title}
         chrome={chrome}
         docks={mobile ? undefined : docks}
+        onOpenPullRequest={() => docks.dispatch({ type: "open-git", pullRequest: true })}
       />
 
       {mobile ? (
