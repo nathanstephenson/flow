@@ -19,6 +19,7 @@ import {
   INERT_PERMISSION_KEYS,
 } from "./composer-extensions.ts";
 import { ComposerMenu } from "./composer-menu.tsx";
+import { useHost } from "@/host.tsx";
 
 type Discovery =
   | { key: string; state: "idle" }
@@ -37,7 +38,9 @@ export function WorkflowInstructions({
   backend: string;
   onChange: (value: string) => void;
 }) {
-  const key = `${backend}\0${project ?? ""}`;
+  const { config } = useHost();
+  const scope = project ?? config.scope;
+  const key = `${backend}\0${scope}`;
   const [discovery, setDiscovery] = useState<Discovery>({ key, state: "idle" });
   const [query, setQuery] = useState<string | undefined>(undefined);
   const [highlighted, setHighlighted] = useState(0);
@@ -46,7 +49,7 @@ export function WorkflowInstructions({
   useEffect(() => {
     const controller = new AbortController();
     setHighlighted(0);
-    if (!project || !backend) {
+    if (!scope || !backend) {
       setDiscovery({ key, state: "idle" });
       return () => controller.abort();
     }
@@ -54,13 +57,13 @@ export function WorkflowInstructions({
     void (async () => {
       try {
         const response = await fetch(
-          `/api/skills?scope=${encodeURIComponent(project)}&backend=${encodeURIComponent(backend)}`,
+          `/api/skills?scope=${encodeURIComponent(scope)}&backend=${encodeURIComponent(backend)}`,
           { credentials: "same-origin", signal: controller.signal },
         );
         if (!response.ok) throw new Error(`Skill discovery failed (${response.status})`);
         const answer = (await response.json()) as ScopeSkills;
-        if (answer.scope !== project || answer.backend !== backend) {
-          throw new Error("Skill discovery returned a different Project or Backend Adapter");
+        if (answer.scope !== scope || answer.backend !== backend) {
+          throw new Error("Skill discovery returned a different Scope or Backend Adapter");
         }
         if (answer.problem) throw new Error(answer.problem);
         if (!controller.signal.aborted) setDiscovery({ key, state: "ready", skills: answer.skills });
@@ -75,7 +78,7 @@ export function WorkflowInstructions({
       }
     })();
     return () => controller.abort();
-  }, [backend, key, project]);
+  }, [backend, key, scope]);
 
   const current = discovery.key === key ? discovery : ({ key, state: "loading" } as const);
   const catalogue = useMemo<Triggerable[]>(
@@ -121,16 +124,14 @@ export function WorkflowInstructions({
     query === undefined &&
     current.state === "ready" &&
     !current.skills.some((skill) => skill.name === invocation.name)
-      ? `Skill /${invocation.name} is not available in this Project checkout. Execution will fail unless it exists in the execution Scope.`
+      ? `Skill /${invocation.name} is not available in ${project ? "this Project checkout" : "the Default Scope"}. Execution will fail unless it exists in the execution Scope.`
       : "";
   const emptyLabel =
-    !project
-      ? "Choose a Project to use Skills"
-      : current.state === "failed"
-        ? `Could not load Skills: ${current.problem}`
-        : query && catalogue.length > 0
-          ? `No Skills match “${query}”`
-          : "No Skills for this Project and Backend Adapter";
+    current.state === "failed"
+      ? `Could not load Skills: ${current.problem}`
+      : query && catalogue.length > 0
+        ? `No Skills match “${query}”`
+        : "No Skills for this Scope and Backend Adapter";
 
   return (
     <div className="flex flex-col gap-1">
@@ -174,9 +175,7 @@ export function WorkflowInstructions({
         {missing ||
           (current.state === "failed"
             ? `Skill discovery failed: ${current.problem}`
-            : project
-              ? "Skills are previewed from this Project and resolved fresh in the execution Scope on every attempt."
-              : "Bind this Workflow to a Project before adding a leading Skill invocation.")}
+            : `Skills are previewed from ${project ? "this Project" : "the Default Scope"} and resolved fresh in the execution Scope on every attempt.`)}
       </p>
     </div>
   );
