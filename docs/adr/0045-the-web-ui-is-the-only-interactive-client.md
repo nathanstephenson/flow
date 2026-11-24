@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Removes the TUI (`flow tui`, `src/tui/`). The ADRs that mention the TUI stay as history.
+Accepted. Removes the TUI (`flow tui`, `src/tui/`) and its mentions in other ADRs and docs.
 
 ## Decision
 

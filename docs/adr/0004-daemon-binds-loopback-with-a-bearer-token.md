@@ -27,7 +27,7 @@ Refresh-token rotation is persisted and concurrent requests coordinate one refre
 
 The local `/auth` handoff and its `flow=` cookie are disabled in OIDC mode. The daemon bearer token
 continues to work when explicitly presented in an `Authorization` header, including by remote CLI
-and TUI clients. This is an intentional administrative bypass and must be distributed like a root
+clients. This is an intentional administrative bypass and must be distributed like a root
 credential. A browser cannot obtain it from Flow.
 
 All documents, immutable assets, APIs, SSE streams and Shell WebSockets pass through the same gate.

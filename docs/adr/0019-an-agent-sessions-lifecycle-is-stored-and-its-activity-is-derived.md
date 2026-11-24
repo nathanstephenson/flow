@@ -98,7 +98,7 @@ would reproduce exactly the churn this replaces. Awaiting deliberately does not 
 equally its owner's turn: the band already surfaces it, so a stamp would buy nothing and would cost
 real churn — a turn that hit two un-authorised tools would come back out of Awaiting with a fresh
 timestamp and jump the working band. `updatedAt` leaves `SessionSummary` altogether rather than
-staying on as a field with no reader, and the rail and the TUI both print `restingAt`, because a
+staying on as a field with no reader, and the rail prints `restingAt`, because a
 list that shows one time while ordering by another reads as broken the first time they disagree.
 
 **The open-prompt index is an index; the transcript stays the truth.** `statusOf` cannot scan a

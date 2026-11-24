@@ -6,7 +6,7 @@ embedded in `src/web/assets.generated.ts` as a manifest the Session Host serves 
 SPA fallback for deep-linked Agent Sessions, behind the same token gate as the API. `src/client/`
 correspondingly stops being only the shared reducer and becomes the shared front-end core, holding
 the transport and the presentation logic both clients need. Everything there stays free of DOM
-types, because the terminal client compiles it under a configuration that has none — which is what
+types, because the CLI compiles it under a configuration that has none — which is what
 keeps the boundary honest about what is genuinely shared rather than merely colocated.
 
 The arrangement this replaces worked because the shared modules imported only types, so erasing them

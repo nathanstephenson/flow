@@ -22,9 +22,7 @@ second refusal path for a `send` naming an id that does not exist, and — the p
 class of garbage that has no owner. Every paste someone thinks better of leaves bytes at an id no
 transcript will ever name, so something has to sweep them, on a timer, against a "was this ever
 sent?" question the store cannot answer. Inline has no such class: the bytes arrive in the same act
-that commits to them. The precedent for putting a web-only field on a shared command is already here,
-in `create.worktree.branch` — "the web client's alone: the TUI has no text entry outside its prompt
-line, so nothing it cannot do is hidden behind this field". A terminal has no clipboard image either.
+that commits to them.
 
 **Written at send, not at dispatch.** `send(…, "after_turn")` queues while a turn is in flight, so
 there is a window — possibly minutes — between accepting a message and dispatching it. Holding the

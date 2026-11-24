@@ -8,7 +8,7 @@ the [README](../README.md).
 | [M0 walking skeleton](#m0-walking-skeleton) | Complete |
 | [M1 pi adapter](#m1-pi-adapter) | Complete |
 | [M2 durability and revive](#m2-durability-and-revive) | Complete |
-| [M3 transport and TUI](#m3-transport-and-tui) | Complete |
+| [M3 transport](#m3-transport) | Complete |
 | [M4 web UI](#m4-web-ui) | Complete |
 | [M5 single executable](#m5-single-executable) | Complete |
 | [M6 bundled web client](#m6-bundled-web-client) | In progress |
@@ -79,13 +79,12 @@ flow list
 - Claude's `resumeDropsTurn` takes a message id, not a boolean. So there is no generic "drop the
   torn turn" hint to pass down. Flow closes the torn turn in its own transcript instead.
 
-## M3 transport and TUI
+## M3 transport
 
-The terminal client talks to the Session Host over the wire. It never uses a session object.
+Clients talk to the Session Host over the wire. They never use a session object.
 
 ```bash
 flow serve          # Session Host on 127.0.0.1, prints the web handoff URL
-flow tui            # terminal client; connects to a running host or embeds one
 flow list
 ```
 
@@ -93,16 +92,9 @@ Transport is POST for commands and SSE for events. Flow uses SSE, not WebSocket,
 transcript goes in one direction and has sequence numbers. So reconnect is `?since=N`: a replay,
 not a resynchronisation protocol. It needs no dependency in Node or in the browser.
 
-The tests found two bugs that a manual try would probably miss:
-
-- **A stdin chunk is not a keystroke.** A paste arrives as one chunk, and an arrow key as a
-  three-byte escape sequence. So Flow splits chunks into keys.
-- **Chunk handlers raced.** Key handling is async. A chunk that arrived during the previous one
-  mixed with it and applied keys out of order. Flow now processes chunks strictly in sequence.
-
 ## M4 web UI
 
-A richer surface than the TUI, on the same transport and the same reducer.
+A browser client on the same transport and the same reducer.
 
 ```bash
 flow serve   # prints http://127.0.0.1:PORT/auth?token=… — open that once
@@ -113,7 +105,7 @@ M4 showed several Agent Sessions at once, collapsible tool calls, file edits as 
 each pane's transcript, a model picker grouped by provider, Steering Queue depth and context usage.
 M6 rebuilds this surface with one Agent Session on screen at a time.
 
-The browser ran **the same reducer as the TUI**, not a copy. `src/client/reduce.ts` and
+The browser ran **the same reducer as the CLI**, not a copy. `src/client/reduce.ts` and
 `src/client/diff.ts` imported only types. So stripping the types left standalone ESM with no
 imports. The host served them as `/reduce.js` and `/diff.js`, with no bundler. A test loaded what
 the Session Host served and asserted that it gave the same state as the TypeScript reducer.
@@ -171,8 +163,8 @@ TypeScript. The host no longer serves that file with its types removed.
 - It removes a limit: in M4, shared code could not import a value. That is why
   `src/client/diff.ts` compares lines naively.
 - So `src/client/` becomes the shared front-end core: reducer, transport, and the presentation logic
-  that both clients need. Everything in it must stay free of DOM types, because the TUI compiles it
-  in a program that has none.
+  that clients need. Everything in it must stay free of DOM types, because the CLI compiles it in a
+  program that has none.
 
 The Session Host knows nothing about Vite. `prebuild:binary` builds `web/dist`, and the binary build
 turns it into the manifest that it injects. The rest of the chain does not change. The host now
@@ -200,7 +192,7 @@ opened one pane for each Agent Session.
   the most active first.
 - Each row has a dot, a Subagent count, a queue depth and a relative time. That is enough to monitor
   any number of sessions without reading them.
-- Ten modules are shared with the terminal client, not the three that M4 allowed. The model and
+- Ten modules are shared in `src/client/`, not the three that M4 allowed. The model and
   Effort pickers, the status predicates, transcript search and the relative clock now each have one
   implementation, not two that had already drifted apart.
 - Styling is stock shadcn/ui on Base UI primitives, with no custom palette. The six states of an

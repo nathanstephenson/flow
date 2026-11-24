@@ -64,7 +64,3 @@ this host means running commands as the user who started it — tools are pre-ap
 holding the token can simply ask the agent to run Bash. A Shell is a convenience on top of an
 existing capability rather than a new one, and a flag implying otherwise would advertise a boundary
 that is not there.
-
-The TUI gets no equivalent, and that is a deliberate asymmetry in a project whose premise is that
-its two front-ends do not drift. The TUI is already running inside a terminal; the shell it would
-give you is the one you launched it from.
