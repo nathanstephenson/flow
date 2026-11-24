@@ -195,7 +195,7 @@ export async function runNativeAutoSubagentIncompatibilityScenario(): Promise<Na
     if (toolResultIncludes(body.messages, "native-auto-executed")) commandExecuted = true;
     if (transcript.includes("native child marker") && !hasToolResult) {
       streamMessage(response, { type: "tool_use", id: "sub-tool-1", name: "Bash", input: {
-        command: "echo native-auto-executed &",
+        command: "echo native-auto-executed & wait",
       } }, "tool_use");
     } else if (!hasToolResult) {
       streamMessage(response, { type: "tool_use", id: "agent-call-1", name: "Agent", input: {
