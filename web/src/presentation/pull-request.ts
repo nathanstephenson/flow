@@ -1,5 +1,7 @@
 import type { PullRequestSummary } from "../../../src/protocol/git.ts";
-import type { PullRequestCheck, PullRequestCheckLog, PullRequestDetails, PullRequestThread } from "../../../src/protocol/pull-request.ts";
+import type { MergeMethod, PullRequestCheck, PullRequestCheckLog, PullRequestDetails, PullRequestThread } from "../../../src/protocol/pull-request.ts";
+
+export const methodLabels: Record<MergeMethod, string> = { MERGE: "Merge commit", SQUASH: "Squash and merge", REBASE: "Rebase and merge" };
 
 export function safePullRequestUrl(value: string): string | undefined {
   try {

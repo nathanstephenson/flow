@@ -6,7 +6,7 @@ import { it } from "node:test";
 import { transformSync } from "esbuild";
 import { checkDraftBlock, threadDraftBlock } from "../web/src/presentation/pull-request.ts";
 
-function managedStack(branches: { name: string; pr?: { number: number; state?: string; title?: string; url?: string } | undefined; isMerged?: boolean }[]) {
+function managedStack(branches: { name: string; pr?: { number: number; state?: string; title?: string; url?: string; isDraft?: boolean } | undefined; isMerged?: boolean }[]) {
   const members = branches.map((branch, index) => ({ ...branch, isCurrent: index === branches.length - 1, isMerged: branch.isMerged ?? false, isQueued: false, needsRebase: false, ...(branch.pr ? { pr: { ...branch.pr, state: branch.pr.state ?? "OPEN" } } : {}) }));
   return { view: { trunk: "main", currentBranch: branches.at(-1)?.name ?? "main", branches: members } };
 }
@@ -33,6 +33,7 @@ function component(file: string, command: (input: any) => Promise<any>, globals:
     if (name === "@/git-state.ts") return { useGitState: () => ({ git: gitState, repository: repositoryState }) };
     if (name === "@/presentation/git.ts") return require("../web/src/presentation/git.ts");
     if (name === "@/presentation/pull-request.ts") return require("../web/src/presentation/pull-request.ts");
+    if (name === "../../../src/protocol/stack.ts") return require("../src/protocol/stack.ts");
     return new Proxy({}, { get: (_target, key) => key });
   } });
   return { render: (name: string, props: any) => { index = 0; return module.exports[name]!(props); }, effects: effects as ((() => void) & { deps?: unknown[] })[] };
@@ -286,6 +287,40 @@ it("reviews Submit and confirms it with the review token", async () => {
   findButton(render(), "Confirm and submit").props.onClick();
   await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.type === "change_stack").input)), { action: "submit", token: "reviewed" });
+});
+
+it("reviews Merge stack and confirms it with the review token and the chosen method", async () => {
+  const calls: any[] = [];
+  const { view } = managedStack([{ name: "feature", pr: { number: 3 } }]);
+  const { render } = await stackPane(async input => {
+    calls.push(input);
+    if (input.type === "prepare_stack") return { token: "reviewed", action: "merge", view, mergeMethods: ["SQUASH", "REBASE"] };
+    return input.type === "stack_status" ? { available: true, conflicts: [], rebasing: false, view } : "Merged";
+  });
+  findButton(render(), "Merge stack").props.onClick();
+  await flush();
+  assert.equal(calls.find(call => call.type === "prepare_stack").action, "merge");
+  const confirm = find(render(), "section", node => node.props["aria-label"] === "Confirm Stack operation");
+  assert.match(textContent(confirm), /Merge all PRs of this stack into main/);
+  find(confirm, "Select").props.onValueChange("REBASE");
+  findButton(render(), "Confirm and merge").props.onClick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.type === "change_stack").input)), { action: "merge", token: "reviewed", method: "REBASE" });
+});
+
+it("disables Merge stack and says why when a pull request is a draft", async () => {
+  const { view } = managedStack([{ name: "feature", pr: { number: 3, isDraft: true } }]);
+  const { render } = await stackPane(async () => ({ available: true, conflicts: [], rebasing: false, view }));
+  assert.equal(findButton(render(), "Merge stack").props.disabled, true);
+  find(render(), "p", node => textContent(node) === "#3 is a draft. Mark it ready for review first.");
+});
+
+it("shows how far a stack branch is ahead of and behind its upstream", async () => {
+  const { view } = managedStack([{ name: "feature", pr: { number: 3 } }]);
+  Object.assign(view.branches[0]!, { ahead: 2, behind: 1 });
+  const { render } = await stackPane(async () => ({ available: true, conflicts: [], rebasing: false, view }));
+  const row = findAll(find(render(), "ol", node => node.props["aria-label"] === "Stack branches"), "li")[0]!;
+  assert.match(textContent(row), /#3 Open · 2 ahead · 1 behind · Current/);
 });
 
 it("keeps the list and an open review when the same stack is read again", async () => {

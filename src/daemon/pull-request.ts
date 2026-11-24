@@ -1,5 +1,5 @@
 import { api, connection, gh, page, type Connection, type Gh } from "./github.ts";
-import { githubRepository, localRepository, resolvePullRequest, resolveRepository, type ResolvedPullRequest } from "./repository.ts";
+import { githubRepository, localRepository, mergeMethods, mergeSettingsFields, resolvePullRequest, resolveRepository, writers, type MergeSettings, type ResolvedPullRequest } from "./repository.ts";
 import { cleanStack } from "./stack.ts";
 import { pushTarget, remoteHead } from "./push.ts";
 import { localStack, stackParent } from "./stack-metadata.ts";
@@ -11,8 +11,7 @@ const commentFields = "id author{login} body url createdAt";
 const threadFields = "id path line isOutdated isResolved viewerCanReply viewerCanResolve viewerCanUnresolve";
 const threadCommentFields = `${commentFields} diffHunk`;
 const checkFields = "... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}";
-const detailsQuery = `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision updatedAt author{login} headRefName headRefOid headRepository{id nameWithOwner} baseRefName mergeable mergeStateStatus locked repository{isArchived viewerPermission mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed} comments(first:100){nodes{${commentFields}} ${page}} reviews(first:100){nodes{${commentFields} state} ${page}} reviewThreads(first:100){nodes{${threadFields} comments(first:100){nodes{${threadCommentFields}} ${page}}} ${page}} commits(last:1){nodes{commit{statusCheckRollup{id contexts(first:100){nodes{${checkFields}} ${page}}}}}}}}}`;
-const writers = ["ADMIN", "MAINTAIN", "WRITE"];
+const detailsQuery = `query($id:ID!){node(id:$id){... on PullRequest{id number url title body state isDraft reviewDecision updatedAt author{login} headRefName headRefOid headRepository{id nameWithOwner} baseRefName mergeable mergeStateStatus locked repository{${mergeSettingsFields}} comments(first:100){nodes{${commentFields}} ${page}} reviews(first:100){nodes{${commentFields} state} ${page}} reviewThreads(first:100){nodes{${threadFields} comments(first:100){nodes{${threadCommentFields}} ${page}}} ${page}} commits(last:1){nodes{commit{statusCheckRollup{id contexts(first:100){nodes{${checkFields}} ${page}}}}}}}}}`;
 
 type Comment = Omit<PullRequestComment, "author"> & { author: { login: string } | null };
 type ThreadNode = Omit<PullRequestThread, "comments" | "diffHunk"> & { comments: Connection<Comment & { diffHunk: string }> };
@@ -21,7 +20,7 @@ type DetailsNode = Omit<PullRequestDetails, "repo" | "author" | "headRepository"
   author: { login: string } | null;
   headRepository: { id: string; nameWithOwner: string } | null;
   locked: boolean;
-  repository: { isArchived: boolean; viewerPermission: string | null; mergeCommitAllowed: boolean; squashMergeAllowed: boolean; rebaseMergeAllowed: boolean };
+  repository: MergeSettings;
   comments: Connection<Comment>;
   reviews: Connection<Comment & { state: string }>;
   reviewThreads: Connection<ThreadNode>;
@@ -47,14 +46,8 @@ async function details(scope: string, ref: Pick<PullRequestRef, "repo" | "id">, 
     threads.push({ ...thread, diffHunk: all[0]?.diffHunk ?? "", comments: all.map(comment) });
   }
   const rollup = commits.nodes[0]?.commit.statusCheckRollup;
-  const writer = !repository.isArchived && writers.includes(repository.viewerPermission ?? "");
-  const mergeMethods: MergeMethod[] = !writer ? [] : [
-    ...(repository.mergeCommitAllowed ? ["MERGE" as const] : []),
-    ...(repository.squashMergeAllowed ? ["SQUASH" as const] : []),
-    ...(repository.rebaseMergeAllowed ? ["REBASE" as const] : []),
-  ];
   return { headRepositoryId: headRepository?.id, pr: {
-    ...fields, repo: ref.repo, author: author?.login ?? "[deleted]", mergeMethods,
+    ...fields, repo: ref.repo, author: author?.login ?? "[deleted]", mergeMethods: mergeMethods(repository),
     ...(headRepository ? { headRepository: headRepository.nameWithOwner } : {}),
     viewerCanComment: !repository.isArchived && (!locked || writers.includes(repository.viewerPermission ?? "")),
     comments: (await connection(scope, github, comments, id, "PullRequest", "comments", commentFields)).map(comment),

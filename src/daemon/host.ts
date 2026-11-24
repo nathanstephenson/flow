@@ -8,8 +8,8 @@ import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
 import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
-import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
-import type { StackInput, StackReview, StackStatus } from "../protocol/stack.ts";
+import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage, mergeableStack, stackMergeMethods } from "./stack.ts";
+import type { StackInput, StackReview, StackReviewAction, StackStatus } from "../protocol/stack.ts";
 import { changes, changesText, commitContext, diff } from "./changes.ts";
 import { commit } from "./commit.ts";
 import { push, pushState } from "./push.ts";
@@ -395,16 +395,22 @@ export class SessionHost {
     }
   }
 
-  async prepareStack(sessionId: string, action: "submit" | "sync"): Promise<StackReview> {
-    if (action !== "submit" && action !== "sync") throw new CommandRefused("Invalid Stack review action.");
+  async prepareStack(sessionId: string, action: StackReviewAction): Promise<StackReview> {
+    if (action !== "submit" && action !== "sync" && action !== "merge") throw new CommandRefused("Invalid Stack review action.");
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
       this.stackReviews.delete(sessionId);
       await cleanStack(record.scope);
       const status = await stackStatus(record.scope);
       if (!status.view) throw new Error(status.notice ?? "This branch is not in a stack.");
-      const review = { token: randomUUID(), action, view: status.view };
-      this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
+      const fingerprint = await stackFingerprint(record.scope, status.view, action === "sync");
+      const review: StackReview = { token: randomUUID(), action, view: status.view };
+      if (action === "merge") {
+        review.view = await mergeableStack(record.scope);
+        review.mergeMethods = await stackMergeMethods(record.scope, review.view);
+        if (!review.mergeMethods.length) throw new Error("You cannot merge pull requests in this repository.");
+      }
+      this.stackReviews.set(sessionId, { review, fingerprint, expires: Date.now() + 15 * 60_000 });
       return review;
     });
   }
@@ -412,10 +418,11 @@ export class SessionHost {
   async changeStack(sessionId: string, input: StackInput): Promise<string> {
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
-      if (input.action === "submit" || input.action === "sync") {
+      if (input.action === "submit" || input.action === "sync" || input.action === "merge") {
         const saved = this.stackReviews.get(sessionId);
         this.stackReviews.delete(sessionId);
         if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
+        if (input.action === "merge" && !saved.review.mergeMethods?.includes(input.method!)) throw new Error("This repository does not permit that merge method.");
         await cleanStack(record.scope);
         const status = await stackStatus(record.scope);
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
