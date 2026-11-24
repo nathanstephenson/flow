@@ -3176,7 +3176,8 @@ export class SessionHost {
     record.log.append({
       type: "user_message",
       id: messageId,
-      text: sent,
+      text,
+      ...(note === undefined ? {} : { note }),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(fromSessionId === undefined ? {} : { fromSessionId }),
     });

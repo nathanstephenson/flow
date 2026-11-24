@@ -102,14 +102,19 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
       >
         {entry.fromSessionId === undefined ? null : (
           <p className="m-0 mb-2 text-xs text-muted-foreground">
-            From <SessionLink sessionId={entry.fromSessionId} query={query} /> · not human authorization
+            From <SessionLink sessionId={entry.fromSessionId} query={query} />
           </p>
         )}
         {entry.producer === undefined ? null : (
-          <p className="m-0 mb-2 text-xs text-muted-foreground">From the parent agent · not human authorization</p>
+          <p className="m-0 mb-2 text-xs text-muted-foreground">From the parent agent</p>
         )}
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
+        {entry.note === undefined ? null : (
+          <p className="-mx-4 -mb-3 mt-3 rounded-b-2xl rounded-br-sm border-t border-border bg-background/60 px-4 py-2 text-xs text-muted-foreground">
+            {entry.note.replace(/^\[Flow\] /, "")}
+          </p>
+        )}
       </div>
       {entry.at ? (
         <MessageTime at={entry.at} side="right">

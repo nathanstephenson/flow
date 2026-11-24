@@ -69,7 +69,7 @@ export type OpenPermission = { callId: string; tool: string; context?: string; a
 export type Entry = ({ rewound?: true }) & (
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   /** `at`: when the message was logged. */
-  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string; fromSessionId?: string; producer?: Producer }
+  | { kind: "user"; id: string; text: string; note?: string; attachments?: string[]; at?: string; fromSessionId?: string; producer?: Producer }
   /** `endedAt`: when the turn ended, on the parent's last message of that turn only. */
   | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer; endedAt?: string }
   | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
@@ -430,6 +430,7 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           ...(event.fromSessionId === undefined
             ? { text: event.text }
             : { text: event.text.slice(event.text.indexOf("\n") + 1), fromSessionId: event.fromSessionId }),
+          ...(event.note === undefined ? {} : { note: event.note }),
           ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
           at,
         }),
