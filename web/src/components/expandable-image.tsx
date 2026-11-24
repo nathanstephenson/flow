@@ -5,7 +5,13 @@ import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/
 import { cn } from "@/lib/utils.ts";
 
 /** A thumbnail that opens the image in a dialog of at most 80% of the window, to zoom and pan. */
-export function ExpandableImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
+export function ExpandableImage({ src, alt, className, referrerPolicy, onError }: {
+  src: string;
+  alt: string;
+  className?: string;
+  referrerPolicy?: ReferrerPolicy;
+  onError?: () => void;
+}) {
   return (
     <Dialog>
       <DialogTrigger
@@ -17,18 +23,18 @@ export function ExpandableImage({ src, alt, className }: { src: string; alt: str
           />
         }
       >
-        <img src={src} alt={alt} className={cn("block", className)} />
+        <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy={referrerPolicy} onError={onError} className={cn("block", className)} />
       </DialogTrigger>
       <DialogContent className="w-auto max-w-[80vw] gap-0 p-2 sm:max-w-[80vw]">
         <DialogTitle className="sr-only">{alt || "Image"}</DialogTitle>
-        <ZoomPanImage src={src} alt={alt} />
+        <ZoomPanImage src={src} alt={alt} referrerPolicy={referrerPolicy} />
       </DialogContent>
     </Dialog>
   );
 }
 
 /** Pinch or Ctrl+wheel zooms at the pointer, scrolling and dragging pan, double-click toggles fitted and 2×. */
-function ZoomPanImage({ src, alt }: { src: string; alt: string }) {
+function ZoomPanImage({ src, alt, referrerPolicy }: { src: string; alt: string; referrerPolicy?: ReferrerPolicy }) {
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const [view, setView] = useState(UNZOOMED);
@@ -92,6 +98,7 @@ function ZoomPanImage({ src, alt }: { src: string; alt: string }) {
       <img
         src={src}
         alt={alt}
+        referrerPolicy={referrerPolicy}
         draggable={false}
         className="block max-h-[calc(80dvh-1rem)] max-w-[calc(80vw-1rem)] origin-top-left will-change-transform"
         style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
