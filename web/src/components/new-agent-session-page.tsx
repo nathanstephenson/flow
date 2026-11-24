@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, useLayoutEffect } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import type { Capabilities, EffortLevel } from "../../../src/protocol/events.ts";
@@ -96,7 +96,7 @@ export function NewAgentSessionPage({
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
   const projectField = useRef<HTMLLabelElement | null>(null);
-  const [creating, setCreating] = useState<{ text: string; attachments: IncomingAttachment[] } | undefined>();
+  const [creating, setCreating] = useState<Creating | undefined>();
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -197,7 +197,7 @@ export function NewAgentSessionPage({
 
   const send = useCallback(
     async (text: string, attachments: IncomingAttachment[]): Promise<unknown | undefined> => {
-      setCreating({ text, attachments });
+      setCreating({ text, attachments, ...originOf("[data-composer-input]") });
       const created = await create();
       if (!created) {
         setCreating(undefined);
@@ -298,7 +298,7 @@ export function NewAgentSessionPage({
     launchInFlight.current = true;
     setLaunching(true);
     setFailure(undefined);
-    setCreating({ text: workflow.name, attachments: [] });
+    setCreating({ text: workflow.name, attachments: [], ...originOf('[aria-label="Workflow"]') });
     const input = validatedInput;
     const launchId = crypto.randomUUID();
     try {
@@ -341,9 +341,18 @@ export function NewAgentSessionPage({
   const groups = groupProjects(projects);
 
   return (
-    <div data-new-session="" className="transcript-scroller relative flex min-h-0 flex-col overflow-y-auto">
+    <div
+      data-new-session=""
+      className={cn("transcript-scroller relative flex min-h-0 flex-col overflow-y-auto", creating !== undefined && "overflow-hidden")}
+    >
       {creating !== undefined ? <CreatingAgentSession {...creating} /> : null}
-      <div hidden={creating !== undefined} className="m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
+      <div
+        inert={creating !== undefined}
+        className={cn(
+          "m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6",
+          creating !== undefined && "animate-out fade-out-0 fill-mode-forwards",
+        )}
+      >
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <Tabs
           value={tab}
@@ -604,10 +613,29 @@ const SMOKE_PUFFS: [x: number, y: number, turn: number, duration: number, delay:
   [-62, -30, 170, 6.4, -0.9],
 ];
 
-function CreatingAgentSession({ text, attachments }: { text: string; attachments: IncomingAttachment[] }) {
+type Creating = { text: string; attachments: IncomingAttachment[]; from: DOMRect | undefined; scrolled: number };
+
+function originOf(selector: string): Pick<Creating, "from" | "scrolled"> {
+  return {
+    from: document.querySelector(`[data-new-session] ${selector}`)?.getBoundingClientRect(),
+    scrolled: document.querySelector("[data-new-session]")?.scrollTop ?? 0,
+  };
+}
+
+function CreatingAgentSession({ text, attachments, from, scrolled }: Creating) {
+  const message = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const to = (card.current ?? message.current)?.getBoundingClientRect();
+    if (!from || !to || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    message.current?.animate(
+      [{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: "none" }],
+      { duration: 400, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+  }, []);
   return (
-    <div role="status" className="absolute inset-0">
-      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 flex-col items-center">
+    <div role="status" className="absolute inset-x-0 h-full" style={{ top: scrolled }}>
+      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 animate-in flex-col items-center duration-500 fade-in-0">
         <div className="creating-smoke size-48" aria-hidden>
           {SMOKE_PUFFS.map(([x, y, turn, duration, delay], index) => (
             <span
@@ -618,8 +646,8 @@ function CreatingAgentSession({ text, attachments }: { text: string; attachments
         </div>
         <span className="-mt-4 text-sm text-muted-foreground">Creating Agent Session…</span>
       </div>
-      <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center px-4 sm:px-6">
-        <div className="flex w-full max-w-2xl flex-col gap-2">
+      <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center">
+        <div ref={message} className="flex w-full max-w-2xl flex-col gap-2 px-4 sm:px-6">
           {attachments.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {attachments.map((attachment, index) => (
@@ -633,7 +661,7 @@ function CreatingAgentSession({ text, attachments }: { text: string; attachments
             </div>
           ) : null}
           {text === "" ? null : (
-            <p className="line-clamp-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm whitespace-pre-wrap">{text}</p>
+            <p ref={card} className="line-clamp-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm whitespace-pre-wrap">{text}</p>
           )}
         </div>
       </div>
