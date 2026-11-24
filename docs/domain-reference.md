@@ -413,6 +413,11 @@ process separation stays enabled in both modes; HTTP MCP and network authority a
 `worktrees.always` in **Settings → Projects → Worktrees** makes the web New Agent Session page start
 every Agent Session in a Worktree and hides its choice. Forks and `session_create`
 still choose for themselves.
+
+`worktrees.updateSource` fast-forwards the Source Branch from its upstream in the Project before
+any Worktree is cut, for Agent Sessions and scheduled Workflow Occurrences. If that fails, the
+Worktree is cut from the local branch: an Agent Session gets a `warn` notice with git's message, and
+a Workflow Occurrence gets a generic `warning`.
 _Avoid_: config, preferences, options, profile
 
 **Effort**:

@@ -60,6 +60,7 @@ import {
   removeMergedBranch,
   removeWorktree,
   repairWorktree,
+  updateSourceBranch,
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
@@ -259,6 +260,8 @@ export type SessionHostOptions = {
   filesystemIsolationMode?: () => import("../protocol/settings.ts").FilesystemIsolationMode;
   sandboxSupport?: () => import("../isolation/sandbox.ts").SandboxSupport | undefined;
   sandboxSharing?: () => import("../protocol/settings.ts").SandboxSharing;
+  /** Fast-forward the Source Branch before cutting a Worktree from it. */
+  updateSourceBranch?: () => boolean;
   /** The Project Root that a Shared Sandbox mounts. */
   projectRoot?: () => string | undefined;
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
@@ -604,6 +607,7 @@ export class SessionHost {
   private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationMode"];
   private readonly sandbox: SessionHostOptions["sandboxSupport"];
   private readonly sandboxSharing: SessionHostOptions["sandboxSharing"];
+  private readonly updateSourceBranch: SessionHostOptions["updateSourceBranch"];
   private readonly shared: SharedSandbox | undefined;
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
@@ -613,6 +617,7 @@ export class SessionHost {
     this.filesystemIsolation = options.filesystemIsolationMode;
     this.sandbox = options.sandboxSupport;
     this.sandboxSharing = options.sandboxSharing;
+    this.updateSourceBranch = options.updateSourceBranch;
     this.shared = options.store ? new SharedSandbox(options.store.root, options.projectRoot ?? (() => undefined)) : undefined;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
@@ -1089,7 +1094,8 @@ export class SessionHost {
     // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
     const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
     this.validatePermissionMode(backend.name, permissionMode);
-    const worktree = options.scheduled?.worktree ?? (options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined);
+    const cut = options.scheduled?.worktree || !options.worktree ? undefined : await this.cutWorktree(options.scope, options.worktree);
+    const worktree = options.scheduled?.worktree ?? cut?.worktree;
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
@@ -1184,6 +1190,7 @@ export class SessionHost {
     });
     if (options.fork) this.appendForkPrefix(record, options.fork.source.id, options.fork.userMessageId, options.fork.prefix);
     this.flushBuffered(record);
+    if (cut?.warning) record.log.append({ type: "notice", level: "warn", text: cut.warning });
     // After session_started, never before: the transcript has to open with it (see `buffered`).
     await this.refreshBranch(record);
     /*
@@ -1245,12 +1252,13 @@ export class SessionHost {
   private async cutWorktree(
     repo: string,
     options: { from: string; branch?: string },
-  ): Promise<{ path: string; repo: string; branch: string }> {
+  ): Promise<{ worktree: { path: string; repo: string; branch: string }; warning?: string }> {
     // A host with no state root has nowhere to put a worktree. Said plainly rather than left to
     // fail as an undefined path, the way an unavailable pty is reported.
     if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot make a worktree");
     if (!isRepository(repo)) throw new CommandRefused(`${repo} is not a git repository`);
 
+    const updated = this.updateSourceBranch?.() ? await updateSourceBranch(repo, options.from) : undefined;
     const created = await createWorktree({
       repo,
       from: options.from,
@@ -1258,7 +1266,10 @@ export class SessionHost {
       ...(options.branch === undefined ? {} : { branch: options.branch }),
     });
     if (!created.ok) throw new CommandRefused(created.failure.message);
-    return { path: created.value.path, repo, branch: created.value.branch };
+    return {
+      worktree: { path: created.value.path, repo, branch: created.value.branch },
+      ...(updated?.ok === false ? { warning: `Source Branch ${options.from} was not updated, so the Worktree was cut from the local branch: ${updated.failure.message}` } : {}),
+    };
   }
 
   /** Attach a fresh Backend Session to a Dormant Agent Session, continuing the same transcript. */

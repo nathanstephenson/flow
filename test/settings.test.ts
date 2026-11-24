@@ -951,6 +951,10 @@ describe("worktree settings", () => {
     assert.equal(store.view().worktrees, undefined);
     store.update({ worktrees: { always: true } });
     assert.deepEqual(new ConfigStore(root).view().worktrees, { always: true });
+    assert.equal(store.updateSourceBranch(), false);
+    store.update({ worktrees: { updateSource: true } });
+    assert.deepEqual(new ConfigStore(root).view().worktrees, { always: true, updateSource: true });
+    assert.equal(new ConfigStore(root).updateSourceBranch(), true);
   });
 
   it("warns and ignores an invalid disk value, and refuses an invalid patch", () => {

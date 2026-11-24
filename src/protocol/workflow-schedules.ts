@@ -43,5 +43,7 @@ export interface WorkflowOccurrence {
   worktree?: { path: string; repo: string; branch: string } | undefined;
   /** Deliberately generic: external diagnostics may contain credentials. */
   outcome?: string | undefined;
+  /** Deliberately generic, like `outcome`. */
+  warning?: string | undefined;
 }
 export interface WorkflowOccurrencePage { occurrences: WorkflowOccurrence[]; next?: string }

@@ -41,6 +41,8 @@ export interface FilesystemIsolationStatus {
 export type WorktreeSettings = {
   /** The web New Agent Session page starts every Agent Session in a Worktree. */
   always?: boolean;
+  /** Fast-forward the Source Branch to its upstream before any Worktree is cut from it. */
+  updateSource?: boolean;
 };
 
 export type Settings = {

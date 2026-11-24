@@ -14,7 +14,7 @@ import type { ConfigStore } from './config-store.ts';
 import { resolveWorkflowCalls } from '../workflows/calls.ts';
 import { ScheduleValidationError } from '../workflows/schedule-errors.ts';
 import { includedProjects } from './projects.ts';
-import { isClean, localBranches, planWorktree, removeMergedBranch, removeWorktree, run, GIT_WRITE_TIMEOUT_MS } from './git.ts';
+import { isClean, localBranches, planWorktree, removeMergedBranch, removeWorktree, run, updateSourceBranch, GIT_WRITE_TIMEOUT_MS } from './git.ts';
 
 export function scheduleDriver(options: { host: SessionHost; config: ConfigStore; workflows: WorkflowStore; executions: WorkflowExecutionService; schedules: WorkflowScheduleStore; transcripts: TranscriptStore }): ScheduleDriver {
   const { host, config, workflows, executions, schedules, transcripts } = options;
@@ -141,6 +141,10 @@ export function scheduleDriver(options: { host: SessionHost; config: ConfigStore
           const provision = previous.catch(() => {}).then(async () => {
             signal?.throwIfAborted();
             const from = occurrence.settings.worktree!.from;
+            if (config.updateSourceBranch() && !(await updateSourceBranch(repo, from)).ok) {
+              occurrence = { ...occurrence, warning: 'Source Branch not updated; cut from the local branch.' };
+            }
+            signal?.throwIfAborted();
             const planned = await planWorktree({ repo, from, branch: `flow/schedule-${occurrence.id}`, under: transcripts.worktreesRoot() });
             if (!planned.ok) throw new Error('Could not plan worktree');
             signal?.throwIfAborted();

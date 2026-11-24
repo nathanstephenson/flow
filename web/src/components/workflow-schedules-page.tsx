@@ -638,6 +638,7 @@ function OccurrenceDetail({ id, onSession }: { id: string; onSession: (id: strin
           </p>
           <p className="break-all text-sm">Scope: {occurrence.scope ?? occurrence.settings.projectId}</p>
           {occurrence.outcome && <p role="status">{occurrence.outcome}</p>}
+          {occurrence.warning && <p role="status">{occurrence.warning}</p>}
           {occurrence.association === "failed" && (
             <Button
               disabled={busy}

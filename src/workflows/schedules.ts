@@ -42,6 +42,7 @@ export const occurrenceValidator = z.object({
   createdAt: timestamp, finishedAt: timestamp.optional(), sessionId: storageId.optional(), association: z.enum(['pending', 'attached', 'failed']).optional(), executionId: storageId.optional(),
   scope: z.string().min(1).optional(), worktree: z.object({ path: z.string(), repo: z.string(), branch: z.string() }).strict().optional(),
   outcome: z.string().max(2000).optional(),
+  warning: z.string().max(2000).optional(),
 }).strict().superRefine((value, context) => {
   if (value.id !== occurrenceId(value.scheduleId, value.activation, value.scheduledAt)) context.addIssue({ code: 'custom', message: 'Invalid occurrence identity' });
   if (isActiveOccurrence(value) === (value.finishedAt !== undefined)) context.addIssue({ code: 'custom', message: 'Invalid occurrence completion' });
