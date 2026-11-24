@@ -4,8 +4,8 @@ import type { LoggedEvent } from "../protocol/events.ts";
 import type { PresentationPage, PresentationSnapshot, PresentationUpdate } from "../protocol/presentation.ts";
 
 /**
- * A client's view of the Session Host. The TUI and the web UI both reach the daemon through this
- * shape, so neither can quietly grow a shortcut into a session object.
+ * A client's view of the Session Host. Every front-end reaches the daemon through this shape, so
+ * none can quietly grow a shortcut into a session object.
  */
 export type Connection = {
   command<T = unknown>(command: Command): Promise<T>;
@@ -13,8 +13,8 @@ export type Connection = {
   /**
    * What a Scope could be switched to, or have a worktree cut from.
    *
-   * Here rather than left to each front-end's own fetch because the TUI has no other way to reach a
-   * GET, and the alternative — making the list a Command — would put a query that changes outside
+   * Here rather than left to each front-end's own fetch because a non-browser client has no other way to
+   * reach a GET, and the alternative — making the list a Command — would put a query that changes outside
    * Flow through the door meant for things that change it.
    */
   branches(scope: string): Promise<BranchList>;

@@ -2,9 +2,8 @@
  * A one-line précis of a tool call's arguments.
  *
  * A collapsed tool call that says only `[complete] Edit` withholds the one thing a reader wants —
- * which file, which command, which pattern. The TUI prints exactly that today (`render.ts:79`), so
- * this lives beside the reducer and stays DOM-free: it returns a string, and both front-ends can
- * print a string.
+ * which file, which command, which pattern. This lives beside the reducer and stays DOM-free: it
+ * returns a string, and any front-end can print a string.
  */
 
 /**

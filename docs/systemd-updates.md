@@ -87,7 +87,7 @@ Use the same configuration with `"scope": "user"`, place units in `~/.config/sys
 
 ## Operation and recovery
 
-`flow update [--force]` queues the fixed updater and returns after submission; it does not wait for completion. Follow `journalctl -u flow-update.service` (or `journalctl --user -u ...`) for the final result. Close other CLI/TUI clients first. `--force` is CLI-only. Web Settings use the same unit with a pinned, confirmed stable release and persisted success/failure status. Busy work is checked again by the host immediately before systemd stop. Directly starting the updater without a queued request fails without mutation.
+`flow update [--force]` queues the fixed updater and returns after submission; it does not wait for completion. Follow `journalctl -u flow-update.service` (or `journalctl --user -u ...`) for the final result. Close other CLI clients first. `--force` is CLI-only. Web Settings use the same unit with a pinned, confirmed stable release and persisted success/failure status. Busy work is checked again by the host immediately before systemd stop. Directly starting the updater without a queued request fails without mutation.
 
 If systemd definitively refuses to stop the service (for example, missing polkit authorization), Flow reopens admission only after verifying that the original process still owns the active service and no manager job is pending. No package files are changed. An uncertain stop or real shutdown is never undone this way.
 

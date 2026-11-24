@@ -6,7 +6,7 @@ import type { Entry } from "./reduce.ts";
  *
  * DOM-free deliberately rather than incidentally: `highlightSegments` returns segments and not
  * nodes, which is what keeps this module compiling under the root config's `lib: ["ES2023"]`, and so
- * what lets the TUI match the way the web UI matches instead of growing a second rule.
+ * what lets another front-end match the way the web UI matches instead of growing a second rule.
  *
  * Case-insensitive substring, and nothing else. No regex (a reader typing `(` into a filter box does
  * not mean a group) and no fuzzy matching (which finds things nobody asked for and hides the reason).

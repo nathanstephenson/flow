@@ -50,7 +50,3 @@ while `<Highlighted>` marks within rendered text, so a query spanning a syntax b
 entry visible without visibly marking anything in it. Reconciling them means matching over a
 flattened rendered string and mapping offsets back into the tree, which is disproportionate for a
 filter box.
-
-The TUI still prints raw markdown. It has the tree available and the reason it does not yet consume
-it is that a terminal renderer is a separate problem — wrapping inside inline runs, ANSI weights,
-framing a code block in a character grid — not an oversight in this decision.

@@ -3,9 +3,8 @@ import type { ViewState } from "./reduce.ts";
 /**
  * How much of the Conversation Context is spent, as one short chrome label.
  *
- * The two front-ends had drifted on the wording — the TUI said `context 12%` and the web UI said
- * `12% context` for the same numbers. The TUI's wording wins because it reads as a label rather than
- * as a sentence fragment, and because it is the one with tests.
+ * `context 12%` rather than `12% context`, because it reads as a label rather than as a sentence
+ * fragment.
  */
 export function contextUsageLabel(usage: ViewState["contextUsage"]): string | undefined {
   if (!usage) return undefined;
@@ -17,8 +16,8 @@ export function contextUsageLabel(usage: ViewState["contextUsage"]): string | un
 /**
  * The same reading spelled out in full, for a hover where there is room for the numbers.
  *
- * Here rather than in `web/src/presentation/` so the rounding rule lives in one place: the TUI
- * prints `contextUsageLabel`'s percentage, and the same `used / window` stated twice is the drift
+ * Here rather than in `web/src/presentation/` so the rounding rule lives in one place: every
+ * front-end prints `contextUsageLabel`'s percentage, and the same `used / window` stated twice is the drift
  * this file exists to prevent.
  *
  * Rows rather than one string because the two readings are not the same measure and must not read as

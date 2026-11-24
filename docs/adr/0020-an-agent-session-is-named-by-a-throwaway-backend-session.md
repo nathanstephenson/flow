@@ -78,7 +78,7 @@ name severed mid-phrase reads as a bug and is worse than the first line of what 
 ## Per-backend Settings amendment
 
 Default Backend is machine-wide and resolved by the Session Host when a create command omits its
-backend. Web and terminal clients honour it; explicit choices win. With no setting, automatic
+backend. Web and CLI clients honour it; explicit choices win. With no setting, automatic
 selection prefers Claude, then the first registered adapter. An unavailable configured adapter is
 refused rather than silently rerouting a prompt. Existing Agent Sessions keep their bound adapter.
 

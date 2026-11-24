@@ -89,7 +89,7 @@ export type ServeOptions = {
   config?: ConfigStore;
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
-   * Optional external browser gate. The daemon bearer token remains valid for explicit CLI/TUI
+   * Optional external browser gate. The daemon bearer token remains valid for explicit CLI
    * clients, but browser cookies and navigation are owned exclusively by this gate when present.
    */
   oidc?: OidcGate;
@@ -1129,7 +1129,7 @@ type RequestAuthentication =
   | { kind: "bearer" }
   | { kind: "browser"; sessionId: string };
 
-/** Bearer access is deliberately independent of OIDC so remote CLI/TUI clients keep working. */
+/** Bearer access is deliberately independent of OIDC so remote CLI clients keep working. */
 async function authenticateRequest(
   request: IncomingMessage,
   options: ServeOptions,
@@ -1203,7 +1203,7 @@ a{display:inline-flex;align-items:center;justify-content:center;width:100%;heigh
 }
 
 /**
- * Same-origin only. A request with no Origin header is a non-browser client (the TUI, curl), which
+ * Same-origin only. A request with no Origin header is a non-browser client (the CLI, curl), which
  * a hostile page cannot forge on the user's behalf, so it is not what this check defends against.
  */
 function originAllowed(request: IncomingMessage, publicAppUrl?: string): boolean {

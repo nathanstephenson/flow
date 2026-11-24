@@ -23,7 +23,7 @@ flow serve --port 3000 --address 0.0.0.0
 
 ## External OIDC gate
 
-Flow can give browser admission to any OpenID Provider that follows the standard. CLI and TUI
+Flow can give browser admission to any OpenID Provider that follows the standard. CLI
 clients continue to use the bearer header.
 
 > **This is a shared personal deployment. It is not multi-user isolation.** Every person that the

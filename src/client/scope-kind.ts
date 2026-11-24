@@ -18,9 +18,8 @@ export function scopeKindLabel(scope: { worktree?: true }): string {
  * Why the checkout is a label and never a control.
  *
  * A Scope is fixed for an Agent Session's whole life, so there is no version of this someone could
- * change from here — a different directory is a different Agent Session. Exported as prose because
- * both front-ends want to say it: the web client as a tooltip, and it is the reason the TUI's
- * branch overlay offers no way to move between checkouts.
+ * change from here — a different directory is a different Agent Session. Exported as prose so the web
+ * client can say it as a tooltip.
  */
 export function scopeKindHint(scope: { worktree?: true }): string {
   return scope.worktree

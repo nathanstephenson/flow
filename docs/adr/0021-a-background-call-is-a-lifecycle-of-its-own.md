@@ -140,8 +140,8 @@ exist by then.
 
 ## Amendment: the web client draws one row
 
-Two rows for one call read as two calls. The Entries and `ownKeys` are unchanged, and the TUI still
-draws both rows, but the web transcript folds a Background Call into the tool row that launched it
+Two rows for one call read as two calls. The Entries and `ownKeys` are unchanged, but the web transcript
+folds a Background Call into the tool row that launched it
 whenever that row is shown (`web/src/presentation/background-rows.ts`). The tool row keeps the
 command and the launch receipt, and takes the card's status and clock at its far end: a spinner and
 its age while the Call runs, then when it finished, in red if it failed. A Tool Chain that holds a

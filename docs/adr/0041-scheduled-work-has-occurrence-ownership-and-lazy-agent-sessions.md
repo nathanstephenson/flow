@@ -7,7 +7,7 @@ Accepted. Amends ADRs 0013, 0023 (Workflow Executions), 0032, 0033 and 0034.
 ## Decision
 
 The Session Host admits Workflow Schedules while running; an open browser is unnecessary. There
-are no OS timers or CLI/TUI schedule commands. Multiple schedules can reference one definition.
+are no OS timers or CLI schedule commands. Multiple schedules can reference one definition.
 Each saves fixed typed inputs, an opted-in source Project, selected MCP connections, a recurrence,
 an overlap limit (default 3, range 1–100) and optional local-base-branch Worktree provisioning.
 

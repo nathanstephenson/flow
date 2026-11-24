@@ -54,9 +54,9 @@ Node runs sources under `src/`, `test/` and `web/src/presentation/` with
 - Use only erasable syntax: no parameter properties, enums or namespaces.
 - Relative imports carry the `.ts` extension. The build rewrites them.
 - The rest of `web/` is built by Vite and does not have this limit.
-- `src/client/**` keeps this limit, even when it is browser-facing, because the TUI runs it
+- `src/client/**` keeps this limit, even when it is browser-facing, because the CLI runs it
   stripped.
-- Code in `src/client/` must not use DOM types, because the TUI compiles it in a program that has
+- Code in `src/client/` must not use DOM types, because the CLI compiles it in a program that has
   none.
 
 ## Web client development

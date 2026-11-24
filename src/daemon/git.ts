@@ -282,8 +282,7 @@ export type WorktreePlan = { branch: string; path: string };
  *
  * A name the reader supplied is never bumped. Someone who typed a name and got a different one has
  * been ignored, so an existing ref is a failure carrying git's own conclusion; bumping exists only
- * for the derived name, and only because the TUI never types and would otherwise be stuck on the
- * second worktree of the day.
+ * for the derived name, which would otherwise be stuck on the second worktree of the day.
  */
 export async function planWorktree(options: {
   repo: string;

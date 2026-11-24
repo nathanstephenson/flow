@@ -16,7 +16,7 @@ import { compactTokens } from "./context-usage.ts";
 import { deriveStatus } from "./status.ts";
 
 /**
- * The reducer both front-ends share. The TUI and the web UI import this same function, which is
+ * The reducer every front-end shares. The CLI and the web UI import this same function, which is
  * what stops them drifting.
  *
  * Pure and order-dependent only on `seq`: replaying a Presentation Transcript twice gives the same
