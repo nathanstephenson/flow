@@ -302,13 +302,13 @@
 }
 
 .creating-smoke {
-  --tint: color-mix(in srgb, var(--foreground) var(--creating-tint, 10%), transparent);
+  --tint: color-mix(in srgb, var(--status-active) var(--creating-tint, 26%), transparent);
   position: relative;
   mask-image: radial-gradient(closest-side, black 35%, transparent);
 }
 
 .dark .creating-smoke {
-  --creating-tint: 14%;
+  --creating-tint: 38%;
 }
 
 .creating-smoke > span {
