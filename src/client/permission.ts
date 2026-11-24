@@ -49,8 +49,7 @@ export const PERMISSION_CHOICES: readonly PermissionChoice[] = [
   },
 ];
 
-// Permission controls are rendered and navigated on every TUI key event. Keep the fixed narrowed
-// view beside the source choices rather than allocating and scanning the same list in that hot path.
+// The fixed narrowed view, kept beside the source choices rather than sliced on every render.
 const ONE_SHOT_PERMISSION_CHOICES: readonly PermissionChoice[] = PERMISSION_CHOICES.slice(0, 2);
 
 /** The same shared controls, narrowed for requests whose scope can never become standing. */

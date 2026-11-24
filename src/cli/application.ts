@@ -238,11 +238,11 @@ async function oneShot(
          * worst of the three things that could happen, because it looks like a slow model rather
          * than like a question. Aborting ends the turn, which prints the `aborted` row below and
          * gets the transcript written; the Agent Session is left Dormant like any other, so `--session`
-         * can pick it up in the TUI or the web client, where it *can* be answered.
+         * can pick it up in the web client, where it *can* be answered.
          */
         if (entry.event.type === "enquiry" && entry.event.state === "asked") {
           console.log("  ? the model asked a question, and this runner has no way to answer it");
-          console.log(`  ? resume with: --session ${sessionId}  (or open it in the TUI)`);
+          console.log(`  ? resume with: --session ${sessionId}  (or open it in the web UI)`);
           void connection.command({ type: "abort", sessionId });
         }
         /*
@@ -269,7 +269,7 @@ async function oneShot(
           const { tool, callId } = state.authorising;
           refused = callId;
           console.log(`  ! ${tool} needs authorising, and this runner has no way to ask; refusing it`);
-          console.log(`  ! authorise it with: --session ${sessionId}  (or open it in the TUI)`);
+          console.log(`  ! authorise it with: --session ${sessionId}  (or open it in the web UI)`);
           // Rejection swallowed rather than dropped: `--session` resumes a live Agent Session, and a
           // call decided in another client between the reducer seeing it and this landing comes back
           // as a refusal. There is nothing to do about that — the prompt is settled either way — and
@@ -327,7 +327,7 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
     case "enquiry": {
       // This runner takes no input, so an Enquiry it sees is one it aborts (see `oneShot`) — what
       // reaches here is therefore `aborted`, and what it prints is what was asked and went
-      // unanswered. The TUI and the web client are where one can actually be answered.
+      // unanswered. The web client is where one can actually be answered.
       const asked = answerLines(entry.questions, entry.answers).join("; ");
       return `  ? [${entry.status}] ${asked}`;
     }

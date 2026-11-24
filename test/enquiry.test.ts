@@ -7,7 +7,6 @@ import {
   canCommit,
   cursorAfter,
   cursorAfterTyping,
-  cursorClamped,
   rowsFor,
   startAnswering,
   toggled,
@@ -49,17 +48,13 @@ describe("the rows an Enquiry offers", () => {
 });
 
 describe("where the cursor goes", () => {
-  it("wraps on the web and clamps in the terminal", () => {
-    // Each front-end keeps its own idiom rather than the two of them growing a third.
+  it("wraps", () => {
     assert.equal(cursorAfter(0, -1, 3), 2);
     assert.equal(cursorAfter(2, 1, 3), 0);
-    assert.equal(cursorClamped(0, -1, 3), 0);
-    assert.equal(cursorClamped(2, 1, 3), 2);
   });
 
   it("survives an empty list, which is a state the picker can legitimately be in", () => {
     assert.equal(cursorAfter(0, 1, 0), 0);
-    assert.equal(cursorClamped(0, 1, 0), 0);
   });
 
   it("follows the typing onto the Other row, and comes back off it", () => {

@@ -247,8 +247,7 @@ type ProviderGroup = { provider: string; items: ModelChoice[] };
 
 /**
  * `modelChoices()` returns a flat list already sorted by provider, so the grouping is a fold rather
- * than a sort. Keeping the flat shape shared and the grouping local is deliberate: the TUI renders
- * the same data as a scrolling list with provider headings.
+ * than a sort. The flat shape stays shared and the grouping stays local.
  */
 function groupByProvider(choices: ModelChoice[]): ProviderGroup[] {
   const groups: ProviderGroup[] = [];

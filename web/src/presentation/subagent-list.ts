@@ -20,8 +20,8 @@ import { producerKey, subagentParents } from "../../../src/client/subagent-tree.
  * every status freezes at whatever it was when the Subagent first appeared. The list keeps looking
  * live because new Subagents still arrive.
  *
- * DOM-free like `subagent-tree.ts`, so the TUI can show the same list in the same order later
- * rather than inventing a second rule.
+ * DOM-free like `subagent-tree.ts`, so another front-end can show the same list in the same
+ * order rather than inventing a second rule.
  */
 
 /** A Subagent Entry's key is its kind and id, which is what `entryKey` builds for it. */

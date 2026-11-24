@@ -73,7 +73,7 @@ function entryView({ entry, query, sessionId, background }: TranscriptEntryProps
       return <TranscriptMarker entry={entry} />;
     default: {
       // An Entry kind this file has not thought about is a compile error here, not a row that
-      // renders nothing. `reduce.ts`, the TUI and the CLI already fail this way; this file did not,
+      // renders nothing. `reduce.ts` and the CLI already fail this way; this file did not,
       // which made a missing case invisible in the one front-end that shows it.
       //
       // Unreachable at runtime, and returning null rather than throwing for that reason. `Entry` is
@@ -568,7 +568,7 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
 
 /**
  * ADR 0003 asks a Revive to continue the same Presentation Transcript "behind a visible marker", and
- * this is that marker made visible: a rule with a centred label, the same `──` device the TUI uses.
+ * this is that marker made visible: a rule with a centred label.
  *
  * It switches on `entry.marker`, never on the text. The reducer grew a distinct `marker` kind
  * precisely so no front-end has to sniff a string prefix to find out what happened.

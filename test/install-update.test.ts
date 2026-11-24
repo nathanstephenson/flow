@@ -275,7 +275,7 @@ test('registry rejects old builds, concurrent roots, invalid owners, and dead up
   const f = fixture();
   try {
     await assert.rejects(f.install.register('old-build', f.root, ['list']), /replaced/);
-    const lease = await f.install.register('test-build', '/other-root', ['tui']);
+    const lease = await f.install.register('test-build', '/other-root', ['list']);
     const refused = await f.start(['update']).done;
     assert.equal(refused.code, 1); assert.match(refused.output, /other Flow/);
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);

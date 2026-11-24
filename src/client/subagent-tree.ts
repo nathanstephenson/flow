@@ -4,7 +4,7 @@ import type { Entry } from "./reduce.ts";
  * Which Subagent spawned which, read from `producer` on each Subagent Entry.
  *
  * The transcript stays flat (ADR 0015), so the tree exists only here, built over keys at paint time.
- * DOM-free so the web client and the TUI share one rule.
+ * DOM-free so every front-end shares one rule.
  */
 
 const SUBAGENT_PREFIX = "subagent:";

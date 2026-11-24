@@ -392,7 +392,7 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
  *
  * Filtering lives here rather than in the store: the store's job is the reduced, append-only state,
  * and a per-viewer presentation filter is not that — a query is typed and cleared without anything
- * having happened to the Presentation Transcript, and the TUI filters the same record its own way.
+ * having happened to the Presentation Transcript.
  *
  * With no query this is the store's own array, so TranscriptView re-renders only when an entry is
  * added. With a query it recomputes on every coalesced tick, which is the cost of a filter that

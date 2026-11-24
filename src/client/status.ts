@@ -43,7 +43,7 @@ export function occupied(status: SessionStatus): boolean {
 /** Stable group identities shared by the host and both clients. */
 export type RailGroup = "needs-input" | "unread" | "working" | "idle" | "dormant" | "filed-away";
 
-export const RAIL_GROUPS: readonly RailGroup[] = [
+const RAIL_GROUPS: readonly RailGroup[] = [
   "needs-input",
   "unread",
   "working",

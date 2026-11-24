@@ -154,9 +154,7 @@ export type Command =
        * derived. It is still bound for the session's whole life; a worktree is a Scope chosen at
        * birth, never a Scope switched into later.
        *
-       * `from` is an existing branch the client picked. `branch` overrides the derived name and is
-       * the web client's alone: the TUI has no text entry outside its prompt line, so it never
-       * sends one, and nothing it cannot do is hidden behind this field.
+       * `from` is an existing branch the client picked. `branch` overrides the derived name.
        */
       worktree?: { from: string; branch?: string };
     }
@@ -172,10 +170,6 @@ export type Command =
        * beforehand — a paste the human never sends should not leave anything behind, and one they do
        * send should reach the Session Host in the same act. The host writes each one down and mints
        * the id, which is why `user_message` carries ids and this does not.
-       *
-       * The web client's alone, like `create.worktree.branch` and for the same reason: a terminal
-       * has no clipboard image to paste, so the TUI never sends one and nothing it cannot do is
-       * hidden behind this field.
        */
       attachments?: IncomingAttachment[];
     }

@@ -13,7 +13,7 @@ import { producerKey } from "../../../src/client/subagent-tree.ts";
  * the Subagent actually did belongs to the Agents tab: interleaved in the transcript it read as the
  * session's own work, and with two Subagents at once it read as nobody's in particular.
  *
- * DOM-free like `search.ts`, so the TUI can draw the same split rather than inventing a second rule.
+ * DOM-free like `search.ts`, so another front-end can draw the same split rather than inventing a second rule.
  */
 
 const SUBAGENT_PREFIX = "subagent:";

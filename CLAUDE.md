@@ -55,7 +55,7 @@ FLOW_URL=http://127.0.0.1:4318 FLOW_STATE_DIR=/tmp/scratch npm run dev
 ```
 
 `FLOW_STATE_DIR` is what keeps it isolated — its own token, `config.json`, and transcripts. Without
-it, a second host overwrites the `daemon.json` the real one and the TUI depend on. `FLOW_URL` is
+it, a second host overwrites the `daemon.json` the real one and the CLI depend on. `FLOW_URL` is
 read once at Vite config load, so repointing the proxy means restarting Vite.
 
 ## Screenshots belong in the PR, not in the tree
