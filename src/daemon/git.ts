@@ -371,12 +371,15 @@ export async function updateSourceBranch(repo: string, branch: string): Promise<
   if (!remote.ok) return remote;
   const fetched = await run(repo, ["fetch", "--quiet", remote.value.trim()], GIT_WRITE_TIMEOUT_MS);
   if (!fetched.ok) return fetched;
+  const target = upstream.value.trim();
+  const contained = await run(repo, ["merge-base", "--is-ancestor", target, `refs/heads/${branch}`], GIT_READ_TIMEOUT_MS);
+  if (contained.ok) return { ok: true, value: undefined };
+  if (contained.failure.code !== 1) return contained;
   const current = await head(repo);
   if (!current.ok) return current;
-  const target = upstream.value.trim();
   const updated = !current.value.detached && current.value.name === branch
     ? await run(repo, ["merge", "--ff-only", "--quiet", target], GIT_WRITE_TIMEOUT_MS)
-    : await run(repo, ["fetch", "--quiet", ".", `${target}:refs/heads/${branch}`], GIT_WRITE_TIMEOUT_MS);
+    : await run(repo, ["fetch", ".", `${target}:refs/heads/${branch}`], GIT_WRITE_TIMEOUT_MS);
   if (!updated.ok) return updated;
   return { ok: true, value: undefined };
 }

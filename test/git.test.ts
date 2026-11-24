@@ -326,13 +326,32 @@ describe("updateSourceBranch", () => {
     assert.equal((await updateSourceBranch(repo, "main")).ok, false);
   });
 
-  it("fails, and leaves the branch alone, when it has diverged", async () => {
-    const { clone } = behind("diverged");
-    git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
-    const before = tip(clone, "main");
-    assert.equal((await updateSourceBranch(clone, "main")).ok, false);
-    assert.equal(tip(clone, "main"), before);
-  });
+  for (const branch of ["main", "feature"]) {
+    it(`fails, and leaves ${branch} alone, when it has diverged`, async () => {
+      const { clone } = behind(`diverged-${branch}`);
+      git(clone, "switch", "--quiet", branch);
+      git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
+      git(clone, "switch", "--quiet", "main");
+      const before = tip(clone, branch);
+      const updated = await updateSourceBranch(clone, branch);
+      assert.equal(updated.ok, false);
+      if (!updated.ok) assert.match(updated.failure.message, /fast-forward/);
+      assert.equal(tip(clone, branch), before);
+    });
+
+    it(`succeeds, and leaves ${branch} alone, when it is only ahead`, async () => {
+      const upstream = newRepo(`ahead-${branch}-upstream`, ["feature"]);
+      const clone = join(root, `ahead-${branch}`);
+      git(root, "clone", "--quiet", upstream, clone);
+      git(clone, "branch", "--quiet", "--track", "feature", "origin/feature");
+      git(clone, "switch", "--quiet", branch);
+      git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
+      git(clone, "switch", "--quiet", "main");
+      const before = tip(clone, branch);
+      assert.deepEqual(await updateSourceBranch(clone, branch), { ok: true, value: undefined });
+      assert.equal(tip(clone, branch), before);
+    });
+  }
 });
 
 describe("removeMergedBranch", { concurrency: false }, () => {
