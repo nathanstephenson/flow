@@ -234,7 +234,13 @@ function DockTabPanel({
           />
         </Suspense>
       ) : content?.kind === "git" ? (
-        <GitPane key={`${sessionId}-${tab.id}`} sessionId={sessionId} onAddToDraft={onAddToDraft} />
+        <GitPane
+          key={`${sessionId}-${tab.id}`}
+          sessionId={sessionId}
+          pullRequest={content.pullRequest === true}
+          onPullRequestShown={() => dispatch({ type: "pull-request-shown", side, tabId: tab.id })}
+          onAddToDraft={onAddToDraft}
+        />
       ) : content?.kind === "subagents" ? (
         <SubagentsPane
           key={tab.id}

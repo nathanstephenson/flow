@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangesView, PushState } from "../../../src/protocol/git.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -17,7 +17,12 @@ type Reads = { changes: number; stack: number; pullRequest: number; mount: numbe
 type Step = { kind: "replace"; state: PushState } | { kind: "pull_request"; head: string };
 type Notice = { text: string; url?: string };
 
-export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddToDraft: (block: string) => AppendResult }) {
+export function GitPane({ sessionId, pullRequest, onPullRequestShown, onAddToDraft }: {
+  sessionId: string;
+  pullRequest: boolean;
+  onPullRequestShown: () => void;
+  onAddToDraft: (block: string) => AppendResult;
+}) {
   const { connection } = useHost();
   const { git, repository } = useGitState(sessionId);
   const [reads, setReads] = useState<Reads>({ changes: 0, stack: 0, pullRequest: 0, mount: 0 });
@@ -32,6 +37,12 @@ export function GitPane({ sessionId, onAddToDraft }: { sessionId: string; onAddT
   const tabs: Tab[] = ["Changes", ...(git?.pr || available.pullRequest ? ["Pull request" as const] : []), ...(available.stack ? ["Stack" as const] : [])];
   if (!tabs.includes(tab)) setTab("Changes");
   const selected = tabs.includes(tab) ? tab : "Changes";
+  const canShowPullRequest = !busy && tabs.includes("Pull request");
+  useEffect(() => {
+    if (!pullRequest || !canShowPullRequest) return;
+    setTab("Pull request");
+    onPullRequestShown();
+  }, [canShowPullRequest, onPullRequestShown, pullRequest]);
   const steps = gitSteps(git);
   const pullOffer = pullStep(git);
 
