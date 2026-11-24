@@ -407,13 +407,7 @@ export function NewAgentSessionPage({
                   authorisingSummary={undefined}
                 />
               </TabsContent>
-              <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">
-                <div>
-                  <h2 className="font-medium">Start with a workflow</h2>
-                  <p className="text-xs text-muted-foreground">
-                    The workflow runs independently, so the parent chat stays available for questions and follow-up work.
-                  </p>
-                </div>
+              <TabsContent value="workflow" keepMounted className="grid gap-3">
                 {definitions.error ? (
                   <p role="alert" className="text-sm text-destructive">Could not load workflows: {definitions.error}</p>
                 ) : definitions.data === undefined ? (
