@@ -25,6 +25,7 @@ export type HostConfig = {
   /** Fresh machine capability and effective mode, reported by the Session Host. */
   filesystemIsolationStatus?: FilesystemIsolationStatus;
   sandboxSharing?: Settings["sandboxSharing"];
+  worktrees?: Settings["worktrees"];
   /** Browser gate in use. Provider details and tokens are intentionally never exposed. */
   authentication?: "token" | "oidc";
   scope: string;
@@ -183,6 +184,7 @@ export function HostProvider({ children }: { children: ReactNode }) {
               filesystemIsolation: body.filesystemIsolation,
               filesystemIsolationStatus: body.filesystemIsolationStatus,
               sandboxSharing: body.sandboxSharing,
+              worktrees: body.worktrees,
               // Spread-with-undefined would leave a stale value behind once a section is cleared.
               // Both optional sections need it, and for `permissions` it is not tidiness: a stale
               // list would leave a revoked row on screen, and revoking a second grant would send the

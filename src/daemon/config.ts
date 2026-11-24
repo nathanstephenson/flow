@@ -13,6 +13,7 @@ import {
   type FilesystemIsolationMode,
   type SandboxSharing,
   type WorkflowRuntimeSettings,
+  type WorktreeSettings,
   formatDuration,
   parseDuration,
   type Settings,
@@ -57,6 +58,7 @@ export type Config = {
   updateChannel?: UpdateChannel;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
+  worktrees?: WorktreeSettings;
   retention: Retention;
   fonts: Fonts;
   /**
@@ -169,6 +171,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const filesystemIsolation = readFilesystemIsolation(parsed, warnings);
   const sandboxSharing = readSandboxSharing(parsed, warnings);
   const updateChannel = readUpdateChannel(parsed, warnings);
+  const worktrees = readWorktrees(parsed, warnings);
 
   return {
     config: {
@@ -179,6 +182,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
       ...(updateChannel === undefined ? {} : { updateChannel }),
       mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
+      ...(worktrees === undefined ? {} : { worktrees }),
       ...(projects === undefined ? {} : { projects }),
       ...(permissions === undefined ? {} : { permissions }),
       ...(providers === undefined ? {} : { providers }),
@@ -262,6 +266,31 @@ function patchSandboxSharing(current: SandboxSharing | undefined, value: unknown
   if (value === undefined) return current;
   if (!sharingModes.includes(value)) throw new ConfigError('sandboxSharing must be "session" or "shared"');
   return value as SandboxSharing;
+}
+
+const worktreeKeys = ["always"] as const satisfies readonly (keyof WorktreeSettings)[];
+
+function readWorktrees(parsed: unknown, warnings: string[]): WorktreeSettings | undefined {
+  try {
+    return patchWorktrees(undefined, (parsed as { worktrees?: unknown } | null)?.worktrees);
+  } catch (error) {
+    warnings.push(`${(error as Error).message}; using defaults`);
+    return undefined;
+  }
+}
+
+function patchWorktrees(current: WorktreeSettings | undefined, value: unknown): WorktreeSettings | undefined {
+  if (value === undefined) return current;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ConfigError("worktrees must be an object");
+  refuseUnknownKeys(value, worktreeKeys, "worktrees");
+  const next = { ...current };
+  for (const key of worktreeKeys) {
+    const flag = (value as Record<string, unknown>)[key];
+    if (flag === undefined) continue;
+    if (typeof flag !== "boolean") throw new ConfigError(`worktrees.${key} must be true or false`);
+    next[key] = flag;
+  }
+  return next;
 }
 
 const updateChannels: readonly unknown[] = ["stable", "beta"] satisfies UpdateChannel[];
@@ -562,19 +591,21 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing", "updateChannel"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing", "updateChannel", "worktrees"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   const filesystemIsolation = patchFilesystemIsolation(current.filesystemIsolation, body.filesystemIsolation);
   const sandboxSharing = patchSandboxSharing(current.sandboxSharing, body.sandboxSharing);
   const updateChannel = patchUpdateChannel(current.updateChannel, body.updateChannel);
+  const worktrees = patchWorktrees(current.worktrees, body.worktrees);
   return {
     ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
     ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
     ...(updateChannel === undefined ? {} : { updateChannel }),
     mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
+    ...(worktrees === undefined ? {} : { worktrees }),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
     ...(projects === undefined ? {} : { projects }),

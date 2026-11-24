@@ -409,6 +409,10 @@ checking is not permission to launch unrestricted work. Changes affect new Backe
 (including Revive), new Workflow Executions and new local stdio MCP clients; existing work retains
 its policy. Agent Workflow Steps still inherit their owning Backend Session's boundary. Worker
 process separation stays enabled in both modes; HTTP MCP and network authority are unchanged.
+
+`worktrees.always` in **Settings → Projects → Worktrees** makes the web New Agent Session page start
+every Agent Session in a Worktree and hides its choice. The TUI, Forks and `session_create`
+still choose for themselves.
 _Avoid_: config, preferences, options, profile
 
 **Effort**:
