@@ -301,6 +301,50 @@
   }
 }
 
+.creating-smoke {
+  --tint: color-mix(in srgb, var(--status-active) var(--creating-tint, 26%), transparent);
+  position: relative;
+  mask-image: radial-gradient(closest-side, black 35%, transparent);
+}
+
+.dark .creating-smoke {
+  --creating-tint: 38%;
+}
+
+.creating-smoke > span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 55%;
+  height: 40%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--tint), transparent);
+  opacity: 0;
+  animation: creating-puff var(--duration) ease-out var(--delay) infinite;
+}
+
+@keyframes creating-puff {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--turn)) scale(0.4);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) rotate(calc(var(--turn) + 90deg)) scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creating-smoke > span {
+    animation: none;
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
 /*
  * The reading measure, and the one column everything in a pane lines up on: the transcript, and the
  * Composer floating over it.

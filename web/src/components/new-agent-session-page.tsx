@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, useLayoutEffect } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import type { Capabilities, EffortLevel } from "../../../src/protocol/events.ts";
@@ -24,6 +24,7 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { workflowIssue } from "@/presentation/workflows.ts";
 import { retainWorkflowLaunch } from "@/workflow-launch.ts";
 import { Composer } from "@/components/composer.tsx";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { initialValue, ValueEditor } from "@/components/workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "@/components/workflow-api.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -95,6 +96,14 @@ export function NewAgentSessionPage({
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
   const projectField = useRef<HTMLLabelElement | null>(null);
+  const [creating, setCreating] = useState<Creating | undefined>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -188,8 +197,12 @@ export function NewAgentSessionPage({
 
   const send = useCallback(
     async (text: string, attachments: IncomingAttachment[]): Promise<unknown | undefined> => {
+      setCreating({ text, attachments, ...originOf("[data-composer-input]") });
       const created = await create();
-      if (!created) return;
+      if (!created) {
+        setCreating(undefined);
+        return;
+      }
       const queued =
         text === "" && attachments.length === 0
           ? true
@@ -201,11 +214,12 @@ export function NewAgentSessionPage({
               when: "after_turn",
             });
       if (queued === undefined) {
+        setCreating(undefined);
         setFailure("The Agent Session was created, but the message was not sent. Your Draft is still here.");
         return;
       }
       drafts.write(NEW_AGENT_SESSION_DRAFT, { text: "", attachments: [] });
-      onCreated(created);
+      if (mounted.current) onCreated(created);
       return queued;
     },
     [create, drafts, onCreated, run],
@@ -284,6 +298,7 @@ export function NewAgentSessionPage({
     launchInFlight.current = true;
     setLaunching(true);
     setFailure(undefined);
+    setCreating({ text: workflow.name, attachments: [], ...originOf('[aria-label="Workflow"]') });
     const input = validatedInput;
     const launchId = crypto.randomUUID();
     try {
@@ -304,10 +319,11 @@ export function NewAgentSessionPage({
         });
       }
       // Success opens monitoring; partial failure opens the same surface with a preserved retry.
-      onCreated(created, true);
+      if (mounted.current) onCreated(created, true);
     } finally {
       launchInFlight.current = false;
       setLaunching(false);
+      setCreating(undefined);
     }
   }, [create, inputIssue, onCreated, runtimeIssue, validatedInput, workflow]);
 
@@ -325,8 +341,18 @@ export function NewAgentSessionPage({
   const groups = groupProjects(projects);
 
   return (
-    <div data-new-session="" className="transcript-scroller flex min-h-0 flex-col overflow-y-auto">
-      <div className="m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
+    <div
+      data-new-session=""
+      className={cn("transcript-scroller relative flex min-h-0 flex-col overflow-y-auto", creating !== undefined && "overflow-hidden")}
+    >
+      {creating !== undefined ? <CreatingAgentSession {...creating} /> : null}
+      <div
+        inert={creating !== undefined}
+        className={cn(
+          "m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6",
+          creating !== undefined && "animate-out fade-out-0 fill-mode-forwards",
+        )}
+      >
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <Tabs
           value={tab}
@@ -573,6 +599,73 @@ function ProjectPicker({
         </ComboboxContent>
       </Combobox>
     </label>
+  );
+}
+
+const SMOKE_PUFFS: [x: number, y: number, turn: number, duration: number, delay: number][] = [
+  [70, -12, 10, 5.3, -0.4],
+  [38, 58, 75, 6.1, -2.2],
+  [-30, 64, 140, 4.7, -3.9],
+  [-72, 8, 200, 5.9, -1.3],
+  [-44, -56, 260, 6.7, -4.8],
+  [22, -70, 320, 5.1, -2.9],
+  [60, 40, 40, 7.3, -5.6],
+  [-62, -30, 170, 6.4, -0.9],
+];
+
+type Creating = { text: string; attachments: IncomingAttachment[]; from: DOMRect | undefined; scrolled: number };
+
+function originOf(selector: string): Pick<Creating, "from" | "scrolled"> {
+  return {
+    from: document.querySelector(`[data-new-session] ${selector}`)?.getBoundingClientRect(),
+    scrolled: document.querySelector("[data-new-session]")?.scrollTop ?? 0,
+  };
+}
+
+function CreatingAgentSession({ text, attachments, from, scrolled }: Creating) {
+  const message = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const to = (card.current ?? message.current)?.getBoundingClientRect();
+    if (!from || !to || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    message.current?.animate(
+      [{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: "none" }],
+      { duration: 400, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+  }, []);
+  return (
+    <div role="status" className="absolute inset-x-0 h-full" style={{ top: scrolled }}>
+      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 animate-in flex-col items-center duration-500 fade-in-0">
+        <div className="creating-smoke size-48" aria-hidden>
+          {SMOKE_PUFFS.map(([x, y, turn, duration, delay], index) => (
+            <span
+              key={index}
+              style={{ "--x": `${x}px`, "--y": `${y}px`, "--turn": `${turn}deg`, "--duration": `${duration}s`, "--delay": `${delay}s` } as CSSProperties}
+            />
+          ))}
+        </div>
+        <span className="-mt-4 text-sm text-muted-foreground">Creating Agent Session…</span>
+      </div>
+      <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center">
+        <div ref={message} className="flex w-full max-w-2xl flex-col gap-2 px-4 sm:px-6">
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((attachment, index) => (
+                <ExpandableImage
+                  key={index}
+                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                  alt=""
+                  className="size-14 rounded-md border border-border object-cover"
+                />
+              ))}
+            </div>
+          ) : null}
+          {text === "" ? null : (
+            <p ref={card} className="line-clamp-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm whitespace-pre-wrap">{text}</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
