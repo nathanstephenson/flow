@@ -35,7 +35,7 @@ async function fixture(t: import('node:test').TestContext) {
   const settings = { name: 'Scheduled', workflowId: definition.id, input: {}, projectId: repo, mcpConnectionIds: [], timing: { kind: 'interval' as const, value: 1, unit: 'minutes' as const }, concurrency: 1 };
   const schedule = createSchedule(settings, 0, true); schedules.saveSchedule(schedule);
   const occurrence: WorkflowOccurrence = { version: 1, id: occurrenceId(schedule.id, 1, 60_000), scheduleId: schedule.id, activation: 1, revision: 1, scheduledAt: 60_000, createdAt: 60_000, settings: occurrenceSettings(schedule), status: 'provisioning' };
-  return { root, repo, host, workflows, executions, schedules, driver, schedule, occurrence };
+  return { root, repo, config, host, workflows, executions, schedules, driver, schedule, occurrence };
 }
 for (const state of ['dirty', 'detached-unmerged', 'detached-merged', 'changed-branch', 'unmerged', 'merged'] as const) {
   test(`retention checks the current Worktree HEAD: ${state}`, { timeout: 10_000 }, async t => {
@@ -84,6 +84,17 @@ for (const change of [{ model: 'missing', effort: 'high' }, { model: 'fake-1', e
   });
 }
 
+test('a Source Branch that cannot be updated is cut from the local branch with a generic warning', { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  f.config.update({ worktrees: { updateSource: true } });
+  const occurrence = { ...f.occurrence, settings: { ...f.occurrence.settings, worktree: { from: 'main' } } };
+  f.schedules.claimOccurrence(occurrence);
+  t.mock.method(f.executions, 'startScheduled');
+  await f.driver.launch(occurrence);
+  const saved = f.schedules.getOccurrence(occurrence.id);
+  assert.ok(saved.worktree);
+  assert.equal(saved.warning, 'Source Branch not updated; cut from the local branch.');
+});
 test('aborting pre-start validation prevents Worktree and execution effects', { timeout: 10_000 }, async t => {
   const f = await fixture(t), controller = new AbortController();
   const occurrence = { ...f.occurrence, settings: { ...f.occurrence.settings, worktree: { from: 'main' } } };

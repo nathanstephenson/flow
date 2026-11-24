@@ -358,6 +358,29 @@ export async function createWorktree(options: {
   return { ok: true, value: planned.value };
 }
 
+/**
+ * Fast-forward the Source Branch `branch` in the Project `repo` to its upstream.
+ *
+ * Only a fast-forward: git refuses a diverged branch, and refuses to move a branch that is
+ * checked out in a linked worktree, so nothing local is ever lost.
+ */
+export async function updateSourceBranch(repo: string, branch: string): Promise<GitResult<void>> {
+  const upstream = await run(repo, ["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`], GIT_READ_TIMEOUT_MS);
+  if (!upstream.ok) return upstream;
+  const remote = await run(repo, ["config", "--get", `branch.${branch}.remote`], GIT_READ_TIMEOUT_MS);
+  if (!remote.ok) return remote;
+  const fetched = await run(repo, ["fetch", "--quiet", remote.value.trim()], GIT_WRITE_TIMEOUT_MS);
+  if (!fetched.ok) return fetched;
+  const current = await head(repo);
+  if (!current.ok) return current;
+  const target = upstream.value.trim();
+  const updated = !current.value.detached && current.value.name === branch
+    ? await run(repo, ["merge", "--ff-only", "--quiet", target], GIT_WRITE_TIMEOUT_MS)
+    : await run(repo, ["fetch", "--quiet", ".", `${target}:refs/heads/${branch}`], GIT_WRITE_TIMEOUT_MS);
+  if (!updated.ok) return updated;
+  return { ok: true, value: undefined };
+}
+
 export async function removeMergedBranch(repo: string, branch: string, from?: string): Promise<GitResult<void>> {
   if (from === undefined) {
     const target = await head(repo);

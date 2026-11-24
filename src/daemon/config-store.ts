@@ -90,6 +90,8 @@ export class ConfigStore {
   /** Read when a sandbox-mode Backend Session starts. */
   readonly sandboxSharing = (): SandboxSharing => this.config.sandboxSharing ?? "session";
 
+  readonly updateSourceBranch = (): boolean => this.config.worktrees?.updateSource === true;
+
   readonly updateChannel = (): UpdateChannel => this.config.updateChannel ?? "stable";
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */

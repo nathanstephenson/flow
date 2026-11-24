@@ -268,7 +268,7 @@ function patchSandboxSharing(current: SandboxSharing | undefined, value: unknown
   return value as SandboxSharing;
 }
 
-const worktreeKeys = ["always"] as const satisfies readonly (keyof WorktreeSettings)[];
+const worktreeKeys = ["always", "updateSource"] as const satisfies readonly (keyof WorktreeSettings)[];
 
 function readWorktrees(parsed: unknown, warnings: string[]): WorktreeSettings | undefined {
   try {

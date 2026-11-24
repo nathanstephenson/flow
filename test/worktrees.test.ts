@@ -35,8 +35,8 @@ describe("worktrees", () => {
     rmSync(work, { recursive: true, force: true });
   });
 
-  async function hostWith(retention: number | "never" = DAY): Promise<SessionHost> {
-    const host = new SessionHost({ store, retention });
+  async function hostWith(retention: number | "never" = DAY, updateSourceBranch = false): Promise<SessionHost> {
+    const host = new SessionHost({ store, retention, updateSourceBranch: () => updateSourceBranch });
     host.registerBackend(new FakeBackend());
     await host.load();
     return host;
@@ -54,6 +54,37 @@ describe("worktrees", () => {
     assert.equal(summary.scope.startsWith(join(store.worktreesRoot(), "api")), true);
     assert.equal(summary.worktree, true);
     assert.equal(existsSync(join(summary.scope, "README.md")), true);
+  });
+
+  describe("updating the Source Branch", () => {
+    const warnings = (host: SessionHost, id: string): string[] =>
+      host.logFor(id).since(0).flatMap(({ event }) => event.type === "notice" && event.level === "warn" ? [event.text] : []);
+
+    it("cuts from the upstream's latest commit", async () => {
+      const host = await hostWith(DAY, true);
+      const upstream = repository(work, "upstream");
+      const repo = join(work, "api");
+      git(work, "clone", "--quiet", upstream, repo);
+      git(upstream, "commit", "--quiet", "--allow-empty", "-m", "upstream moved");
+
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+
+      const scope = host.list().find((entry) => entry.id === id)!.scope;
+      assert.equal(git(scope, "log", "-1", "--format=%s").trim(), "upstream moved");
+      assert.deepEqual(warnings(host, id), []);
+    });
+
+    it("cuts from the local branch with a warning when the update fails", async () => {
+      const host = await hostWith(DAY, true);
+      const repo = repository(work, "api");
+
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "main" } });
+
+      const scope = host.list().find((entry) => entry.id === id)!.scope;
+      assert.equal(git(scope, "log", "-1", "--format=%s").trim(), "first");
+      assert.equal(warnings(host, id).length, 1);
+      assert.match(warnings(host, id)[0]!, /Source Branch main was not updated/);
+    });
   });
 
   it("cuts a new branch and leaves the repository where it was", async () => {

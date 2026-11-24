@@ -176,6 +176,9 @@ _Avoid_: merge request, review, change
 **Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
 _Avoid_: target branch, trunk, upstream
 
+**Source Branch**: The Project branch a Worktree is cut from.
+_Avoid_: base branch, main worktree
+
 **Stack**: An ordered list of branches on a trunk, registered in the repository of a Scope. Each branch builds on the branch below it, and the lowest branch builds on the trunk. The branch below is the Base Branch of its Pull Request. A chain of Pull Request bases or of commits that is not registered is not a Stack.
 _Avoid_: inferred stack, stack graph, candidate
 

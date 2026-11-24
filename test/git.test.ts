@@ -19,6 +19,7 @@ import {
   removeMergedBranch,
   removeWorktree,
   switchBranch,
+  updateSourceBranch,
 } from "../src/daemon/git.ts";
 
 /**
@@ -286,6 +287,51 @@ describe("createWorktree", () => {
     const created = await createWorktree({ repo, from: "no-such-branch", under });
     assert.equal(created.ok, false);
     assert.equal(existsSync(join(under, "absent-base")), false);
+  });
+});
+
+describe("updateSourceBranch", () => {
+  /** A clone of a repository that then gains a commit on `main` and on `feature`. */
+  const behind = (name: string): { clone: string; upstream: string } => {
+    const upstream = newRepo(`${name}-upstream`, ["feature"]);
+    const clone = join(root, name);
+    git(root, "clone", "--quiet", upstream, clone);
+    git(clone, "branch", "--quiet", "--track", "feature", "origin/feature");
+    for (const branch of ["main", "feature"]) {
+      git(upstream, "switch", "--quiet", branch);
+      writeFileSync(join(upstream, `${branch}.txt`), "new\n");
+      git(upstream, "add", ".");
+      git(upstream, "commit", "--quiet", "-m", `${branch} moved`);
+    }
+    return { clone, upstream };
+  };
+  const tip = (repo: string, ref: string): string => git(repo, "rev-parse", ref).trim();
+
+  it("fast-forwards the branch checked out in the Project", async () => {
+    const { clone, upstream } = behind("ff-checked-out");
+    assert.deepEqual(await updateSourceBranch(clone, "main"), { ok: true, value: undefined });
+    assert.equal(tip(clone, "main"), tip(upstream, "main"));
+    assert.equal(existsSync(join(clone, "main.txt")), true);
+  });
+
+  it("fast-forwards a branch that is not checked out", async () => {
+    const { clone, upstream } = behind("ff-other");
+    assert.deepEqual(await updateSourceBranch(clone, "feature"), { ok: true, value: undefined });
+    assert.equal(tip(clone, "feature"), tip(upstream, "feature"));
+    assert.deepEqual(await head(clone), { ok: true, value: { name: "main" } });
+  });
+
+  it("fails for a branch with no upstream", async () => {
+    const repo = newRepo("no-upstream");
+    assert.equal((await updateSourceBranch(repo, "main")).ok, false);
+  });
+
+  it("fails, and leaves the branch alone, when it has diverged", async () => {
+    const { clone } = behind("diverged");
+    git(clone, "commit", "--quiet", "--allow-empty", "-m", "local");
+    const before = tip(clone, "main");
+    assert.equal((await updateSourceBranch(clone, "main")).ok, false);
+    assert.equal(tip(clone, "main"), before);
   });
 });
 
