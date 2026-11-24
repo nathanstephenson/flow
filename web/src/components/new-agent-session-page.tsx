@@ -24,6 +24,7 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { workflowIssue } from "@/presentation/workflows.ts";
 import { retainWorkflowLaunch } from "@/workflow-launch.ts";
 import { Composer } from "@/components/composer.tsx";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { initialValue, ValueEditor } from "@/components/workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "@/components/workflow-api.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -595,16 +596,16 @@ function ProjectPicker({
 function CreatingAgentSession({ text, attachments }: { text: string; attachments: IncomingAttachment[] }) {
   return (
     <div role="status" className="absolute inset-0">
-      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 flex-col items-center gap-4">
-        <div className="creating-blob size-24 bg-primary/25" aria-hidden />
-        <span className="text-sm text-muted-foreground">Creating Agent Session…</span>
+      <div className="absolute top-1/2 left-1/2 grid -translate-1/2 place-items-center">
+        <div className="creating-glow col-start-1 row-start-1 size-64" aria-hidden />
+        <span className="col-start-1 row-start-1 text-sm text-muted-foreground">Creating Agent Session…</span>
       </div>
       <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center px-4 sm:px-6">
-        <div className="flex w-full max-w-2xl flex-col gap-2 rounded-xl border bg-muted/40 px-4 py-3">
+        <div className="flex w-full max-w-2xl flex-col gap-2">
           {attachments.length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {attachments.map((attachment, index) => (
-                <img
+                <ExpandableImage
                   key={index}
                   src={`data:${attachment.mediaType};base64,${attachment.data}`}
                   alt=""
@@ -613,7 +614,9 @@ function CreatingAgentSession({ text, attachments }: { text: string; attachments
               ))}
             </div>
           ) : null}
-          {text === "" ? null : <p className="line-clamp-6 text-sm whitespace-pre-wrap">{text}</p>}
+          {text === "" ? null : (
+            <p className="line-clamp-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm whitespace-pre-wrap">{text}</p>
+          )}
         </div>
       </div>
     </div>

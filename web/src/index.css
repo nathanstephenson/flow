@@ -301,27 +301,34 @@
   }
 }
 
-.creating-blob {
-  border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
-  animation: creating-blob 6s ease-in-out infinite;
+@property --creating-swell {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
 }
 
-@keyframes creating-blob {
-  33% {
-    border-radius: 63% 37% 41% 59% / 58% 36% 64% 42%;
-    transform: rotate(120deg) scale(1.08);
-  }
-  66% {
-    border-radius: 37% 63% 55% 45% / 47% 62% 38% 53%;
-    transform: rotate(240deg) scale(0.94);
-  }
-  100% {
-    transform: rotate(360deg);
+.creating-glow {
+  --tint: color-mix(in srgb, var(--status-active) var(--creating-tint, 18%), transparent);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle, transparent var(--creating-swell), var(--tint) calc(var(--creating-swell) + 20px), transparent calc(var(--creating-swell) + 40px)),
+    radial-gradient(closest-side, var(--tint), transparent);
+  mask-image: radial-gradient(closest-side, black 20%, transparent);
+  animation: creating-glow 4s linear infinite;
+}
+
+.dark .creating-glow {
+  --creating-tint: 26%;
+}
+
+@keyframes creating-glow {
+  to {
+    --creating-swell: 40px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .creating-blob {
+  .creating-glow {
     animation: none;
   }
 }
