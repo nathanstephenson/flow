@@ -95,6 +95,14 @@ export function NewAgentSessionPage({
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
   const projectField = useRef<HTMLLabelElement | null>(null);
+  const [creating, setCreating] = useState<{ text: string; attachments: IncomingAttachment[] } | undefined>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -188,8 +196,12 @@ export function NewAgentSessionPage({
 
   const send = useCallback(
     async (text: string, attachments: IncomingAttachment[]): Promise<unknown | undefined> => {
+      setCreating({ text, attachments });
       const created = await create();
-      if (!created) return;
+      if (!created) {
+        setCreating(undefined);
+        return;
+      }
       const queued =
         text === "" && attachments.length === 0
           ? true
@@ -201,11 +213,12 @@ export function NewAgentSessionPage({
               when: "after_turn",
             });
       if (queued === undefined) {
+        setCreating(undefined);
         setFailure("The Agent Session was created, but the message was not sent. Your Draft is still here.");
         return;
       }
       drafts.write(NEW_AGENT_SESSION_DRAFT, { text: "", attachments: [] });
-      onCreated(created);
+      if (mounted.current) onCreated(created);
       return queued;
     },
     [create, drafts, onCreated, run],
@@ -284,6 +297,7 @@ export function NewAgentSessionPage({
     launchInFlight.current = true;
     setLaunching(true);
     setFailure(undefined);
+    setCreating({ text: workflow.name, attachments: [] });
     const input = validatedInput;
     const launchId = crypto.randomUUID();
     try {
@@ -304,10 +318,11 @@ export function NewAgentSessionPage({
         });
       }
       // Success opens monitoring; partial failure opens the same surface with a preserved retry.
-      onCreated(created, true);
+      if (mounted.current) onCreated(created, true);
     } finally {
       launchInFlight.current = false;
       setLaunching(false);
+      setCreating(undefined);
     }
   }, [create, inputIssue, onCreated, runtimeIssue, validatedInput, workflow]);
 
@@ -325,8 +340,9 @@ export function NewAgentSessionPage({
   const groups = groupProjects(projects);
 
   return (
-    <div data-new-session="" className="transcript-scroller flex min-h-0 flex-col overflow-y-auto">
-      <div className="m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
+    <div data-new-session="" className="transcript-scroller relative flex min-h-0 flex-col overflow-y-auto">
+      {creating !== undefined ? <CreatingAgentSession {...creating} /> : null}
+      <div hidden={creating !== undefined} className="m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <Tabs
           value={tab}
@@ -573,6 +589,34 @@ function ProjectPicker({
         </ComboboxContent>
       </Combobox>
     </label>
+  );
+}
+
+function CreatingAgentSession({ text, attachments }: { text: string; attachments: IncomingAttachment[] }) {
+  return (
+    <div role="status" className="absolute inset-0">
+      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 flex-col items-center gap-4">
+        <div className="creating-blob size-24 bg-primary/25" aria-hidden />
+        <span className="text-sm text-muted-foreground">Creating Agent Session…</span>
+      </div>
+      <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center px-4 sm:px-6">
+        <div className="flex w-full max-w-2xl flex-col gap-2 rounded-xl border bg-muted/40 px-4 py-3">
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((attachment, index) => (
+                <img
+                  key={index}
+                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                  alt=""
+                  className="size-14 rounded-md border border-border object-cover"
+                />
+              ))}
+            </div>
+          ) : null}
+          {text === "" ? null : <p className="line-clamp-6 text-sm whitespace-pre-wrap">{text}</p>}
+        </div>
+      </div>
+    </div>
   );
 }
 

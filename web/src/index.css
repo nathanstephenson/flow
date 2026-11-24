@@ -301,6 +301,31 @@
   }
 }
 
+.creating-blob {
+  border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  animation: creating-blob 6s ease-in-out infinite;
+}
+
+@keyframes creating-blob {
+  33% {
+    border-radius: 63% 37% 41% 59% / 58% 36% 64% 42%;
+    transform: rotate(120deg) scale(1.08);
+  }
+  66% {
+    border-radius: 37% 63% 55% 45% / 47% 62% 38% 53%;
+    transform: rotate(240deg) scale(0.94);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creating-blob {
+    animation: none;
+  }
+}
+
 /*
  * The reading measure, and the one column everything in a pane lines up on: the transcript, and the
  * Composer floating over it.
