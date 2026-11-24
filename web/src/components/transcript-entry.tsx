@@ -110,6 +110,11 @@ function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: 
         )}
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
+        {entry.note === undefined ? null : (
+          <p className="-mx-4 -mb-3 mt-3 rounded-b-2xl rounded-br-sm border-t border-border bg-background/60 px-4 py-2 text-xs text-muted-foreground">
+            <span className="font-medium">Flow</span> · {entry.note.replace(/^\[Flow\] /, "")}
+          </p>
+        )}
       </div>
       {entry.at ? (
         <MessageTime at={entry.at} side="right">

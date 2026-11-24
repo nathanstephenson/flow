@@ -163,6 +163,13 @@ describe("reduce", () => {
     assert.equal(entry?.kind === "user" && entry.fromSessionId, "s2");
   });
 
+  it("keeps a Flow note apart from the human's words", () => {
+    const state = reduceAll(transcript({ type: "user_message", id: "u1", text: "carry on", note: "[Flow] moved" }).since(0));
+    const [entry] = state.entries;
+    assert.equal(entry?.kind === "user" && entry.text, "carry on");
+    assert.equal(entry?.kind === "user" && entry.note, "[Flow] moved");
+  });
+
   it("keeps queue depth in view state", () => {
     const state = reduceAll(transcript({ type: "queue_changed", pending: ["a", "b"] }).since(0));
     assert.deepEqual(state.queue, ["a", "b"]);
