@@ -325,8 +325,8 @@ export function NewAgentSessionPage({
   const groups = groupProjects(projects);
 
   return (
-    <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
+    <div data-new-session="" className="transcript-scroller flex min-h-0 flex-col overflow-y-auto">
+      <div className="m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <Tabs
           value={tab}
