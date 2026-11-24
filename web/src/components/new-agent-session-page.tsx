@@ -236,7 +236,7 @@ export function NewAgentSessionPage({
     [backendModels, branches, inWorktree, listSkills, run, scope, send],
   );
 
-  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(tab === "workflow" ? "/api/workflows" : undefined, 10_000);
+  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>("/api/workflows", 10_000);
   const availableWorkflows = useMemo(
     () => eligibleWorkflows(definitions.data?.workflows ?? [], backend, projectPath),
     [backend, definitions.data, projectPath],
@@ -395,77 +395,79 @@ export function NewAgentSessionPage({
                   ) : null}
                 </div>
               ) : null}
-              <TabsContent value="chat" keepMounted className="grid gap-3">
-                <Composer
-                  id={NEW_AGENT_SESSION_DRAFT}
-                  chrome={chrome}
-                  actions={actions}
-                  floating={false}
-                  unavailable={backend === "" ? "This Session Host advertises no backend" : capabilityProblem}
-                  placeholder="What should it work on? Enter starts the Agent Session."
-                  drafts={drafts}
-                  authorisingSummary={undefined}
-                />
-              </TabsContent>
-              <TabsContent value="workflow" keepMounted className="grid gap-3">
-                {definitions.error ? (
-                  <p role="alert" className="text-sm text-destructive">Could not load workflows: {definitions.error}</p>
-                ) : definitions.data === undefined ? (
-                  <p className="text-sm text-muted-foreground">Loading compatible workflows…</p>
-                ) : availableWorkflows.length === 0 ? (
-                  <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    No global or {project?.name} workflows use Backend Adapter {backend}.
-                  </p>
-                ) : (
-                  <>
-                    <label className="grid gap-1.5">
-                      <span className="text-sm font-medium">Workflow</span>
-                      <Select
-                        value={workflowId}
-                        onValueChange={(value) => {
-                          if (value === null) return;
-                          const selected = availableWorkflows.find((definition) => definition.id === value);
-                          setWorkflowId(value);
-                          setWorkflowInput(selected ? initialValue(selected.inputSchema) : {});
-                        }}
-                      >
-                        <SelectTrigger className="w-full" aria-label="Workflow">
-                          <SelectValue>{workflow?.name ?? "Select a workflow"}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="">Select a workflow</SelectItem>
-                          {availableWorkflows.map((definition) => (
-                            <SelectItem key={definition.id} value={definition.id}>
-                              {definition.name}{definition.projectId === undefined ? " · Global" : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </label>
-                    {workflow ? (
-                      <div className="grid gap-4">
-                        <fieldset className="grid gap-3 rounded-lg border p-3">
-                          <legend className="px-1 text-sm font-medium">Inputs</legend>
-                          <ValueEditor schema={workflow.inputSchema} value={workflowInput} onChange={setWorkflowInput} />
-                        </fieldset>
-                        {(inputIssue || runtimeIssue) && (
-                          <p role="alert" className="text-xs text-destructive">{inputIssue || runtimeIssue}</p>
-                        )}
-                        <Button
-                          className="justify-self-start"
-                          disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue || !!capabilityProblem}
-                          onClick={() => void launchWorkflow()}
+              <div className="grid">
+                <TabsContent value="chat" keepMounted hidden={false} className="col-start-1 row-start-1 grid content-start gap-3 data-hidden:invisible">
+                  <Composer
+                    id={NEW_AGENT_SESSION_DRAFT}
+                    chrome={chrome}
+                    actions={actions}
+                    floating={false}
+                    unavailable={backend === "" ? "This Session Host advertises no backend" : capabilityProblem}
+                    placeholder="What should it work on? Enter starts the Agent Session."
+                    drafts={drafts}
+                    authorisingSummary={undefined}
+                  />
+                </TabsContent>
+                <TabsContent value="workflow" keepMounted hidden={false} className="col-start-1 row-start-1 grid content-start gap-3 data-hidden:invisible">
+                  {definitions.error ? (
+                    <p role="alert" className="text-sm text-destructive">Could not load workflows: {definitions.error}</p>
+                  ) : definitions.data === undefined ? (
+                    <p className="text-sm text-muted-foreground">Loading compatible workflows…</p>
+                  ) : availableWorkflows.length === 0 ? (
+                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                      No global or {project?.name} workflows use Backend Adapter {backend}.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="grid gap-1.5">
+                        <span className="text-sm font-medium">Workflow</span>
+                        <Select
+                          value={workflowId}
+                          onValueChange={(value) => {
+                            if (value === null) return;
+                            const selected = availableWorkflows.find((definition) => definition.id === value);
+                            setWorkflowId(value);
+                            setWorkflowInput(selected ? initialValue(selected.inputSchema) : {});
+                          }}
                         >
-                          {launching ? "Starting workflow…" : "Create Agent Session and start"}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </>
-                )}
-                <div className="overflow-hidden rounded-xl border bg-background">
-                  <TurnStrip chrome={chrome} actions={actions} permissions={false} />
-                </div>
-              </TabsContent>
+                          <SelectTrigger className="w-full" aria-label="Workflow">
+                            <SelectValue>{workflow?.name ?? "Select a workflow"}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">Select a workflow</SelectItem>
+                            {availableWorkflows.map((definition) => (
+                              <SelectItem key={definition.id} value={definition.id}>
+                                {definition.name}{definition.projectId === undefined ? " · Global" : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      {workflow ? (
+                        <div className="grid gap-4">
+                          <fieldset className="grid gap-3 rounded-lg border p-3">
+                            <legend className="px-1 text-sm font-medium">Inputs</legend>
+                            <ValueEditor schema={workflow.inputSchema} value={workflowInput} onChange={setWorkflowInput} />
+                          </fieldset>
+                          {(inputIssue || runtimeIssue) && (
+                            <p role="alert" className="text-xs text-destructive">{inputIssue || runtimeIssue}</p>
+                          )}
+                          <Button
+                            className="justify-self-start"
+                            disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue || !!capabilityProblem}
+                            onClick={() => void launchWorkflow()}
+                          >
+                            {launching ? "Starting workflow…" : "Create Agent Session and start"}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  <div className="overflow-hidden rounded-xl border bg-background">
+                    <TurnStrip chrome={chrome} actions={actions} permissions={false} />
+                  </div>
+                </TabsContent>
+              </div>
 
               {(config.mcp ?? []).length > 0 && (
                 <Accordion>
