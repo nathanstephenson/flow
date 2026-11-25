@@ -3873,7 +3873,7 @@ function errorMessage(error: unknown): string {
 }
 
 const READ_ONLY_REFUSED = new Set<Command["type"]>([
-  "switch_branch", "pull_branch", "change_pull_request", "comment_pull_request", "resolve_pull_request_thread",
+  "switch_branch", "pull_branch", "change_pull_request", "comment_pull_request", "submit_pull_request_review", "resolve_pull_request_thread",
   "edit_pull_request", "set_pull_request_draft", "rerun_pull_request_checks", "prepare_stack", "change_stack",
   "assist_stack", "commit", "push", "create_pull_request", "start_tour",
 ]);
