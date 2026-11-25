@@ -25,6 +25,11 @@ no restriction. Any other Scope must be the Project Root, and the new Agent Sess
 
 Human Shells are unchanged (ADR 0028).
 
+Host work that needs no writes uses the same read-only mount. A Backend Session with no tools,
+such as a probe or the Summary Model, and stdio MCP discovery for workflow authoring (ADR 0031)
+mount their Scope read-only in Bubblewrap and per-session Sandbox. The Workflow Builder keeps its
+private folder (ADR 0030).
+
 ## Considered options
 
 - **Refuse a Read-only Scope where it cannot be enforced.** Safe, but the option is then not

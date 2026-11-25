@@ -2812,7 +2812,7 @@ export class SessionHost {
     if (!connection) throw new Error('MCP connection removed. Refresh the workflow editor.');
     const { McpSession } = await import('../backend/mcp.ts');
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined,
-      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, expectedScopeIdentity);
+      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, expectedScopeIdentity, undefined, true);
   }
 
   mcpStatus(id: string) {

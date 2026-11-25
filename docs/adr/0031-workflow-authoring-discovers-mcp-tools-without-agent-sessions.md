@@ -54,8 +54,8 @@ capabilities and cannot invoke the discovered services.
 
 MCP steps are readily authorable without a throwaway conversation. HTTP services may need prior
 sign-in in MCP Settings. Local stdio discovery **starts configured server code**, even though no
-`tools/call` is issued: it uses the normal filesystem-isolation policy and can write within Scope;
-when isolation is off, that code has unrestricted host filesystem authority. This is not a promise
+`tools/call` is issued: it uses the normal filesystem-isolation policy with the Scope mounted
+read-only (ADR 0046); when isolation is off, that code has unrestricted host filesystem authority. This is not a promise
 that server initialization is side-effect-free, nor a weakening of the builder's own filesystem
 capabilities. Disabled-by-default connections are not automatically started by builder catalogue
 reads; the human can select them in the editor first.
