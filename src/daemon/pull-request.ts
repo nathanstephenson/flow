@@ -78,19 +78,27 @@ export async function projectPullRequest(scope: string, number: number, github: 
   return found ? (await details(scope, found, github))?.pr ?? null : null;
 }
 
-type ListNode = { id: string; number: number; title: string; isDraft: boolean; updatedAt: string; author: { login: string } | null; reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] } };
+type ListNode = { id: string; number: number; title: string; state: PullRequestListItem["state"]; isDraft: boolean; updatedAt: string; author: { login: string } | null; reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] }; repository?: { nameWithOwner: string } };
+const listFields = "id number title state isDraft updatedAt author{login} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}}";
 
-export async function listPullRequests(scope: string, github: Gh = gh): Promise<PullRequestListItem[]> {
+/** Open Pull Requests of the base repository, or with `query`, all of them whose title matches. */
+export async function listPullRequests(scope: string, github: Gh = gh, query?: string): Promise<PullRequestListItem[]> {
   const repo = (await resolveRepository(scope, undefined, github)).base.repo;
   const [owner, name] = repo.split("/");
-  const data = await api<{ viewer: { login: string }; repository: { pullRequests: { nodes: ListNode[] } } }>(scope, github,
-    "query($owner:String!,$name:String!){viewer{login} repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{id number title isDraft updatedAt author{login} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}}}}}}",
-    { owner: owner!, name: name! });
-  const items = data.repository.pullRequests.nodes.map(({ author, reviewRequests, ...node }) => ({
+  const item = (viewer: string) => ({ author, reviewRequests, repository: _, ...node }: ListNode): PullRequestListItem => ({
     ...node, repo, author: author?.login ?? "[deleted]",
-    reviewRequested: reviewRequests.nodes.some(request => request.requestedReviewer?.login === data.viewer.login),
-  }));
-  return items.sort((a, b) => Number(b.reviewRequested) - Number(a.reviewRequested));
+    reviewRequested: reviewRequests.nodes.some(request => request.requestedReviewer?.login === viewer),
+  });
+  if (query) {
+    const data = await api<{ viewer: { login: string }; search: { nodes: (ListNode | Record<string, never>)[] } }>(scope, github,
+      `query($q:String!){viewer{login} search(type:ISSUE,first:50,query:$q){nodes{... on PullRequest{${listFields} repository{nameWithOwner}}}}}`,
+      { q: `repo:${repo} is:pr in:title sort:updated-desc ${query}` });
+    return data.search.nodes.filter((node): node is ListNode => node.repository?.nameWithOwner.toLowerCase() === repo.toLowerCase()).map(item(data.viewer.login));
+  }
+  const data = await api<{ viewer: { login: string }; repository: { pullRequests: { nodes: ListNode[] } } }>(scope, github,
+    `query($owner:String!,$name:String!){viewer{login} repository(owner:$owner,name:$name){pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{${listFields}}}}}`,
+    { owner: owner!, name: name! });
+  return data.repository.pullRequests.nodes.map(item(data.viewer.login)).sort((a, b) => Number(b.reviewRequested) - Number(a.reviewRequested));
 }
 
 async function git(scope: string, args: string[]): Promise<string> {
