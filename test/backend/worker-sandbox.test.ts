@@ -127,7 +127,8 @@ test("a sandbox probe without a state directory runs in a disposable VM and remo
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
   const session = await backend.create({ scope: f.scope, tools: "none", emit: () => {} });
-  const temp = f.spec().additionalWorkspaces.find((mount) => !mount.readOnly)!.path;
+  const temp = f.spec().workspace;
+  assert.notEqual(temp, f.scope);
   assert.equal(existsSync(temp), true);
   await session.dispose();
   await new Promise((resolve) => setTimeout(resolve, 200));
