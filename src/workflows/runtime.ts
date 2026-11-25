@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants, mkdirSync, openSync, closeSync, readFileSync, fstatSync, writeFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
-import ts from 'typescript';
+import ts from 'typescript-api';
 import { getQuickJS } from 'quickjs-emscripten';
 import { libraries } from './runtime-libs.ts';
 

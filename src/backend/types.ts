@@ -1,4 +1,5 @@
 import type { AutoCompaction } from "../protocol/settings.ts";
+import type { PlanLimitWindows } from "../protocol/plan-limits.ts";
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
 import type {
   BackendEvent,
@@ -23,7 +24,11 @@ export type PromptAttachment = {
   data: string;
 };
 
+export type ReadOnlyScope = "mounted" | "tools";
+
 export type BackendCreateOptions = {
+  /** Captured policy for scheduled ownership; trusted host use only. */
+  isolationMode?: import("../protocol/settings.ts").FilesystemIsolationMode;
   /** Host-owned startup cancellation; never serialized into a worker or exposed to the model. */
   signal?: AbortSignal;
   /** Host-only: asks the holder to dispose this session so a Shared Sandbox can be re-created. Never serialized into a worker. */
@@ -33,6 +38,8 @@ export type BackendCreateOptions = {
   workflow?: import("./workflow-tools.ts").WorkflowParent;
   /** Host-mediated communication between independent Agent Sessions; parent tools only. */
   sessionTools?: import("./session-tools.ts").SessionTools;
+  piAuth?: import("./pi/model-auth.ts").PiModelAuth;
+  refreshModels?: boolean;
   mcp?: import("./mcp.ts").McpSession;
   scope: string;
   autoCompaction?: AutoCompaction;
@@ -43,6 +50,8 @@ export type BackendCreateOptions = {
   permissionMode?: AgentPermissionMode;
   /** Resume token from a previous Backend Session, when reviving a Dormant Agent Session. */
   resume?: string;
+  /** With `resume`: the Conversation Context ends just before this user message id. */
+  resumeBefore?: string;
   /** A directory this adapter may keep its own session state in, beside our transcript. */
   stateDir?: string;
   /**
@@ -81,6 +90,7 @@ export type BackendCreateOptions = {
    * for the two to disagree.
    */
   tools?: "none";
+  readOnly?: ReadOnlyScope;
   emit: (event: BackendEvent) => void;
   /** Fatal execution loss, not an ordinary model error. The host interrupts and makes it Dormant. */
   onFailure?: (error: Error) => void;
@@ -115,6 +125,8 @@ export interface BackendSession {
   refreshMcp?(): Promise<void>;
   startWorkflowSubagent?(options: WorkflowSubagentOptions): WorkflowSubagentHandle;
   readonly capabilities: Capabilities;
+  /** The running total reported on `context_usage`, current before `turn_ended`. */
+  readonly spend?: Spend | undefined;
   /** Opaque token allowing a later Revive to continue this Conversation Context. */
   resumeToken(): string | undefined;
   /**
@@ -127,7 +139,8 @@ export interface BackendSession {
    * declared on `ModelInfo.acceptsImages`, and the host refuses a send that contradicts it, so an
    * adapter that receives them has already been told they are servable.
    */
-  prompt(text: string, attachments?: PromptAttachment[]): Promise<void>;
+  /** `messageId` is the host's `user_message` id, kept so the message can be a Rewind target. */
+  prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void>;
   abort(): Promise<void>;
   setModel(modelId: string): Promise<void>;
   /**
@@ -153,6 +166,8 @@ export interface BackendSession {
    * never closes it pins the Agent Session in `running` and refuses everything sent afterwards.
    */
   compact?(instructions?: string): Promise<void>;
+  /** Return the Scope's files to their state at a user message. Throws and changes nothing if it cannot. */
+  rewindFiles?(messageId: string): Promise<void>;
   /**
    * The Skills this Agent Session's Scope offers.
    *
@@ -164,6 +179,7 @@ export interface BackendSession {
    * would be a second way to change state the Session Host already owns, able to disagree with it.
    */
   skills?(): Promise<Skill[]>;
+  planLimits?(): Promise<PlanLimitWindows[]>;
   /**
    * Answer an Enquiry this Backend Session is holding open.
    *
@@ -202,7 +218,12 @@ export interface BackendSession {
 
 export interface AgentBackend {
   readonly name: string;
+  /** Mounts needed for later attachment to a non-evictable Shared Sandbox. */
+  scheduledSandboxMounts?(scope: string): { writable: string[]; readable: string[] };
   create(options: BackendCreateOptions): Promise<BackendSession>;
+  shutdown?(): Promise<void>;
   /** Move this backend's records in `stateDir` from Scope `from` to Scope `to`, with no Backend Session running. */
   relocate?(stateDir: string, from: string, to: string): void;
+  /** Copy a Conversation Context for a Fork. Returns the resume token for `to`. */
+  fork?(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string;
 }

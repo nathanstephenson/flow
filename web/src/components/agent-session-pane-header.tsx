@@ -17,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog.tsx";
+import { PullRequestIndicators } from "@/components/pull-request-indicators.tsx";
 import { McpConnectionMenu, useMcpConnectionStatus } from "@/components/mcp-status.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -29,6 +30,7 @@ import {
 import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
+import { safePullRequestUrl } from "@/presentation/pull-request.ts";
 
 /**
  * What this Agent Session *is*, and what can be done to it as a whole.
@@ -65,6 +67,8 @@ export type AgentSessionPaneHeaderProps = {
   chrome: Chrome;
   /** Absent where the host cannot open a Shell, which is how the controls disappear rather than break. */
   docks?: Docks;
+  /** Absent for a read-only Scope, which has no Git pane, so the link opens the Pull Request itself. */
+  onOpenPullRequest?: () => void;
 };
 
 const BLUR_LAYERS = [
@@ -81,7 +85,9 @@ export function AgentSessionPaneHeader({
   title,
   chrome,
   docks,
+  onOpenPullRequest,
 }: AgentSessionPaneHeaderProps) {
+  const pr = useAgentSessions().sessions.find((session) => session.id === sessionId)?.git?.pr;
   return (
     <div className="relative z-10 mb-[calc(var(--header-overlap,0px)*-1)] text-foreground">
       {/*
@@ -122,6 +128,25 @@ export function AgentSessionPaneHeader({
             </>
           )}
           <span className="truncate font-medium">{title}</span>
+          {pr ? (
+            <span className="ml-0.5 flex shrink-0 items-center gap-1.5 text-xs">
+              <a
+                className="rounded-sm font-mono text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/30"
+                href={safePullRequestUrl(pr.url)}
+                aria-label={`Pull Request #${pr.number}`}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => {
+                  if (!onOpenPullRequest || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  onOpenPullRequest();
+                }}
+              >
+                #{pr.number}
+              </a>
+              <PullRequestIndicators pr={pr} className="-translate-y-[0.33px]" />
+            </span>
+          ) : null}
         </span>
 
         <div className="ml-auto flex items-center gap-1.5">

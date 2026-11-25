@@ -163,7 +163,6 @@ describe("New Agent Session tabs integration", () => {
     assert.equal(find(workflow, "Tabs").props.value, "workflow");
     assert.equal(find(workflow, "TabsTrigger", (tab) => tab.props.value === "workflow").props.children, "Workflow");
     assert.equal(find(workflow, "TabsContent", (panel) => panel.props.value === "workflow").props.keepMounted, true);
-    assert.ok(find(workflow, "h2", (heading) => heading.props.children === "Start with a workflow"));
 
     find(workflow, "Tabs").props.onValueChange("invalid");
     assert.equal(find(render(), "Tabs").props.value, "workflow");

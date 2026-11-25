@@ -1,10 +1,13 @@
-import { Bot, LoaderCircle } from "lucide-react";
+import { Bot, ChevronRight, LoaderCircle, MessageCircleQuestionMark } from "lucide-react";
 import { memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { parseMarkdown } from "@client/markdown.ts";
 import type { Entry } from "@client/reduce.ts";
 import { authorisationLabel } from "@client/permission.ts";
 import { toolSummary } from "@client/tool-summary.ts";
+import { sessionLabel } from "@client/session-label.ts";
+import { useAgentSessions } from "@/agent-sessions.tsx";
+import { formatRoute } from "@/presentation/route.ts";
 import { Highlighted } from "@/components/highlighted.tsx";
 import { useOpenSubagent } from "@/components/subagent-open.tsx";
 import { entryKey } from "@/presentation/entry-key.ts";
@@ -13,11 +16,13 @@ import { useNow } from "@/lib/use-now.ts";
 import { EditDiffView, ToolPayloadView } from "@/components/edit-diff-view.tsx";
 import { Markdown } from "@/components/markdown.tsx";
 import { cn } from "@/lib/utils.ts";
+import { Button } from "@/components/ui/button.tsx";
 import { ToolName } from "@/components/tool-name.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import { toolOutcome } from "@/presentation/tool-display.ts";
 import { messageTime } from "@/presentation/message-time.ts";
+import { MessageActionButtons, useOpenSession } from "@/components/message-actions.tsx";
 
 /**
  * One Entry of the Presentation Transcript.
@@ -41,7 +46,12 @@ export type TranscriptEntryProps = {
   background?: Of<"background_call"> | undefined;
 };
 
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, sessionId, background }: TranscriptEntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry(props: TranscriptEntryProps) {
+  // Still the human's record, but no longer what the model sees.
+  return props.entry.rewound ? <div className="opacity-50">{entryView(props)}</div> : entryView(props);
+});
+
+function entryView({ entry, query, sessionId, background }: TranscriptEntryProps) {
   switch (entry.kind) {
     case "user":
       return <UserEntryView entry={entry} query={query} sessionId={sessionId} />;
@@ -63,7 +73,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return <TranscriptMarker entry={entry} />;
     default: {
       // An Entry kind this file has not thought about is a compile error here, not a row that
-      // renders nothing. `reduce.ts`, the TUI and the CLI already fail this way; this file did not,
+      // renders nothing. `reduce.ts` and the CLI already fail this way; this file did not,
       // which made a missing case invisible in the one front-end that shows it.
       //
       // Unreachable at runtime, and returning null rather than throwing for that reason. `Entry` is
@@ -74,19 +84,47 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, query, ses
       return null;
     }
   }
-});
+}
 
 type Of<K extends Entry["kind"]> = Extract<Entry, { kind: K }>;
 
 function UserEntryView({ entry, query, sessionId }: { entry: Of<"user">; query: string; sessionId: string }) {
   const blocks = useMemo(() => parseMarkdown(entry.text), [entry.text]);
   return (
-    <div className="relative flex flex-col items-end py-3">
-      <div className="min-w-0 max-w-[90%] rounded-2xl rounded-br-sm bg-muted px-4 py-3 sm:max-w-[80%]">
+    // The `before` band spans the transcript's width, so hovering anywhere at this message's height
+    // shows its actions. The scroll container clips it.
+    <div className="group/message relative flex flex-col items-end py-3 before:absolute before:inset-y-0 before:-right-[100vw] before:-left-[100vw] before:content-['']">
+      <div
+        className={cn(
+          "relative min-w-0 max-w-[90%] rounded-2xl rounded-br-sm px-4 py-3 sm:max-w-[80%]",
+          entry.fromSessionId === undefined && entry.producer === undefined ? "bg-muted" : "border border-border bg-muted/40 text-muted-foreground",
+        )}
+      >
+        {entry.fromSessionId === undefined ? null : (
+          <p className="m-0 mb-2 text-xs text-muted-foreground">
+            From <SessionLink sessionId={entry.fromSessionId} query={query} />
+          </p>
+        )}
+        {entry.producer === undefined ? null : (
+          <p className="m-0 mb-2 text-xs text-muted-foreground">From the parent agent</p>
+        )}
         {entry.attachments?.length ? <Attachments ids={entry.attachments} sessionId={sessionId} /> : null}
         <Markdown blocks={blocks} query={query} />
+        {entry.note === undefined ? null : (
+          <p className="-mx-4 -mb-3 mt-3 rounded-b-2xl rounded-br-sm border-t border-border bg-background/60 px-4 py-2 text-xs text-muted-foreground">
+            {entry.note.replace(/^\[Flow\] /, "")}
+          </p>
+        )}
       </div>
-      {entry.at ? <MessageTime at={entry.at} side="right" /> : null}
+      {entry.at ? (
+        <MessageTime at={entry.at} side="right">
+          {entry.rewound || entry.producer ? null : (
+            <span className="inline-flex [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+              <MessageActionButtons userMessageId={entry.id} />
+            </span>
+          )}
+        </MessageTime>
+      ) : null}
     </div>
   );
 }
@@ -142,13 +180,12 @@ function AssistantEntryView({ entry, query }: { entry: Of<"assistant">; query: s
  * message's last line when the margin has room — the user's on the right, the agent's on the left —
  * and under the message, on its own side, when it does not.
  */
-function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
+function MessageTime({ at, side, children }: { at: string; side: "left" | "right"; children?: ReactNode }) {
   return (
-    <time
-      dateTime={at}
-      title={new Date(at).toLocaleString()}
+    <div
       className={cn(
-        "mt-1 block text-xs whitespace-nowrap text-muted-foreground/70",
+        "relative mt-1 flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground/70",
+        side === "right" && "flex-row-reverse @min-[68rem]/transcript:flex-row",
         // The message's own line height in the margin, so the time's baseline meets the text's.
         "@min-[68rem]/transcript:absolute @min-[68rem]/transcript:mt-0 @min-[68rem]/transcript:leading-[1.375rem]",
         side === "right"
@@ -156,8 +193,9 @@ function MessageTime({ at, side }: { at: string; side: "left" | "right" }) {
           : "@min-[68rem]/transcript:right-full @min-[68rem]/transcript:bottom-1 @min-[68rem]/transcript:mr-4",
       )}
     >
-      {messageTime(at, new Date())}
-    </time>
+      <time dateTime={at} title={new Date(at).toLocaleString()}>{messageTime(at, new Date())}</time>
+      {children}
+    </div>
   );
 }
 
@@ -322,7 +360,7 @@ function ToolCallEntryView({
 /**
  * What the model asked, and what it was told.
  *
- * **No controls.** A live Enquiry renders here as a card and nothing more; the answering surface is
+ * **No controls.** A live Enquiry renders here as a row and nothing more; the answering surface is
  * the composer and only the composer. Two answering surfaces for one Enquiry is two cursors, two
  * selections and one blocked turn — and the duplication with the open picker is the same duplication
  * `SubagentStrip` has with the Subagent rows, which reads the same way.
@@ -333,39 +371,44 @@ function ToolCallEntryView({
  */
 function EnquiryEntryView({ entry, query }: { entry: Of<"enquiry">; query: string }) {
   return (
-    <div className="py-0.5">
-      <div className="w-full rounded-lg border px-3 py-2 text-foreground [overflow-wrap:anywhere]">
-        <div className="flex items-center gap-2">
-          <ToolStatusDot status={entry.status === "asked" ? "running" : entry.status === "answered" ? "complete" : "error"} />
-          <span className="shrink-0 text-xs text-muted-foreground">?</span>
-          <span className="min-w-0 font-mono text-sm">
-            {entry.questions.length === 1 ? "Asked a question" : `Asked ${entry.questions.length} questions`}
-          </span>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            {entry.status === "asked" ? "waiting…" : entry.status}
-          </span>
-        </div>
-        <dl className="mt-1 space-y-1">
-          {entry.questions.map((question, index) => {
-            const chosen = entry.answers?.[index] ?? [];
-            return (
-              <div key={question.question} className="text-sm">
-                <dt className="text-xs text-muted-foreground">
-                  <Highlighted text={question.question} query={query} />
-                </dt>
-                <dd className={cn("font-medium", chosen.length === 0 && "text-muted-foreground italic")}>
-                  {chosen.length === 0 ? (
-                    entry.status === "asked" ? "unanswered" : "no answer"
-                  ) : (
-                    <Highlighted text={chosen.join(", ")} query={query} />
-                  )}
-                </dd>
-              </div>
-            );
-          })}
-        </dl>
-      </div>
+    <div className="text-foreground">
+      {entry.questions.map((question, index) => (
+        <EnquiryQuestionView key={question.question} entry={entry} index={index} query={query} />
+      ))}
     </div>
+  );
+}
+
+function EnquiryQuestionView({ entry, index, query }: { entry: Of<"enquiry">; index: number; query: string }) {
+  const question = entry.questions[index]!;
+  const chosen = entry.answers?.[index] ?? [];
+  const others = question.options.filter((option) => !chosen.includes(option.label)).map((option) => option.label);
+  return (
+    <details className="group/question">
+      <summary className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-1 text-sm select-none hover:bg-muted/50 cursor-tilt relative [--tilt-angle-x:10deg] [--tilt-angle-y:1.5deg] [--tilt-lift:1.005]">
+        <MessageCircleQuestionMark aria-hidden className={cn("size-3.5 shrink-0 text-muted-foreground", index > 0 && "invisible")} />
+        <span className="min-w-0 truncate">
+          <span className="text-muted-foreground">{question.header} </span>
+          {chosen.length === 0 ? (
+            <span className="text-muted-foreground italic">{entry.status === "asked" ? "waiting…" : "no answer"}</span>
+          ) : (
+            <Highlighted text={chosen.join(", ")} query={query} />
+          )}
+        </span>
+        <ChevronRight aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform group-open/question:rotate-90" />
+      </summary>
+      <div className="mt-0.5 mb-1.5 ml-7 space-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        <p>
+          <Highlighted text={question.question} query={query} />
+        </p>
+        {others.length === 0 ? null : (
+          <p className="text-muted-foreground/70">
+            {chosen.length === 0 ? "Options: " : "Other options: "}
+            <Highlighted text={others.join(" · ")} query={query} />
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -476,31 +519,6 @@ function backgroundDot(status: Of<"background_call">["status"]): "running" | "co
 }
 
 /**
- * A failed tool call is one of the three things `--destructive` is spent on — rhea's only coloured
- * token, and a failure is worth it. Running is filled and finished is a quiet ring, the same "shape
- * carries the state, not only colour" rule the Agent Session dots follow. `--chart-2` used to stand
- * in for "finished" and is a grey indistinguishable from the muted text beside it.
- */
-const TOOL_TONE: Record<Of<"tool">["status"], string> = {
-  running: "text-foreground",
-  complete: "text-muted-foreground",
-  error: "text-destructive",
-};
-
-function ToolStatusDot({ status }: { status: Of<"tool">["status"] }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "inline-block size-1.5 shrink-0 rounded-full",
-        TOOL_TONE[status],
-        status === "complete" ? "border-[1.5px] border-current" : "bg-current",
-      )}
-    />
-  );
-}
-
-/**
  * Distinguished by its own level, still. The UI this replaces painted every notice as a warning,
  * throwing away the `info`/`warn`/`error` the reducer records faithfully — so an informational
  * notice shouted and a real error did not stand out.
@@ -516,12 +534,38 @@ const NOTICE_TONE: Record<Of<"notice">["level"], string> = {
   error: "text-destructive",
 };
 
+function SessionLink({ sessionId, query }: { sessionId: string; query: string }) {
+  const { sessions } = useAgentSessions();
+  const named = sessions.find((session) => session.id === sessionId);
+  return named ? (
+    <a
+      href={formatRoute({ sessionId: named.id })}
+      className="rounded-sm font-sans font-medium text-foreground outline-none transition-[text-shadow] duration-150 hover:[text-shadow:0_0_8px_color-mix(in_srgb,currentColor_60%,transparent)] focus-visible:ring-3 focus-visible:ring-ring/30"
+    >
+      <Highlighted text={sessionLabel(named)} query={query} />
+    </a>
+  ) : (
+    <span className="text-foreground">
+      <Highlighted text={sessionId} query={query} />
+    </span>
+  );
+}
+
 function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string }) {
   const tone = NOTICE_TONE[entry.level];
+  const at = entry.sessionId === undefined ? -1 : entry.text.indexOf(entry.sessionId);
   return (
     <Row gutter="!" gutterClassName={tone}>
       <p className={cn("m-0 font-mono text-sm whitespace-pre-wrap [overflow-wrap:anywhere]", tone)}>
-        <Highlighted text={entry.text} query={query} />
+        {at === -1 || entry.sessionId === undefined ? (
+          <Highlighted text={entry.text} query={query} />
+        ) : (
+          <>
+            <Highlighted text={entry.text.slice(0, at)} query={query} />
+            <SessionLink sessionId={entry.sessionId} query={query} />
+            <Highlighted text={entry.text.slice(at + entry.sessionId.length)} query={query} />
+          </>
+        )}
       </p>
     </Row>
   );
@@ -529,7 +573,7 @@ function NoticeEntryView({ entry, query }: { entry: Of<"notice">; query: string 
 
 /**
  * ADR 0003 asks a Revive to continue the same Presentation Transcript "behind a visible marker", and
- * this is that marker made visible: a rule with a centred label, the same `──` device the TUI uses.
+ * this is that marker made visible: a rule with a centred label.
  *
  * It switches on `entry.marker`, never on the text. The reducer grew a distinct `marker` kind
  * precisely so no front-end has to sniff a string prefix to find out what happened.
@@ -542,12 +586,15 @@ const MARKER_TONE: Record<Of<"marker">["marker"], string> = {
   // Receded with the other two: compaction is something a reader wants to be able to find later,
   // not something to interrupt them with. It is also the only marker that can appear mid-turn.
   compacted: "text-muted-foreground",
+  rewound: "text-muted-foreground",
+  forked: "text-muted-foreground",
 };
 
 function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
   // These two read `--color-status-settled` and `--color-status-dormant` until the mapping that
   // defined them was deleted; the label already says which of the two this is.
   const tone = MARKER_TONE[entry.marker];
+  const openSession = useOpenSession();
   return (
     <div
       className={cn("flex items-center gap-2 py-2", tone)}
@@ -555,7 +602,13 @@ function TranscriptMarker({ entry }: { entry: Of<"marker"> }) {
       aria-label={entry.text}
     >
       <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
-      <span className="text-xs">{entry.text}</span>
+      {entry.fromSessionId && openSession ? (
+        <Button variant="link" size="xs" className="h-auto p-0 text-xs text-current" onClick={() => openSession(entry.fromSessionId!)}>
+          Forked from another Agent Session
+        </Button>
+      ) : (
+        <span className="text-xs">{entry.text}</span>
+      )}
       <span className="h-px flex-1 bg-current opacity-50" aria-hidden />
     </div>
   );

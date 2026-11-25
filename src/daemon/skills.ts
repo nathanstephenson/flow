@@ -1,5 +1,6 @@
 import type { AgentBackend, BackendCreateOptions, BackendSession } from "../backend/types.ts";
 import type { BackendEvent, ScopeSkills } from "../protocol/events.ts";
+import type { PlanLimitWindows } from "../protocol/plan-limits.ts";
 
 /**
  * Which Skills a Scope offers, asked without an Agent Session.
@@ -109,6 +110,28 @@ export async function probeSkills(backend: AgentBackend, scope: string, keep?: (
     return { backend: backend.name, scope, skills };
   } catch (error) {
     return failure(message(error));
+  } finally {
+    await release(held, answered ? keep : undefined);
+  }
+}
+
+export async function probePlanLimits(backend: AgentBackend, scope: string, keep: (held: HeldSession) => void): Promise<PlanLimitWindows[]> {
+  const { held, options } = probeSession(scope);
+  const started = backend.create(options);
+  const session = await within(started, PROBE_TIMEOUT_MS);
+  if (session === undefined) {
+    void started.then((late) => void late.dispose().catch(() => {}), () => {});
+    return [];
+  }
+  if (session instanceof Error) return [];
+  held.session = session;
+  let answered = false;
+  try {
+    const limits = await session.planLimits?.() ?? [];
+    answered = true;
+    return limits;
+  } catch {
+    return [];
   } finally {
     await release(held, answered ? keep : undefined);
   }

@@ -26,7 +26,7 @@ export function modelChoices(capabilities: Capabilities | undefined): ModelChoic
  * `Capabilities` is how a model list arrives inside an Agent Session, and `GET /api/models` is how
  * it arrives before there is one (ADR 0020) — the New Agent Session view reads the second. Only
  * `.models` was ever used here, so taking the list is the whole of the generalisation, and
- * `modelChoices` keeps its signature so the TUI is untouched.
+ * `modelChoices` keeps its signature.
  */
 export function modelChoicesOf(models: readonly ModelInfo[] | undefined): ModelChoice[] {
   if (!models) return [];

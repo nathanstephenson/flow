@@ -185,14 +185,13 @@ describe("branches", () => {
       const said = host
         .logFor(id)
         .since(0)
-        .flatMap((entry) => (entry.event.type === "user_message" ? [entry.event.text] : []));
+        .flatMap((entry) => (entry.event.type === "user_message" ? [entry.event] : []));
       assert.equal(said.length, 1, "one message, not two");
-      assert.match(said[0] ?? "", /now on branch feature/);
+      assert.equal(said[0]?.text, "carry on");
+      assert.match(said[0]?.note ?? "", /now on branch feature/);
       // The human's words lead. A backend expands a Skill only when its name is the first thing in
       // the message, so a note in front of them would stop `/tdd` being a Skill at all.
-      assert.match(said[0] ?? "", /^carry on\n/);
-      // And the model was handed the same text the transcript shows.
-      assert.equal(backend.latest.prompts.at(-1), said[0]);
+      assert.equal(backend.latest.prompts.at(-1), `carry on\n\n${said[0]?.note}`);
     });
 
     it("is sent once, not on every message after the switch", async () => {
@@ -206,10 +205,10 @@ describe("branches", () => {
       const said = host
         .logFor(id)
         .since(0)
-        .flatMap((entry) => (entry.event.type === "user_message" ? [entry.event.text] : []));
+        .flatMap((entry) => (entry.event.type === "user_message" ? [entry.event] : []));
       assert.equal(said.length, 2);
-      assert.match(said[0] ?? "", /now on branch feature/);
-      assert.doesNotMatch(said[1] ?? "", /now on branch/);
+      assert.match(said[0]?.note ?? "", /now on branch feature/);
+      assert.equal(said[1]?.note, undefined);
     });
 
     /**

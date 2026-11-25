@@ -12,7 +12,8 @@
  * question is asked one segment higher up. A flag rather than the repository's name over the wire,
  * because the name is already here in the Scope.
  */
-export function projectName(scope: string, worktree?: true): string {
+export function projectName(scope: string, worktree?: true, readOnly?: true): string {
+  if (readOnly) return "<chat>";
   const path = worktree ? scope.slice(0, Math.max(0, scope.lastIndexOf("/"))) : scope;
   const cut = path.lastIndexOf("/");
   return (cut < 0 ? path : path.slice(cut + 1)) || scope;

@@ -16,7 +16,10 @@ export type WorkerLaunchOptions = {
   stdioFds?: number[];
   shutdownTimeoutMs?: number;
   startupTimeoutMs?: number;
+  diagnosticsWindowMs?: number;
 };
+
+const sdkShadowWarning = /^\(node:\d+\) \[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED\].*\n(?:\(Use `node --trace-warnings .*\n)?/gm;
 
 export function workerCommand(options: WorkerLaunchOptions = {}): { command: string; args: string[] } {
   const source = import.meta.url.endsWith(".ts");
@@ -36,9 +39,14 @@ export function launchWorker(options: WorkerLaunchOptions = {}) {
     stdio: ["pipe", "pipe", "pipe", ...(options.stdioFds ?? [])],
   });
   child.stdin?.on("error", () => {});
-  // Drain diagnostics so a chatty SDK cannot block on stderr. Keep only a bounded failure tail.
-  let diagnostics = "";
-  child.stderr?.on("data", (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString()).slice(-8192); });
+  // Drain diagnostics so a chatty SDK cannot block on stderr. Keep only a bounded, recent failure tail.
+  const windowMs = options.diagnosticsWindowMs ?? 10_000;
+  let diagnostics: { at: number; text: string }[] = [];
+  const recent = () => diagnostics.filter(({ at }) => at >= performance.now() - windowMs);
+  child.stderr?.on("data", (chunk: Buffer) => {
+    diagnostics = [...recent(), { at: performance.now(), text: chunk.toString() }];
+    while (diagnostics.length > 1 && diagnostics.reduce((length, { text }) => length + text.length, 0) > 8192) diagnostics.shift();
+  });
   const exited = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
@@ -56,7 +64,7 @@ export function launchWorker(options: WorkerLaunchOptions = {}) {
         try { decode(chunk); } catch (error) { onError(error as Error); }
       });
     },
-    diagnostics: () => diagnostics.trim(),
+    diagnostics: () => recent().map(({ text }) => text).join("").replace(sdkShadowWarning, "").slice(-8192).trim(),
     /** Await the process, then kill its entire process group if cooperative disposal stalled. */
     stop: (graceful: () => Promise<unknown>) => stopping ??= (async () => {
       let timer: NodeJS.Timeout | undefined;

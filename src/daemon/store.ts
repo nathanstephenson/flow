@@ -57,6 +57,8 @@ export type SessionMeta = {
    * the import picker can say it was already brought in.
    */
   imported?: { source: ImportSource; conversationId: string };
+  /** A Rewind not yet followed by a turn: the next Backend Session ends its context before this user message. */
+  rewindTo?: string;
   modelId?: string;
   effort?: EffortLevel;
   permissionMode?: AgentPermissionMode;
@@ -112,6 +114,8 @@ export type SessionMeta = {
    * *basename* — and `branch` is flattened on its way into the path, so both are written down.
    */
   worktree?: { path: string; repo: string; branch: string };
+  readOnly?: true;
+  scheduledOccurrenceId?: string;
 };
 
 export function defaultStateRoot(): string {
@@ -120,6 +124,7 @@ export function defaultStateRoot(): string {
 
 export class TranscriptStore {
   readonly root: string;
+  onSessionDeleted?: (sessionId: string) => void;
 
   constructor(root: string = defaultStateRoot()) {
     this.root = root;
@@ -235,6 +240,7 @@ export class TranscriptStore {
    */
   deleteSession(sessionId: string): void {
     rmSync(this.sessionDir(sessionId), { recursive: true, force: true });
+    this.onSessionDeleted?.(sessionId);
   }
 
   async listSessionIds(): Promise<string[]> {

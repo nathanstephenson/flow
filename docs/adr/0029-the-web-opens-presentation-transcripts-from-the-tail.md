@@ -2,7 +2,7 @@
 
 The durable Presentation Transcript remains append-only and sequence-numbered (ADR 0001). This
 changes how the web reads it, not what is stored, what enters Conversation Context, or how the
-CLI and TUI replay raw Agent Events. A browser opening a long Agent Session must not download and
+CLI replays raw Agent Events. A browser opening a long Agent Session must not download and
 reduce every past event before showing its latest answer, nor briefly replay past Running or
 Awaiting activity into today's composer.
 
@@ -27,7 +27,7 @@ metadata replacement is included when metadata changes. An entry upsert retains 
 including updates to a row outside the loaded tail. Ordinals are zero-based positions in the
 complete reduced transcript, not raw event sequence numbers. New rows receive increasing ordinals;
 upserts neither reorder nor renumber earlier rows. The raw SSE subscription and its exclusive
-`since` replay cursor remain available unchanged for CLI and TUI consumers.
+`since` replay cursor remain available unchanged for CLI consumers.
 
 Backward reads use `GET /api/sessions/:id/presentation?before=N&limit=400`, where `before` is an
 exclusive ordinal. Pages return reduced entries with their original indices, `start`, `total` and

@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils.ts";
  *
  * Beside the composer rather than in the header, because it is a fact about what the *next turn* has
  * room to do — the same reason the model and Effort controls sit there. The bar alone carries it at
- * rest; the numbers are one hover away, from the shared formatter so the TUI and this UI cannot
- * drift on the rounding again.
+ * rest; the numbers are one hover away, from the shared formatter so front-ends cannot drift on
+ * the rounding.
  */
 export function ContextUsageMeter({ usage, compacting }: { usage: Chrome["contextUsage"]; compacting: boolean }) {
   // Keyed off the formatter's "nothing honest to say" rather than re-testing the window here, so

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject, useLayoutEffect } from "react";
 
 import type { IncomingAttachment } from "../../../src/protocol/attachments.ts";
 import type { Capabilities, EffortLevel } from "../../../src/protocol/events.ts";
@@ -25,6 +25,7 @@ import { workflowIssue } from "@/presentation/workflows.ts";
 import { retainWorkflowLaunch } from "@/workflow-launch.ts";
 import { Composer } from "@/components/composer.tsx";
 import { ImportConversations } from "@/components/import-conversations.tsx";
+import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { initialValue, ValueEditor } from "@/components/workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "@/components/workflow-api.ts";
 import { TurnStrip } from "@/components/turn-strip.tsx";
@@ -86,22 +87,35 @@ export function NewAgentSessionPage({
 
   const [projectPath, setProjectPath] = useState<string | undefined>(() => drafts.scope());
   const project = projects.find((candidate) => candidate.path === projectPath);
-  const scope = project?.path;
+  const projectRoot = config.projects?.root ? config.scope : undefined;
+  const readOnly = projectRoot !== undefined && projectPath === READ_ONLY_ROOT.path;
+  const scope = readOnly ? projectRoot : project?.path;
+  const isolation = config.filesystemIsolationStatus?.mode ?? config.filesystemIsolation ?? "none";
+  const enforced = isolation === "bubblewrap" || (isolation === "sandbox" && config.sandboxSharing !== "shared");
   const [chosenBackend, setBackend] = useState<string | undefined>(initialBackend);
   const backend = chosenBackend ?? resolveDefaultBackend(config.backends, config.providers?.defaultBackend) ?? "";
   const [chosenModel, setChosenModel] = useState<string | undefined>();
   const [effort, setEffort] = useState<EffortLevel | undefined>();
   const [chosenPermissionMode, setPermissionMode] = useState<import("../../../src/protocol/events.ts").AgentPermissionMode | undefined>();
-  const [inWorktree, setInWorktree] = useState(false);
+  const alwaysWorktree = config.worktrees?.always === true;
+  const [chosenWorktree, setInWorktree] = useState(false);
   const [cutFrom, setCutFrom] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
   const projectField = useRef<HTMLLabelElement | null>(null);
+  const [creating, setCreating] = useState<Creating | undefined>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const branches = useBranches(scope);
+  const branches = useBranches(readOnly ? undefined : scope);
   useEffect(() => {
     if (config.git !== false) branches.load();
   }, [scope, config.git]);
@@ -110,6 +124,7 @@ export function NewAgentSessionPage({
   const head = branches.list?.head;
   const checkedOut = head?.detached ? undefined : head?.name;
   const base = cutFrom ?? checkedOut ?? "";
+  const inWorktree = alwaysWorktree || chosenWorktree;
 
   const { catalogue: models, loading: modelsLoading, problem: modelsProblem, refresh: refreshModels } = useModelCatalogue();
   const backendModels = models?.find((entry) => entry.backend === backend);
@@ -138,6 +153,7 @@ export function NewAgentSessionPage({
     effort,
     ...(chosenPermissionMode ? { permissionMode: chosenPermissionMode } : {}),
     inWorktree,
+    readOnly,
     repository,
     base,
   });
@@ -188,8 +204,12 @@ export function NewAgentSessionPage({
 
   const send = useCallback(
     async (text: string, attachments: IncomingAttachment[]): Promise<unknown | undefined> => {
+      setCreating({ text, attachments, ...originOf("[data-composer-input]") });
       const created = await create();
-      if (!created) return;
+      if (!created) {
+        setCreating(undefined);
+        return;
+      }
       const queued =
         text === "" && attachments.length === 0
           ? true
@@ -201,11 +221,12 @@ export function NewAgentSessionPage({
               when: "after_turn",
             });
       if (queued === undefined) {
+        setCreating(undefined);
         setFailure("The Agent Session was created, but the message was not sent. Your Draft is still here.");
         return;
       }
       drafts.write(NEW_AGENT_SESSION_DRAFT, { text: "", attachments: [] });
-      onCreated(created);
+      if (mounted.current) onCreated(created);
       return queued;
     },
     [create, drafts, onCreated, run],
@@ -236,7 +257,7 @@ export function NewAgentSessionPage({
     [backendModels, branches, inWorktree, listSkills, run, scope, send],
   );
 
-  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>(tab === "workflow" ? "/api/workflows" : undefined, 10_000);
+  const definitions = useWorkflowResource<{ workflows: WorkflowDefinition[] }>("/api/workflows", 10_000);
   const availableWorkflows = useMemo(
     () => eligibleWorkflows(definitions.data?.workflows ?? [], backend, projectPath),
     [backend, definitions.data, projectPath],
@@ -284,6 +305,7 @@ export function NewAgentSessionPage({
     launchInFlight.current = true;
     setLaunching(true);
     setFailure(undefined);
+    setCreating({ text: workflow.name, attachments: [], ...originOf('[aria-label="Workflow"]') });
     const input = validatedInput;
     const launchId = crypto.randomUUID();
     try {
@@ -304,10 +326,11 @@ export function NewAgentSessionPage({
         });
       }
       // Success opens monitoring; partial failure opens the same surface with a preserved retry.
-      onCreated(created, true);
+      if (mounted.current) onCreated(created, true);
     } finally {
       launchInFlight.current = false;
       setLaunching(false);
+      setCreating(undefined);
     }
   }, [create, inputIssue, onCreated, runtimeIssue, validatedInput, workflow]);
 
@@ -322,11 +345,21 @@ export function NewAgentSessionPage({
     [drafts, projectPath],
   );
 
-  const groups = groupProjects(projects);
+  const groups = groupProjects(projectRoot === undefined ? projects : [READ_ONLY_ROOT, ...projects]);
 
   return (
-    <div data-new-session="" className="transcript-scroller min-h-0 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6">
+    <div
+      data-new-session=""
+      className={cn("transcript-scroller relative flex min-h-0 flex-col overflow-y-auto", creating !== undefined && "overflow-hidden")}
+    >
+      {creating !== undefined ? <CreatingAgentSession {...creating} /> : null}
+      <div
+        inert={creating !== undefined}
+        className={cn(
+          "m-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-12 sm:px-6",
+          creating !== undefined && "animate-out fade-out-0 fill-mode-forwards",
+        )}
+      >
         <h1 className="text-center text-lg font-medium">New Agent Session</h1>
         <Tabs
           value={tab}
@@ -343,7 +376,7 @@ export function NewAgentSessionPage({
             ))}
           </TabsList>
 
-          {projects.length === 0 ? (
+          {projects.length === 0 && projectRoot === undefined ? (
             <>
               <TabsContent value="chat">
                 <NoProjects uncurated={uncurated} />
@@ -378,7 +411,7 @@ export function NewAgentSessionPage({
                   fieldRef={projectField}
                   groups={groups}
                   projects={projects}
-                  project={project}
+                  project={readOnly ? READ_ONLY_ROOT : project}
                   onPick={(picked) => {
                     setProjectPath(picked.path);
                     setCutFrom(undefined);
@@ -387,6 +420,11 @@ export function NewAgentSessionPage({
                 />
               </div>
 
+              {readOnly && !enforced ? (
+                <p className="text-center text-xs text-muted-foreground" role="note">
+                  Isolation cannot enforce read-only here. Flow removes write tools, but this is not a boundary.
+                </p>
+              ) : null}
               {capabilityProblem ? (
                 <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground" role="status">
                   <span>{capabilityProblem}</span>
@@ -395,99 +433,95 @@ export function NewAgentSessionPage({
                   ) : null}
                 </div>
               ) : null}
-              <TabsContent value="chat" keepMounted className="grid gap-3">
-                <Composer
-                  id={NEW_AGENT_SESSION_DRAFT}
-                  chrome={chrome}
-                  actions={actions}
-                  floating={false}
-                  unavailable={backend === "" ? "This Session Host advertises no backend" : capabilityProblem}
-                  placeholder="What should it work on? Enter starts the Agent Session."
-                  drafts={drafts}
-                  authorisingSummary={undefined}
-                />
-                {/*
-                  * Beside the composer rather than a tab of its own: an import is another way to
-                  * start a chat, not a third kind of work. Collapsed by default, and its panel
-                  * unmounts when closed, so the Project's conversations are read only when asked for.
-                  */}
-                <Accordion>
-                  <AccordionItem value="import">
-                    <AccordionTrigger>Import from Claude Code</AccordionTrigger>
-                    <AccordionContent className="grid gap-3">
-                      <p className="text-xs text-muted-foreground">
-                        Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. They always use the claude backend, and nothing runs until you write to one.
-                      </p>
-                      <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </TabsContent>
-              <TabsContent value="workflow" keepMounted className="grid gap-4 rounded-xl border bg-card/30 p-4">
-                <div>
-                  <h2 className="font-medium">Start with a workflow</h2>
-                  <p className="text-xs text-muted-foreground">
-                    The workflow runs independently, so the parent chat stays available for questions and follow-up work.
-                  </p>
-                </div>
-                {definitions.error ? (
-                  <p role="alert" className="text-sm text-destructive">Could not load workflows: {definitions.error}</p>
-                ) : definitions.data === undefined ? (
-                  <p className="text-sm text-muted-foreground">Loading compatible workflows…</p>
-                ) : availableWorkflows.length === 0 ? (
-                  <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    No global or {project?.name} workflows use Backend Adapter {backend}.
-                  </p>
-                ) : (
-                  <>
-                    <label className="grid gap-1.5">
-                      <span className="text-sm font-medium">Workflow</span>
-                      <Select
-                        value={workflowId}
-                        onValueChange={(value) => {
-                          if (value === null) return;
-                          const selected = availableWorkflows.find((definition) => definition.id === value);
-                          setWorkflowId(value);
-                          setWorkflowInput(selected ? initialValue(selected.inputSchema) : {});
-                        }}
-                      >
-                        <SelectTrigger className="w-full" aria-label="Workflow">
-                          <SelectValue>{workflow?.name ?? "Select a workflow"}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="">Select a workflow</SelectItem>
-                          {availableWorkflows.map((definition) => (
-                            <SelectItem key={definition.id} value={definition.id}>
-                              {definition.name}{definition.projectId === undefined ? " · Global" : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </label>
-                    {workflow ? (
-                      <div className="grid gap-4">
-                        <fieldset className="grid gap-3 rounded-lg border p-3">
-                          <legend className="px-1 text-sm font-medium">Inputs</legend>
-                          <ValueEditor schema={workflow.inputSchema} value={workflowInput} onChange={setWorkflowInput} />
-                        </fieldset>
-                        {(inputIssue || runtimeIssue) && (
-                          <p role="alert" className="text-xs text-destructive">{inputIssue || runtimeIssue}</p>
-                        )}
-                        <Button
-                          className="justify-self-start"
-                          disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue || !!capabilityProblem}
-                          onClick={() => void launchWorkflow()}
+              <div className="grid">
+                <TabsContent value="chat" keepMounted hidden={false} className="col-start-1 row-start-1 grid content-start gap-3 data-hidden:invisible">
+                  <Composer
+                    id={NEW_AGENT_SESSION_DRAFT}
+                    chrome={chrome}
+                    actions={actions}
+                    floating={false}
+                    unavailable={backend === "" ? "This Session Host advertises no backend" : capabilityProblem}
+                    placeholder="What should it work on? Enter starts the Agent Session."
+                    drafts={drafts}
+                    authorisingSummary={undefined}
+                  />
+                  {/*
+                    * Beside the composer rather than a tab of its own: an import is another way to
+                    * start a chat, not a third kind of work. Collapsed by default, and its panel
+                    * unmounts when closed, so the Project's conversations are read only when asked for.
+                    */}
+                  <Accordion>
+                    <AccordionItem value="import">
+                      <AccordionTrigger>Import from Claude Code</AccordionTrigger>
+                      <AccordionContent className="grid gap-3">
+                        <p className="text-xs text-muted-foreground">
+                          Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. They always use the claude backend, and nothing runs until you write to one.
+                        </p>
+                        <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
+                      </AccordionContent>
+                    </AccordionItem>
+                  </Accordion>
+                </TabsContent>
+                <TabsContent value="workflow" keepMounted hidden={false} className="col-start-1 row-start-1 grid content-start gap-3 data-hidden:invisible">
+                  {definitions.error ? (
+                    <p role="alert" className="text-sm text-destructive">Could not load workflows: {definitions.error}</p>
+                  ) : definitions.data === undefined ? (
+                    <p className="text-sm text-muted-foreground">Loading compatible workflows…</p>
+                  ) : availableWorkflows.length === 0 ? (
+                    <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                      No global or {project?.name} workflows use Backend Adapter {backend}.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="grid gap-1.5">
+                        <span className="text-sm font-medium">Workflow</span>
+                        <Select
+                          value={workflowId}
+                          onValueChange={(value) => {
+                            if (value === null) return;
+                            const selected = availableWorkflows.find((definition) => definition.id === value);
+                            setWorkflowId(value);
+                            setWorkflowInput(selected ? initialValue(selected.inputSchema) : {});
+                          }}
                         >
-                          {launching ? "Starting workflow…" : "Create Agent Session and start"}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </>
-                )}
-                <div className="overflow-hidden rounded-xl border bg-background">
-                  <TurnStrip chrome={chrome} actions={actions} permissions={false} />
-                </div>
-              </TabsContent>
+                          <SelectTrigger className="w-full" aria-label="Workflow">
+                            <SelectValue>{workflow?.name ?? "Select a workflow"}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="">Select a workflow</SelectItem>
+                            {availableWorkflows.map((definition) => (
+                              <SelectItem key={definition.id} value={definition.id}>
+                                {definition.name}{definition.projectId === undefined ? " · Global" : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      {workflow ? (
+                        <div className="grid gap-4">
+                          <fieldset className="grid gap-3 rounded-lg border p-3">
+                            <legend className="px-1 text-sm font-medium">Inputs</legend>
+                            <ValueEditor schema={workflow.inputSchema} value={workflowInput} onChange={setWorkflowInput} />
+                          </fieldset>
+                          {(inputIssue || runtimeIssue) && (
+                            <p role="alert" className="text-xs text-destructive">{inputIssue || runtimeIssue}</p>
+                          )}
+                          <Button
+                            className="justify-self-start"
+                            disabled={launching || !command || validatedInput === undefined || !!inputIssue || !!runtimeIssue || !!capabilityProblem}
+                            onClick={() => void launchWorkflow()}
+                          >
+                            {launching ? "Starting workflow…" : "Create Agent Session and start"}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  <div className="overflow-hidden rounded-xl border bg-background">
+                    <TurnStrip chrome={chrome} actions={actions} permissions={false} />
+                  </div>
+                </TabsContent>
+              </div>
 
               {(config.mcp ?? []).length > 0 && (
                 <Accordion>
@@ -511,7 +545,7 @@ export function NewAgentSessionPage({
                 </Accordion>
               )}
 
-              {repository && config.git !== false ? (
+              {repository && config.git !== false && !alwaysWorktree ? (
                 <div className="flex flex-col gap-1">
                   <label className="flex items-center gap-2">
                     <input
@@ -540,14 +574,16 @@ export function NewAgentSessionPage({
   );
 }
 
-function ProjectPicker({
+const READ_ONLY_ROOT: Project = { path: "read-only-project-root", name: "<chat>" };
+
+export function ProjectPicker({
   fieldRef,
   groups,
   projects,
   project,
   onPick,
 }: {
-  fieldRef: RefObject<HTMLLabelElement | null>;
+  fieldRef?: RefObject<HTMLLabelElement | null>;
   groups: ProjectGroup[];
   projects: Project[];
   project: Project | undefined;
@@ -593,6 +629,73 @@ function ProjectPicker({
         </ComboboxContent>
       </Combobox>
     </label>
+  );
+}
+
+const SMOKE_PUFFS: [x: number, y: number, turn: number, duration: number, delay: number][] = [
+  [70, -12, 10, 5.3, -0.4],
+  [38, 58, 75, 6.1, -2.2],
+  [-30, 64, 140, 4.7, -3.9],
+  [-72, 8, 200, 5.9, -1.3],
+  [-44, -56, 260, 6.7, -4.8],
+  [22, -70, 320, 5.1, -2.9],
+  [60, 40, 40, 7.3, -5.6],
+  [-62, -30, 170, 6.4, -0.9],
+];
+
+export type Creating = { text: string; attachments: IncomingAttachment[]; from: DOMRect | undefined; scrolled: number };
+
+function originOf(selector: string): Pick<Creating, "from" | "scrolled"> {
+  return {
+    from: document.querySelector(`[data-new-session] ${selector}`)?.getBoundingClientRect(),
+    scrolled: document.querySelector("[data-new-session]")?.scrollTop ?? 0,
+  };
+}
+
+export function CreatingAgentSession({ text, attachments, from, scrolled }: Creating) {
+  const message = useRef<HTMLDivElement>(null);
+  const card = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const to = (card.current ?? message.current)?.getBoundingClientRect();
+    if (!from || !to || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    message.current?.animate(
+      [{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: "none" }],
+      { duration: 400, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+  }, []);
+  return (
+    <div role="status" className="absolute inset-x-0 h-full" style={{ top: scrolled }}>
+      <div className="absolute top-1/2 left-1/2 flex -translate-1/2 animate-in flex-col items-center duration-500 fade-in-0">
+        <div className="creating-smoke size-48" aria-hidden>
+          {SMOKE_PUFFS.map(([x, y, turn, duration, delay], index) => (
+            <span
+              key={index}
+              style={{ "--x": `${x}px`, "--y": `${y}px`, "--turn": `${turn}deg`, "--duration": `${duration}s`, "--delay": `${delay}s` } as CSSProperties}
+            />
+          ))}
+        </div>
+        <span className="-mt-4 text-sm text-muted-foreground">Creating Agent Session…</span>
+      </div>
+      <div className="absolute inset-x-0 bottom-0 flex h-1/2 items-center justify-center">
+        <div ref={message} className="flex w-full max-w-2xl flex-col gap-2 px-4 sm:px-6">
+          {attachments.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {attachments.map((attachment, index) => (
+                <ExpandableImage
+                  key={index}
+                  src={`data:${attachment.mediaType};base64,${attachment.data}`}
+                  alt=""
+                  className="size-14 rounded-md border border-border object-cover"
+                />
+              ))}
+            </div>
+          ) : null}
+          {text === "" ? null : (
+            <p ref={card} className="line-clamp-6 rounded-xl border bg-muted/40 px-4 py-3 text-sm whitespace-pre-wrap">{text}</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

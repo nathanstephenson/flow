@@ -2,7 +2,7 @@
  * How long ago something happened, for the "last updated" badge both front-ends show.
  *
  * Shared with the browser the same way the reducer is: types only, so stripping leaves standalone
- * ESM. The TUI and the web UI must agree about what "2h" means, and the only way to guarantee that
+ * ESM. Every front-end must agree about what "2h" means, and the only way to guarantee that
  * is for there to be one implementation.
  *
  * `now` is a parameter rather than a call to the clock so a frame renders the same way twice.

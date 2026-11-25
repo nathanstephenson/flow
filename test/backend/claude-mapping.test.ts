@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
+import type { Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 
+import { AsyncQueue } from "../../src/backend/claude/async-queue.ts";
 import {
+  ClaudeBackend,
   addSpend,
   briefOf,
   describeCompaction,
   describeContextUsage,
   describeSpend,
   isAsyncLaunch,
+  resolvedModelOf,
 } from "../../src/backend/claude/index.ts";
 import { StreamedMessage, StreamedMessages, type ContentBlock } from "../../src/backend/claude/streamed-message.ts";
 import { contextUsageLabel } from "../../src/client/context-usage.ts";
@@ -296,6 +300,42 @@ describe("what the Agent tool says a Subagent is", () => {
   it("omits a description that is not a string rather than printing one", () => {
     assert.deepEqual(briefOf({ subagent_type: "Explore", description: 42 }), { name: "Explore" });
   });
+
+  it("takes the model the call asked for over the definition and the parent", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore", model: "haiku" }, { model: "opus", effort: "high" }, new Map([["Explore", "sonnet"]])),
+      { name: "Explore", model: "haiku", effort: "high" });
+  });
+
+  it("takes the agent definition's model before the parent's", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore" }, { model: "opus" }, new Map([["Explore", "sonnet"]])),
+      { name: "Explore", model: "sonnet" });
+  });
+
+  it("takes the effort the call asked for over the parent's", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore", effort: "max" }, { model: "opus", effort: "low" }), { name: "Explore", model: "opus", effort: "max" });
+    assert.deepEqual(briefOf({ subagent_type: "Explore", effort: "huge" }, { effort: "low" }), { name: "Explore", effort: "low" });
+  });
+
+  it("inherits the parent's model and effort when nothing else names them", () => {
+    assert.deepEqual(briefOf({ subagent_type: "Explore" }, { model: "opus", effort: "low" }), { name: "Explore", model: "opus", effort: "low" });
+  });
+});
+
+describe("the model a Subagent resolved to", () => {
+  const aliases = new Map([["claude-haiku-4-5", "haiku"]]);
+
+  it("maps the resolved id back to the picker's alias", () => {
+    assert.equal(resolvedModelOf({ status: "async_launched", resolvedModel: "claude-haiku-4-5" }, aliases), "haiku");
+  });
+
+  it("keeps a resolved id the picker has no alias for", () => {
+    assert.equal(resolvedModelOf({ status: "completed", resolvedModel: "claude-opus-9" }, aliases), "claude-opus-9");
+  });
+
+  it("is undefined when the result names no model", () => {
+    assert.equal(resolvedModelOf({ status: "completed" }, aliases), undefined);
+    assert.equal(resolvedModelOf(undefined, aliases), undefined);
+  });
 });
 
 /**
@@ -435,5 +475,95 @@ describe("a compaction boundary", () => {
     assert.equal(said("auto", 22_000), "Compacted automatically, 84k → 22k tokens");
     assert.equal(said("manual", 22_000), "Compacted, 84k → 22k tokens");
     assert.equal(said("auto", undefined), "Compacted automatically, from 84k tokens");
+  });
+});
+
+/** Real SDK message shapes for an `Agent` call made by another Subagent, fed through a session. */
+async function nestingFixture(t: TestContext) {
+  const messages = new AsyncQueue<SDKMessage>();
+  const events: BackendEvent[] = [];
+  const backend = new ClaudeBackend({ allowedTools: [], query: (() => ({
+    [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](),
+    supportedModels: async () => [{ value: "sonnet", supportedEffortLevels: ["high"] }],
+    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 100 }),
+    close: () => messages.close(),
+  }) as unknown as Query) as typeof query });
+  const session = await backend.create({ scope: "/tmp", emit: (event) => events.push(event) });
+  t.after(() => session.dispose());
+  const push = (message: unknown) => messages.push(message as SDKMessage);
+  const drain = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const spawn = async (id: string, parent: string | null, prompt?: string) => {
+    push({ type: "assistant", parent_tool_use_id: parent, message: { id: `message-${id}`, content: [{
+      type: "tool_use", id, name: "Agent", input: { subagent_type: "general-purpose", description: id, ...(prompt ? { prompt } : {}) },
+    }] } });
+    await drain();
+  };
+  const answer = async (id: string, parent: string | null, background = false) => {
+    push({ type: "user", parent_tool_use_id: parent,
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: "done" }] },
+      ...(background ? { tool_use_result: { status: "async_launched" } } : {}) });
+    await drain();
+  };
+  const finish = async () => {
+    push({ type: "result", subtype: "success" });
+    await drain();
+  };
+  const snapshots = (id: string) => events.filter((event) => event.type === "subagent" && event.subagentId === id);
+  const turnsEnded = () => events.filter((event) => event.type === "turn_ended").length;
+  const send = async (parent: string | null, content: unknown, uuid?: string) => {
+    push({ type: "user", parent_tool_use_id: parent, message: { content }, ...(uuid ? { uuid } : {}) });
+    await drain();
+  };
+  const instructions = () => events.flatMap((event) => event.type === "subagent_instruction" ? [[event.producer.subagentId, event.text]] : []);
+  return { spawn, answer, finish, send, snapshots, turnsEnded, instructions };
+}
+
+describe("a Subagent spawned by another Subagent", () => {
+  it("names its parent as producer on every snapshot", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("parent", null);
+    await f.spawn("child", "parent");
+    await f.answer("child", "parent");
+
+    assert.deepEqual(f.snapshots("child").map((event) => [event.type === "subagent" && event.state, "producer" in event && event.producer]),
+      [["running", { subagentId: "parent" }], ["complete", { subagentId: "parent" }]]);
+    assert.equal("producer" in f.snapshots("parent")[0]!, false, "a root Subagent has no producer");
+  });
+
+  it("holds no turn when its parent is backgrounded", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("parent", null);
+    await f.answer("parent", null, true);
+    await f.spawn("child", "parent");
+    await f.finish();
+
+    assert.equal(f.turnsEnded(), 1, "the child of detached work must not hold the turn");
+    await f.answer("child", "parent");
+    assert.deepEqual(f.snapshots("child").map((event) => event.type === "subagent" && event.state), ["running", "complete"]);
+  });
+});
+
+describe("instructions a Subagent receives", () => {
+  it("reports its brief once, even when the stream echoes it", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("child", null, "Find every caller");
+    await f.send("child", [{ type: "text", text: "Find every caller" }]);
+
+    assert.deepEqual(f.instructions(), [["child", "Find every caller"]]);
+  });
+
+  it("reports a later message sent into it", async (t) => {
+    const f = await nestingFixture(t);
+    await f.spawn("child", null, "Find every caller");
+    await f.send("child", "Also check the tests", "u1");
+
+    assert.deepEqual(f.instructions(), [["child", "Find every caller"], ["child", "Also check the tests"]]);
+  });
+
+  it("leaves the Agent Session's own user text to the host", async (t) => {
+    const f = await nestingFixture(t);
+    await f.send(null, "hello");
+
+    assert.deepEqual(f.instructions(), []);
   });
 });

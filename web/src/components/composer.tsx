@@ -1,12 +1,13 @@
 import { ArrowUp, Bot, Loader2, Square, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import { attachPasted } from "@/attachments.ts";
 import type { ComposerActions } from "@/composer-actions.ts";
-import { outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
+import { appendDraftText, outgoing, type Draft, type PendingAttachment } from "@/presentation/drafts.ts";
 import type { DraftStash } from "@/drafts.ts";
 import { composerPlaceholder, sendLabel } from "@/presentation/composer-hint.ts";
-import type { RunningWork } from "@/presentation/running-work.ts";
+import { nestedLabel, type RunningWork } from "@/presentation/running-work.ts";
+import { modelLabel } from "@/presentation/subagent-list.ts";
 import { ToolIcon } from "@/components/tool-icon.tsx";
 import type { Chrome } from "@/store/contract.ts";
 import { AttachmentTray } from "@/components/attachment-tray.tsx";
@@ -30,7 +31,7 @@ import {
 } from "../../../src/client/enquiry.ts";
 import { completed, matching, menuQuery, triggerables, triggeredBy } from "@/presentation/composer-menu.ts";
 import { answerCurrentEnquiry } from "@/presentation/enquiry-commit.ts";
-import type { PermissionDecision, Skill } from "../../../src/protocol/events.ts";
+import type { ModelInfo, PermissionDecision, Skill } from "../../../src/protocol/events.ts";
 import { TurnStrip, type TurnStripControls } from "@/components/turn-strip.tsx";
 import { TurnOptionsButton, TurnSummary } from "@/components/composer-turn-options.tsx";
 import { useIsMobile } from "@/lib/use-mobile.ts";
@@ -40,6 +41,16 @@ import { toast } from "@/components/ui/toaster.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
+
+export type AppendResult = "added" | "question" | "locked";
+export type ComposerHandle = { append: (block: string) => AppendResult };
+
+export function appendToComposer(composer: ComposerHandle | null, drafts: DraftStash, id: string, block: string): AppendResult {
+  if (composer) return composer.append(block);
+  const draft = drafts.read(id);
+  drafts.write(id, { ...draft, text: appendDraftText(draft.text, block) });
+  return "added";
+}
 
 /**
  * Where a message goes in, and what the next turn will cost to run.
@@ -68,6 +79,7 @@ import { ExpandableImage } from "@/components/expandable-image.tsx";
  * spins, and a rejection puts the text back and says why.
  */
 export function Composer({
+  handle,
   id,
   chrome,
   actions,
@@ -75,6 +87,7 @@ export function Composer({
   unavailable,
   placeholder,
   drafts,
+  seed: given,
   authorisingSummary,
   work = NO_WORK,
   onOpenWork,
@@ -85,6 +98,7 @@ export function Composer({
   abortDisabled = false,
   abortLabel,
 }: {
+  handle?: React.RefObject<ComposerHandle | null>;
   /**
    * What this composer's Draft is filed under, and what its listbox ids are built from — an Agent
    * Session id for a session, and a reserved key for the one on the New Agent Session view.
@@ -131,6 +145,8 @@ export function Composer({
    * has moved on still has to clear the Draft it came from.
    */
   drafts: DraftStash;
+  /** Starts the Composer with this instead of the stashed Draft, e.g. a rewound message. */
+  seed?: Draft | undefined;
   /**
    * The précis of the call awaiting authorisation, passed in rather than looked up.
    *
@@ -159,7 +175,7 @@ export function Composer({
    * at another Agent Session. A read rather than a take — see web/src/drafts.ts for why StrictMode
    * requires that — and `useRef` so the seed is taken once rather than on every render.
    */
-  const seed = useRef(drafts.read(id)).current;
+  const seed = useRef(given ?? drafts.read(id)).current;
   const [text, setText] = useState(seed.text);
   const [attachments, setAttachments] = useState<PendingAttachment[]>(seed.attachments);
   /** A Workflow relay borrows the input for free text without consuming the ordinary Draft. */
@@ -298,6 +314,27 @@ export function Composer({
     },
     [drafts, id],
   );
+
+  const appendState = useRef({ blocked, locked });
+  appendState.current = { blocked, locked };
+  useEffect(() => {
+    if (!handle) return;
+    handle.current = {
+      append: (block) => {
+        const relayed = relayedDraft.current;
+        if (relayed) {
+          relayedDraft.current = { ...relayed, text: appendDraftText(relayed.text, block) };
+          latest.current = relayedDraft.current;
+          return "added";
+        }
+        if (appendState.current.blocked) return "question";
+        if (appendState.current.locked) return "locked";
+        input.current?.append(block);
+        return "added";
+      },
+    };
+    return () => { handle.current = null; };
+  }, [handle]);
 
   /*
    * Returns synchronously whether the paste was ours, because that is what decides whether the
@@ -727,7 +764,7 @@ export function Composer({
       ) : null}
       {/* Measured as one: the cards stand above the panel, and the transcript has to clear both. */}
       <div ref={panel} className="pane-measure">
-      <WorkStack running={work} onOpen={onOpenWork} />
+      <WorkStack running={work} models={chrome.capabilities?.models ?? []} onOpen={onOpenWork} />
       <div
         className={cn(
           "relative z-10 rounded-xl border shadow-lg",
@@ -981,16 +1018,30 @@ function useCardTransitions(running: readonly RunningWork[]): { card: Card; leav
 /**
  * The Subagents and Background Calls running beside the turn, as cards stacked behind the panel's
  * top edge: each one shows a single line, and each further back is a little narrower, so the stack
- * reads as depth rather than as a list. The newest is nearest the panel.
+ * reads as depth rather than as a list. The newest is nearest the panel. Hovered or focused, a card
+ * grows upwards to show all of its detail, and the cards behind it move up by the same amount so
+ * they stay on its top edge. They move by `translate`, not by layout, so the panel keeps its height
+ * and the transcript does not move.
  *
  * A card slides up from behind the one in front as it appears, and back behind it as it finishes:
  * its height grows from the part that is always tucked away, so everything above it moves with it
  * rather than jumping.
  */
-function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpen: ((work: RunningWork) => void) | undefined }) {
+function WorkStack({ running, models, onOpen }: {
+  running: readonly RunningWork[];
+  models: readonly ModelInfo[];
+  onOpen: ((work: RunningWork) => void) | undefined;
+}) {
   const cards = useCardTransitions(running);
+  const [open, setOpen] = useState<{ key: string; extra: number }>();
   if (cards.length === 0) return null;
   const depthOf = (index: number) => cards.slice(index).filter(({ leaving }) => !leaving).length;
+  const openIndex = cards.findIndex(({ card, leaving }) => !leaving && card.key === open?.key);
+  const track = (key: string) => (event: SyntheticEvent<HTMLElement>) => {
+    const button = event.currentTarget;
+    const extra = button.scrollHeight + button.offsetHeight - button.clientHeight - (button.parentElement?.offsetHeight ?? 0);
+    setOpen((current) => button.matches(":hover, :focus-visible") ? { key, extra } : current?.key === key ? undefined : current);
+  };
 
   return (
     <ul aria-label="Running beside this turn" className="flex flex-col">
@@ -1000,28 +1051,67 @@ function WorkStack({ running, onOpen }: { running: readonly RunningWork[]; onOpe
           aria-hidden={leaving || undefined}
           // Tucked 0.75rem behind the card in front, with 1.75rem showing; narrower with depth.
           className={cn(
-            "relative -mb-3 overflow-hidden rounded-t-xl border border-b-0 bg-card shadow-sm",
-            "transition-[height,opacity,margin] duration-200 ease-out motion-reduce:transition-none",
+            "relative -mb-3 transition-[height,opacity,margin,translate] duration-200 ease-out motion-reduce:transition-none",
             leaving ? "pointer-events-none h-3 opacity-0" : "pointer-events-auto h-10 opacity-100 starting:h-3 starting:opacity-0",
           )}
-          style={{ marginInline: `${Math.max(1, depthOf(index)) * 0.5}rem`, zIndex: index }}
+          style={{
+            marginInline: `${Math.max(1, depthOf(index)) * 0.5}rem`,
+            zIndex: index,
+            ...(index < openIndex && open ? { translate: `0 -${open.extra}px` } : {}),
+          }}
         >
           {card.kind === "more" ? (
-            <p className="flex h-7 items-center px-3 text-xs text-muted-foreground">+{card.count} more running</p>
+            <p className="h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 py-1.5 text-xs leading-4 text-muted-foreground shadow-sm">
+              +{card.count} more running
+            </p>
           ) : (
             <button
               type="button"
               tabIndex={leaving ? -1 : undefined}
               onClick={() => onOpen?.(card)}
+              onPointerEnter={track(card.key)}
+              onPointerLeave={track(card.key)}
+              onFocus={track(card.key)}
+              onBlur={track(card.key)}
               aria-label={card.kind === "agent" ? `Open agent ${card.name}` : `Show ${card.tool} in the transcript`}
-              className="relative flex h-7 w-full items-center gap-2 rounded-t-xl px-3 text-left text-xs text-muted-foreground hover:text-foreground"
+              style={open?.key === card.key ? { height: `calc(100% + ${open.extra}px)` } : undefined}
+              className={cn(
+                "group/card absolute inset-x-0 bottom-0 h-full overflow-hidden rounded-t-xl border border-b-0 bg-card px-3 pt-1.5 pb-3",
+                "text-left text-xs leading-4 text-muted-foreground shadow-sm outline-none hover:pb-4.5 hover:text-foreground",
+                "transition-[height,scale,box-shadow,color] duration-200 ease-out motion-reduce:transition-none",
+                "hover:scale-[1.005] hover:shadow-[0_6px_16px_-6px_rgb(0_0_0/0.35)]",
+                "focus-visible:pb-4.5 focus-visible:border-ring focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-ring/30",
+              )}
             >
-              {card.kind === "agent" ? <Bot aria-hidden className="size-3.5 shrink-0" /> : <ToolIcon name={card.tool} />}
-              <span className="shrink-0 text-foreground/80">{card.kind === "agent" ? card.name : card.tool}</span>
-              {card.detail ? (
-                <span className={cn("min-w-0 truncate", card.kind === "call" && "font-mono")}>{card.detail}</span>
+              <span className="flex items-start gap-2">
+                {card.kind === "agent" ? <Bot aria-hidden className="my-px size-3.5 shrink-0" /> : <ToolIcon name={card.tool} className="my-px" />}
+                <span className="shrink-0 text-foreground/80">{card.kind === "agent" ? card.name : card.tool}</span>
+                {card.detail ? (
+                  <span className="min-w-0 truncate [overflow-wrap:anywhere] group-hover/card:line-clamp-8 group-hover/card:whitespace-normal group-focus-visible/card:line-clamp-8 group-focus-visible/card:whitespace-normal">
+                    {card.detail}
+                  </span>
+                ) : null}
+                <span className="ml-auto flex h-4 shrink-0 items-center gap-2">
+                  {card.kind === "agent" ? nestedLabel(card.nested) : null}
+                  <Loader2 aria-hidden className="size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+                </span>
+              </span>
+              {card.full ? (
+                <span
+                  className={cn(
+                    "mt-1.5 ml-5.5 hidden rounded-md bg-muted px-2 py-1 whitespace-normal [overflow-wrap:anywhere]",
+                    "group-hover/card:line-clamp-6 group-focus-visible/card:line-clamp-6",
+                    card.kind === "call" && "font-mono",
+                  )}
+                >
+                  {card.full}
+                </span>
               ) : null}
-              <Loader2 aria-hidden className="ml-auto size-3 shrink-0 animate-spin motion-reduce:animate-none" />
+              {card.kind === "agent" && (card.model || card.effort) ? (
+                <span className="mt-1 hidden pl-5.5 font-mono group-hover/card:block group-focus-visible/card:block">
+                  {[card.model && modelLabel(card.model, models), card.effort].filter(Boolean).join(" · ")}
+                </span>
+              ) : null}
             </button>
           )}
         </li>

@@ -1,4 +1,4 @@
-import { ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, GitPullRequest, Lock, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -16,6 +16,7 @@ import {
 } from "@/presentation/rail-sections.ts";
 import { activityStatusText } from "@/presentation/activity.ts";
 import { BackendIcon } from "@/components/backend-icon.tsx";
+import { PullRequestIndicators } from "@/components/pull-request-indicators.tsx";
 import { statusIndicatorColor } from "@/components/status-indicator.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -82,6 +83,9 @@ export type AgentSessionNavProps = {
   onSettle: (sessionId: string) => void;
   onNew: () => void;
   onOpenSettings: () => void;
+  onSchedules?: () => void;
+  onSpend?: () => void;
+  onPullRequests?: () => void;
 };
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
@@ -194,7 +198,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
+      <RailFooter onSchedules={props.onSchedules ? () => { props.onSchedules!(); closeMobile(); } : undefined} onSpend={props.onSpend ? () => { props.onSpend!(); closeMobile(); } : undefined} onPullRequests={props.onPullRequests ? () => { props.onPullRequests!(); closeMobile(); } : undefined} onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }
@@ -349,7 +353,7 @@ function AgentSessionRow({
             <span className="sr-only agent-session-status-text">{activityStatusText({ ...summary, status })}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
-            <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
+            <span className="truncate">{projectName(summary.scope, summary.worktree, summary.readOnly)}</span>
             {/* Attention rows show the qualifying event's age above. Ordinary rows keep Resting,
                 the same timestamp that orders their group. */}
             {!summary.attention ? (
@@ -424,7 +428,8 @@ function AgentSessionRow({
 }
 
 /**
- * Where this Agent Session's edits land: which branch, and which of the two checkouts.
+ * Where this Agent Session's edits land: which branch, and which of the two checkouts. A read-only
+ * Scope has no edits to land, so it says that in words instead.
  *
  * Absent when the Scope is not a repository, which is the same signal the composer's Scope Strip
  * hides its branch control on — a Project need not be a repository at all (ADR 0011), and a row that
@@ -440,6 +445,14 @@ function AgentSessionRow({
  * the pane header.
  */
 function ScopeLine({ summary }: { summary: SessionSummary }) {
+  if (summary.readOnly) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Lock aria-hidden className="size-3! shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{scopeKindLabel(summary)}</span>
+      </span>
+    );
+  }
   if (!summary.branch) return null;
   const Glyph = summary.worktree ? FolderGit2 : GitBranch;
 
@@ -452,7 +465,8 @@ function ScopeLine({ summary }: { summary: SessionSummary }) {
         {scopeKindLabel(summary)}
         {summary.branch.detached ? ", detached at" : ""}
       </span>
-      <span className="truncate font-mono">{summary.branch.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono">{summary.branch.name}</span>
+      {summary.git?.pr ? <PullRequestIndicators pr={summary.git.pr} /> : null}
     </span>
   );
 }
@@ -533,7 +547,7 @@ function CollapsibleGroup({
  * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
  * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
-function RailFooter({ onNew, onOpenSettings }: { onNew: () => void; onOpenSettings: () => void }) {
+function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend, onPullRequests }: { onNew: () => void; onOpenSettings: () => void; onSchedules?: (() => void) | undefined; onSpend?: (() => void) | undefined; onPullRequests?: (() => void) | undefined }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
       <Tooltip>
@@ -553,6 +567,33 @@ function RailFooter({ onNew, onOpenSettings }: { onNew: () => void; onOpenSettin
         </TooltipTrigger>
         <TooltipContent>Settings</TooltipContent>
       </Tooltip>
+      {onSchedules && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSchedules} />}>
+            <CalendarClock aria-hidden />
+            <span className="sr-only">Schedules</span>
+          </TooltipTrigger>
+          <TooltipContent>Schedules</TooltipContent>
+        </Tooltip>
+      )}
+      {onSpend && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onSpend} />}>
+            <ChartColumn aria-hidden />
+            <span className="sr-only">Spend</span>
+          </TooltipTrigger>
+          <TooltipContent>Spend</TooltipContent>
+        </Tooltip>
+      )}
+      {onPullRequests && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onPullRequests} />}>
+            <GitPullRequest aria-hidden />
+            <span className="sr-only">Pull Requests</span>
+          </TooltipTrigger>
+          <TooltipContent>Pull Requests</TooltipContent>
+        </Tooltip>
+      )}
 
       <Tooltip>
         <TooltipTrigger

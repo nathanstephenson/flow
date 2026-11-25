@@ -119,6 +119,17 @@ describe("the create Command a New Agent Session form describes", () => {
     assert.equal(createCommandFor({ ...form, effort: "high" })?.effort, "high");
   });
 
+  it("marks a read-only Scope and never cuts a worktree for it", () => {
+    assert.deepEqual(
+      createCommandFor({ ...form, scope: "/work", readOnly: true, inWorktree: true }),
+      { type: "create", scope: "/work", backend: "claude", modelId: "claude-x", readOnly: true },
+    );
+  });
+
+  it("omits readOnly for a Project", () => {
+    assert.ok(!("readOnly" in (createCommandFor(form) ?? {})));
+  });
+
   describe("the worktree clause", () => {
     it("cuts from the base branch when the toggle is on and the Scope is a repository", () => {
       assert.deepEqual(createCommandFor({ ...form, inWorktree: true })?.worktree, {

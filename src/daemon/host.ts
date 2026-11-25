@@ -1,19 +1,26 @@
 import type { WorkflowParent } from "../backend/workflow-tools.ts";
+import { waitForAbort } from "../backend/worker/rpc.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput, type SessionTools } from '../backend/session-tools.ts';
 import { sessionToolSummary, sessionToolPage } from './session-tool-views.ts';
 import { credentialKey } from './credential-redaction.ts';
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest } from "./pull-request.ts";
-import { stackStatus, actionStackStatus, cleanStack, stackFingerprint, changeStack, stackConflictMessage } from "./stack.ts";
-import type { StackInput, StackReview } from "../protocol/stack.ts";
-import type { GitStatus, PublishInput, PublishReview, PublishResult } from "../protocol/publish.ts";
-import { gitStatus, snapshot, target, branchChanges, canNameBranch, publish, type PublishSnapshot, type PublishTarget } from "./publish.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog, dropUnchangedBranch, fetchBranch, listPullRequests, projectPullRequest, projectTarget, pullRequestRange, remoteUrl, submitReview, type Find } from "./pull-request.ts";
+import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage, mergeableStack, stackMergeMethods } from "./stack.ts";
+import type { StackInput, StackReview, StackReviewAction, StackStatus } from "../protocol/stack.ts";
+import { changes, changesText, commitContext, diff, fileDiff, rangeChanges } from "./changes.ts";
+import { gh } from "./github.ts";
+import { resolveRepository } from "./repository.ts";
+import type { PullRequestRef, PullRequestTarget } from "../protocol/pull-request.ts";
+import { commit } from "./commit.ts";
+import { push, pushState } from "./push.ts";
+import { GitStates, readStatus } from "./git-state.ts";
+import { TOUR_INSTRUCTIONS, TOUR_READ_TOOLS, pullRequestTourInput, tourInput, tourText } from "./tour.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
-import type { AgentBackend, BackendSession, PromptAttachment } from "../backend/types.ts";
+import type { AgentBackend, BackendSession, PromptAttachment, ReadOnlyScope, WorkflowSubagentHandle } from "../backend/types.ts";
 import {
   isAttachmentMediaType,
   mediaTypeOf,
@@ -29,6 +36,7 @@ import type {
   SessionLifecycle,
   SessionStatus,
   SessionSummary,
+  AttentionRaised,
 } from "../protocol/commands.ts";
 import type {
   AgentEvent,
@@ -40,21 +48,26 @@ import type {
   PermissionDecision,
   Producer,
   Question,
+  RewindRestore,
   ScopeSkills,
   Skill,
   Spend,
 } from "../protocol/events.ts";
-import type { Branch } from "../protocol/git.ts";
+import type { Branch, CommitInput, GitChanges, GitDiff, GitText, GitTextKind, TourView } from "../protocol/git.ts";
 // `switchBranch` is aliased because this class has a method of that name: the method is the
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
 import {
+  addDetachedCheckout,
   createWorktree,
+  refExists,
+  removeDetachedCheckout,
   head,
   isClean,
   isRepository,
   removeMergedBranch,
   removeWorktree,
   repairWorktree,
+  updateSourceBranch,
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
@@ -62,11 +75,16 @@ import { listClaudeCodeConversations, readClaudeCodeConversation } from "./claud
 import { importClaudeConversation } from "../backend/worker/claude-state.ts";
 import type { ImportableConversation, ImportMode, ImportSource } from "../protocol/imports.ts";
 import { probeModels, type BackendModels } from "./models.ts";
-import { probeSkills, type HeldSession } from "./skills.ts";
+import { PiModelProbeCache } from "./pi-model-cache.ts";
+import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
+import { probePlanLimits, probeSkills, type HeldSession } from "./skills.ts";
+import type { PlanLimits, PlanLimitWindows } from "../protocol/plan-limits.ts";
 import { recordTiming } from "./timings.ts";
 import type { SessionMeta, TitleSource, TranscriptStore } from "./store.ts";
 import { SharedSandbox } from "../isolation/shared-sandbox.ts";
-import { nameInput, summarisePublish, suggestedBranch, SummaryModelSpare } from "./summariser.ts";
+import { nameInput, suggestGitText, SummaryModelSpare } from "./summariser.ts";
+import { SpendLedger } from "./spend-ledger.ts";
+import type { SpendSource, SpendSummary } from "../protocol/spend.ts";
 
 /**
  * A command the Session Host will not carry out in the state the thing is in — a turn in flight, a
@@ -86,7 +104,9 @@ export class CommandRefused extends Error {
 }
 
 /** One message waiting out a turn: what the human typed, and the Attachments already written for it. */
-type QueuedMessage = { id: string; text: string; attachments: string[] };
+type QueuedMessage = { id: string; text: string; attachments: string[]; fromSessionId?: string };
+
+type Tour = { id: string; view: TourView; handle?: WorkflowSubagentHandle; running?: Promise<void> };
 
 type SessionRecord = {
   mcpConnectionIds?: string[];
@@ -215,6 +235,8 @@ type SessionRecord = {
   branchGeneration: number;
   /** Set when this Scope is a worktree this host made, and so may remove again. */
   worktree: { path: string; repo: string; branch: string } | undefined;
+  readOnly?: true;
+  scheduledOccurrenceId?: string;
   /**
    * A line held back to ride along with the next message, telling the model the branch moved under
    * it. See `switchBranch` for why it cannot go through the Steering Queue.
@@ -232,6 +254,7 @@ type SessionRecord = {
   resumeToken: string | undefined;
   /** The conversation this Agent Session was imported from (ADR 0039), or absent for one made here. */
   imported: { source: ImportSource; conversationId: string } | undefined;
+  rewindTo: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
   permissionMode: AgentPermissionMode;
@@ -250,8 +273,11 @@ export type SessionHostOptions = {
   filesystemIsolationMode?: () => import("../protocol/settings.ts").FilesystemIsolationMode;
   sandboxSupport?: () => import("../isolation/sandbox.ts").SandboxSupport | undefined;
   sandboxSharing?: () => import("../protocol/settings.ts").SandboxSharing;
+  /** Fast-forward the Source Branch before cutting a Worktree from it. */
+  updateSourceBranch?: () => boolean;
   /** The Project Root that a Shared Sandbox mounts. */
   projectRoot?: () => string | undefined;
+  projectPaths?: () => readonly string[];
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
@@ -318,6 +344,7 @@ export type SessionHostOptions = {
    * the daemon wants; tests point it at a fixture rather than at somebody's real conversations.
    */
   importEnv?: NodeJS.ProcessEnv;
+  tourModel?: (backend: string) => { modelId: string; effort: EffortLevel } | undefined;
 };
 
 /** Owns every Agent Session, and the Steering Queue that sits above all backends (ADR 0002). */
@@ -326,6 +353,7 @@ export class SessionHost {
   private readonly backends = new Map<string, AgentBackend>();
   /** Model probes by backend name, held in flight rather than resolved — see `models`. */
   private readonly modelProbes = new Map<string, Promise<BackendModels>>();
+  private readonly piModelProbeCache = new PiModelProbeCache();
   /** One warm Skills session per Backend Adapter, for the last Scope asked — see `skillsFor` (ADR 0035). */
   private readonly skillSessions = new Map<string, HeldSession>();
   /**
@@ -336,6 +364,7 @@ export class SessionHost {
    * one dimension.
    */
   private readonly skillProbes = new Map<string, Promise<ScopeSkills>>();
+  private planLimitProbe: Promise<PlanLimits[]> | undefined;
   /**
    * One Summary Model session, booted before a naming needs it (ADR 0020).
    *
@@ -343,10 +372,13 @@ export class SessionHost {
    * `settle` — it is a throwaway that outlives any one of them, in the same way `modelProbes` is.
    */
   private readonly summarySpare = new SummaryModelSpare();
+  private readonly spendLedger: SpendLedger | undefined;
   private readonly stackReviews = new Map<string, { review: StackReview; fingerprint: string; expires: number }>();
   private readonly gitOperations = new Set<string>();
+  private readonly gitStates = new GitStates();
   private readonly closingScopes = new Set<string>();
-  private readonly publishReviews = new Map<string, { token: string; expires: number; snapshot: PublishSnapshot; target: PublishTarget }>();
+  private readonly tours = new Map<string, Tour>();
+  private readonly pullRequestTours = new Map<string, Tour>();
 
   private refuseGitOperation(scope: string): void {
     if (this.gitOperations.has(scopeKey(scope))) throw new CommandRefused("A Git operation is in progress in this Scope. Wait for it to finish.");
@@ -380,19 +412,26 @@ export class SessionHost {
       throw new CommandRefused(error instanceof Error ? error.message : String(error));
     } finally {
       this.gitOperations.delete(key);
+      void this.gitStates.refresh(scope);
     }
   }
 
-  async prepareStack(sessionId: string, action: "submit" | "sync"): Promise<StackReview> {
-    if (action !== "submit" && action !== "sync") throw new CommandRefused("Invalid Stack review action.");
+  async prepareStack(sessionId: string, action: StackReviewAction): Promise<StackReview> {
+    if (action !== "submit" && action !== "sync" && action !== "merge") throw new CommandRefused("Invalid Stack review action.");
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
       this.stackReviews.delete(sessionId);
       await cleanStack(record.scope);
-      const status = await actionStackStatus(record.scope);
-      if (!status.view) throw new Error(status.problem ?? "No stack found.");
-      const review = { token: randomUUID(), action, view: status.view };
-      this.stackReviews.set(sessionId, { review, fingerprint: await stackFingerprint(record.scope, status.view, action === "sync"), expires: Date.now() + 15 * 60_000 });
+      const status = await stackStatus(record.scope);
+      if (!status.view) throw new Error(status.notice ?? "This branch is not in a stack.");
+      const fingerprint = await stackFingerprint(record.scope, status.view, action === "sync");
+      const review: StackReview = { token: randomUUID(), action, view: status.view };
+      if (action === "merge") {
+        review.view = await mergeableStack(record.scope);
+        review.mergeMethods = await stackMergeMethods(record.scope, review.view);
+        if (!review.mergeMethods.length) throw new Error("You cannot merge pull requests in this repository.");
+      }
+      this.stackReviews.set(sessionId, { review, fingerprint, expires: Date.now() + 15 * 60_000 });
       return review;
     });
   }
@@ -400,21 +439,21 @@ export class SessionHost {
   async changeStack(sessionId: string, input: StackInput): Promise<string> {
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
-      if (input.action === "submit" || input.action === "sync") {
+      if (input.action === "submit" || input.action === "sync" || input.action === "merge") {
         const saved = this.stackReviews.get(sessionId);
         this.stackReviews.delete(sessionId);
         if (!saved || saved.expires < Date.now() || saved.review.token !== input.token || saved.review.action !== input.action) throw new Error("This Stack review expired. Review again.");
+        if (input.action === "merge" && !saved.review.mergeMethods?.includes(input.method!)) throw new Error("This repository does not permit that merge method.");
         await cleanStack(record.scope);
-        const status = await actionStackStatus(record.scope);
+        const status = await stackStatus(record.scope);
         if (!status.view || await stackFingerprint(record.scope, status.view, input.action === "sync") !== saved.fingerprint) throw new Error("The reviewed stack changed. Review again.");
       }
       try {
-        return await changeStack(record.scope, input);
+        return await this.afterPullRequestWrite(record.scope, changeStack(record.scope, input));
       } finally {
         for (const other of this.sessions.values()) {
           if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
           this.stackReviews.delete(other.id);
-          this.publishReviews.delete(other.id);
           await this.refreshBranch(other);
           other.pendingBranchNote = "[Flow] A Stack operation was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
         }
@@ -425,60 +464,263 @@ export class SessionHost {
   async assistStack(sessionId: string): Promise<void> {
     const record = this.record(sessionId);
     await this.withGitOperation(record.scope, async () => {
-      const status = await actionStackStatus(record.scope);
-      if (!status.rebasing) throw new Error("No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
+      const status = await stackStatus(record.scope);
+      if (!status.rebasing) throw new Error(status.notice === otherWorktreeRebase ? otherWorktreeRebase : "No Stack rebase is in progress. Use Rebase first after a Sync conflict.");
     });
     await this.send(sessionId, stackConflictMessage, "now");
   }
 
-  async gitStatus(sessionId: string): Promise<GitStatus> {
-    return gitStatus(this.record(sessionId).scope);
+  pollGitState(forced?: string): Promise<void> {
+    return this.gitStates.poll([...this.sessions.values()].map(record => ({ scope: record.scope, lifecycle: record.lifecycle, watched: record.log.watched })), forced);
   }
 
-  async preparePublish(sessionId: string): Promise<PublishReview> {
-    const record = this.record(sessionId);
-    return this.withGitOperation(record.scope, async () => {
-      this.publishReviews.delete(sessionId);
-      for (const [id, review] of this.publishReviews) if (review.expires < Date.now()) this.publishReviews.delete(id);
-      const { input: changes, ...reviewed } = await snapshot(record.scope);
-      const destination = await target(record.scope, reviewed.branch);
-      const committed = await branchChanges(record.scope, destination);
-      if (reviewed.files.length === 0 && committed.commits.length === 0 && !destination.pr) throw new CommandRefused("There are no changes to publish.");
-      let text: Awaited<ReturnType<typeof summarisePublish>> = { commitMessage: "", title: destination.pr?.title ?? "", body: "" };
-      let warning: string | undefined;
-      const model = this.summaryModel?.(record.backendName);
-      try {
-        if (!model) throw new Error("No Summary Model is configured. Choose one in Settings, or enter publish text below.");
-        text = await summarisePublish({ backend: this.backendFor(model.backend), modelId: model.modelId, text: `${changes}\nCommitted branch changes:\n${committed.input}` });
-      } catch (error) {
-        warning = `Enter publish text manually. ${error instanceof Error ? error.message : String(error)}`;
-      }
-      const suggestion = await canNameBranch(record.scope, reviewed.branch, destination)
-        ? text.suggestedBranch ?? suggestedBranch((record.titleSource !== "scope" ? record.title : "") || text.commitMessage || committed.commits[0]?.replace(/^[a-f0-9]+ /, "") || record.title)
-        : undefined;
-      delete text.suggestedBranch;
-      const token = randomUUID();
-      this.publishReviews.set(sessionId, { token, expires: Date.now() + 15 * 60_000, snapshot: reviewed, target: destination });
-      return { ...text, ...(suggestion ? { suggestedBranch: suggestion } : {}), token, files: reviewed.files, committedFiles: committed.files, commits: committed.commits, branch: reviewed.branch, defaultBranch: destination.defaultBranch, ...(destination.baseBranch ? { baseBranch: destination.baseBranch } : {}), ...(destination.pr ? { pr: destination.pr } : {}), ...(warning ? { warning } : {}) };
+  private async afterPullRequestWrite<T>(scope: string, write: Promise<T>): Promise<T> {
+    try {
+      return await write;
+    } finally {
+      await this.pollGitState(scope);
+    }
+  }
+
+  private async readGit<T>(read: () => Promise<T>): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private readStack(sessionId: string): Promise<StackStatus> {
+    const scope = this.gitScope(sessionId);
+    return this.readGit(async () => {
+      const status = await stackStatus(scope);
+      if (status.view && !await stackTitles(scope, status.view)) status.notice = "Pull request titles could not be read. Copy uses the links.";
+      return status;
     });
   }
 
-  async publish(sessionId: string, input: PublishInput): Promise<PublishResult> {
+  private projectScope(project: string): string {
+    if (typeof project !== "string" || !isRepository(project)) throw new CommandRefused(`${project} is not a git repository.`);
+    return project;
+  }
+
+  private pullRequestPlace(target: PullRequestTarget): { scope: string; find?: Find } {
+    if (target.project === undefined) return { scope: this.record(target.sessionId).scope };
+    return { scope: this.projectScope(target.project), find: projectTarget };
+  }
+
+  /** Start an Agent Session in a Worktree on the head branch of a Pull Request, or focus the one already on it. */
+  async startPullRequestSession(project: string, ref: PullRequestRef): Promise<string> {
+    const scope = this.projectScope(project);
+    const pr = await this.readGit(() => projectTarget(scope, ref, gh));
+    const repository = await this.readGit(() => resolveRepository(scope, undefined, gh));
+    if (pr.state !== "OPEN") throw new CommandRefused("This pull request is not open.");
+    if (pr.headRepository?.id !== repository.base.id) throw new CommandRefused("This pull request comes from a fork. Flow can start an Agent Session only on a branch in the base repository.");
+    const existing = [...this.sessions.values()].find(record => record.lifecycle !== "ended" && scopeKey(record.worktree?.repo ?? record.scope) === scopeKey(scope) && !record.branch?.detached && record.branch?.name === pr.headRefName);
+    if (existing) return existing.id;
+    if (await refExists(scope, pr.headRefName)) throw new CommandRefused(`The branch ${pr.headRefName} already exists in ${scope}. Start an Agent Session on it from the New Agent Session page.`);
+    const { remote } = await this.readGit(() => remoteUrl(scope, pr.repo));
+    if (!remote) throw new CommandRefused(`No remote in ${scope} points to ${pr.repo}. Add one.`);
+    const fetched = await this.readGit(() => fetchBranch(scope, remote, pr.headRefName));
+    try {
+      return await this.create({ scope, worktree: { from: `${remote}/${pr.headRefName}`, branch: pr.headRefName } });
+    } catch (error) {
+      await dropUnchangedBranch(scope, pr.headRefName, fetched);
+      throw error;
+    }
+  }
+
+  private gitScope(sessionId: string): string {
+    const scope = this.record(sessionId).scope;
+    if (!isRepository(scope)) throw new CommandRefused("This Scope is not a Git repository.");
+    return scope;
+  }
+
+  private async readChanges(command: Extract<Command, { type: "git_changes" | "git_diff" }>): Promise<GitChanges | GitDiff> {
+    const scope = this.gitScope(command.sessionId);
+    const base = (branch: string) => this.gitStates.pullRequestBase(scope, branch);
+    return this.readGit(async () => {
+      if (command.type === "git_diff") return await diff(scope, command.view, command.path, base);
+      if (command.view === "branch") return await changes(scope, command.view, base);
+      const read = await readStatus(scope);
+      return { files: read.files, commits: [], fingerprint: read.fingerprint, ...await commitContext(scope, read.local.branch, branch => this.gitStates.hasPullRequest(scope, branch)) };
+    });
+  }
+
+  async commit(sessionId: string, input: CommitInput): Promise<string> {
+    this.gitScope(sessionId);
     const record = this.record(sessionId);
     return this.withGitOperation(record.scope, async () => {
-      const review = this.publishReviews.get(sessionId);
-      if (!review || review.token !== input.token || review.expires < Date.now()) throw new CommandRefused("This Publish review expired. Open Publish again.");
-      this.publishReviews.delete(sessionId);
+      const before = await head(record.scope);
       try {
-        return await publish(record.scope, review.snapshot, review.target, input);
+        return await commit(record.scope, input);
       } finally {
-        for (const other of this.sessions.values()) {
-          if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
-          await this.refreshBranch(other);
-          other.pendingBranchNote = "[Flow] Git publishing was attempted in this Scope. Re-read the branch and changed files before relying on earlier reads.";
+        const after = await head(record.scope);
+        if (after.ok && before.ok && after.value.name !== before.value.name) {
+          for (const other of this.sessions.values()) {
+            if (scopeKey(other.scope) !== scopeKey(record.scope)) continue;
+            await this.refreshBranch(other);
+            other.pendingBranchNote = `[Flow] A commit from the Git pane moved this Scope to branch ${after.value.name}. Re-read the branch and changed files before relying on earlier reads.`;
+          }
         }
       }
     });
+  }
+
+  async suggestGitText(sessionId: string, kind: GitTextKind, paths?: string[]): Promise<GitText> {
+    const record = this.record(sessionId);
+    if (!["commit", "pull_request", "branch"].includes(kind) || (paths !== undefined && (!Array.isArray(paths) || paths.some(path => typeof path !== "string")))) throw new CommandRefused("Invalid suggestion request.");
+    const model = this.summaryModel?.(record.backendName);
+    if (!model) throw new CommandRefused("No Summary Model is configured. Choose one in Settings, or enter the text.");
+    return this.readGit(async () => {
+      const text = await changesText(record.scope, kind === "pull_request" ? "branch" : "uncommitted", paths, branch => this.gitStates.pullRequestBase(record.scope, branch));
+      return await suggestGitText({ backend: this.backendFor(model.backend), modelId: model.modelId, text, kind,
+        spent: (spend) => this.recordSpend("publish", randomUUID(), this.spendScope(this.record(sessionId)), spend) });
+    });
+  }
+
+  tour(sessionId: string): TourView {
+    this.record(sessionId);
+    return this.tours.get(sessionId)?.view ?? { state: "idle" };
+  }
+
+  startTour(sessionId: string): TourView {
+    const record = this.record(sessionId);
+    this.dropTour(sessionId);
+    const tour: Tour = { id: randomUUID(), view: { state: "running" } };
+    this.tours.set(sessionId, tour);
+    void this.runTour(record, tour);
+    return tour.view;
+  }
+
+  cancelTour(sessionId: string): TourView {
+    this.record(sessionId);
+    this.dropTour(sessionId);
+    return { state: "idle" };
+  }
+
+  private dropTour(sessionId: string): void {
+    const tour = this.tours.get(sessionId);
+    this.tours.delete(sessionId);
+    void tour?.handle?.cancel().catch(() => undefined);
+  }
+
+  private async runTour(record: SessionRecord, tour: Tour): Promise<void> {
+    const current = () => this.tours.get(record.id) === tour;
+    let made: { branch: string; head: string; repo: string } | undefined;
+    try {
+      const { input, ...found } = await tourInput(record.scope);
+      made = found;
+      if (!current()) return;
+      tour.view = { state: "running", branch: made.branch, head: made.head };
+      if (!record.session) await this.revive(record.id);
+      const session = record.session;
+      if (!current()) return;
+      if (!session) throw new Error("This Backend Adapter cannot run a tour.");
+      const log = record.log.since(0);
+      const model = log.findLast(({ event }) => event.type === "model_changed")?.event;
+      const effort = log.findLast(({ event }) => event.type === "effort_changed")?.event;
+      const chosen = this.tourModel?.(record.backendName);
+      const modelId = chosen?.modelId ?? (model?.type === "model_changed" ? model.model.id : record.modelId);
+      if (!modelId) throw new Error("The Agent Session's model is unknown. Choose a Tour Model in Settings.");
+      const text = await this.writeTour(session, tour, input, modelId, chosen?.effort ?? (effort?.type === "effort_changed" ? effort.effort : record.effort) ?? "off",
+        spend => this.workflowSpend(record.id, `tour:${tour.id}`, spend));
+      if (current()) tour.view = { state: "done", text, ...made };
+    } catch (error) {
+      if (current()) tour.view = { state: "failed", problem: error instanceof Error ? error.message : String(error), ...(made ? { branch: made.branch, head: made.head } : {}) };
+    }
+  }
+
+  private async writeTour(session: BackendSession, tour: Tour, input: string, modelId: string, effort: EffortLevel, spent: (spend: Spend) => void): Promise<string> {
+    if (!session.startWorkflowSubagent) throw new Error("This Backend Adapter cannot run a tour.");
+    tour.handle = session.startWorkflowSubagent({
+      id: tour.id, name: "Tour", instructions: TOUR_INSTRUCTIONS, input, modelId, effort, permissionMode: "ask",
+      emit: ({ event }) => {
+        if (event.type === "permission" && event.state === "asked") {
+          queueMicrotask(() => void tour.handle?.answerPermission(event.callId, TOUR_READ_TOOLS.includes(event.tool) ? "allow" : "deny").catch(() => undefined));
+        }
+        if (event.type === "enquiry" && event.state === "asked") {
+          queueMicrotask(() => void tour.handle?.answerEnquiry(event.askId, event.questions.map(() => ["No human is available. Continue without an answer."])).catch(() => undefined));
+        }
+        if (event.type === "spend") spent(event.spend);
+      },
+    });
+    return tourText(await tour.handle.done);
+  }
+
+  private pullRequestTourKey(project: string, ref: PullRequestRef): string {
+    return `${scopeKey(this.projectScope(project))}\0${ref?.repo}#${ref?.number}`;
+  }
+
+  pullRequestTour(project: string, ref: PullRequestRef): TourView {
+    return this.pullRequestTours.get(this.pullRequestTourKey(project, ref))?.view ?? { state: "idle" };
+  }
+
+  startPullRequestTour(project: string, ref: PullRequestRef): TourView {
+    const key = this.pullRequestTourKey(project, ref);
+    if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot make a tour.");
+    this.dropPullRequestTour(key);
+    const tour: Tour = { id: randomUUID(), view: { state: "running" } };
+    this.pullRequestTours.set(key, tour);
+    tour.running = this.runPullRequestTour(project, ref, key, tour);
+    return tour.view;
+  }
+
+  cancelPullRequestTour(project: string, ref: PullRequestRef): TourView {
+    this.dropPullRequestTour(this.pullRequestTourKey(project, ref));
+    return { state: "idle" };
+  }
+
+  private dropPullRequestTour(key: string): void {
+    const tour = this.pullRequestTours.get(key);
+    this.pullRequestTours.delete(key);
+    void tour?.handle?.cancel().catch(() => undefined);
+  }
+
+  /** A Tour with no Agent Session: a host Backend Session over a read-only checkout of the Pull Request head. */
+  private async runPullRequestTour(project: string, ref: PullRequestRef, key: string, tour: Tour): Promise<void> {
+    const current = () => this.pullRequestTours.get(key) === tour;
+    let made: { branch: string; head: string; repo: string } | undefined;
+    let checkout: string | undefined;
+    let session: BackendSession | undefined;
+    try {
+      const range = await pullRequestRange(project, ref);
+      made = { branch: range.pr.headRefName, head: range.head, repo: range.pr.repo };
+      if (current()) tour.view = { state: "running", branch: made.branch, head: made.head };
+      const input = await pullRequestTourInput(project, range, { headRefName: range.pr.headRefName, baseRefName: range.pr.baseBranch });
+      const backendName = resolveDefaultBackend([...this.backends.keys()], this.defaultBackend?.());
+      if (backendName === undefined) throw new Error("No backends available");
+      const chosen = this.tourModel?.(backendName);
+      const configured = chosen?.modelId ?? this.defaultModel?.(backendName);
+      let reported: string | undefined;
+      if (!current()) return;
+      checkout = join(this.store!.worktreesRoot(), ".tours", tour.id);
+      const added = await addDetachedCheckout(project, range.head, checkout);
+      if (!added.ok) {
+        checkout = undefined;
+        throw new Error(added.failure.message);
+      }
+      if (!current()) return;
+      session = await this.backendFor(backendName).create({
+        scope: checkout, permissionMode: "ask", readOnly: this.readOnlyEnforcement(), ...(configured ? { modelId: configured } : {}),
+        emit: (event) => { if (event.type === "model_changed") reported = event.model.id; },
+      });
+      if (!current()) return;
+      const modelId = configured ?? reported;
+      if (!modelId) throw new Error("The Default Backend reported no model. Choose a Tour Model in Settings.");
+      const text = await this.writeTour(session, tour, input, modelId, chosen?.effort ?? this.defaultEffort?.(backendName) ?? "off",
+        spend => this.recordSpend("tour", tour.id, scopeKey(project), spend));
+      if (current()) tour.view = { state: "done", text, ...made };
+    } catch (error) {
+      if (current()) tour.view = { state: "failed", problem: error instanceof Error ? error.message : String(error), ...(made ? { branch: made.branch, head: made.head } : {}) };
+    } finally {
+      await session?.dispose().catch(() => undefined);
+      if (checkout) await removeDetachedCheckout(project, checkout);
+    }
+  }
+
+  private readOnlyEnforcement(isolationMode = this.filesystemIsolationMode()): ReadOnlyScope {
+    return isolationMode === "bubblewrap" || (isolationMode === "sandbox" && this.sandboxSharing?.() !== "shared") ? "mounted" : "tools";
   }
   private readonly store: TranscriptStore | undefined;
   private readonly retention: number | "never" | (() => number | "never");
@@ -493,7 +735,9 @@ export class SessionHost {
   private readonly summaryModel:
     | ((backend: string) => { backend: string; modelId: string; automatic: boolean } | undefined)
     | undefined;
+  private readonly tourModel: SessionHostOptions["tourModel"];
   private readonly closedListeners = new Set<(sessionId: string) => void>();
+  private readonly attentionListeners = new Set<(raised: AttentionRaised) => void>();
   private readonly backendFailures = new Set<Promise<void>>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
@@ -502,6 +746,9 @@ export class SessionHost {
   private readonly filesystemIsolation: SessionHostOptions["filesystemIsolationMode"];
   private readonly sandbox: SessionHostOptions["sandboxSupport"];
   private readonly sandboxSharing: SessionHostOptions["sandboxSharing"];
+  private readonly updateSourceBranch: SessionHostOptions["updateSourceBranch"];
+  private readonly projectRoot: SessionHostOptions["projectRoot"];
+  private readonly projectPaths: SessionHostOptions["projectPaths"];
   private readonly shared: SharedSandbox | undefined;
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
@@ -513,11 +760,15 @@ export class SessionHost {
     this.filesystemIsolation = options.filesystemIsolationMode;
     this.sandbox = options.sandboxSupport;
     this.sandboxSharing = options.sandboxSharing;
+    this.updateSourceBranch = options.updateSourceBranch;
+    this.projectRoot = options.projectRoot;
+    this.projectPaths = options.projectPaths;
     this.shared = options.store ? new SharedSandbox(options.store.root, options.projectRoot ?? (() => undefined)) : undefined;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
     this.resolveSecret = options.resolveSecret;
     this.store = options.store;
+    this.spendLedger = options.store ? new SpendLedger(options.store.root) : undefined;
     this.retention = options.retention ?? "never";
     this.standingAuthorisations = options.standingAuthorisations;
     this.allowTool = options.allowTool;
@@ -528,6 +779,7 @@ export class SessionHost {
     this.defaultEffort = options.defaultEffort;
     this.defaultPermissionMode = options.defaultPermissionMode;
     this.summaryModel = options.summaryModel;
+    this.tourModel = options.tourModel;
   }
 
   /**
@@ -541,6 +793,11 @@ export class SessionHost {
   onSessionClosed(listener: (sessionId: string) => void): () => void {
     this.closedListeners.add(listener);
     return () => this.closedListeners.delete(listener);
+  }
+
+  onAttentionRaised(listener: (raised: AttentionRaised) => void): () => void {
+    this.attentionListeners.add(listener);
+    return () => this.attentionListeners.delete(listener);
   }
 
   private announceClosed(sessionId: string): void {
@@ -583,17 +840,27 @@ export class SessionHost {
    * In flight rather than resolved is what is remembered, so two clients opening the page at once
    * spawn one probe between them rather than one each.
    */
-  async models(scope: string, refresh = false): Promise<BackendModels[]> {
+  async models(scope: string, refresh = false, backendName?: string): Promise<BackendModels[]> {
     if (refresh) this.modelProbes.clear();
-    const probes = [...this.backends.values()].map((backend) => {
+    const backends = backendName === undefined ? [...this.backends.values()] : [this.backendFor(backendName)];
+    const probes = backends.map((backend) => {
       const held = this.modelProbes.get(backend.name);
       if (held) return held;
       const probe = this.timed("models", backend, false, (timed) =>
-        probeModels(timed, scope, false, (held) => this.holdSkillSession(backend.name, held, false)));
+        probeModels(backend.name === 'pi' ? this.piModelProbeCache.wrap(timed) : timed,
+          scope, false, (held) => this.holdSkillSession(backend.name, held, false), refresh));
       this.modelProbes.set(backend.name, probe);
       return probe;
     });
     return await Promise.all(probes);
+  }
+
+  async workflowAgentModels(scope: string, backend: string) {
+    const [catalogue] = await this.models(scope, false, backend);
+    if (!catalogue || catalogue.problem) throw new Error(catalogue?.problem ?? 'Workflow model capabilities are unavailable');
+    const probe = this.skillSessions.get(backend);
+    if (!probe || probe.dead || !probe.session.startWorkflowSubagent) throw new Error('Workflow agent capabilities are unavailable. Retry after the Backend Session is ready.');
+    return catalogue.models;
   }
 
   /**
@@ -645,6 +912,29 @@ export class SessionHost {
       probeSkills(timed, scope, (held) => this.holdSkillSession(backend.name, held, true)));
   }
 
+  async planLimits(scope: string): Promise<PlanLimits[]> {
+    this.planLimitProbe ??= Promise.all([...this.backends.values()].map(async (backend) =>
+      (await this.askPlanLimits(backend, scope)).map((windows) => ({ backend: backend.name, ...windows }))))
+      .then((answers) => answers.flat())
+      .finally(() => { this.planLimitProbe = undefined; });
+    return await this.planLimitProbe;
+  }
+
+  private async askPlanLimits(backend: AgentBackend, scope: string): Promise<PlanLimitWindows[]> {
+    const warm = this.skillSessions.get(backend.name);
+    if (warm && !warm.dead) {
+      if (!warm.session.planLimits) return [];
+      try {
+        return await this.timed("planLimits", backend, true, () => warm.session.planLimits!());
+      } catch {
+        this.skillSessions.delete(backend.name);
+        void warm.session.dispose().catch(() => {});
+      }
+    }
+    return await this.timed("planLimits", backend, false, (timed) =>
+      probePlanLimits(timed, scope, (held) => this.holdSkillSession(backend.name, held, false)));
+  }
+
   /** `replace` is false for the model probe: it fills an empty or dead slot and never replaces a live one. */
   private holdSkillSession(name: string, held: HeldSession, replace: boolean): void {
     const old = this.skillSessions.get(name);
@@ -657,7 +947,7 @@ export class SessionHost {
   }
 
   /** Records `create` (time in `backend.create`), `answer` and `total` to the timings file. */
-  private async timed<T>(kind: "models" | "skills", backend: AgentBackend, warm: boolean, probe: (backend: AgentBackend) => Promise<T>): Promise<T> {
+  private async timed<T>(kind: "models" | "skills" | "planLimits", backend: AgentBackend, warm: boolean, probe: (backend: AgentBackend) => Promise<T>): Promise<T> {
     const begin = performance.now();
     let create = 0;
     const timed: AgentBackend = { name: backend.name, create: async (options) => {
@@ -713,6 +1003,9 @@ export class SessionHost {
       key,
     };
     if (reason !== "Input needed") record.latestOutcome = record.latestAttention;
+    for (const listener of this.attentionListeners) {
+      listener({ sessionId: record.id, title: record.title, reason, version, at });
+    }
     return { at, version };
   }
 
@@ -747,6 +1040,7 @@ export class SessionHost {
         // lifting an Ended row back out of Filed away.
         const input = record.lifecycle === "live" ? newestAt(parentInput, workflowInput) : undefined;
         const outcome = record.latestOutcome;
+        const git = this.gitStates.summary(record.scope);
         const unread = outcome !== undefined && outcome.version > record.readAttentionVersion;
         const attention: SessionAttention | undefined = input
           ? {
@@ -782,7 +1076,9 @@ export class SessionHost {
           lastSeq: record.log.lastSeq,
           ...(record.capabilities ? { capabilities: record.capabilities } : {}),
           ...(record.branch ? { branch: record.branch } : {}),
+          ...(git ? { git } : {}),
           ...(record.worktree ? { worktree: true as const } : {}),
+          ...(record.readOnly ? { readOnly: true as const } : {}),
           ...(record.session || existsSync(record.scope) ? {} : {
             scopeMissing: true as const,
             ...this.suggestion(record.scope),
@@ -810,11 +1106,13 @@ export class SessionHost {
    */
   async load(): Promise<void> {
     if (!this.store) return;
+    rmSync(join(this.store.worktreesRoot(), ".tours"), { recursive: true, force: true });
     for (const id of await this.store.listSessionIds()) {
       const meta = this.store.readMeta(id);
       if (!meta || this.sessions.has(id)) continue;
 
       const entries = this.store.readEntries(id);
+      if (this.spendLedger?.needsBackfill) this.backfillSpend(id, scopeKey(meta.worktree?.repo ?? meta.scope), entries);
       const record: SessionRecord = {
         id: meta.id,
         scope: meta.scope,
@@ -854,12 +1152,15 @@ export class SessionHost {
         branch: branchFrom(entries),
         branchGeneration: 0,
         worktree: meta.worktree,
+        ...(meta.readOnly ? { readOnly: true as const } : {}),
+        ...(meta.scheduledOccurrenceId ? { scheduledOccurrenceId: meta.scheduledOccurrenceId } : {}),
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
         spend: spendFrom(entries),
         mcpConnectionIds: meta.mcpConnectionIds ?? [],
         resumeToken: meta.resumeToken,
         imported: meta.imported,
+        rewindTo: meta.rewindTo,
         modelId: meta.modelId,
         effort: meta.effort,
         permissionMode: meta.permissionMode ?? this.permissionDefault(meta.backend),
@@ -879,10 +1180,50 @@ export class SessionHost {
       }
       this.persist(record);
     }
+    this.spendLedger?.finishBackfill();
     await this.reap();
   }
 
+  private backfillSpend(sessionId: string, scope: string, entries: LoggedEvent[]): void {
+    for (const { event, at } of entries.slice(entries.findLastIndex(({ event }) => event.type === "forked") + 1)) {
+      if (event.type === "context_usage" && event.spend) this.spendLedger!.record("session", sessionId, scope, event.spend, at);
+      if (event.type === "workflow_spend") this.spendLedger!.record("workflow", JSON.stringify([sessionId, event.executionId]), scope, event.spend, at);
+    }
+  }
+
+  recordSpend(source: SpendSource, key: string, scope: string | undefined, spend: Spend): void {
+    this.spendLedger?.record(source, key, scope, spend);
+  }
+
+  spendSummary(): SpendSummary | undefined {
+    return this.spendLedger?.summary();
+  }
+
+  private namingSpent(record: SessionRecord): (spend: Spend) => void {
+    return (spend) => this.recordSpend("naming", randomUUID(), this.spendScope(record), spend);
+  }
+
+  private spendScope(record: SessionRecord): string {
+    return scopeKey(record.worktree?.repo ?? record.scope);
+  }
+
+  private readonly scheduledAttachments = new Map<string, Promise<string>>();
+
+  /** Internal attachment lane: concurrent agent/input/recovery callbacks share creation and Revive.
+   * The caller has already journaled the intended identity before entering this operation. */
+  attachScheduled(options: Parameters<SessionHost['create']>[0] & { scheduled: NonNullable<Parameters<SessionHost['create']>[0]['scheduled']> }): Promise<string> {
+    if (this.workflowShutdown) return Promise.reject(new CommandRefused('Session Host is stopping'));
+    const id = options.scheduled.id;
+    const pending = this.scheduledAttachments.get(id);
+    if (pending) return pending;
+    const attachment = this.create(options).finally(() => { this.scheduledAttachments.delete(id); });
+    this.scheduledAttachments.set(id, attachment);
+    return attachment;
+  }
+
   async create(options: {
+    /** Internal scheduled attachment only; not accepted by routes. */
+    scheduled?: { id: string; occurrenceId: string; worktree?: { path: string; repo: string; branch: string } };
     mcpConnectionIds?: string[];
     scope: string;
     backend?: string;
@@ -891,7 +1232,17 @@ export class SessionHost {
     permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
+    readOnly?: true;
+    fork?: { source: SessionRecord; userMessageId: string; prefix: LoggedEvent[] };
   }): Promise<string> {
+    if (options.scheduled) {
+      const existing = this.sessions.get(options.scheduled.id);
+      if (existing) {
+        if (existing.scheduledOccurrenceId !== options.scheduled.occurrenceId) throw new Error('Scheduled association mismatch');
+        await this.openWorkflowSession(existing.id);
+        return existing.id;
+      }
+    }
     const connections = this.mcpConnections?.() ?? [];
     if (options.mcpConnectionIds !== undefined && (!Array.isArray(options.mcpConnectionIds) || options.mcpConnectionIds.some((id) => typeof id !== "string"))) throw new Error("Invalid MCP selection");
     const mcpConnectionIds = connections.filter((connection) => options.mcpConnectionIds ? options.mcpConnectionIds.includes(connection.id) : connection.enabledByDefault).map((connection) => connection.id);
@@ -901,18 +1252,25 @@ export class SessionHost {
     // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
     const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
     this.validatePermissionMode(backend.name, permissionMode);
-    const worktree = options.worktree ? await this.cutWorktree(options.scope, options.worktree) : undefined;
+    if (options.readOnly) {
+      const root = this.projectRoot?.();
+      if (root === undefined || scopeKey(options.scope) !== scopeKey(root)) throw new CommandRefused("A Read-only Scope must be the Project Root.");
+      if (options.worktree) throw new CommandRefused("A Read-only Scope cannot be a Worktree.");
+    }
+    const cut = options.scheduled?.worktree || !options.worktree ? undefined : await this.cutWorktree(options.scope, options.worktree);
+    const worktree = options.scheduled?.worktree ?? cut?.worktree;
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
     // exists so that a `worktree add` which failed leaves nothing persisted pointing at a directory
     // that is not there.
     const scope = scopeKey(worktree?.path ?? options.scope);
-    const id = randomUUID();
+    const id = options.scheduled?.id ?? randomUUID();
     const now = new Date().toISOString();
     const modelId = options.modelId ?? this.defaultModel?.(backend.name);
     const effort = options.effort ?? this.defaultEffort?.(backend.name);
 
     const record: SessionRecord = {
       id,
+      ...(options.scheduled ? { scheduledOccurrenceId: options.scheduled.occurrenceId } : {}),
       scope,
       backendName: backend.name,
       log: this.newLog(id),
@@ -942,12 +1300,14 @@ export class SessionHost {
       branch: undefined,
       branchGeneration: 0,
       worktree,
+      ...(options.readOnly ? { readOnly: true as const } : {}),
       pendingBranchNote: undefined,
       capabilities: undefined,
       spend: undefined,
       mcpConnectionIds,
       resumeToken: undefined,
       imported: undefined,
+      rewindTo: undefined,
       /*
        * Resolved here and never again.
        *
@@ -970,6 +1330,7 @@ export class SessionHost {
     record.buffered = [];
     let session: BackendSession;
     try {
+      if (options.fork) this.copyForkState(record, options.fork.source, options.fork.userMessageId, options.fork.prefix);
       session = await this.startPermissionBackend(record);
       if (session.capabilities.models.length === 0) {
         throw new CommandRefused("Model capabilities are unavailable. Check the backend and try again.");
@@ -978,7 +1339,7 @@ export class SessionHost {
       // Creation never returns an Agent Session without confirmed models. In particular, do not
       // leave a persisted, empty Agent Session (or a newly cut worktree) after a failed probe.
       await record.session?.dispose().catch(() => {});
-      await this.releaseWorktree(record);
+      if (!options.scheduled) await this.releaseWorktree(record);
       record.log.closeSubscribers();
       this.sessions.delete(id);
       this.store?.deleteSession(id);
@@ -992,7 +1353,9 @@ export class SessionHost {
       permissionMode: record.permissionMode,
       ...(worktree === undefined ? {} : { worktree: true as const }),
     });
+    if (options.fork) this.appendForkPrefix(record, options.fork.source.id, options.fork.userMessageId, options.fork.prefix);
     this.flushBuffered(record);
+    if (cut?.warning) record.log.append({ type: "notice", level: "warn", text: cut.warning });
     // After session_started, never before: the transcript has to open with it (see `buffered`).
     await this.refreshBranch(record);
     /*
@@ -1004,7 +1367,7 @@ export class SessionHost {
      * how a spare gets dropped when somebody clears the Setting: nothing will ever *tell* us it
      * changed (ADR 0009), so a read-through is the only moment it can be noticed.
      */
-    this.warmSummaryModel(backend.name);
+    if (!options.scheduled) this.warmSummaryModel(backend.name);
     return id;
   }
 
@@ -1107,6 +1470,7 @@ export class SessionHost {
       mcpConnectionIds: (this.mcpConnections?.() ?? []).filter((connection) => connection.enabledByDefault).map((connection) => connection.id),
       resumeToken: options.mode === "continue" ? options.conversationId : undefined,
       imported: { source: options.source, conversationId: options.conversationId },
+      rewindTo: undefined,
       // Resolved once, as `create` resolves them, so a Revive a month from now does not pick up
       // whatever the defaults are by then.
       modelId: options.mode === "continue" ? this.defaultModel?.(backendName) : undefined,
@@ -1195,12 +1559,13 @@ export class SessionHost {
   private async cutWorktree(
     repo: string,
     options: { from: string; branch?: string },
-  ): Promise<{ path: string; repo: string; branch: string }> {
+  ): Promise<{ worktree: { path: string; repo: string; branch: string }; warning?: string }> {
     // A host with no state root has nowhere to put a worktree. Said plainly rather than left to
     // fail as an undefined path, the way an unavailable pty is reported.
     if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot make a worktree");
     if (!isRepository(repo)) throw new CommandRefused(`${repo} is not a git repository`);
 
+    const updated = this.updateSourceBranch?.() && await refExists(repo, options.from) ? await updateSourceBranch(repo, options.from) : undefined;
     const created = await createWorktree({
       repo,
       from: options.from,
@@ -1208,7 +1573,10 @@ export class SessionHost {
       ...(options.branch === undefined ? {} : { branch: options.branch }),
     });
     if (!created.ok) throw new CommandRefused(created.failure.message);
-    return { path: created.value.path, repo, branch: created.value.branch };
+    return {
+      worktree: { path: created.value.path, repo, branch: created.value.branch },
+      ...(updated?.ok === false ? { warning: `Source Branch ${options.from} was not updated, so the Worktree was cut from the local branch: ${updated.failure.message}` } : {}),
+    };
   }
 
   /** Attach a fresh Backend Session to a Dormant Agent Session, continuing the same transcript. */
@@ -1246,6 +1614,7 @@ export class SessionHost {
   async relocate(sessionId: string, scope: string, repo?: string): Promise<void> {
     const record = this.record(sessionId);
     const from = record.scope;
+    if (record.readOnly) throw new CommandRefused("An Agent Session with a Read-only Scope cannot relocate.");
     if (record.session || record.reviving) throw new CommandRefused("This Agent Session is running. Only a stopped Agent Session can relocate.");
     if (existsSync(from)) throw new CommandRefused(`Scope ${from} still exists. An Agent Session keeps its Scope while it exists.`);
     const to = this.relocationFolder(scope);
@@ -1328,7 +1697,7 @@ export class SessionHost {
    * value that can bypass the Steering Queue, and "after_turn" already means "queue if busy, else
    * dispatch now" — so there is no sensible default to pick. It matches `Command` either way.
    */
-  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string): Promise<void> {
+  async send(sessionId: string, text: string, when: SendWhen, attachments?: IncomingAttachment[], beforeAccept?: () => void, titleText?: string, fromSessionId?: string): Promise<void> {
     const record = this.record(sessionId);
     this.refuseGitOperation(record.scope);
     // ADR 0003: the first message revives a Dormant session, so resuming work is one action.
@@ -1342,15 +1711,16 @@ export class SessionHost {
     const ids = (attachments ?? []).map((attachment) =>
       this.storeOrThrow().writeAttachment(record.id, attachment.mediaType, attachment.data),
     );
+    const from = fromSessionId === undefined ? {} : { fromSessionId };
 
     if (when === "after_turn" && record.turnInFlight) {
-      record.queue.push({ id: randomUUID(), text, attachments: ids });
+      record.queue.push({ id: randomUUID(), text, attachments: ids, ...from });
       record.log.append(queueChanged(record.queue));
       this.touch(record);
       return;
     }
     // A title override applies only to the initial dispatch; a queued turn already has a title.
-    await this.dispatch(record, { text, attachments: ids }, titleText);
+    await this.dispatch(record, { text, attachments: ids, ...from }, titleText);
   }
 
   /**
@@ -1736,6 +2106,107 @@ export class SessionHost {
     this.touch(record);
   }
 
+  /** Rewind (CONTEXT.md). Answers with the user message, for the composer to offer again. */
+  async rewind(sessionId: string, userMessageId: string, restore: RewindRestore): Promise<{ text: string; attachments: string[] }> {
+    const record = this.record(sessionId);
+    this.refuseGitOperation(record.scope);
+    if (record.lifecycle === "ended") throw new CommandRefused(`Agent Session ${sessionId} has Ended`);
+    const message = userMessage(record.log.since(0), userMessageId)?.event;
+    if (message?.type !== "user_message") throw new CommandRefused("That user message is not in this Agent Session");
+    if (!record.session) await this.revive(sessionId);
+    if (record.permissionChanging) await this.waitForPermissionChange(record);
+    const session = record.session;
+    if (!session) throw new CommandRefused(`Agent Session ${sessionId} has no Backend Session`);
+    if (record.turnInFlight || record.queue.length > 0 || record.openSubagentIds.size > 0 || record.openBackgroundCallIds.size > 0) {
+      throw new CommandRefused("Wait for the turn, the queued messages and the background work to finish, or abort them, before rewinding");
+    }
+    const files = restore !== "conversation";
+    if (files && record.readOnly) throw new CommandRefused("This Agent Session has a Read-only Scope. Rewind only its conversation.");
+    const conversation = restore !== "files";
+    if (conversation && !session.capabilities.rewind) throw new CommandRefused(`${record.backendName} cannot rewind a Conversation Context`);
+    if (files && (!session.capabilities.rewindFiles || !session.rewindFiles)) throw new CommandRefused(`${record.backendName} cannot rewind files`);
+    if (files) {
+      try { await session.rewindFiles!(userMessageId); }
+      catch (error) { throw new CommandRefused(`Files were not rewound: ${errorMessage(error)}`); }
+    }
+    if (conversation) {
+      record.rewindTo = userMessageId;
+      this.persist(record);
+      record.session = undefined;
+      await this.stopBackendSession(record.scope, session, record.id);
+      record.buffered = [];
+      record.backendEpoch += 1;
+      try { await this.startPermissionBackend(record); }
+      catch (error) {
+        record.buffered = undefined;
+        record.lifecycle = "dormant";
+        record.log.append({ type: "session_dormant", reason: `rewind failed: ${errorMessage(error)}` });
+        this.touch(record);
+        throw error;
+      }
+    }
+    record.log.append({ type: "rewound", userMessageId, restore });
+    this.flushBuffered(record);
+    this.touch(record);
+    return { text: message.text, attachments: message.attachments ?? [] };
+  }
+
+  /** Fork (CONTEXT.md). Answers with the new Agent Session's id. */
+  async fork(sessionId: string, userMessageId: string, worktree?: { from: string; branch?: string }): Promise<string> {
+    const source = this.record(sessionId);
+    if (!source.capabilities?.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    const events = source.log.since(0);
+    const at = userMessage(events, userMessageId);
+    if (!at) throw new CommandRefused("That user message is not in this Agent Session");
+    return await this.create({
+      scope: worktree ? source.worktree?.repo ?? source.scope : source.scope,
+      backend: source.backendName,
+      ...(source.modelId === undefined ? {} : { modelId: source.modelId }),
+      ...(source.effort === undefined ? {} : { effort: source.effort }),
+      permissionMode: source.permissionMode,
+      mcpConnectionIds: source.mcpConnectionIds ?? [],
+      ...(worktree === undefined ? {} : { worktree }),
+      ...(source.readOnly ? { readOnly: true as const } : {}),
+      fork: { source, userMessageId, prefix: events.filter((entry) => entry.seq < at.seq) },
+    });
+  }
+
+  /** Give a Fork the source's Conversation Context, to be cut before the user message on start. */
+  private copyForkState(record: SessionRecord, source: SessionRecord, userMessageId: string, prefix: LoggedEvent[]): void {
+    record.title = `${source.title} (fork)`;
+    record.titleSource = "summary";
+    const backend = this.backendFor(source.backendName);
+    const kept = prefix.some(({ event }) => event.type === "user_message");
+    if (!kept || !this.store || !source.resumeToken) return;
+    if (!backend.fork) throw new CommandRefused(`${source.backendName} cannot fork a Conversation Context`);
+    record.resumeToken = backend.fork(
+      { stateDir: this.store.backendDir(source.id), scope: source.scope, resume: source.resumeToken },
+      { stateDir: this.store.backendDir(record.id), scope: record.scope },
+    );
+    record.rewindTo = userMessageId;
+    this.persist(record);
+  }
+
+  /** Copy what the human saw before the Fork point. The source's session start, scope and queue are not this session's. */
+  private appendForkPrefix(record: SessionRecord, sourceId: string, userMessageId: string, prefix: LoggedEvent[]): void {
+    for (const { event, at } of prefix) {
+      if (event.type === "session_started" || event.type === "queue_changed" || event.type === "workflow_spend") continue;
+      if (event.type === "context_usage" && event.spend) { const { spend: _, ...rest } = event; record.log.append(rest, at); continue; }
+      if (event.type === "revived") { record.log.append({ type: "revived", fromSeq: event.fromSeq }, at); continue; }
+      if (event.type === "user_message" && event.attachments && this.store) {
+        const to = this.store.attachmentsDir(record.id);
+        mkdirSync(to, { recursive: true });
+        for (const id of event.attachments) {
+          const from = join(this.store.attachmentsDir(sourceId), id);
+          if (existsSync(from)) copyFileSync(from, join(to, id));
+        }
+      }
+      record.log.append(event, at);
+    }
+    this.closeTornTurn(record, record.log.since(0));
+    record.log.append({ type: "forked", fromSessionId: sourceId, userMessageId });
+  }
+
   /**
    * The Skills this Agent Session can be sent.
    *
@@ -1848,7 +2319,7 @@ export class SessionHost {
   private async refreshBranch(record: SessionRecord): Promise<void> {
     if (!isRepository(record.scope)) return;
     const generation = (record.branchGeneration += 1);
-    const found = await head(record.scope);
+    const [found] = await Promise.all([head(record.scope), this.gitStates.refresh(record.scope)]);
     // A repository git cannot answer about is left as it was: this runs off the critical path, and
     // there is no reader to tell.
     if (!found.ok) return;
@@ -1875,6 +2346,8 @@ export class SessionHost {
   workflowOwner?: {
     stop(sessionId: string): Promise<void>;
     forget(sessionId: string): Promise<void>;
+    /** Durable scheduled recovery may still need this session and its worktree. */
+    canForget?(sessionId: string, occurrenceId?: string): boolean;
     active(sessionId: string): number;
     context(sessionId: string): string;
     parent(sessionId: string): WorkflowParent;
@@ -2145,6 +2618,7 @@ export class SessionHost {
     const previous = record.log.since(0).findLast(({ event }) => event.type === 'workflow_spend' && event.executionId === executionId);
     if (previous?.event.type === 'workflow_spend' && JSON.stringify(previous.event.spend) === JSON.stringify(spend)) return;
     record.log.append({ type: 'workflow_spend', executionId, spend });
+    this.recordSpend("workflow", JSON.stringify([sessionId, executionId]), this.spendScope(record), spend);
   }
 
   authoriseWorkflowTool(tool: string): void { this.allowTool?.(tool); }
@@ -2158,6 +2632,7 @@ export class SessionHost {
     const record = this.sessions.get(sessionId);
     if (!record) return;
     this.refuseGitOperation(record.scope);
+    this.dropTour(sessionId);
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "ended";
@@ -2184,6 +2659,7 @@ export class SessionHost {
     if (record.lifecycle === "ended") throw new Error(`Session ${sessionId} has ended`);
     if (record.lifecycle === "settled") return;
 
+    this.dropTour(sessionId);
     const session = record.session;
     record.session = undefined;
     record.lifecycle = "settled";
@@ -2229,6 +2705,7 @@ export class SessionHost {
     const reaped: string[] = [];
     for (const record of [...this.sessions.values()]) {
       if (record.lifecycle !== "settled") continue;
+      if (this.workflowOwner?.canForget?.(record.id, record.scheduledOccurrenceId) === false) continue;
       const settledAt = record.settledAt === undefined ? NaN : Date.parse(record.settledAt);
       // An unreadable timestamp means we cannot know the age; leaving it is the safe failure.
       if (Number.isNaN(settledAt) || now - settledAt < retention) continue;
@@ -2245,7 +2722,7 @@ export class SessionHost {
         await this.releaseWorktree(record);
         record.log.closeSubscribers();
         this.sessions.delete(record.id);
-        this.publishReviews.delete(record.id);
+        this.dropTour(record.id);
         this.store?.deleteSession(record.id);
         reaped.push(record.id);
       } finally {
@@ -2327,7 +2804,7 @@ export class SessionHost {
 
     const generation = (record.titleGeneration += 1);
     let reason: string | undefined;
-    const name = await this.summarySpare.name(backend, summary, nameInput(entries), undefined, (problem) => { reason = problem; });
+    const name = await this.summarySpare.name(backend, summary, nameInput(entries), undefined, (problem) => { reason = problem; }, this.namingSpent(record));
     if (name === undefined) throw new CommandRefused(`Could not name this Agent Session${reason ? `: ${reason}` : ""}`);
     // Refused rather than applied when something newer has already been asked for. A human who
     // clicked twice wants the second answer, and the first arriving afterwards must not undo it.
@@ -2364,7 +2841,7 @@ export class SessionHost {
     const generation = (record.titleGeneration += 1);
     let name: string | undefined;
     try {
-      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input);
+      name = await this.summarySpare.name(this.backendFor(summary.backend), summary, input, undefined, undefined, this.namingSpent(record));
     } catch {
       return;
     }
@@ -2387,12 +2864,14 @@ export class SessionHost {
     this.workflowShutdown = true;
     // Creation can still be awaiting backend startup after its caller disconnects. Drain those
     // accepted operations before walking sessions, so late children cannot escape shutdown.
-    await Promise.allSettled([...this.sessionToolOperations]);
+    await Promise.allSettled([...this.sessionToolOperations, ...this.scheduledAttachments.values()]);
     // First, so that a naming still in flight cannot warm a replacement on the way out — the
     // one-shot CLI runner shuts down microseconds before `process.exit`, and a spare booted in
     // that window is a child process nothing is left to dispose. Not awaited, and cannot be: see
     // `SummaryModelSpare.dispose`.
     this.summarySpare.dispose();
+    const tours = [...this.pullRequestTours.keys()].map(key => { const running = this.pullRequestTours.get(key)?.running; this.dropPullRequestTour(key); return running; });
+    await Promise.allSettled(tours);
     const warm = [...this.skillSessions.values()];
     this.skillSessions.clear();
     await Promise.all(warm.map((held) => held.session.dispose().catch(() => {})));
@@ -2414,9 +2893,15 @@ export class SessionHost {
       this.persist(record);
     }
     await this.shared?.close().catch((error: unknown) => console.error(`Shared sandbox removal failed: ${(error as Error).message}`));
+    const stopped = await Promise.allSettled([...this.backends.values()].map(async backend => backend.shutdown?.()));
+    const failures = stopped.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Backend Adapter shutdown failed");
   }
 
   async execute(command: Command): Promise<unknown> {
+    if (READ_ONLY_REFUSED.has(command.type) && "sessionId" in command && this.record(command.sessionId).readOnly) {
+      throw new CommandRefused("This Agent Session has a Read-only Scope. It cannot change Git state or run a Tour.");
+    }
     switch (command.type) {
       case "create":
         return await this.create({
@@ -2427,6 +2912,7 @@ export class SessionHost {
           ...(command.permissionMode === undefined ? {} : { permissionMode: command.permissionMode }),
           ...(command.mcpConnectionIds === undefined ? {} : { mcpConnectionIds: command.mcpConnectionIds }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
+          ...(command.readOnly ? { readOnly: true as const } : {}),
         });
       case "send":
         return await this.send(command.sessionId, command.text, command.when, command.attachments);
@@ -2454,28 +2940,99 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "pull_branch":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
-      case "change_pull_request":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => changePullRequest(this.record(command.sessionId).scope, command.action, command.input));
-      case "pull_request":
-        return await pullRequest(this.record(command.sessionId).scope);
-      case "comment_pull_request":
-        return await commentPullRequest(this.record(command.sessionId).scope, command.input);
-      case "resolve_pull_request_thread":
-        return await resolvePullRequestThread(this.record(command.sessionId).scope, command.input);
+      case "change_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        const change = () => this.afterPullRequestWrite(scope, changePullRequest(scope, command.action, command.input, gh, find));
+        return await (find ? this.readGit(change) : this.withGitOperation(scope, change));
+      }
+      case "pull_request": {
+        if ("project" in command) {
+          const scope = this.projectScope(command.project);
+          return await this.readGit(() => projectPullRequest(scope, command.number));
+        }
+        const scope = this.record(command.sessionId).scope;
+        return await this.readGit(() => pullRequest(scope, this.gitStates.pullRequestRef(scope)));
+      }
+      case "comment_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, commentPullRequest(scope, command.input, gh, find));
+      }
+      case "resolve_pull_request_thread": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, resolvePullRequestThread(scope, command.input, gh, find));
+      }
+      case "edit_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, editPullRequest(scope, command.input, gh, find));
+      }
+      case "set_pull_request_draft": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, setPullRequestDraft(scope, command.input, gh, find));
+      }
+      case "rerun_pull_request_checks": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, rerunPullRequestChecks(scope, command.input, gh, find));
+      }
+      case "pull_request_check_log": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await checkLog(scope, command.pr, command.jobId, gh, find);
+      }
+      case "submit_pull_request_review": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, submitReview(scope, command.input, gh, find));
+      }
+      case "project_pull_requests": {
+        const scope = this.projectScope(command.project);
+        const query = typeof command.query === "string" ? command.query.trim() : "";
+        return await this.readGit(() => listPullRequests(scope, gh, query || undefined));
+      }
+      case "pull_request_changes":
+      case "pull_request_diff": {
+        const scope = this.projectScope(command.project);
+        return await this.readGit(async () => {
+          const range = await pullRequestRange(scope, command.pr);
+          return command.type === "pull_request_diff" ? await fileDiff(scope, command.path, range.base, range.head) : await rangeChanges(scope, range.base, range.head);
+        });
+      }
+      case "start_pull_request_session":
+        return await this.startPullRequestSession(command.project, command.pr);
       case "stack_status":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => stackStatus(this.record(command.sessionId).scope));
+        return await this.readStack(command.sessionId);
       case "prepare_stack":
         return await this.prepareStack(command.sessionId, command.action);
       case "change_stack":
         return await this.changeStack(command.sessionId, command.input);
       case "assist_stack":
         return await this.assistStack(command.sessionId);
-      case "git_status":
-        return await this.gitStatus(command.sessionId);
-      case "prepare_publish":
-        return await this.preparePublish(command.sessionId);
-      case "publish":
-        return await this.publish(command.sessionId, command.input);
+      case "refresh_git": {
+        const scope = this.record(command.sessionId).scope;
+        if (!isRepository(scope)) {
+          await this.gitStates.refresh(scope);
+          return { repository: false };
+        }
+        await Promise.all([...this.sessions.values()].filter(other => scopeKey(other.scope) === scopeKey(scope)).map(other => this.refreshBranch(other)));
+        if (command.pullRequest === true) await this.pollGitState(scope);
+        return { repository: true };
+      }
+      case "git_changes":
+      case "git_diff":
+        return await this.readChanges(command);
+      case "commit":
+        return await this.commit(command.sessionId, { fingerprint: command.fingerprint, paths: command.paths, message: command.message, ...(command.branch === undefined ? {} : { branch: command.branch }) });
+      case "push_state":
+        return await this.readGit(() => pushState(this.gitScope(command.sessionId)));
+      case "push":
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, push(this.record(command.sessionId).scope, { head: command.head, ...(command.replace === undefined ? {} : { replace: command.replace }) })));
+      case "create_pull_request":
+        return await this.withGitOperation(this.gitScope(command.sessionId), () => this.afterPullRequestWrite(this.record(command.sessionId).scope, createPullRequest(this.record(command.sessionId).scope, { head: command.head, title: command.title, body: command.body, draft: command.draft === true })));
+      case "suggest_git_text":
+        return await this.suggestGitText(command.sessionId, command.kind, command.paths);
+      case "start_tour":
+        return "project" in command ? this.startPullRequestTour(command.project, command.pr) : this.startTour(command.sessionId);
+      case "tour":
+        return "project" in command ? this.pullRequestTour(command.project, command.pr) : this.tour(command.sessionId);
+      case "cancel_tour":
+        return "project" in command ? this.cancelPullRequestTour(command.project, command.pr) : this.cancelTour(command.sessionId);
       case "switch_branch":
         return await this.switchBranch(command.sessionId, command.branch);
       case "switch_scope_branch":
@@ -2484,6 +3041,10 @@ export class SessionHost {
         return await this.rename(command.sessionId);
       case "compact":
         return await this.compact(command.sessionId, command.instructions);
+      case "rewind":
+        return await this.rewind(command.sessionId, command.userMessageId, command.restore);
+      case "fork":
+        return await this.fork(command.sessionId, command.userMessageId, command.worktree);
       case "answer_enquiry":
         return await this.answerEnquiry(command.sessionId, command.askId, command.answers);
       case "answer_permission":
@@ -2532,6 +3093,22 @@ export class SessionHost {
     return structuredClone((this.mcpConnections?.() ?? []).filter(connection => record.mcpConnectionIds?.includes(connection.id)));
   }
 
+  scheduledConnections(ids: string[]) {
+    const connections = this.mcpConnections?.() ?? [];
+    if (ids.some(id => !connections.some(connection => connection.id === id))) throw new ScheduleValidationError('Selected MCP connection is unavailable');
+    return structuredClone(connections.filter(connection => ids.includes(connection.id)));
+  }
+
+  scheduledMcp(scope: string, ids: string[], mode: import('../protocol/settings.ts').FilesystemIsolationMode) {
+    const connections = this.scheduledConnections(ids);
+    const oauth = this.mcpAuth ? (connection: import('../protocol/mcp.ts').McpConnection) => this.mcpAuth!.provider(connection) : undefined;
+    return import('../backend/mcp.ts').then(({ McpSession }) => new McpSession(connections, scope, oauth, true, this.resolveSecret, undefined, this.filesystemStateRoot(), mode));
+  }
+
+  scheduledSandboxMcp(scope: string, ids: string[]) {
+    return import('../backend/worker/sandbox-mcp.ts').then(({ SandboxMcpSession }) => new SandboxMcpSession(this.scheduledConnections(ids), scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, this.resolveSecret));
+  }
+
   /** Include an SDK-supplied owning root in every local execution's filesystem policy. */
   filesystemStateRoot(): string | undefined { return this.store?.root; }
 
@@ -2539,21 +3116,31 @@ export class SessionHost {
   filesystemIsolationMode(): import("../protocol/settings.ts").FilesystemIsolationMode { return this.filesystemIsolation?.() ?? "bubblewrap"; }
   sandboxSupport(): import("../isolation/sandbox.ts").SandboxSupport | undefined { return this.sandbox?.(); }
   /** The Shared Sandbox, when the Settings choose one VM for all sandbox sessions. */
+  scheduledSandboxMounts(scope: string): { writable: string[]; readable: string[] } {
+    const mounts = [...this.backends.values()].flatMap(backend => backend.scheduledSandboxMounts?.(scope) ?? []);
+    return { writable: mounts.flatMap(item => item.writable), readable: mounts.flatMap(item => item.readable) };
+  }
+
+  isReadOnly(sessionId: string): boolean { return this.record(sessionId).readOnly === true; }
+
   sharedSandbox(): SharedSandbox | undefined { return this.sandboxSharing?.() === "shared" ? this.shared : undefined; }
 
-  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode()) {
+  async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode(), signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (isolationMode === "sandbox") {
-      await this.openWorkflowSession(id);
+      await waitForAbort(this.openWorkflowSession(id), signal);
+      signal?.throwIfAborted();
       const { SandboxMcpSession } = await import("../backend/worker/sandbox-mcp.ts");
       const mcp = this.record(id).mcp;
       if (!(mcp instanceof SandboxMcpSession)) throw new Error("Sandbox isolation is unavailable; unrestricted launch refused: the Agent Session has no sandbox");
-      return mcp.directView(connectionId);
+      return mcp.directView(connectionId, signal);
     }
     const connection = this.workflowMcpConnections(id).find(connection => connection.id === connectionId);
     if (!connection) throw new Error('MCP connection is removed or disabled for this Agent Session. Enable it in the Agent Session settings and reconfigure the step.');
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
+    signal?.throwIfAborted();
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, undefined, undefined, this.isReadOnly(id));
   }
 
   /** Metadata discovery owned by authoring, never by an Agent/Backend Session. */
@@ -2562,7 +3149,7 @@ export class SessionHost {
     if (!connection) throw new Error('MCP connection removed. Refresh the workflow editor.');
     const { McpSession } = await import('../backend/mcp.ts');
     return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined,
-      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, expectedScopeIdentity);
+      true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, expectedScopeIdentity, undefined, true);
   }
 
   mcpStatus(id: string) {
@@ -2663,18 +3250,21 @@ export class SessionHost {
         check(signal);
         const { text, scope = source.scope, backend: name = source.backendName, modelId, effort, worktree } = sessionCreateInput.parse(input);
         if (!isAbsolute(scope)) throw new CommandRefused('Scope must be an absolute directory');
+        const readOnly = source.readOnly && !(this.projectPaths?.() ?? []).some(path => scopeKey(path) === scopeKey(scope));
+        if (readOnly && scopeKey(scope) !== scopeKey(this.projectRoot?.() ?? scope)) throw new CommandRefused('A read-only Agent Session can create Agent Sessions only in a Project or at the Project Root');
         const sessionId = await this.create({ scope, backend: name,
+          ...(readOnly ? { readOnly: true as const } : {}),
           ...(modelId === undefined ? {} : { modelId }),
           ...(effort === undefined ? {} : { effort }),
           ...(worktree === undefined ? {} : { worktree: { from: worktree.from, ...(worktree.branch === undefined ? {} : { branch: worktree.branch }) } }),
           mcpConnectionIds: source.mcpConnectionIds ?? [],
           permissionMode: source.permissionMode === 'auto' && name !== 'claude' ? 'ask' : source.permissionMode });
         // Persist a receipt even if cancellation loses the RPC result; never blindly recreate.
-        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}` });
-        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}` });
+        source.log.append({ type: 'notice', level: 'info', text: `Created Agent Session ${sessionId}`, sessionId });
+        this.record(sessionId).log.append({ type: 'notice', level: 'info', text: `Created by Agent Session ${source.id}`, sessionId: source.id });
         try {
           check(signal);
-          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+          await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
           return { sessionId, delivery: 'accepted' };
         } catch (error) {
           return { sessionId, delivery: 'not-sent', error: error instanceof Error ? error.message : String(error) };
@@ -2684,7 +3274,7 @@ export class SessionHost {
         check(signal);
         const { sessionId, text } = sessionSendInput.parse(input);
         if (sessionId === source.id) throw new CommandRefused('Use the current conversation instead of messaging yourself');
-        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text);
+        await this.send(sessionId, attributed(text), 'after_turn', undefined, () => check(signal), text, source.id);
         return { sessionId, delivery: 'accepted' };
       }),
     };
@@ -2700,13 +3290,14 @@ export class SessionHost {
     const isolationMode = this.filesystemIsolationMode();
     const mcp = isolationMode === "sandbox"
       ? new SandboxMcpSession(selected, record.scope, oauth, this.resolveSecret)
-      : new McpSession(selected, record.scope, oauth, false, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
+      : new McpSession(selected, record.scope, oauth, false, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, undefined, undefined, record.readOnly === true);
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);
     const compactionModelId = this.compactionModel?.(backend.name);
     let attached: BackendSession | undefined;
     const session = await backend.create({
+      isolationMode,
       mcp,
       onFailure: () => {
         if (!attached || record.session !== attached) return;
@@ -2722,6 +3313,7 @@ export class SessionHost {
         relayPermission: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayPermission(input, signal); },
       },
       scope: record.scope,
+      ...(record.readOnly ? { readOnly: this.readOnlyEnforcement(isolationMode) } : {}),
       emit: (event) => {
         if (!attached || record.session === attached) this.onBackendEvent(record.id, event);
       },
@@ -2731,6 +3323,7 @@ export class SessionHost {
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
       ...(record.resumeToken === undefined ? {} : { resume: record.resumeToken }),
+      ...(record.resumeToken === undefined || record.rewindTo === undefined ? {} : { resumeBefore: record.rewindTo }),
       ...(record.spend === undefined ? {} : { priorSpend: record.spend }),
       ...(this.store ? { stateDir: this.store.backendDir(record.id) } : {}),
       // Read here rather than held, so a Revive picks up every grant made since this Agent Session
@@ -2778,8 +3371,8 @@ export class SessionHost {
       } else await abort();
     };
     const prompt = session.prompt.bind(session);
-    session.prompt = (text, attachments) => {
-      pendingTurn = waitForMcp(() => prompt(text, attachments));
+    session.prompt = (text, attachments, messageId) => {
+      pendingTurn = waitForMcp(() => prompt(text, attachments, messageId));
       return pendingTurn;
     };
     if (session.compact) {
@@ -2905,7 +3498,7 @@ export class SessionHost {
     record.openPermissionAttention.clear();
   }
 
-  private async dispatch(record: SessionRecord, message: Pick<QueuedMessage, "text" | "attachments">, titleText = message.text): Promise<void> {
+  private async dispatch(record: SessionRecord, message: Omit<QueuedMessage, "id">, titleText = message.text): Promise<void> {
     if (record.permissionChanging) await this.waitForPermissionChange(record);
     this.refuseGitOperation(record.scope);
     if (!record.session) throw new Error(`Session ${record.id} has no Backend Session`);
@@ -2926,7 +3519,7 @@ export class SessionHost {
       }
       record.initialEffortUnconfirmed = false;
     }
-    const { text, attachments } = message;
+    const { text, attachments, fromSessionId } = message;
     const note = record.pendingBranchNote;
     record.pendingBranchNote = undefined;
     /*
@@ -2944,11 +3537,14 @@ export class SessionHost {
     const startingTurn = !record.turnInFlight;
     const generation = record.turnGeneration = (record.turnGeneration ?? 0) + (startingTurn ? 1 : 0);
     record.turnInFlight = true;
+    const messageId = randomUUID();
     record.log.append({
       type: "user_message",
-      id: randomUUID(),
-      text: sent,
+      id: messageId,
+      text,
+      ...(note === undefined ? {} : { note }),
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(fromSessionId === undefined ? {} : { fromSessionId }),
     });
     // Titled from the original instructions, never attribution or `sent`. A switch made before the first
     // message would otherwise name the Agent Session after the note, and permanently: the rename
@@ -2978,7 +3574,7 @@ export class SessionHost {
       this.recordDispatchFailure(record, error, startingTurn);
     };
     try {
-      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments)).catch(failed);
+      void session.prompt(workflowContext ? `${sent}\n\n${workflowContext}` : sent, this.loadAttachments(record.id, attachments), messageId).catch(failed);
     } catch (error) {
       failed(error);
     }
@@ -3028,6 +3624,10 @@ export class SessionHost {
     if (event.type === "turn_started" || (event.type === "permission" && event.state === "asked")) {
       record.permissionActivityVersion = (record.permissionActivityVersion ?? 0) + 1;
     }
+    if (event.type === "turn_started" && record.rewindTo !== undefined) {
+      record.rewindTo = undefined;
+      this.persist(record);
+    }
     const before = this.activityOf(record);
     const permissionWasOpen = event.type === "permission" && record.openPermissionAttention.has(event.callId);
     const enquiryWasOpen = event.type === "enquiry" && record.openEnquiryAttention.has(event.askId);
@@ -3058,7 +3658,10 @@ export class SessionHost {
 
     // Kept current so a Revive can hand the running total back to the next Backend Session, which
     // counts only its own run.
-    if (event.type === "context_usage" && event.spend) record.spend = event.spend;
+    if (event.type === "context_usage" && event.spend) {
+      record.spend = event.spend;
+      this.recordSpend("session", sessionId, this.spendScope(record), event.spend);
+    }
 
     /*
      * Ordinarily redundant — `dispatch` and `compact` both set this before the adapter acknowledges,
@@ -3071,6 +3674,8 @@ export class SessionHost {
       if (!record.turnInFlight) record.turnGeneration = (record.turnGeneration ?? 0) + 1;
       record.turnInFlight = true;
     }
+
+    if (event.type === "tool_ended" && record.turnInFlight) this.gitStates.touch(record.scope);
 
     if (event.type === "turn_ended") {
       record.turnGeneration = (record.turnGeneration ?? 0) + 1;
@@ -3247,6 +3852,7 @@ export class SessionHost {
     if (!this.store) return;
     const meta: SessionMeta = {
       id: record.id,
+      ...(record.scheduledOccurrenceId ? { scheduledOccurrenceId: record.scheduledOccurrenceId } : {}),
       scope: record.scope,
       backend: record.backendName,
       title: record.title,
@@ -3267,11 +3873,13 @@ export class SessionHost {
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
       ...(record.imported === undefined ? {} : { imported: record.imported }),
+      ...(record.rewindTo === undefined ? {} : { rewindTo: record.rewindTo }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
       permissionMode: record.permissionMode,
       ...(record.initialEffortUnconfirmed ? { initialEffortUnconfirmed: true } : {}),
       ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
+      ...(record.readOnly ? { readOnly: true as const } : {}),
     };
     this.store.writeMeta(meta);
   }
@@ -3284,6 +3892,10 @@ export function suggestedScope(scope: string, worktreesRoot: string): string | u
   if (at < 0) return undefined;
   const candidate = join(worktreesRoot, scope.slice(at + marker.length));
   return candidate !== scope && existsSync(candidate) ? candidate : undefined;
+}
+
+function userMessage(entries: LoggedEvent[], id: string): LoggedEvent | undefined {
+  return entries.find(({ event }) => event.type === "user_message" && event.id === id);
 }
 
 /** The turn still open at the end of these entries, if any. */
@@ -3467,15 +4079,23 @@ function openBackgroundCalls(entries: LoggedEvent[]): { callId: string; tool: st
   return [...open].map(([callId, brief]) => ({ callId, ...brief }));
 }
 
-function openSubagents(entries: LoggedEvent[]): { subagentId: string; name: string }[] {
-  const open = new Map<string, string>();
+type OpenSubagent = { name: string; model?: string; effort?: EffortLevel; producer?: Producer };
+
+function openSubagents(entries: LoggedEvent[]): ({ subagentId: string } & OpenSubagent)[] {
+  const open = new Map<string, OpenSubagent>();
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type !== "subagent") continue;
-    if (event.state === "running" || event.state === "waiting") open.set(event.subagentId, event.name);
-    else open.delete(event.subagentId);
+    if (event.state === "running" || event.state === "waiting") {
+      open.set(event.subagentId, {
+        name: event.name,
+        ...(event.model === undefined ? {} : { model: event.model }),
+        ...(event.effort === undefined ? {} : { effort: event.effort }),
+        ...(event.producer === undefined ? {} : { producer: event.producer }),
+      });
+    } else open.delete(event.subagentId);
   }
-  return [...open].map(([subagentId, name]) => ({ subagentId, name }));
+  return [...open].map(([subagentId, brief]) => ({ subagentId, ...brief }));
 }
 
 /** What the transcript last reported this Agent Session had spent, across every Backend Session. */
@@ -3484,6 +4104,7 @@ function spendFrom(entries: LoggedEvent[]): Spend | undefined {
   for (const entry of entries) {
     const event: AgentEvent = entry.event;
     if (event.type === "context_usage" && event.spend) spend = event.spend;
+    if (event.type === "forked") spend = undefined;
   }
   return spend;
 }
@@ -3534,6 +4155,12 @@ function firstLine(text: string): string {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+const READ_ONLY_REFUSED = new Set<Command["type"]>([
+  "switch_branch", "pull_branch", "change_pull_request", "comment_pull_request", "submit_pull_request_review", "resolve_pull_request_thread",
+  "edit_pull_request", "set_pull_request_draft", "rerun_pull_request_checks", "prepare_stack", "change_stack",
+  "assist_stack", "commit", "push", "create_pull_request", "start_tour",
+]);
 
 function scopeKey(scope: string): string {
   try {

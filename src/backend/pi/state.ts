@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Point pi session files in `stateDir` from Scope `from` to Scope `to`. pi reopens a session only when its header `cwd` matches. */
@@ -14,4 +14,19 @@ export function relocatePiState(stateDir: string, from: string, to: string): voi
     writeFileSync(temporary, JSON.stringify({ ...header, cwd: to }) + (end < 0 ? "" : content.slice(end)), { mode: 0o600 });
     renameSync(temporary, path);
   }
+}
+
+export const USER_MESSAGE_MAP = "flow-user-messages.json";
+
+/** Copy the most recent pi session file and its user message map for a Fork, bound to Scope `scope`. */
+export function forkPiState(from: string, to: string, scope: string): string {
+  const files = readdirSync(from, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
+  const latest = files.map((entry) => entry.name).sort((a, b) => statSync(join(from, b)).mtimeMs - statSync(join(from, a)).mtimeMs)[0];
+  if (!latest) throw new Error("No pi session to fork");
+  const content = readFileSync(join(from, latest), "utf8");
+  const end = content.indexOf("\n");
+  const header = JSON.parse(end < 0 ? content : content.slice(0, end)) as Record<string, unknown>;
+  writeFileSync(join(to, latest), JSON.stringify({ ...header, cwd: scope }) + (end < 0 ? "" : content.slice(end)), { mode: 0o600, flag: "wx" });
+  if (existsSync(join(from, USER_MESSAGE_MAP))) copyFileSync(join(from, USER_MESSAGE_MAP), join(to, USER_MESSAGE_MAP));
+  return to;
 }

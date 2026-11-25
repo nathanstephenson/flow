@@ -4,9 +4,14 @@ import { ConfigStore } from './config-store.ts';
 import { SecretStore } from './secret-store.ts';
 import { WorkflowStore } from '../workflows/store.ts';
 import { WorkflowExecutionService } from './workflow-executions.ts';
+import { WorkflowScheduleStore } from '../workflows/schedule-store.ts';
+import { WorkflowScheduleService } from './workflow-schedules.ts';
+import { scheduleDriver } from './workflow-schedule-driver.ts';
 import { WorkflowBuilderService } from './workflow-builder.ts';
+import { workflowCatalogue } from './workflow-routes.ts';
 import { WorkflowMcpAuthoringService } from './workflow-mcp-authoring.ts';
 import { SessionHost } from './host.ts';
+import { includedProjects } from './projects.ts';
 import { McpAuth } from './mcp-auth.ts';
 import { serve, type RunningServer } from './server.ts';
 import { ShellRegistry } from './shell.ts';
@@ -55,21 +60,30 @@ export async function startRuntime(options: {
       store, resolveSecret: name => secrets.resolve(name), retention: config.retention,
       mcpConnections: config.mcpConnections, mcpAuth,
       filesystemIsolationMode: config.filesystemIsolationMode, sandboxSupport: config.sandboxSupport,
-      sandboxSharing: config.sandboxSharing, projectRoot: config.projectRoot,
+      sandboxSharing: config.sandboxSharing, updateSourceBranch: config.updateSourceBranch, projectRoot: config.projectRoot,
+      projectPaths: () => includedProjects(config.rawProjectRoot(), config.projectInclude()).map(project => project.path),
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
-      defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel,
+      defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel, tourModel: config.tourModel,
     });
     const shells = new ShellRegistry();
+    let workflowSchedules: WorkflowScheduleService | undefined;
+    let workflowExecutions: WorkflowExecutionService | undefined;
     let workflowBuilders: WorkflowBuilderService | undefined;
     let workflowMcpAuthoring: WorkflowMcpAuthoringService | undefined;
     let running: RunningServer | undefined;
     let oidc: OidcGate | undefined;
     let sweep: ReturnType<typeof setInterval> | undefined;
+    let gitPoll: ReturnType<typeof setInterval> | undefined;
+    let gitPolling: Promise<void> | undefined;
     let reaping = Promise.resolve();
     let stopping: Promise<void> | undefined;
     const stop = (): Promise<void> => stopping ??= (async () => {
       clearInterval(sweep);
+      clearInterval(gitPoll);
+      const scheduledErrors: unknown[] = [];
+      try { await workflowSchedules?.stopAdmission(); } catch (error) { scheduledErrors.push(error); }
+      try { await workflowExecutions?.stopScheduled(); } catch (error) { scheduledErrors.push(error); }
       const interrupt = async () => { await Promise.all([host.shutdown(), workflowBuilders?.shutdown(), workflowMcpAuthoring?.shutdown(), shells.killAll(), reaping]); };
       if (running) await running.stopAdmission(interrupt);
       else await interrupt();
@@ -79,24 +93,53 @@ export async function startRuntime(options: {
       if (running) await running.close();
       else { mcpAuth.dispose(); oidc?.dispose(); }
       ownership.release();
+      if (scheduledErrors.length) throw new AggregateError(scheduledErrors, 'Scheduled workflow cleanup failed');
     })();
     cleanup = stop;
     registerBackends(host);
     trimTimings(root);
     void host.models(config.projectRoot() ?? process.cwd());
     const workflows = new WorkflowStore(root);
-    const workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());
+    store.onSessionDeleted = sessionId => workflows.deleteOwner({ kind: 'session', sessionId });
+    workflowExecutions = new WorkflowExecutionService(host, workflows, secrets, config, options.workflowRuntime());
     workflowMcpAuthoring = new WorkflowMcpAuthoringService({ host, config, scope: process.cwd() });
     workflowBuilders = new WorkflowBuilderService({
       host, config, scope: process.cwd(), stateRoot: root,
-      validateDefinition: definition => workflowExecutions.validateDefinitionCredentials(definition),
+      validateDefinition: definition => workflowExecutions!.validateDefinitionCredentials(definition),
+      workflowCatalogue: () => workflowCatalogue(workflows),
+      workflowDefinition: id => { try { return workflows.getDefinition(id); } catch { return undefined; } },
       mcpCatalogue: (scope, projectId, scopeIdentity) => workflowMcpAuthoring!.catalogue(projectId, { scope, scopeIdentity }),
       mcpTool: (scope, projectId, scopeIdentity, connectionId, toolName) => workflowMcpAuthoring!.tool(projectId, connectionId, toolName, { scope, scopeIdentity }),
     });
+    try {
+      const schedules = new WorkflowScheduleStore(root);
+      workflowSchedules = new WorkflowScheduleService(schedules, scheduleDriver({ host, config, workflows, executions: workflowExecutions, schedules, transcripts: store }));
+      workflowExecutions.onScheduledResult = async record => { workflowSchedules!.result(record); };
+    } catch {
+      workflowExecutions.scheduledOwnershipAvailable = false;
+      console.error('Workflow Schedule initialization failed. Scheduling is disabled. Other Session Host services will continue.');
+    }
     await host.load();
+    try { await workflowSchedules?.start(); }
+    catch { console.error('Workflow Schedule reconciliation failed. Other Session Host services will continue.'); }
     workflowExecutions.reconcile();
-    sweep = setInterval(() => { reaping = reaping.then(async () => { await host.reap(); }); }, 60 * 60 * 1000);
+    reaping = reaping.then(async () => {
+      try { await workflowSchedules?.prune(); }
+      catch { console.error('Workflow Schedule retention failed. Cleanup will be retried.'); }
+    });
+    sweep = setInterval(() => {
+      reaping = reaping.then(async () => {
+        try { await host.reap(); }
+        catch { console.error('Agent Session Reaping failed. The next sweep will retry.'); }
+        try { await workflowSchedules?.prune(); }
+        catch { console.error('Workflow Schedule retention failed. The next sweep will retry.'); }
+      });
+    }, 60 * 60 * 1000);
     sweep.unref();
+    gitPoll = setInterval(() => {
+      gitPolling ??= host.pollGitState().finally(() => { gitPolling = undefined; });
+    }, 30_000);
+    gitPoll.unref();
     host.onSessionClosed(sessionId => shells.killFor(sessionId));
     const token = readOrCreateToken(root);
     oidc = await createOidcGateFromEnv(root);
@@ -104,7 +147,7 @@ export async function startRuntime(options: {
       instanceId: ownership.instanceId, pid: process.pid, version: options.version, url: '', token, mode: options.mode,
       settings: { port: options.port ?? 0, address: options.address ?? '127.0.0.1', cwd: process.cwd(), oidc: oidcFingerprint() },
     };
-    const hasActiveWork = () => host.hasActiveWork() || workflowBuilders!.hasActiveWork() || workflowMcpAuthoring!.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions.list(session.id).occupied);
+    const hasActiveWork = () => !!workflowSchedules?.hasActiveWork() || host.hasActiveWork() || workflowBuilders!.hasActiveWork() || workflowMcpAuthoring!.hasActiveWork() || shells.hasLiveShells() || host.list().some(session => workflowExecutions!.list(session.id).occupied);
     const updates = new WebUpdateController({
       root,
       installedVersion: options.version,
@@ -118,6 +161,7 @@ export async function startRuntime(options: {
       control: { identity, stop, hasActiveWork },
       updates,
       host, token, shells, config, mcpAuth, store, workflows, secrets, workflowExecutions, workflowBuilders, workflowMcpAuthoring,
+      ...(workflowSchedules === undefined ? {} : { workflowSchedules }),
       assets: options.assets(), scope: process.cwd(),
       ...(oidc === undefined ? {} : { oidc }),
       ...(options.port === undefined ? {} : { port: options.port }),

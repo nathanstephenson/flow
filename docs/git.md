@@ -1,19 +1,54 @@
-# Git: publishing and stacked pull requests
+# Git: commit, push, pull requests and stacked pull requests
 
-## Publish branch names
+## Commit, push and create a pull request
 
-Before the first push, Publish shows a branch name that you can edit.
+The Git pane shows the next step above its tabs: Commit, Push, or Create pull request.
 
-- Flow uses the Summary Model to suggest the name, if one is configured. Otherwise it uses a local
-  fallback.
-- When you confirm, Flow creates a feature branch from the default branch, or renames an
-  unpublished branch.
-- Published branches and registered stack branches keep their names.
-- Flow does not change branches while it prepares the review.
+The tabs are Changes, Pull request and Stack, in this order. Changes is selected until you select
+another tab. If the selected tab goes away, Changes is selected again. The Pull request tab shows
+when the branch has a pull request or when the pull request cannot be read; the tab then shows the
+error. The Stack tab shows when `gh stack` is available. In a Scope that the Session Host reports
+is not a Git repository, the pane shows only one line of text.
+
+Push and Create pull request need a push remote that is a github.com repository. Without one, the
+header shows "No GitHub remote. Commit only."
+
+- Commit includes only the files that you select in the Uncommitted view. Other files keep their
+  staged and unstaged state. Git hooks run.
+- On the default branch or a detached HEAD, Commit requires a new branch name. You can rename a
+  branch that has no pull request, no remote branch and no stack registration.
+- Push sends the current branch to its push remote and sets the upstream. Flow never pushes the
+  default branch. If the push replaces remote commits, Flow lists them and asks first.
+- Create pull request uses the stack parent or the default branch as the base. The branch must be
+  pushed.
+- Suggest asks the Summary Model for text, if one is configured. It fills only empty fields.
+
+## Pull request tab
+
+The Pull request tab shows the pull request of the current branch in four sections: Overview,
+Checks, Review threads and Comments and reviews. Failing checks and unresolved threads are first.
+Resolved threads are collapsed.
+
+- Merge, Rebase, Edit, and Ready for review or Convert to draft are at the top. Merge and Rebase
+  ask first. When Merge is not available, a line below the actions tells why: the pull request is
+  a draft, or you cannot merge it in this repository.
+- Refresh in the Git pane header reads the local Git State, the pull request and the open tab
+  again.
+- Rebase changes only the local branch. It requires a clean Scope, aborts on a conflict and pushes
+  nothing.
+- Re-run failed jobs runs the failed jobs of one GitHub Actions run again. It shows once for each
+  run that has a failed job. Flow refuses a run that is not for the current head.
+- Each action first makes sure that the pull request is still the one of the current branch.
+- The tab reads the pull request again when the polled Git State of the pull request changes. It does
+  not read again when the pull request it shows has the same update time, state and checks.
+
+The rail row shows two icons at the end of the branch line: the pull request state and its check
+status. The session header shows the pull request number as a link, followed by the same icons. A
+tooltip gives the words, for example "Pull Request #178. Draft. Checks passing."
 
 ## Stacked pull requests
 
-The Git tab in the browser uses `github/gh-stack` directly. It is tested with v0.1.1.
+The Stack tab uses `github/gh-stack` directly. It is tested with v0.3.0.
 
 Install and authenticate it on the Session Host machine:
 
@@ -22,9 +57,29 @@ gh extension install github/gh-stack
 gh auth login
 ```
 
-Without it, the ordinary Git controls are still available.
+Without it, the Stack tab is hidden. The ordinary Git controls are still available.
 
-Stack supports Create, Add, Switch, Submit, Sync and Rebase. Merge and stack restructuring are not
+The Stack tab shows only the Stack that `gh stack view` reports for the current branch. Flow does
+not infer a Stack from pull request bases or from commit ancestry, and it does not show a Stack
+that is only on GitHub or only in another clone. To show a Stack from GitHub, run
+`gh stack checkout <PR number>` in the Scope. See ADR 0044.
+
+- On a branch in a Stack, the tab lists the branches from top to bottom, then the trunk. Each row
+  shows the PR number, state and title, and "Needs rebase", "Merged" or "Queued" when they apply.
+  It also shows how many commits the local branch is ahead of and behind its upstream, as of the
+  last fetch.
+- On a branch that is not in a Stack, the tab shows the Create stack form.
+- On the trunk of a registered Stack or the default branch, on a detached HEAD, or on a branch
+  with no commits, the tab shows one line of text.
+- The tab reads the Stack again when the branch, the head commit, or the number or state of the
+  pull request changes, and on Refresh. It keeps the shown list until the new one arrives.
+- The tab can load while an agent turn runs. Stack actions cannot.
+- Flow runs one `gh stack` command at a time for each repository, also across its worktrees.
+  `gh stack view` writes the stack metadata, so a read waits for a running Stack action, and an
+  action waits for a running read. A `gh stack` command that you run in a terminal at the same
+  time is not in this queue.
+
+Stack supports Create, Add, Switch, Submit, Sync, Rebase and Merge. Stack restructuring is not
 available.
 
 ### Rules for all stack operations
@@ -32,17 +87,20 @@ available.
 - Switching and changes require that no Agent Session in the same Scope is working, including
   background work.
 - The working tree must be clean, except to continue or abort a conflict. Flow never stashes
-  changes. Use Publish for uncommitted files.
+  changes. Commit uncommitted files first. While Git State shows changed files, Create stack, New
+  branch, Switch, Rebase, Submit stack, Sync stack and Merge stack are disabled.
 - Stack branches use their active parent as the review base, and as the base for new PRs.
 
 ### Create
 
-- Flow offers Create only for a clear chain of at least two existing local branches, linked by PR
-  head and base relationships.
-- Commit ancestry alone does not identify a stack.
-- Merged members keep their status.
-- Create registers the branches shown. It never accepts names for new branches.
-- Flow does not offer ambiguous chains, or branches that a stack already tracks.
+- Choose the trunk. The default is the default branch of the remote.
+- Add local branches that are not in a Stack. Put them in order from top to bottom with the move
+  buttons. The current branch is in the list first.
+- A branch cannot also be the trunk, and a branch can be in the list only once.
+- Create stack runs `gh stack init --base <trunk>` with the branches from bottom to top. It does not
+  create branches. It then switches to the top branch.
+- `gh stack init` does not require that each branch contains the branch below it. Rebase puts the
+  branches on top of each other.
 
 ### Switch
 
@@ -62,6 +120,19 @@ Submit and Sync need a fresh review of the affected branches and PRs.
 - After a Sync conflict, use Rebase to resolve it locally. Then confirm Sync again. Flow does not
   retry or push automatically.
 
+### Merge
+
+Merge stack needs a fresh review, like Submit and Sync.
+
+- Merge stack uses `gh stack merge --yes` with the chosen merge method. GitHub merges all PRs of
+  the Stack into the trunk in one operation. If one PR cannot merge, no PR merges. If the trunk
+  uses a merge queue, GitHub adds the Stack to the queue.
+- Each branch that is not merged must have an open PR that is not a draft.
+- The review shows only the merge methods that the repository permits for you.
+- GitHub merges the PR heads on GitHub. Local commits that are not pushed are not merged. Use the
+  ahead and behind counts to find them, then Submit first.
+- Flow does not Sync after the merge.
+
 ### Rebase conflicts
 
 A paused Rebase shows the conflict files, **Continue** and **Abort**.
@@ -70,11 +141,17 @@ A paused Rebase shows the conflict files, **Continue** and **Abort**.
 asks the agent to resolve and stage the conflicts, then to run `gh stack rebase --continue` only when
 they are resolved.
 
-- This does not give permission to publish, push, sync or merge.
-- Examine the result, then refresh Stack.
+- This does not give permission to push, sync or merge.
+- Examine the result, then click Refresh.
+- `gh stack` keeps one rebase state for all worktrees of a repository. Continue, Abort and Ask agent
+  are available only in the worktree where the rebase stopped. Other worktrees show "A stack rebase
+  is in progress in another worktree." and refuse Stack actions until it ends.
 
 ### Copy
 
 - **Copy stack** copies the PR titles as formatted links, from top to bottom.
 - **Copy PR link** copies one PR.
 - A plain-text paste contains only the titles.
+- If a title cannot be read, the tab says so, and Copy uses the link in place of the title.
+- Flow reads the titles with one GitHub query for all PRs of the Stack. It reads them again when a
+  PR number or state changes, and otherwise after 5 minutes.

@@ -1,9 +1,10 @@
 import type { BackendCreateOptions, BackendSession, WorkflowSubagentOptions } from "../types.ts";
 import type { McpTool } from "../mcp.ts";
-import type { Capabilities } from "../../protocol/events.ts";
+import type { Capabilities, Spend } from "../../protocol/events.ts";
 
 export type McpToolMetadata = Omit<McpTool, "call">;
-export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "sessionTools" | "onFailure" | "signal"> & {
+export type CreateMetadata = Omit<BackendCreateOptions, "emit" | "mcp" | "workflow" | "workflowBuilder" | "sessionTools" | "piAuth" | "onFailure" | "signal"> & {
+  piAuth?: readonly import('../pi/model-auth.ts').PiProviderAuth[];
   /** Only instructions cross the worker channel; the three callbacks remain in the host. */
   workflowBuilderInstructions?: string;
   mcpTools?: McpToolMetadata[];
@@ -21,6 +22,7 @@ export type WorkflowMetadata = Omit<WorkflowSubagentOptions, "emit">;
 export type SessionSnapshot = {
   capabilities: Capabilities;
   resume: string | undefined;
+  spend?: Spend | undefined;
   methods: string[];
   /** Worker durations in ms, only in the create reply: process start to create, backend import, backend create. */
   startup?: { ready: number; import: number; create: number };
@@ -29,10 +31,14 @@ export function snapshot(session: BackendSession): SessionSnapshot {
   return {
     capabilities: session.capabilities,
     resume: session.resumeToken(),
-    methods: ["refreshMcp", "startWorkflowSubagent", "compact", "skills", "answerEnquiry", "answerPermission", "setPermissionMode"]
+    spend: session.spend,
+    methods: ["refreshMcp", "startWorkflowSubagent", "compact", "rewindFiles", "skills", "planLimits", "answerEnquiry", "answerPermission", "setPermissionMode"]
       .filter((method) => typeof (session as unknown as Record<string, unknown>)[method] === "function"),
   };
 }
 export function mcpMetadata(mcp: BackendCreateOptions["mcp"]): McpToolMetadata[] {
   return (mcp?.tools() ?? []).map(({ name, connectionId, definition, serverIdentity }) => ({ name, connectionId, definition, serverIdentity }));
 }
+
+/** Backend-free worker initialization for occurrence-owned Sandbox MCP. */
+export interface McpOnlyMetadata { scope: string; connections: import('../../protocol/mcp.ts').McpConnection[] }

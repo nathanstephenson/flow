@@ -167,3 +167,76 @@ describe("what a Subagent was asked to do", () => {
     assert.equal(subagents.describe("some_read"), undefined);
   });
 })
+
+describe("correcting what a Subagent runs on", () => {
+  it("merges the correction into an open brief and answers the new one", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", model: "opus", effort: "high" });
+    assert.deepEqual(subagents.refine("call_1", { effort: "low" }), { name: "Explore", model: "opus", effort: "low" });
+    assert.deepEqual(subagents.describe("call_1"), { name: "Explore", model: "opus", effort: "low" });
+  });
+
+  it("corrects a detached brief too", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", model: "opus" });
+    subagents.background("call_1");
+    assert.deepEqual(subagents.refine("call_1", { model: "haiku" }), { name: "Explore", model: "haiku" });
+    assert.equal(subagents.isDetached("call_1"), true);
+  });
+
+  it("answers nothing when the correction changes nothing, or the call is not a Subagent", () => {
+    const subagents = new Subagents();
+    subagents.spawn("call_1", { name: "Explore", effort: "high" });
+    assert.equal(subagents.refine("call_1", { effort: "high" }), undefined);
+    assert.equal(subagents.refine("some_read", { effort: "low" }), undefined);
+  });
+});
+
+/**
+ * Work started by backgrounded work is backgrounded too: a Subagent spawned under a detached
+ * ancestor holds no turn, survives the turn end, and only its own end closes it.
+ */
+describe("a Subagent nested under a backgrounded one", () => {
+  it("does not hold the turn, survives clear, and closes when it returns", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.background("parent");
+    subagents.spawn("child", { name: "Plan" }, "parent");
+
+    assert.equal(subagents.hold("complete"), false, "a child of detached work must not hold the turn");
+    subagents.clear();
+    assert.deepEqual(subagents.describe("child"), { name: "Plan" });
+    assert.equal(subagents.returned("child"), undefined);
+    assert.equal(subagents.describe("child"), undefined);
+  });
+
+  it("is detached through every generation", () => {
+    const subagents = new Subagents();
+    subagents.spawn("a", { name: "A" });
+    subagents.spawn("b", { name: "B" }, "a");
+    subagents.spawn("c", { name: "C" }, "b");
+    assert.equal(subagents.isDetached("c"), false);
+
+    subagents.background("a");
+    assert.equal(subagents.isDetached("c"), true);
+  });
+
+  it("is freed from the turn when its parent is backgrounded", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.spawn("child", { name: "Plan" }, "parent");
+    subagents.hold("complete");
+
+    assert.equal(subagents.background("parent"), "complete", "nothing is left holding the turn");
+    subagents.clear();
+    assert.deepEqual(subagents.describe("child"), { name: "Plan" });
+  });
+
+  it("remembers the Subagent that spawned it", () => {
+    const subagents = new Subagents();
+    subagents.spawn("parent", { name: "Explore" });
+    subagents.spawn("child", { name: "Plan" }, "parent");
+    assert.equal(subagents.parentOf("child"), "parent");
+    assert.equal(subagents.parentOf("parent"), "");
+  });
+});

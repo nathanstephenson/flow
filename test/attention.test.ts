@@ -6,6 +6,7 @@ import { afterEach, describe, it } from "node:test";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
+import type { AttentionRaised } from "../src/protocol/commands.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 
 async function fixture(root?: string) {
@@ -40,6 +41,23 @@ describe("attention inbox", () => {
     assert.equal(host.list().find((session) => session.id === id)?.outputPreview, "first line continues");
     assert.deepEqual(host.list().map((session) => session.id), before);
     assert.ok(before.includes(other));
+  });
+
+  it("announces each new raise to subscribers until they unsubscribe", async () => {
+    const { backend, host, id } = await fixture();
+    const raised: AttentionRaised[] = [];
+    const unsubscribe = host.onAttentionRaised((event) => raised.push(event));
+
+    await complete(host, backend, id);
+    await complete(host, backend, id, "error");
+    unsubscribe();
+    await complete(host, backend, id);
+
+    assert.deepEqual(raised.map(({ sessionId, reason }) => ({ sessionId, reason })), [
+      { sessionId: id, reason: "Completed" },
+      { sessionId: id, reason: "Failed" },
+    ]);
+    assert.ok(raised[1]!.version > raised[0]!.version);
   });
 
   it("qualifies parent outcomes and acknowledges only the observed version", async () => {

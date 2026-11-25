@@ -1,4 +1,5 @@
 import type { Entry } from "../../../src/client/reduce.ts";
+import { producerKey } from "../../../src/client/subagent-tree.ts";
 
 /**
  * Which rows belong to a Subagent, and which belong to the Agent Session itself.
@@ -12,7 +13,7 @@ import type { Entry } from "../../../src/client/reduce.ts";
  * the Subagent actually did belongs to the Agents tab: interleaved in the transcript it read as the
  * session's own work, and with two Subagents at once it read as nobody's in particular.
  *
- * DOM-free like `search.ts`, so the TUI can draw the same split rather than inventing a second rule.
+ * DOM-free like `search.ts`, so another front-end can draw the same split rather than inventing a second rule.
  */
 
 const SUBAGENT_PREFIX = "subagent:";
@@ -23,23 +24,14 @@ const SUBAGENT_PREFIX = "subagent:";
  */
 const ENQUIRY_PREFIX = "enquiry:";
 
-/** The key of the Entry a Subagent's own row uses, given the id its rows are attributed to. */
-export function subagentKey(subagentId: string): string {
-  return `${SUBAGENT_PREFIX}${subagentId}`;
-}
-
-/** The Subagent a row belongs to, or undefined for the Agent Session's own work. */
-export function producerKey(entry: Entry): string | undefined {
-  return "producer" in entry && entry.producer ? subagentKey(entry.producer.subagentId) : undefined;
-}
-
 /**
- * The rows the Agent Session produced itself, and one row per Subagent it started.
+ * The rows one producer made itself, and one row per Subagent it started. `producer` is a Subagent's
+ * key, or undefined for the Agent Session — so a nested Subagent's card sits in its parent's rows.
  *
  * Two things are dropped, for the same reason: neither tells a reader anything the Subagent's own
  * card does not.
  *
- * The first is everything a Subagent produced — its work belongs to the Agents tab.
+ * The first is everything another producer made — a Subagent's work belongs to its own view.
  *
  * The second is the tool call that spawned it. A Subagent shares its id with that call, so the
  * transcript holds two Entries for it (ADR 0015): the `tool` row is what the parent asked for, and
@@ -61,6 +53,7 @@ export function producerKey(entry: Entry): string | undefined {
 export function ownKeys(
   keys: readonly string[],
   getEntry: (key: string) => Entry | undefined,
+  producer?: string,
 ): string[] {
   // Keys alone answer this: a Subagent's Entry key is `subagent:<id>` and its spawning call's is
   // `tool:<id>`, so the pairing is visible without reading a single Entry. An Enquiry's is the same
@@ -77,23 +70,9 @@ export function ownKeys(
     if (spawners.has(key)) return false;
     const entry = getEntry(key);
     // A key with no Entry cannot happen while the transcript is append-only, but dropping it here
-    // would hide a row for a reason nobody could see. Kept, and rendered as whatever it turns out
+    // would hide a row for a reason nobody could see. Kept in the session's rows, and rendered as whatever it turns out
     // to be.
-    return entry === undefined || producerKey(entry) === undefined;
-  });
-}
-
-/**
- * The rows one Subagent produced, in the order they arrived — the whole of its own transcript: its
- * messages, its thinking and its tool calls, and nothing of its parent's.
- */
-export function memberKeys(
-  keys: readonly string[],
-  getEntry: (key: string) => Entry | undefined,
-  subagent: string,
-): string[] {
-  return keys.filter((key) => {
-    const entry = getEntry(key);
-    return entry !== undefined && producerKey(entry) === subagent;
+    if (entry === undefined) return producer === undefined;
+    return producerKey(entry) === producer;
   });
 }

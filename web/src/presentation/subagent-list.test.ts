@@ -3,15 +3,19 @@ import { describe, it } from "node:test";
 
 import type { Entry, SubagentStatus } from "../../../src/client/reduce.ts";
 import { entryKey } from "./entry-key.ts";
-import { activeKeys, ordered, subagentKeys, timing } from "./subagent-list.ts";
+import { activeKeys, ordered, runningCalls, subagentKeys, subtitle, timing } from "./subagent-list.ts";
 
-const subagent = (id: string, status: SubagentStatus): Entry => ({
+const subagent = (id: string, status: SubagentStatus, parent?: string): Entry => ({
   kind: "subagent",
   id,
   name: "Explore",
   status,
   startedAt: "2026-01-01T00:00:00.000Z",
+  ...(parent === undefined ? {} : { producer: { subagentId: parent } }),
 });
+
+/** `ordered` without the depths, for the cases about order alone. */
+const keysOf = (rows: { key: string }[]) => rows.map((row) => row.key);
 
 /** A transcript is a list of entries; its keys are what the store hands a component. */
 function transcript(...entries: Entry[]) {
@@ -55,7 +59,7 @@ describe("ordering the Subagents for reading", () => {
       subagent("blocked", "waiting"),
       subagent("working", "running"),
     );
-    assert.deepEqual(ordered(subagentKeys(keys, getEntry), getEntry), [
+    assert.deepEqual(keysOf(ordered(subagentKeys(keys, getEntry), getEntry)), [
       "subagent:working",
       "subagent:blocked",
       "subagent:done",
@@ -68,7 +72,7 @@ describe("ordering the Subagents for reading", () => {
       subagent("middle", "running"),
       subagent("newest", "running"),
     );
-    assert.deepEqual(ordered(subagentKeys(keys, getEntry), getEntry), [
+    assert.deepEqual(keysOf(ordered(subagentKeys(keys, getEntry), getEntry)), [
       "subagent:newest",
       "subagent:middle",
       "subagent:oldest",
@@ -81,7 +85,7 @@ describe("ordering the Subagents for reading", () => {
       subagent("second", "complete"),
       subagent("third", "aborted"),
     );
-    assert.deepEqual(ordered(subagentKeys(keys, getEntry), getEntry), [
+    assert.deepEqual(keysOf(ordered(subagentKeys(keys, getEntry), getEntry)), [
       "subagent:third",
       "subagent:second",
       "subagent:first",
@@ -95,7 +99,7 @@ describe("ordering the Subagents for reading", () => {
    */
   it("reorders when a status changes, with the key list untouched", () => {
     const before = transcript(subagent("a", "running"), subagent("b", "complete"));
-    assert.deepEqual(ordered(subagentKeys(before.keys, before.getEntry), before.getEntry), [
+    assert.deepEqual(keysOf(ordered(subagentKeys(before.keys, before.getEntry), before.getEntry)), [
       "subagent:a",
       "subagent:b",
     ]);
@@ -103,7 +107,7 @@ describe("ordering the Subagents for reading", () => {
     // Same keys, same length, same order — only the statuses have swapped.
     const after = transcript(subagent("a", "complete"), subagent("b", "running"));
     assert.deepEqual(after.keys, before.keys, "the key list must be identical for this to prove anything");
-    assert.deepEqual(ordered(subagentKeys(after.keys, after.getEntry), after.getEntry), [
+    assert.deepEqual(keysOf(ordered(subagentKeys(after.keys, after.getEntry), after.getEntry)), [
       "subagent:b",
       "subagent:a",
     ]);
@@ -112,7 +116,7 @@ describe("ordering the Subagents for reading", () => {
   it("ranks a key whose Entry has gone last rather than dropping it", () => {
     const { keys } = transcript(subagent("a", "running"), subagent("gone", "running"));
     const getEntry = (key: string) => (key === "subagent:gone" ? undefined : subagent("a", "running"));
-    const result = ordered(keys, getEntry);
+    const result = keysOf(ordered(keys, getEntry));
     assert.equal(result.length, 2, "a Subagent must not vanish from the list without saying so");
     assert.equal(result.at(-1), "subagent:gone");
   });
@@ -123,6 +127,54 @@ describe("ordering the Subagents for reading", () => {
     const copy = [...spawned];
     ordered(spawned, getEntry);
     assert.deepEqual(spawned, copy, "sorting in place would reorder a cached membership list");
+  });
+});
+
+describe("ordering nested Subagents as a tree", () => {
+  it("puts each child directly under its parent, one level deeper", () => {
+    const { keys, getEntry } = transcript(
+      subagent("a", "running"),
+      subagent("b", "running"),
+      subagent("a1", "complete", "a"),
+      subagent("a2", "running", "a"),
+      subagent("a2x", "running", "a2"),
+    );
+    assert.deepEqual(ordered(subagentKeys(keys, getEntry), getEntry), [
+      { key: "subagent:b", depth: 0 },
+      { key: "subagent:a", depth: 0 },
+      { key: "subagent:a2", depth: 1 },
+      { key: "subagent:a2x", depth: 2 },
+      { key: "subagent:a1", depth: 1 },
+    ]);
+  });
+
+  it("puts a Subagent whose parent is missing at the root", () => {
+    const { keys, getEntry } = transcript(subagent("orphan", "running", "gone"));
+    assert.deepEqual(ordered(subagentKeys(keys, getEntry), getEntry), [{ key: "subagent:orphan", depth: 0 }]);
+  });
+});
+
+describe("a Subagent's own running Background Calls", () => {
+  it("counts running calls it started, and nobody else's", () => {
+    const call = (id: string, status: "running" | "complete", parent?: string): Entry => ({
+      kind: "background_call",
+      id,
+      tool: "Bash",
+      status,
+      startedAt: "t",
+      ...(parent === undefined ? {} : { producer: { subagentId: parent } }),
+    });
+    const { keys, getEntry } = transcript(
+      subagent("a", "running"),
+      subagent("a1", "running", "a"),
+      call("c1", "running", "a"),
+      call("c2", "running", "a"),
+      call("c3", "complete", "a"),
+      call("c4", "running", "a1"),
+      call("c5", "running"),
+    );
+    assert.equal(runningCalls(keys, getEntry, "subagent:a"), 2);
+    assert.equal(runningCalls(keys, getEntry, "subagent:a1"), 1);
   });
 });
 
@@ -200,5 +252,24 @@ describe("when a Subagent started or stopped", () => {
 
   it("says nothing rather than something wrong for an unparseable time", () => {
     assert.equal(of(timed("running", "")).at, "");
+  });
+});
+
+describe("what a Subagent row says under its title", () => {
+  const models = [{ id: "haiku", provider: "anthropic", label: "Haiku" }];
+  const entry = (fields: Partial<Extract<Entry, { kind: "subagent" }>>): Extract<Entry, { kind: "subagent" }> =>
+    ({ kind: "subagent", id: "a", name: "Explore", status: "running", startedAt: "", ...fields });
+
+  it("names the type, the model by its label, and the effort", () => {
+    assert.equal(subtitle(entry({ description: "read", model: "haiku", effort: "low" }), models), "Explore · Haiku · low");
+  });
+
+  it("prints the raw id of a model the list cannot describe", () => {
+    assert.equal(subtitle(entry({ description: "read", model: "claude-opus-9" }), models), "Explore · claude-opus-9");
+  });
+
+  it("leaves out the type when it is already the title", () => {
+    assert.equal(subtitle(entry({ model: "haiku", effort: "low" }), models), "Haiku · low");
+    assert.equal(subtitle(entry({}), models), undefined);
   });
 });

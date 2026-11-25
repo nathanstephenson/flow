@@ -49,9 +49,9 @@ other thing that outlives a turn and the one this is most often mistaken for.
 Everything billed for an Agent Session so far, across every model, Subagents included. Distinct
 from how full the Conversation Context is: Spend is cumulative and unbounded, occupancy is a
 fraction of a window, and a session routinely bills many times what its window holds. One known
-exception, stated rather than fixed (ADR 0020): naming an Agent Session or drafting Git publish text
-bills the Summary Model in a Backend Session that is thrown away, so those calls appear in no
-Agent Session's Spend.
+exception, stated rather than fixed (ADR 0020): naming an Agent Session or suggesting commit and
+Pull Request text bills the Summary Model in a Backend Session that is thrown away, so those calls
+appear in no Agent Session's Spend.
 _Avoid_: usage, cost, tokens, context
 
 **Presentation Transcript**:
@@ -172,13 +172,14 @@ Never reapplied on Revive and never inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
 **Summary Model**:
-The model the Session Host uses to name an Agent Session and draft Git publish text, chosen per
-Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's Summary Model,
-without the Default Effort. Reached through an ordinary Backend Adapter, in a throwaway Backend
-Session that holds no Presentation Transcript, runs no tools, and is disposed of when it answers —
-so it is not an Agent Session and is never Revived (ADR 0020). Git publish text and suggested branch
-names are shown for editing only when its owner opens Publish; the model never renames branches,
-commits, or pushes changes.
+The model the Session Host uses to name an Agent Session and suggest commit and Pull Request text,
+chosen per Backend Adapter for the machine. An Agent Session uses only its own Backend Adapter's
+Summary Model, without the Default Effort. Reached through an ordinary Backend Adapter, in a
+throwaway Backend Session that holds no Presentation Transcript, runs no tools, and is disposed of
+when it answers — so it is not an Agent Session and is never Revived (ADR 0020). It writes a commit
+message, a branch name, or a Pull Request title and body only when its owner clicks Suggest, and the
+text fills only empty fields. The owner commits, pushes, and creates the Pull Request as three
+separate steps; the model never renames branches, commits, or pushes changes.
 _Avoid_: naming model, title model, small model, haiku
 
 **Session Host**:
@@ -306,6 +307,16 @@ Explicit human Shells and host-owned Git operations remain distinct.
 _Avoid_: workspace, project, repo — a Project is a distinct thing, defined below, and calling a
 Scope one confuses a binding with a candidate for it.
 
+**Read-only Scope**:
+A Scope that its Agent Session can read but not write. It is fixed when the Agent Session is
+created, and only the Project Root can be one. A Fork keeps it. It refuses a Worktree, Git writes,
+a Tour and a file Rewind. Under Bubblewrap and a per-session Sandbox the Scope is mounted read-only.
+Under unrestricted mode and a Shared Sandbox it is best effort: the agent loses its file-writing
+tools and Bash, and the UI says that this is not a boundary. A read-only Agent Session that creates
+an Agent Session outside a Project gives it a Read-only Scope too. Human Shells are unchanged. See
+ADR 0046.
+_Avoid_: scopeless, sandbox
+
 **Project**:
 A directory its owner has opted into starting Agent Sessions from. A *candidate* Scope, not a Scope:
 it exists before any Agent Session, outlives every one bound to it, and may have several at once.
@@ -319,10 +330,41 @@ that opting in is a click rather than a typed path. Discovered, never configured
 as a Scope.
 _Avoid_: project, suggestion, available project
 
+**Workflow Schedule**:
+A saved Workflow Definition ID, fixed typed inputs, opted-in Project, MCP selection, optional fresh
+Worktree policy, recurrence and overlap limit. Enabling waits a full interval or until the next future
+local daily time in its saved IANA timezone. Re-enabling resets the interval anchor, so pausing and
+re-enabling shifts its timing; unrelated edits preserve it. Intervals measure elapsed time; daily
+times skip gaps and choose the first fold occurrence. Startup admits only future due times, with no
+catch-up even one second after a due time. Pausing or deleting affects only future admission.
+_Avoid_: cron, timer, job
+
+**Workflow Occurrence**:
+One due time and immutable launch configuration, whether admitted, missed, capacity-skipped or failed
+before execution. Each admitted occurrence retains the latest root and reachable called definitions.
+Before scheduled effects, all agent steps in those definitions, including unreached branches, must
+pass model and Effort catalog validation. A cold catalog permits a metadata-only Backend Session
+probe, never an Agent Session, Presentation Transcript, Summary Model or paid inference. Definitions
+without agent steps need no backend. The Session Host owns execution independently of Agent Sessions. Agent work, human input or
+recovery attaches one Agent Session; successful code/MCP work needs none and requests no model summary.
+Code/MCP retain their captured runtime isolation. Newly attached or Revived Backend Sessions use
+current Settings: a change from Sandbox to none makes agent work unrestricted while code/MCP remain
+in their captured Sandbox environment.
+Terminal history lasts seven days after completion; active/input/recovery work does not expire.
+Agent Session transcripts and Spend follow their own lifecycle, not occurrence history retention.
+_Avoid_: Agent Session, job
+
+**Workflow Execution**:
+An independent execution slot owned by one Agent Session for manual work or one Workflow Occurrence
+for scheduled work. Optional Agent Session association never relocates a scheduled checkpoint.
+Retained definitions, nested invocations, attempts and explicit recovery rules apply to both owners.
+_Avoid_: parent turn, Background Call
+
 **Worktree**:
 A Scope the Session Host made, by cutting a branch from a Project. Owned by the host rather than by
-whoever asked for it: it is chosen when an Agent Session is created, never entered later, and it is
-removed when that Agent Session is Reaped — but only while it is clean, so uncommitted work survives.
+whoever asked for it. It is chosen before work starts, and is removed on Agent Session Reap or
+sessionless occurrence history expiry only when clean and safe. Lazy Agent Session attachment adopts
+the existing Scope, never creates another Worktree. Uncommitted work survives.
 Unmerged branches survive Reaping; merged local branches may be removed with the Worktree.
 _Avoid_: checkout, copy, clone, workspace — and note it is a *kind of* Scope, not an alternative to
 one, so an Agent Session bound to a Worktree is bound for its whole life like any other.
@@ -352,6 +394,16 @@ populated screen. Lossy by design — it is not a Presentation Transcript, and i
 disk.
 _Avoid_: transcript, history, log, buffer
 
+**Stack**:
+An ordered list of branches on a trunk that `gh stack` registers in the repository of a Scope. The
+registration is in the common Git directory, so all worktrees of a clone share it. Flow shows only
+the Stack that `gh stack view` reports for the current branch. It does not infer a Stack from Pull
+Request bases, from commit ancestry or from stacks on GitHub, and it does not show a Stack that is
+registered only in another clone (ADR 0044). Each shown Stack permits every Stack action. To create
+a Stack, the owner chooses a trunk and an ordered list of local branches that are not in another
+Stack; the trunk cannot also be a branch of the Stack.
+_Avoid_: inferred stack, stack graph, candidate
+
 **Settings**:
 Values the Session Host reads from its state root, governing every Agent Session on the machine
 rather than one Scope. Read leniently and written strictly: a value it cannot use costs only its own
@@ -375,6 +427,15 @@ checking is not permission to launch unrestricted work. Changes affect new Backe
 (including Revive), new Workflow Executions and new local stdio MCP clients; existing work retains
 its policy. Agent Workflow Steps still inherit their owning Backend Session's boundary. Worker
 process separation stays enabled in both modes; HTTP MCP and network authority are unchanged.
+
+`worktrees.always` in **Settings → Projects → Worktrees** makes the web New Agent Session page start
+every Agent Session in a Worktree and hides its choice. Forks and `session_create`
+still choose for themselves.
+
+`worktrees.updateSource` fast-forwards the Source Branch from its upstream in the Project before
+any Worktree is cut, for Agent Sessions and scheduled Workflow Occurrences. If that fails, the
+Worktree is cut from the local branch: an Agent Session gets a `warn` notice with git's message, and
+a Workflow Occurrence gets a generic `warning`.
 _Avoid_: config, preferences, options, profile
 
 **Effort**:

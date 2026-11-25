@@ -202,6 +202,13 @@ describe("Session Host transport", () => {
    * The same catalogue for a Scope with no Agent Session in it — what the New Agent Session view
    * asks, and the half `list_skills` above cannot answer because it reads a live Backend Session.
    */
+  it("answers the Plan Limits of each backend that has them", async () => {
+    const response = await fetch(`${running.url}/api/plan-limits`, { headers: { authorization: `Bearer ${token}` } });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+  });
+
   describe("the Skill catalogue for a Scope", () => {
     const get = async (path: string) =>
       await fetch(`${running.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
@@ -348,6 +355,31 @@ describe("Session Host transport", () => {
 
     const sessions = await client.listSessions();
     assert.equal(sessions[0]?.id, sessionId);
+  });
+
+  it("streams new Attention raises", async () => {
+    const sessionId = await client.command<string>({ type: "create", scope: "/tmp/scope", backend: "fake" });
+    const controller = new AbortController();
+    const response = await fetch(`${running.url}/api/attention/events`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+
+    await client.command({ type: "send", sessionId, text: "hello", when: "now" });
+    backend.latest.completeTurn("complete");
+
+    const reader = response.body!.getReader();
+    const { value } = await reader.read();
+    controller.abort();
+    const raised = JSON.parse(new TextDecoder().decode(value).replace(/^data: /, ""));
+    assert.equal(raised.sessionId, sessionId);
+    assert.equal(raised.reason, "Completed");
+  });
+
+  it("refuses an unauthenticated Attention stream", async () => {
+    const response = await fetch(`${running.url}/api/attention/events`);
+    assert.equal(response.status, 401);
   });
 
   it("replays from `since` and then follows live", async () => {

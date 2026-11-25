@@ -1,7 +1,10 @@
-import type { TurnEndReason } from "../../protocol/events.ts";
+import type { EffortLevel, TurnEndReason } from "../../protocol/events.ts";
 
-/** What a Subagent was called and asked to do, as the spawning tool call reported it. */
-export type SubagentBrief = { name: string; description?: string };
+/** What a Subagent was called and asked to do, as the spawning tool call reported it, and what it runs on. */
+export type SubagentBrief = { name: string; description?: string; model?: string; effort?: EffortLevel };
+
+/** A Subagent's brief and the Subagent that spawned it, `""` for the Agent Session's own model. */
+type Spawned = { brief: SubagentBrief; parent: string };
 
 /**
  * The Subagents open in one turn, the turn end held back while any of them is, and the backgrounded
@@ -11,7 +14,8 @@ export type SubagentBrief = { name: string; description?: string };
  * subagent cannot be told apart from the one that ends the turn. (ADR 0016 records that CLI 2.1.247
  * emits no such result in the first place — one per parent turn and no more — so the holding below
  * is belt to the bookkeeping's braces. Kept because that is one version on the happy path, and says
- * nothing about a nested Subagent, an interrupt, or an error.) Ending on the first would clear
+ * nothing about an interrupt or an error.) A nested Subagent holds the turn like any other, unless
+ * an ancestor is backgrounded: work started by backgrounded work is backgrounded too. Ending on the first would clear
  * `turnInFlight` in the Session Host, and the Steering Queue would dispatch the next message into a
  * turn that is still running — two messages in one turn, which reads as the agent ignoring the first.
  *
@@ -20,7 +24,7 @@ export type SubagentBrief = { name: string; description?: string };
  * reason StreamedMessage lives apart.
  */
 export class Subagents {
-  private readonly open = new Map<string, SubagentBrief>();
+  private readonly open = new Map<string, Spawned>();
   /**
    * The Subagents running detached, which are open without holding anything (ADR 0016).
    *
@@ -28,7 +32,7 @@ export class Subagents {
    * `open` answers "may this turn end", and this answers "whose card is still running". Only the
    * first is turn-scoped, which is why `clear` empties one and keeps the other.
    */
-  private readonly detached = new Map<string, SubagentBrief>();
+  private readonly detached = new Map<string, Spawned>();
   /**
    * `task_id` to the `callId` that spawned it, for the `task_notification` that closes a detached
    * Subagent — it is the only message carrying the task id alone, and ADR 0015 keeps `callId` the
@@ -37,8 +41,14 @@ export class Subagents {
   private readonly tasks = new Map<string, string>();
   private held: TurnEndReason | undefined;
 
-  spawn(callId: string, brief: SubagentBrief): void {
-    this.open.set(callId, brief);
+  /** Record a Subagent. One spawned under detached work is detached from the start, and holds nothing. */
+  spawn(callId: string, brief: SubagentBrief, parent = ""): void {
+    (this.isDetached(parent) ? this.detached : this.open).set(callId, { brief, parent });
+  }
+
+  /** The Subagent that spawned this one, or `""` for one the Agent Session's own model spawned. */
+  parentOf(callId: string): string {
+    return this.spawned(callId)?.parent ?? "";
   }
 
   /**
@@ -47,7 +57,17 @@ export class Subagents {
    * a Subagent returns needs this back — the returning `tool_result` carries only an id.
    */
   describe(callId: string): SubagentBrief | undefined {
-    return this.open.get(callId) ?? this.detached.get(callId);
+    return this.spawned(callId)?.brief;
+  }
+
+  /** Correct what an open or detached Subagent runs on. Answers the new brief, or undefined when nothing changed. */
+  refine(callId: string, patch: Pick<SubagentBrief, "model" | "effort">): SubagentBrief | undefined {
+    const spawned = this.spawned(callId);
+    if (spawned === undefined) return undefined;
+    const { brief } = spawned;
+    if ((patch.model ?? brief.model) === brief.model && (patch.effort ?? brief.effort) === brief.effort) return undefined;
+    spawned.brief = { ...brief, ...patch };
+    return spawned.brief;
   }
 
   /**
@@ -55,18 +75,28 @@ export class Subagents {
    *
    * Answers the same question `returned` does — the turn end now free to fire — because a launch
    * receipt releases a held end for exactly the reason a real one does: nothing else is waiting.
+   *
+   * Its open descendants are detached with it, since they now have a detached ancestor.
    */
   background(callId: string): TurnEndReason | undefined {
-    const brief = this.open.get(callId);
-    if (brief === undefined) return undefined;
+    const spawned = this.open.get(callId);
+    if (spawned === undefined) return undefined;
     this.open.delete(callId);
-    this.detached.set(callId, brief);
+    this.detached.set(callId, spawned);
+    for (const [id, descendant] of this.open) {
+      if (!this.isDetached(id)) continue;
+      this.open.delete(id);
+      this.detached.set(id, descendant);
+    }
     return this.release();
   }
 
-  /** Whether this Subagent's work survives the parent turn ending. */
+  /** Whether this Subagent's work survives the parent turn ending: it or an ancestor is detached. */
   isDetached(callId: string): boolean {
-    return this.detached.has(callId);
+    for (let at = callId; at !== ""; at = this.spawned(at)?.parent ?? "") {
+      if (this.detached.has(at)) return true;
+    }
+    return false;
   }
 
   /** Remember which Subagent a task id belongs to. Ignores a task that is not one's. */
@@ -125,6 +155,10 @@ export class Subagents {
     this.clear();
     this.detached.clear();
     this.tasks.clear();
+  }
+
+  private spawned(callId: string): Spawned | undefined {
+    return this.open.get(callId) ?? this.detached.get(callId);
   }
 
   private release(): TurnEndReason | undefined {

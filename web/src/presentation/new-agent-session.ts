@@ -23,6 +23,7 @@ export type NewAgentSessionForm = {
   effort: EffortLevel | undefined;
   permissionMode?: AgentPermissionMode;
   inWorktree: boolean;
+  readOnly?: boolean;
   /** Whether the Scope is a repository. Asked, not assumed — the field is free text. */
   repository: boolean;
   /** The branch to cut from: the chosen one, or wherever the repository is now. `""` when unknown. */
@@ -72,6 +73,7 @@ export function createCommandFor(
     ...(form.modelId === undefined ? {} : { modelId: form.modelId }),
     ...(form.effort === undefined ? {} : { effort: form.effort }),
     ...(form.permissionMode === undefined ? {} : { permissionMode: form.permissionMode }),
+    ...(form.readOnly ? { readOnly: true } : {}),
     /*
      * All three conditions, every time.
      *
@@ -81,7 +83,7 @@ export function createCommandFor(
      * or from a branch the answer for the previous Scope named. `base` is empty on a detached HEAD
      * and before the branch list answers, and neither is a branch to cut from.
      */
-    ...(form.inWorktree && form.repository && form.base !== ""
+    ...(!form.readOnly && form.inWorktree && form.repository && form.base !== ""
       ? { worktree: { from: form.base } }
       : {}),
   };

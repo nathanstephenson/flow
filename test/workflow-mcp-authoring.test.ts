@@ -9,7 +9,7 @@ import type { McpConnection } from '../src/protocol/mcp.ts';
 import { UnknownMcpTool, WorkflowMcpAuthoringService, type WorkflowMcpAuthoringOptions } from '../src/daemon/workflow-mcp-authoring.ts';
 import { workflowMcpAuthoringRoutes } from '../src/daemon/workflow-mcp-authoring-routes.ts';
 import { connectionIdentity } from '../src/daemon/workflow-mcp.ts';
-import { workflowAuthoringDirectory, workflowAuthoringScope } from '../src/daemon/workflow-authoring-scope.ts';
+import { checkWorkflowAuthoringDirectory, workflowAuthoringDirectory, workflowAuthoringScope } from '../src/daemon/workflow-authoring-scope.ts';
 import { WorkflowAuthoringScopeChecks } from '../src/daemon/workflow-authoring-scope-checks.ts';
 
 const connection = (id = 'default', enabledByDefault = true): Extract<McpConnection, { transport: 'http' }> => ({ id, name: id, enabledByDefault, transport: 'http', url: `https://${id}.example.test/mcp`, oauth: false, headers: {} });
@@ -266,7 +266,9 @@ test('a failed default and incompatible sibling schema do not hide valid tools; 
   } finally { await f.cleanup(); }
 });
 
-test('all unavailable configured defaults get individual diagnostics within the catalogue limit', async () => {
+test('all unavailable configured defaults get individual diagnostics within the catalogue byte limit', async t => {
+  t.mock.method(WorkflowAuthoringScopeChecks.prototype, 'read', async (path: string) => workflowAuthoringDirectory(realpathSync(path)));
+  t.mock.method(WorkflowAuthoringScopeChecks.prototype, 'check', async (directory: ReturnType<typeof workflowAuthoringDirectory>) => checkWorkflowAuthoringDirectory(directory));
   const f = fixture(Array.from({ length: 100 }, (_, i) => connection(`unavailable${i}`)));
   try {
     f.configure(fake => { fake.failed = true; });

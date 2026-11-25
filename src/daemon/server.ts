@@ -1,12 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Duplex } from "node:stream";
+import { Readable, type Duplex } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { homedir } from "node:os";
 
 import { mediaTypeOf } from "../protocol/attachments.ts";
-import type { Command } from "../protocol/commands.ts";
+import type { AttentionRaised, Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
+import { gh } from "./github.ts";
+import { githubImage } from "./github-image.ts";
 import { workflowRoutes } from './workflow-routes.ts';
+import { workflowScheduleRoutes } from './workflow-schedule-routes.ts';
 import { workflowBuilderRoutes } from './workflow-builder-routes.ts';
 import { workflowMcpAuthoringRoutes } from './workflow-mcp-authoring-routes.ts';
 import { hostControlRoute, type HostControl } from './host-control-routes.ts';
@@ -64,6 +69,7 @@ export type ServeOptions = {
   control?: HostControl;
   workflows?: WorkflowStore;
   workflowExecutions?: WorkflowExecutionService;
+  workflowSchedules?: import('./workflow-schedules.ts').WorkflowScheduleService;
   workflowBuilders?: import('./workflow-builder.ts').WorkflowBuilderService;
   workflowMcpAuthoring?: import('../protocol/workflow-mcp-authoring.ts').WorkflowMcpAuthoring;
   secrets?: SecretStore;
@@ -83,7 +89,7 @@ export type ServeOptions = {
   config?: ConfigStore;
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
-   * Optional external browser gate. The daemon bearer token remains valid for explicit CLI/TUI
+   * Optional external browser gate. The daemon bearer token remains valid for explicit CLI
    * clients, but browser cookies and navigation are owned exclusively by this gate when present.
    */
   oidc?: OidcGate;
@@ -377,6 +383,7 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
   }
 
   if (await workflowMcpAuthoringRoutes(request, response, url.pathname, options.workflowMcpAuthoring)) return;
+  if (await workflowScheduleRoutes(request, response, url, options.workflowSchedules, options.workflowExecutions)) return;
   if (await workflowBuilderRoutes(request, response, url.pathname, options.workflowBuilders)) return;
   if (await workflowExecutionRoutes(request, response, url.pathname, options.workflowExecutions, options.workflows)) return;
   if (await workflowRoutes(request, response, url.pathname, options.workflows, options.secrets, options.workflowExecutions)) return;
@@ -431,6 +438,16 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
 
   if (request.method === "GET" && url.pathname === "/api/sessions") {
     send(response, 200, options.host.list());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/spend") {
+    send(response, 200, options.host.spendSummary());
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/plan-limits") {
+    send(response, 200, await options.host.planLimits(options.config?.projectRoot() ?? options.scope ?? process.cwd()));
     return;
   }
 
@@ -508,9 +525,10 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
    *
    * Its own endpoint rather than more of `/api/config`, and a query rather than state, for the
    * reason `/api/directories` is (ADR 0011): the answer changes outside Flow — a `git
-   * branch` in a terminal, a `git fetch` — so there is nothing worth folding into the document
+   * branch` in a terminal, a `git fetch` — so the list of branches is not folded into the document
    * every client polls, and a cache would need a filesystem watcher in order to be more often
-   * wrong.
+   * wrong. The Git State of an Agent Session's Scope is different: the Session Host holds it and
+   * reads it again at known points, and `SessionSummary.git` carries it (ADR 0043).
    *
    * Answers for a *Scope* rather than for an Agent Session, because the New Agent Session view
    * has to ask before there is a session to ask about: picking the branch to cut a worktree from
@@ -623,6 +641,16 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/attention/events") {
+    streamAttention(
+      response,
+      options.host,
+      authentication.kind === "browser" ? options.oidc : undefined,
+      authentication.kind === "browser" ? authentication.sessionId : undefined,
+    );
+    return;
+  }
+
   const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
@@ -649,6 +677,21 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
   const attachmentMatch = /^\/api\/sessions\/([^/]+)\/attachments\/([^/]+)$/.exec(url.pathname);
   if (request.method === "GET" && attachmentMatch) {
     sendAttachment(response, options.store, attachmentMatch[1] ?? "", attachmentMatch[2] ?? "");
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/github-image") {
+    const image = await githubImage(url.searchParams.get("url") ?? "", () => gh(homedir(), ["auth", "token"])).catch(() => null);
+    if (!image?.body) {
+      send(response, 404, { error: "Image not found." });
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": image.headers.get("content-type") ?? "",
+      "x-content-type-options": "nosniff",
+      "cache-control": "private, max-age=300",
+    });
+    Readable.fromWeb(image.body as WebReadableStream).pipe(response);
     return;
   }
 
@@ -1092,11 +1135,38 @@ function streamEvents(
   });
 }
 
+function streamAttention(
+  response: ServerResponse,
+  host: SessionHost,
+  oidc?: OidcGate,
+  browserSessionId?: string,
+): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  response.flushHeaders();
+  const unsubscribe = host.onAttentionRaised((raised: AttentionRaised) => {
+    response.write(`data: ${JSON.stringify(raised)}\n\n`);
+  });
+  const heartbeat = setInterval(() => response.write(": keepalive\n\n"), 15_000);
+  heartbeat.unref();
+  const detachAuth = oidc && browserSessionId
+    ? oidc.registerConnection(browserSessionId, () => response.end())
+    : undefined;
+  response.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    detachAuth?.();
+  });
+}
+
 type RequestAuthentication =
   | { kind: "bearer" }
   | { kind: "browser"; sessionId: string };
 
-/** Bearer access is deliberately independent of OIDC so remote CLI/TUI clients keep working. */
+/** Bearer access is deliberately independent of OIDC so remote CLI clients keep working. */
 async function authenticateRequest(
   request: IncomingMessage,
   options: ServeOptions,
@@ -1170,7 +1240,7 @@ a{display:inline-flex;align-items:center;justify-content:center;width:100%;heigh
 }
 
 /**
- * Same-origin only. A request with no Origin header is a non-browser client (the TUI, curl), which
+ * Same-origin only. A request with no Origin header is a non-browser client (the CLI, curl), which
  * a hostile page cannot forge on the user's behalf, so it is not what this check defends against.
  */
 function originAllowed(request: IncomingMessage, publicAppUrl?: string): boolean {

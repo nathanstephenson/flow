@@ -50,6 +50,11 @@ export type Draft = { text: string; attachments: PendingAttachment[] };
 /** One Draft, shared by every composer nobody has typed into. */
 export const EMPTY_DRAFT: Draft = { text: "", attachments: [] };
 
+export function appendDraftText(text: string, block: string): string {
+  if (text === "") return block;
+  return `${text}${text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n"}${block}`;
+}
+
 /**
  * Replace a held Draft, and say which object URLs that dropped.
  *

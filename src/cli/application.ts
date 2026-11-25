@@ -5,7 +5,6 @@ import { readHost, oidcFingerprint, type HostIdentity } from '../daemon/ownershi
 import { startRuntime } from '../daemon/runtime.ts';
 import { join, resolve } from "node:path";
 
-import { ConfigStore } from "../daemon/config-store.ts";
 import { embeddedWorkflowRuntime } from '../workflows/runtime-asset.ts';
 import { fileURLToPath } from 'node:url';
 import { getAsset, isSea } from 'node:sea';
@@ -20,7 +19,6 @@ import { initialState, reduce, type ViewState } from "../client/reduce.ts";
 import type { EffortLevel } from "../protocol/events.ts";
 import type { ImportableConversation } from "../protocol/imports.ts";
 import type { AssetManifest } from "../web/assets.ts";
-import { runTui } from "../tui/app.ts";
 import { updateUnsupportedReason, type Installation } from './install-guard.ts';
 
 type WebUpdateSupport = {
@@ -33,7 +31,6 @@ let webUpdateSupport: WebUpdateSupport | undefined;
 const USAGE = `usage:
   flow --version                                        print the installed version
   flow update [--force]                                 update a private global npm installation
-  flow tui   [--scope DIR] [--backend claude|pi|fake]   interactive terminal client
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow serve start|status|stop|restart [--force]          control a background Session Host
   flow list                                             list Agent Sessions
@@ -42,7 +39,6 @@ const USAGE = `usage:
   flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
                                                                one prompt, then exit
 
-  tui without --scope uses the Project Root from config.json, else this directory.
   A one-shot prompt always uses this directory unless --scope names another.`;
 
 type Daemon = { url: string; token: string };
@@ -129,20 +125,6 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (command === "tui") {
-    const { connection, stop } = await clientConnection();
-    try {
-      await runTui({
-        connection,
-        scope: values.scope ?? configuredScope() ?? process.cwd(),
-        ...(values.backend === undefined ? {} : { backend: values.backend }),
-      });
-    } finally {
-      await stop();
-    }
-    return 0;
-  }
-
   if (command === "list") {
     const { connection, stop } = await clientConnection();
     try {
@@ -166,22 +148,6 @@ async function main(): Promise<number> {
     return 1;
   }
   return await oneShot(prompt, values);
-}
-
-/**
- * The Project Root, for a client that named no Scope.
- *
- * Read straight off disk rather than asked of the daemon, because the TUI may be talking to one it
- * did not start, and `/api/config`'s `scope` falls back to *that process's* working directory —
- * which is not this reader's. Only the configured root is a safe answer to borrow; the fallback to
- * `process.cwd()` has to happen here, where the cwd is the right one.
- *
- * A one-time read rather than a read-through, and that does not contradict ADR 0009: an Agent
- * Session's Scope is fixed for its whole life, so this value is consumed the moment it is asked for
- * and there is no later one for it to go stale against.
- */
-function configuredScope(): string | undefined {
-  return new ConfigStore().projectRoot();
 }
 
 /** Build a Session Host with every Backend Adapter registered and prior sessions loaded. */
@@ -310,11 +276,11 @@ async function oneShot(
          * worst of the three things that could happen, because it looks like a slow model rather
          * than like a question. Aborting ends the turn, which prints the `aborted` row below and
          * gets the transcript written; the Agent Session is left Dormant like any other, so `--session`
-         * can pick it up in the TUI or the web client, where it *can* be answered.
+         * can pick it up in the web client, where it *can* be answered.
          */
         if (entry.event.type === "enquiry" && entry.event.state === "asked") {
           console.log("  ? the model asked a question, and this runner has no way to answer it");
-          console.log(`  ? resume with: --session ${sessionId}  (or open it in the TUI)`);
+          console.log(`  ? resume with: --session ${sessionId}  (or open it in the web UI)`);
           void connection.command({ type: "abort", sessionId });
         }
         /*
@@ -341,7 +307,7 @@ async function oneShot(
           const { tool, callId } = state.authorising;
           refused = callId;
           console.log(`  ! ${tool} needs authorising, and this runner has no way to ask; refusing it`);
-          console.log(`  ! authorise it with: --session ${sessionId}  (or open it in the TUI)`);
+          console.log(`  ! authorise it with: --session ${sessionId}  (or open it in the web UI)`);
           // Rejection swallowed rather than dropped: `--session` resumes a live Agent Session, and a
           // call decided in another client between the reducer seeing it and this landing comes back
           // as a refusal. There is nothing to do about that — the prompt is settled either way — and
@@ -399,7 +365,7 @@ function format(entry: NonNullable<ViewState["entries"][number]>): string {
     case "enquiry": {
       // This runner takes no input, so an Enquiry it sees is one it aborts (see `oneShot`) — what
       // reaches here is therefore `aborted`, and what it prints is what was asked and went
-      // unanswered. The TUI and the web client are where one can actually be answered.
+      // unanswered. The web client is where one can actually be answered.
       const asked = answerLines(entry.questions, entry.answers).join("; ");
       return `  ? [${entry.status}] ${asked}`;
     }

@@ -157,9 +157,8 @@ because a hidden entry would look like a failed save.
 
 ### The CLI
 
-- `flow tui` uses the Project Root when `--scope` is absent.
-- A one-shot `flow "<prompt>"` does not. It runs *in* a directory, so that directory is the
-  default. Use `--scope` to choose a different one.
+- A one-shot `flow "<prompt>"` does not use the Project Root. It runs *in* a directory, so that
+  directory is the default. Use `--scope` to choose a different one.
 
 ## Fonts
 

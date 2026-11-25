@@ -14,12 +14,16 @@ import { railWidthValue } from "@/presentation/rail-width.ts";
 import { nextHeldAttention, visibleSessions, withHeldAttention, type HeldAttention } from "@/presentation/rail-sections.ts";
 import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
+import { useAttentionNotifications } from "@/notifications.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
 import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
 import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-layer.tsx";
 import { NewAgentSessionPage } from "@/components/new-agent-session-page.tsx";
 import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsDialog } from "@/components/settings-dialog.tsx";
+import { WorkflowSchedulesPage } from "@/components/workflow-schedules-page.tsx";
+import { SpendPage } from "@/components/spend-page.tsx";
+import { PullRequestsPage } from "@/components/pull-requests-page.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
@@ -51,13 +55,14 @@ import { toast } from "@/components/ui/toaster.tsx";
  */
 export function AppShell() {
   useMobileViewport();
+  useAttentionNotifications();
   const { config } = useHost();
   const { sessions, loaded } = useAgentSessions();
   const {
     route,
     sessionId: focusedId,
     focus,
-    openNewAgentSession,
+    openNewAgentSession, openSchedules, openSpend, openPullRequests,
     openSettings,
     leaveSettings,
   } = useRoute();
@@ -146,7 +151,12 @@ export function AppShell() {
    */
   const [landed, setLanded] = useState(false);
   useEffect(() => {
-    if (landed || route.settings !== undefined) return;
+    if (landed) return;
+    if (route.schedules || route.spend || route.pullRequests) {
+      setLanded(true);
+      return;
+    }
+    if (route.settings !== undefined) return;
     if (focusedId !== undefined) {
       setLanded(true);
       return;
@@ -163,7 +173,7 @@ export function AppShell() {
     // Nothing worth opening when there are none or every Agent Session is Filed away.
     if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
-  }, [landed, loaded, sessions, focusedId, focus, route.settings]);
+  }, [landed, loaded, sessions, focusedId, focus, route.settings, route.schedules, route.pullRequests]);
 
   // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
   // that identity was Reaped or hidden in a collapsed section, never merely because it moved to
@@ -320,6 +330,9 @@ export function AppShell() {
             onSettle={settle}
             onNew={openNewAgentSession}
             onOpenSettings={openSettings}
+            onSchedules={() => openSchedules()}
+            onSpend={openSpend}
+            onPullRequests={() => openPullRequests()}
           />
         </Sidebar>
 
@@ -334,7 +347,7 @@ export function AppShell() {
            * the handle itself is the affordance.
            */}
           <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
-          {focusedId === undefined ? (
+          {route.spend ? <SpendPage /> : route.pullRequests ? <PullRequestsPage project={route.project} pullRequest={route.pullRequest} drafts={drafts} onNavigate={openPullRequests} onSession={focus} /> : route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
             /*
              * The New Agent Session view *is* the empty state — nothing focused and "you are
              * starting one" were always the same moment. Held back until the auto-open rule above has
@@ -354,6 +367,7 @@ export function AppShell() {
               drafts={drafts}
               shells={config.shell === true}
               onOpenProject={openProject}
+              onOpenSession={onCreated}
             />
           )}
         </SidebarInset>

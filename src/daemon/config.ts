@@ -13,12 +13,15 @@ import {
   type FilesystemIsolationMode,
   type SandboxSharing,
   type WorkflowRuntimeSettings,
+  type WorktreeSettings,
   formatDuration,
   parseDuration,
   type Settings,
   type SettingsPatch,
 } from "../protocol/settings.ts";
 import type { UpdateChannel } from "../protocol/update.ts";
+import type { EffortLevel } from "../protocol/events.ts";
+import { EFFORT_ORDER } from "../backend/effort.ts";
 
 /**
  * The Session Host's configuration file: `<stateRoot>/config.json`, beside daemon.json and
@@ -55,6 +58,7 @@ export type Config = {
   updateChannel?: UpdateChannel;
   mcp?: McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
+  worktrees?: WorktreeSettings;
   retention: Retention;
   fonts: Fonts;
   /**
@@ -167,6 +171,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
   const filesystemIsolation = readFilesystemIsolation(parsed, warnings);
   const sandboxSharing = readSandboxSharing(parsed, warnings);
   const updateChannel = readUpdateChannel(parsed, warnings);
+  const worktrees = readWorktrees(parsed, warnings);
 
   return {
     config: {
@@ -177,6 +182,7 @@ export function loadConfig(stateRoot: string): LoadedConfig {
       ...(updateChannel === undefined ? {} : { updateChannel }),
       mcp: readMcp(parsed, warnings),
       workflowRuntime: readWorkflowRuntime(parsed, warnings),
+      ...(worktrees === undefined ? {} : { worktrees }),
       ...(projects === undefined ? {} : { projects }),
       ...(permissions === undefined ? {} : { permissions }),
       ...(providers === undefined ? {} : { providers }),
@@ -262,6 +268,31 @@ function patchSandboxSharing(current: SandboxSharing | undefined, value: unknown
   return value as SandboxSharing;
 }
 
+const worktreeKeys = ["always", "updateSource"] as const satisfies readonly (keyof WorktreeSettings)[];
+
+function readWorktrees(parsed: unknown, warnings: string[]): WorktreeSettings | undefined {
+  try {
+    return patchWorktrees(undefined, (parsed as { worktrees?: unknown } | null)?.worktrees);
+  } catch (error) {
+    warnings.push(`${(error as Error).message}; using defaults`);
+    return undefined;
+  }
+}
+
+function patchWorktrees(current: WorktreeSettings | undefined, value: unknown): WorktreeSettings | undefined {
+  if (value === undefined) return current;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ConfigError("worktrees must be an object");
+  refuseUnknownKeys(value, worktreeKeys, "worktrees");
+  const next = { ...current };
+  for (const key of worktreeKeys) {
+    const flag = (value as Record<string, unknown>)[key];
+    if (flag === undefined) continue;
+    if (typeof flag !== "boolean") throw new ConfigError(`worktrees.${key} must be true or false`);
+    next[key] = flag;
+  }
+  return next;
+}
+
 const updateChannels: readonly unknown[] = ["stable", "beta"] satisfies UpdateChannel[];
 
 function readUpdateChannel(parsed: unknown, warnings: string[]): UpdateChannel | undefined {
@@ -278,7 +309,7 @@ function patchUpdateChannel(current: UpdateChannel | undefined, value: unknown):
 }
 
 function parseProviders(parsed: unknown, warnings: string[]): Providers | undefined {
-  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; autoCompaction?: unknown; compactionModels?: unknown; permissionModes?: unknown } })?.providers;
+  const section = (parsed as { providers?: { defaultBackend?: unknown; defaults?: unknown; summary?: unknown; efforts?: unknown; summaries?: unknown; tours?: unknown; autoCompaction?: unknown; compactionModels?: unknown; permissionModes?: unknown } })?.providers;
   if (section === undefined || section === null) return undefined;
   if (typeof section !== "object" || Array.isArray(section)) {
     warnings.push("providers must be an object; choosing no models");
@@ -329,7 +360,7 @@ function parseProviders(parsed: unknown, warnings: string[]): Providers | undefi
     }
   }
 
-  for (const field of ["efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"] as const) {
+  for (const field of ["efforts", "summaries", "tours", "autoCompaction", "compactionModels", "permissionModes"] as const) {
     const entries = section[field];
     if (entries === undefined) continue;
     if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
@@ -560,19 +591,21 @@ export function applyPatch(current: Config, patch: unknown): Config {
     throw new ConfigError("expected an object");
   }
   const body = patch as SettingsPatch;
-  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing", "updateChannel"], "config");
+  refuseUnknownKeys(body, ["retention", "fonts", "projects", "permissions", "providers", "workflowRuntime", "mcp", "filesystemIsolation", "sandboxSharing", "updateChannel", "worktrees"], "config");
   const projects = patchProjects(current.projects, body.projects);
   const permissions = patchPermissions(current.permissions, body.permissions);
   const providers = patchProviders(current.providers, body.providers);
   const filesystemIsolation = patchFilesystemIsolation(current.filesystemIsolation, body.filesystemIsolation);
   const sandboxSharing = patchSandboxSharing(current.sandboxSharing, body.sandboxSharing);
   const updateChannel = patchUpdateChannel(current.updateChannel, body.updateChannel);
+  const worktrees = patchWorktrees(current.worktrees, body.worktrees);
   return {
     ...(filesystemIsolation === undefined ? {} : { filesystemIsolation }),
     ...(sandboxSharing === undefined ? {} : { sandboxSharing }),
     ...(updateChannel === undefined ? {} : { updateChannel }),
     mcp: body.mcp === undefined ? current.mcp ?? [] : parseMcp(body.mcp),
     workflowRuntime: patchWorkflowRuntime(current.workflowRuntime, body.workflowRuntime),
+    ...(worktrees === undefined ? {} : { worktrees }),
     retention: { settled: patchRetention(current.retention.settled, body.retention) },
     fonts: patchFonts(current.fonts, body.fonts),
     ...(projects === undefined ? {} : { projects }),
@@ -598,7 +631,7 @@ function patchProviders(
   patch: SettingsPatch["providers"],
 ): Providers | undefined {
   if (patch === undefined) return current;
-  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "autoCompaction", "compactionModels", "permissionModes"], "providers");
+  refuseUnknownKeys(patch, ["defaultBackend", "defaults", "summary", "efforts", "summaries", "tours", "autoCompaction", "compactionModels", "permissionModes"], "providers");
 
   const next: Providers = {
     ...(current?.autoCompaction === undefined ? {} : { autoCompaction: { ...current.autoCompaction } }),
@@ -607,6 +640,7 @@ function patchProviders(
     ...(current?.efforts === undefined ? {} : { efforts: { ...current.efforts } }),
     ...(current?.permissionModes === undefined ? {} : { permissionModes: { ...current.permissionModes } }),
     ...(current?.summaries === undefined ? {} : { summaries: { ...current.summaries } }),
+    ...(current?.tours === undefined ? {} : { tours: { ...current.tours } }),
     ...(current?.defaults === undefined ? {} : { defaults: { ...current.defaults } }),
     ...(current?.summary === undefined ? {} : { summary: current.summary }),
   };
@@ -708,6 +742,28 @@ function patchProviders(
         automatic: named.automatic !== false,
       };
     }
+  }
+
+  if (patch.tours !== undefined) {
+    const entries: unknown = patch.tours;
+    if (typeof entries !== "object" || entries === null || Array.isArray(entries)) throw new ConfigError("providers.tours must be an object");
+    const tours = { ...next.tours };
+    for (const [backend, value] of Object.entries(entries as Record<string, unknown>)) {
+      const field = `providers.tours.${backend}`;
+      if (value === null) {
+        delete tours[backend];
+        continue;
+      }
+      if (typeof value !== "object" || Array.isArray(value)) throw new ConfigError(`${field} must name a model and an effort`);
+      refuseUnknownKeys(value, ["modelId", "effort"], field);
+      const named = value as { modelId?: unknown; effort?: unknown };
+      const problem = checkModelId(named.modelId, `${field}.modelId`);
+      if (problem) throw new ConfigError(problem);
+      if (!EFFORT_ORDER.includes(named.effort as EffortLevel)) throw new ConfigError(`${field}.effort must be a valid effort`);
+      tours[backend] = { modelId: (named.modelId as string).trim(), effort: named.effort as EffortLevel };
+    }
+    if (Object.keys(tours).length) next.tours = tours;
+    else delete next.tours;
   }
 
   if (patch.permissionModes !== undefined) {

@@ -1,8 +1,8 @@
 # Flow
 
-Flow runs coding-agent sessions. You can watch and control them from a terminal or a browser.
+Flow runs coding-agent sessions. You can watch and control them from a browser, or send one prompt from the CLI.
 
-- **Local mode (v1)** — a Session Host daemon runs on loopback. A TUI and a web UI are equal clients.
+- **Local mode (v1)** — a Session Host daemon runs on loopback. The web UI is the client.
 - **Backends** — the Claude Agent SDK (on your own Claude subscription) and the pi SDK (for models
   that Claude does not serve). You choose the backend for each Agent Session.
 
@@ -21,7 +21,7 @@ Flow runs coding-agent sessions. You can watch and control them from a terminal 
 
 ## Requirements
 
-- Node.js 22 or later, and npm. CI checks installs on Linux and macOS.
+- Node.js 22.19.0 or later, and npm. CI checks installs on Linux and macOS.
 - A user-owned npm prefix, for example from a Node version manager. Do not use sudo or a shared
   system prefix.
 - For filesystem isolation on Linux: Bubblewrap. See [docs/isolation.md](docs/isolation.md).
@@ -46,7 +46,6 @@ flow serve
 
 `flow serve` stays in the foreground. It prints a web handoff URL
 (`http://127.0.0.1:PORT/auth?token=…`). Open that URL once in your browser.
-To use the terminal client, run `flow tui` in another terminal.
 
 To run the Session Host in the background:
 
@@ -73,6 +72,14 @@ Configure credentials for the Backend Adapter that you use.
 - **pi** — pi keeps its own credential store. Run `pi`, then `/login`, before you start a pi
   session. Flow reads pi state from `PI_CODING_AGENT_DIR` (default `~/.pi/agent`).
 
+Flow uses its own Pi SDK. Update Flow, not only standalone pi, to get a newer model catalogue.
+Pi 1.6 calls the Azure Provider `azure`. Flow accepts saved `azure-openai-responses/<model>`
+references, but legacy Provider keys in Pi's `auth.json` and `models.json` must change to `azure`.
+The API name `azure-openai-responses` does not change. Unavailable models require an explicit new
+selection; Flow does not substitute another model.
+
+Pi cache warming stays limited to active runs unless Pi's global `cacheWarming` setting is `idle`.
+
 ## Everyday use
 
 ### Commands
@@ -80,7 +87,6 @@ Configure credentials for the Backend Adapter that you use.
 | Command | Action |
 | --- | --- |
 | `flow serve [--port N] [--address HOST]` | Run the Session Host in the foreground. |
-| `flow tui [--scope DIR] [--backend claude\|pi\|fake]` | Open the terminal client. It connects to a running host, or starts its own. |
 | `flow list` | List Agent Sessions. |
 | `flow import [--scope DIR]` | List the Claude Code conversations recorded in a directory. |
 | `flow import ID [--scope DIR] [--view]` | Import one as an Agent Session. `--view` makes it read-only. |
@@ -96,11 +102,7 @@ flow --session <id> "What word did I ask you to remember?"   # → marmalade
 flow list
 ```
 
-Scope rules:
-
-- `flow tui` without `--scope` uses the Project Root from `config.json`. If there is no Project
-  Root, it uses the current directory.
-- A one-shot prompt always uses the current directory, unless `--scope` names a different one.
+A one-shot prompt always uses the current directory, unless `--scope` names a different one.
 
 ### Agent Sessions survive restarts
 
@@ -131,15 +133,7 @@ Creation and messaging use the existing permission policy and can incur Spend. A
 another Agent Session's human prompts. Use a fresh Worktree for concurrent edits, and inspect for
 results rather than assuming delivery means completion.
 
-### TUI keys
-
-| Key | Action |
-| --- | --- |
-| `^S` | Sessions |
-| `^P` | Models (grouped by provider) |
-| `^E` | Effort |
-| `esc` | Abort |
-| `^C` | Quit |
+### Messages during a turn
 
 If you type while the agent works, Flow queues the message. It does not interrupt the agent.
 Steering is a deliberate action.
@@ -155,7 +149,7 @@ Steering is a deliberate action.
   section.
 
 Settings, Projects, MCP connections and fonts are described in
-[docs/configuration.md](docs/configuration.md). Git publishing and stacked pull requests are
+[docs/configuration.md](docs/configuration.md). Commit, push, pull requests and stacked pull requests are
 described in [docs/git.md](docs/git.md).
 
 ## Where state lives
@@ -181,7 +175,7 @@ Each state root permits one Session Host.
 flow update
 ```
 
-Before you update, close all CLI and TUI clients. Stop other Session Hosts that use this
+Before you update, close all CLI clients. Stop other Session Hosts that use this
 installation. Updates are never automatic. [docs/updating.md](docs/updating.md) gives the
 requirements, the browser update, systemd setup and the repair procedure.
 
@@ -195,7 +189,25 @@ requirements, the browser update, systemd setup and the repair procedure.
 | [docs/isolation.md](docs/isolation.md) | Filesystem isolation, Bubblewrap and sandboxes |
 | [docs/remote-access.md](docs/remote-access.md) | Container access and the OIDC gate |
 | [docs/configuration.md](docs/configuration.md) | Settings, MCP connections, Projects, fonts, environment variables |
-| [docs/git.md](docs/git.md) | Publish branch names and stacked pull requests |
+| [docs/git.md](docs/git.md) | Commit, push, pull requests and stacked pull requests |
 | [docs/workflow-builder-scope.md](docs/workflow-builder-scope.md) | Workflows, including direct MCP steps |
 | [docs/development.md](docs/development.md) | Build, test, web development, releases |
 | [docs/milestones.md](docs/milestones.md) | Project status and design notes from each milestone |
+
+### Repeating workflows
+
+Open **Schedules** to run a saved workflow every N minutes/hours/days, or daily at a local time in
+an explicitly saved IANA timezone. Enabling never runs immediately. The Session Host must remain
+running; missed times are recorded without catch-up. Daily clock gaps are skipped and repeated times
+run only once, at the first occurrence.
+
+Choose fixed typed inputs, an opted-in Project, MCP connections and an overlap limit (default 3).
+Shared-directory runs can conflict. Optional fresh worktrees use the current local base branch commit
+without fetching or copying uncommitted changes. Each occurrence uses the latest saved root/called
+workflows and retains its own snapshot. Pause or delete stops future runs, not already admitted work.
+
+Code/MCP-only success creates no Agent Session or model summary. An actual agent step, human input
+or recovery attaches one Agent Session with the normal controls. Inspect execution graphs, attempts,
+activity and results in occurrence history, and follow its Agent Session link when input is needed.
+Terminal history lasts seven days; active/input/recovery work and associated transcripts are not
+pruned by that window. Unsafe worktree cleanup preserves dirty files and unmerged commits.

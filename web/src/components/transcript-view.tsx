@@ -51,7 +51,8 @@ export function TranscriptView({
   // `entries` — filtering the entry list would break the length heuristic the store relies on. What
   // survives is the session's own work plus the card saying a Subagent was started.
   const getEntry = useCallback((key: string) => view.getEntry(key), [view]);
-  const shown = useMemo(() => ownKeys(matching, getEntry), [matching, getEntry]);
+  // A Rewind's entries stay in the Presentation Transcript but are not shown (ADR 0040).
+  const shown = useMemo(() => ownKeys(matching, getEntry).filter((key) => !getEntry(key)?.rewound), [matching, getEntry]);
 
   const restore = useRef<{ height: number; top: number; anchor: Element | undefined; offset: number } | undefined>(undefined);
   const restored = useRef<{ top: number; anchor: Element; offset: number; viewportTop: number } | undefined>(undefined);
@@ -264,7 +265,7 @@ export function TranscriptView({
         // The Composer floats over this, so the last line of the last message would sit behind it. The
         // inset is the Composer's measured height; `stick-to-bottom.ts` needs no change, because padding
         // is part of scrollHeight and the distance from the bottom is still zero at the bottom.
-        className="transcript-scroller @container/transcript h-full px-3 pt-[calc(var(--header-overlap,0px)+0.5rem)] pb-[calc(var(--composer-inset,0px)+1.5rem)]"
+        className="transcript-scroller @container/transcript h-full overflow-x-hidden px-3 pt-[calc(var(--header-overlap,0px)+0.5rem)] pb-[calc(var(--composer-inset,0px)+1.5rem)]"
       >
         <div ref={content} className="pane-measure">
           {history.earlier > 0 ? (
@@ -391,7 +392,7 @@ function NewEntriesPill({ onClick }: { onClick: () => void }) {
  *
  * Filtering lives here rather than in the store: the store's job is the reduced, append-only state,
  * and a per-viewer presentation filter is not that — a query is typed and cleared without anything
- * having happened to the Presentation Transcript, and the TUI filters the same record its own way.
+ * having happened to the Presentation Transcript.
  *
  * With no query this is the store's own array, so TranscriptView re-renders only when an entry is
  * added. With a query it recomputes on every coalesced tick, which is the cost of a filter that

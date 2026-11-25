@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, mock } from "node:test";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { git, githubRemote, repository } from "./git-fixture.ts";
 
 import { FakeBackend } from "../src/backend/fake/index.ts";
-import { SessionHost } from "../src/daemon/host.ts";
+import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { AgentEvent } from "../src/protocol/events.ts";
+import type { GitChanges, PushState } from "../src/protocol/git.ts";
+import type { Command } from "../src/protocol/commands.ts";
 
 function events(host: SessionHost, id: string): AgentEvent[] {
   return host.logFor(id).since(0).map((entry) => entry.event);
@@ -618,6 +623,15 @@ describe("a Subagent the turn left behind", () => {
     assert.ok(types.lastIndexOf("subagent") < types.indexOf("session_dormant"));
   });
 
+  it("keeps the model and effort the Subagent ran with", async () => {
+    await backend.latest.setEffort("high");
+    backend.latest.beginSubagent("explorer");
+    await host.shutdown();
+
+    const aborted = events(host, sessionId).find((event) => event.type === "subagent" && event.state === "aborted");
+    assert.deepEqual(aborted?.type === "subagent" && [aborted.model, aborted.effort], ["fake-1", "high"]);
+  });
+
   it("leaves a Subagent that finished on its own alone", async () => {
     const subagent = backend.latest.beginSubagent("explorer");
     subagent.finish("complete");
@@ -637,6 +651,17 @@ describe("a Subagent the turn left behind", () => {
       (event) => event.type === "subagent" && event.state === "aborted",
     );
     assert.equal(aborted.length, 2, "the one that finished must not be closed again");
+  });
+
+  it("keeps a nested Subagent's producer on the snapshot that aborts it", async () => {
+    const parent = backend.latest.beginSubagent("explorer");
+    backend.latest.beginSubagent("planner", undefined, { subagentId: parent.subagentId });
+    await host.shutdown();
+
+    const aborted = events(host, sessionId).find(
+      (event) => event.type === "subagent" && event.name === "planner" && event.state === "aborted",
+    );
+    assert.deepEqual(aborted && "producer" in aborted && aborted.producer, { subagentId: parent.subagentId });
   });
 
   it("closes a Subagent that was waiting, not only one that was running", async () => {
@@ -870,6 +895,60 @@ describe("listing the Skills an Agent Session offers", () => {
  * one warm session per backend (ADR 0035). It keeps the session, not the answer: `skills()` reads
  * the disk again on each ask.
  */
+describe("reading Plan Limits", () => {
+  let backend: FakeBackend;
+  let host: SessionHost;
+  const windows = { short: { label: "5-hour", utilization: 9 }, long: { label: "7-day", utilization: 25 }, others: [] };
+
+  beforeEach(() => {
+    backend = new FakeBackend();
+    host = new SessionHost();
+    host.registerBackend(backend);
+  });
+
+  it("answers from the warm session", async () => {
+    await host.models(tmpdir());
+    backend.sessions[0]!.planLimitWindows = [windows];
+
+    assert.deepEqual(await host.planLimits(tmpdir()), [{ backend: "fake", ...windows }]);
+    assert.equal(backend.sessions.length, 1);
+  });
+
+  it("keeps a cold probe's session warm", async () => {
+    assert.deepEqual(await host.planLimits(tmpdir()), [], "a backend with no limits is left out");
+    await host.planLimits(tmpdir());
+
+    assert.equal(backend.sessions.length, 1);
+    assert.equal(backend.sessions[0]?.toolless, true);
+    assert.equal(backend.sessions[0]?.disposed, false);
+  });
+
+  it("spawns one backend for two callers asking at once", async () => {
+    backend.holdCreate = true;
+    const both = Promise.all([host.planLimits(tmpdir()), host.planLimits(tmpdir())]);
+    backend.releaseCreate();
+    await both;
+
+    assert.equal(backend.sessions.length, 1);
+  });
+
+  it("asks a cold session when the warm one throws", async () => {
+    await host.models(tmpdir());
+    backend.sessions[0]!.planLimits = async () => { throw new Error("gone"); };
+
+    assert.deepEqual(await host.planLimits(tmpdir()), []);
+    assert.equal(backend.sessions.length, 2);
+    assert.equal(backend.sessions[0]?.disposed, true);
+  });
+
+  it("leaves out an adapter with no notion of Plan Limits", async () => {
+    const plain = new SessionHost();
+    plain.registerBackend({ name: "plain", create: async (options) => Object.assign(await backend.create(options), { planLimits: undefined }) });
+
+    assert.deepEqual(await plain.planLimits(tmpdir()), []);
+  });
+});
+
 describe("listing the Skills a Scope offers", () => {
   let backend: FakeBackend;
   let host: SessionHost;
@@ -1684,4 +1763,301 @@ it("refuses a branch switch while a Permission Prompt holds the turn", async () 
 
   await assert.rejects(() => host.switchBranch(sessionId, "other"), /abort the turn/);
 });
+});
+
+describe("SessionHost Git State", () => {
+  async function gitHost() {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost();
+    host.registerBackend(backend);
+    const first = await host.create({ scope, backend: "fake" });
+    const second = await host.create({ scope, backend: "fake" });
+    const git = (id: string) => host.list().find(session => session.id === id)?.git;
+    const cleanup = async () => { await host.shutdown(); rmSync(root, { recursive: true, force: true }); };
+    return { scope, backend, host, first, second, git, cleanup };
+  }
+
+  it("puts Git State on the summary at create and on refresh_git without moving the transcript", async () => {
+    const { scope, host, first, second, git, cleanup } = await gitHost();
+    try {
+      assert.deepEqual({ ...git(first), revision: undefined, head: undefined }, { revision: undefined, branch: "main", head: undefined, changed: 0, ahead: 0, behind: 0, upstream: false });
+      writeFileSync(join(scope, "new.txt"), "new");
+      const seq = host.logFor(first).lastSeq;
+      await host.execute({ type: "refresh_git", sessionId: first });
+      assert.equal(git(first)?.changed, 1);
+      assert.equal(git(second)?.changed, 1);
+      assert.equal(host.logFor(first).lastSeq, seq);
+    } finally { await cleanup(); }
+  });
+
+  it("reads Git State after tool calls during a turn, throttled, and at turn end", async () => {
+    const { scope, backend, host, first, second, git, cleanup } = await gitHost();
+    const settled = async (changed: number) => {
+      const deadline = performance.now() + 5_000;
+      while (git(first)?.changed !== changed && performance.now() < deadline) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(git(first)?.changed, changed);
+    };
+    try {
+      await host.send(second, "work", "now");
+      mock.timers.enable({ apis: ["setTimeout"] });
+      writeFileSync(join(scope, "one.txt"), "one");
+      backend.latest.useTool("Write", {}, "ok");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(git(first)?.changed, 0);
+      mock.timers.tick(3_000);
+      await settled(1);
+      mock.timers.reset();
+      writeFileSync(join(scope, "two.txt"), "two");
+      backend.latest.completeTurn();
+      await settled(2);
+    } finally { mock.timers.reset(); await cleanup(); }
+  });
+
+  it("answers refresh_git with whether the Scope is a repository and reads the branch of each Agent Session on the Scope", async () => {
+    const { scope, host, first, second, cleanup } = await gitHost();
+    const plain = mkdtempSync(join(tmpdir(), "flow-host-plain-"));
+    try {
+      git(scope, "switch", "--quiet", "-c", "moved");
+      assert.deepEqual(await host.execute({ type: "refresh_git", sessionId: first }), { repository: true });
+      for (const id of [first, second]) assert.equal(host.list().find(session => session.id === id)?.branch?.name, "moved");
+      const other = await host.create({ scope: plain, backend: "fake" });
+      assert.deepEqual(await host.execute({ type: "refresh_git", sessionId: other }), { repository: false });
+    } finally { await cleanup(); rmSync(plain, { recursive: true, force: true }); }
+  });
+
+  it("commits, pushes and creates a Pull Request with real git and shows the result in Git State", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-flow-"));
+    const environment = { ...process.env };
+    const scope = repository(root, "repo", ["feature"]);
+    githubRemote(root, scope);
+    git(scope, "push", "--quiet", "origin", "main");
+    git(scope, "remote", "set-head", "origin", "main");
+    git(scope, "switch", "--quiet", "feature");
+    git(scope, "config", "user.name", "Test");
+    git(scope, "config", "user.email", "test@example.com");
+    const bin = join(root, "bin");
+    const created = join(root, "created");
+    mkdirSync(bin);
+    const pull = { id: "PR_7", number: 7, url: "https://github.com/test/repo/pull/7", title: "Add work", baseRefName: "main", headRefOid: "", state: "OPEN", isDraft: true, reviewDecision: null, updatedAt: "2026-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [] }, reviewThreads: { nodes: [] } };
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
+const { existsSync, writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+const out = value => process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
+if (args[0] === "repo") out({ id: "R_repo", defaultBranchRef: { name: "main" }, isFork: false, parent: null });
+if (args[0] === "pr" && args[1] === "create") { writeFileSync(${JSON.stringify(created)}, ""); out(${JSON.stringify(pull.url)} + "\\n"); }
+if (args[0] === "api") out({ data: { repository: { pullRequests: { nodes: existsSync(${JSON.stringify(created)}) ? [${JSON.stringify(pull)}] : [] } } } });
+`);
+    chmodSync(join(bin, "gh"), 0o755);
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+    const host = new SessionHost();
+    host.registerBackend(new FakeBackend());
+    try {
+      const sessionId = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "work.txt"), "work\n");
+      const { fingerprint } = await host.execute({ type: "git_changes", sessionId, view: "uncommitted" }) as GitChanges;
+      await host.execute({ type: "commit", sessionId, fingerprint: fingerprint!, paths: ["work.txt"], message: "Add work" });
+      const state = await host.execute({ type: "push_state", sessionId }) as PushState;
+      await host.execute({ type: "push", sessionId, head: state.head });
+      assert.equal(await host.execute({ type: "create_pull_request", sessionId, head: state.head, title: "Add work", body: "", draft: true }), pull.url);
+      const summary = host.list().find(session => session.id === sessionId)?.git;
+      assert.deepEqual({ branch: summary?.branch, head: summary?.head, changed: summary?.changed, ahead: summary?.ahead, upstream: summary?.upstream, pr: summary?.pr?.number }, { branch: "feature", head: state.head, changed: 0, ahead: 0, upstream: true, pr: 7 });
+    } finally {
+      await host.shutdown();
+      process.env = environment;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads changes and diffs during a turn and refuses an unknown path", async () => {
+    const { scope, host, first, second, cleanup } = await gitHost();
+    try {
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      await host.send(second, "work", "now");
+      const { fingerprint, ...listed } = await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }) as GitChanges;
+      assert.match(fingerprint!, /^[0-9a-f]{64}$/);
+      assert.deepEqual(listed, { files: [{ status: "??", path: "new.txt" }], commits: [], branch: "main", canRename: false });
+      assert.deepEqual(await host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "new.txt" }), { text: "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,1 @@\n+new\n" });
+      await assert.rejects(host.execute({ type: "git_diff", sessionId: first, view: "uncommitted", path: "README.md" }), (error: Error) => error instanceof CommandRefused && /not in the list/.test(error.message));
+    } finally { await cleanup(); }
+  });
+
+  it("refuses each Git write during a turn and allows reads and suggestions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost({ summaryModel: () => ({ backend: "fake", modelId: "fake-2", automatic: false }) });
+    host.registerBackend(backend);
+    try {
+      const first = await host.create({ scope, backend: "fake" });
+      const second = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      await host.send(second, "work", "now");
+      const head = git(scope, "rev-parse", "HEAD").trim();
+      for (const command of [
+        { type: "commit", sessionId: first, fingerprint: "x", paths: ["new.txt"], message: "Add" },
+        { type: "push", sessionId: first, head },
+        { type: "create_pull_request", sessionId: first, head, title: "Add", body: "", draft: true },
+      ] satisfies Command[]) await assert.rejects(host.execute(command), (error: Error) => error instanceof CommandRefused && /occupied/.test(error.message), command.type);
+      await assert.rejects(host.execute({ type: "push_state", sessionId: first }), (error: Error) => error instanceof CommandRefused && /No remote/.test(error.message));
+      backend.autoReply = JSON.stringify({ message: "Add new file" });
+      assert.deepEqual(await host.execute({ type: "suggest_git_text", sessionId: first, kind: "commit", paths: ["new.txt"] }), { message: "Add new file" });
+      assert.match(backend.latest.prompts[0]!, /\+new/);
+      assert.equal(backend.latest.toolless, true);
+    } finally {
+      await host.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const operation of ["settle", "dispose"] as const) {
+    it(`refuses a commit while ${operation} stops a Backend Session`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+      const host = new SessionHost({ retention: 0 });
+      const backend = new FakeBackend();
+      host.registerBackend(backend);
+      const id = await host.create({ scope: repository(root, "repo"), backend: "fake" });
+      await host.send(id, "work", "now");
+      let release!: () => void;
+      const stopped = new Promise<void>((resolve) => { release = resolve; });
+      const session = backend.latest;
+      const dispose = session.dispose.bind(session);
+      session.dispose = async () => { await stopped; await dispose(); };
+      const closing = host[operation](id);
+      try {
+        await assert.rejects(host.commit(id, { fingerprint: "x", paths: ["a"], message: "Add" }), /stopping/);
+        assert.deepEqual(await host.reap(Date.now() + 1_000), []);
+      } finally {
+        release();
+        await closing;
+        await host.shutdown();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("refuses Git pane commands in a Scope that is not a repository root", async () => {
+    const { scope, host, cleanup } = await gitHost();
+    try {
+      mkdirSync(join(scope, "sub"));
+      writeFileSync(join(scope, "sub", "a.txt"), "a\n");
+      const id = await host.create({ scope: join(scope, "sub"), backend: "fake" });
+      for (const command of [
+        { type: "git_changes", sessionId: id, view: "uncommitted" },
+        { type: "git_diff", sessionId: id, view: "uncommitted", path: "a.txt" },
+        { type: "commit", sessionId: id, fingerprint: "x", paths: ["a.txt"], message: "Add" },
+        { type: "push_state", sessionId: id },
+        { type: "push", sessionId: id, head: "x" },
+        { type: "create_pull_request", sessionId: id, head: "x", title: "Add", body: "", draft: true },
+      ] satisfies Command[]) await assert.rejects(host.execute(command), /not a Git repository/, command.type);
+      assert.equal(git(scope, "rev-list", "--count", "HEAD").trim(), "1");
+    } finally { await cleanup(); }
+  });
+
+  it("sends only the selected files to the Summary Model", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-host-git-"));
+    const scope = repository(root, "repo");
+    const backend = new FakeBackend();
+    const host = new SessionHost({ summaryModel: () => ({ backend: "fake", modelId: "fake-2", automatic: false }) });
+    host.registerBackend(backend);
+    try {
+      const id = await host.create({ scope, backend: "fake" });
+      writeFileSync(join(scope, "chosen.txt"), "chosen content\n");
+      writeFileSync(join(scope, "other.txt"), "other content\n");
+      backend.autoReply = JSON.stringify({ message: "Add chosen" });
+      await host.execute({ type: "suggest_git_text", sessionId: id, kind: "commit", paths: ["chosen.txt"] });
+      assert.match(backend.latest.prompts[0]!, /chosen content/);
+      assert.doesNotMatch(backend.latest.prompts[0]!, /other/);
+    } finally {
+      await host.shutdown();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tells other Agent Sessions in the Scope when a commit creates a branch", async () => {
+    const { scope, backend, host, first, second, cleanup } = await gitHost();
+    try {
+      git(scope, "config", "user.name", "Test");
+      git(scope, "config", "user.email", "test@example.com");
+      git(scope, "switch", "--quiet", "--detach");
+      writeFileSync(join(scope, "new.txt"), "new\n");
+      const { fingerprint } = await host.execute({ type: "git_changes", sessionId: first, view: "uncommitted" }) as GitChanges;
+      await host.execute({ type: "commit", sessionId: first, fingerprint: fingerprint!, paths: ["new.txt"], message: "Add", branch: "feat/new" });
+      assert.equal(host.list().find(session => session.id === second)?.branch?.name, "feat/new");
+      await host.send(second, "next", "now");
+      assert.match(backend.sessions[1]!.prompts.at(-1)!, /moved this Scope to branch feat\/new/);
+    } finally { await cleanup(); }
+  });
+});
+
+describe("Read-only Scope", () => {
+  class CaptureBackend extends FakeBackend {
+    readOnly: unknown[] = [];
+    override async create(options: import("../src/backend/types.ts").BackendCreateOptions) {
+      this.readOnly.push(options.readOnly);
+      return super.create(options);
+    }
+  }
+
+  it("binds only to the Project Root, never a Worktree, and persists the flag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    const state = mkdtempSync(join(tmpdir(), "flow-state-"));
+    const { TranscriptStore } = await import("../src/daemon/store.ts");
+    const store = new TranscriptStore(state);
+    const none = new SessionHost();
+    none.registerBackend(new FakeBackend());
+    await assert.rejects(none.create({ scope: root, backend: "fake", readOnly: true }), CommandRefused);
+    await none.shutdown();
+    const host = new SessionHost({ store, projectRoot: () => root });
+    host.registerBackend(new FakeBackend());
+    await assert.rejects(host.create({ scope: tmpdir(), backend: "fake", readOnly: true }), (error: Error) => error instanceof CommandRefused && /Project Root/.test(error.message));
+    await assert.rejects(host.create({ scope: root, backend: "fake", readOnly: true, worktree: { from: "main" } }), (error: Error) => error instanceof CommandRefused && /Worktree/.test(error.message));
+    const id = await host.create({ scope: root, backend: "fake", readOnly: true });
+    assert.equal(host.list().find(session => session.id === id)?.readOnly, true);
+    await host.shutdown();
+    const reloaded = new SessionHost({ store, projectRoot: () => root });
+    reloaded.registerBackend(new FakeBackend());
+    await reloaded.load();
+    assert.equal(reloaded.list().find(session => session.id === id)?.readOnly, true);
+    await reloaded.shutdown();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+
+  it("is mounted read-only where isolation allows and tool-restricted elsewhere", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    for (const [mode, sharing, expected] of [
+      ["bubblewrap", "session", "mounted"],
+      ["sandbox", "session", "mounted"],
+      ["sandbox", "shared", "tools"],
+      ["none", "session", "tools"],
+    ] as const) {
+      const backend = new CaptureBackend();
+      const host = new SessionHost({ projectRoot: () => root, filesystemIsolationMode: () => mode, sandboxSharing: () => sharing });
+      host.registerBackend(backend);
+      await host.create({ scope: root, backend: "fake" });
+      await host.create({ scope: root, backend: "fake", readOnly: true });
+      assert.deepEqual(backend.readOnly, [undefined, expected], `${mode} ${sharing}`);
+      await host.shutdown();
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses Git writes and Tour", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    const host = new SessionHost({ projectRoot: () => root });
+    host.registerBackend(new FakeBackend());
+    const id = await host.create({ scope: root, backend: "fake", readOnly: true });
+    for (const command of [
+      { type: "switch_branch", sessionId: id, branch: "main" },
+      { type: "pull_branch", sessionId: id, branch: "main" },
+      { type: "commit", sessionId: id, fingerprint: "x", paths: ["a"], message: "Add" },
+      { type: "push", sessionId: id, head: "x" },
+      { type: "start_tour", sessionId: id },
+    ] satisfies Command[]) await assert.rejects(host.execute(command), (error: Error) => error instanceof CommandRefused && /read-only/i.test(error.message), command.type);
+    await assert.rejects(host.relocate(id, tmpdir()), (error: Error) => error instanceof CommandRefused && /Read-only/.test(error.message));
+    await host.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  });
 });

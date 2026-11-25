@@ -121,6 +121,15 @@ test('Shell and detached descendants cannot write, delete or follow symlinks out
   } finally { rmSync(alias, { force: true }); rmSync(outside, { recursive: true, force: true }); }
 });
 
+test('a read-only Agent Session Shell step cannot write its Scope', localIntegration, async () => {
+  const executor = await createCodeExecutors({ runtimePath, nodePath: process.execPath, readOnly: sessionId => sessionId === 's' });
+  const ctx = context('');
+  ctx.step = { id: 'a', name: 'a', kind: 'shell', command: 'printf denied > read-only-write' };
+  const output = await executor.shell.execute(ctx) as { exitCode: number };
+  assert.notEqual(output.exitCode, 0);
+  assert.equal(existsSync(join(scope, 'read-only-write')), false);
+});
+
 test('TypeScript checks types, transforms JSON and rejects unsupported APIs', localIntegration, async () => {
   assert.equal(await local.typescript.execute(context('return input.value * 2;')), 8);
   for (const code of ['return "wrong";', 'return process.pid;', 'import fs from "node:fs"; return 1;', 'return input.missing;']) await assert.rejects(local.typescript.execute(context(code)));

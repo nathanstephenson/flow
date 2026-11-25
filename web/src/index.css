@@ -51,6 +51,13 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
 
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --provider-anthropic: #d97757;
+
   --status-active: oklch(0.46 0.14 245);
   --status-awaiting: oklch(0.50 0.19 300);
 
@@ -112,6 +119,13 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --provider-anthropic: #d97757;
 
   --status-active: oklch(0.70 0.14 245);
   --status-awaiting: oklch(0.69 0.17 300);
@@ -284,6 +298,50 @@
 @media (prefers-reduced-motion: reduce) {
   .composer-activity[data-status="running"] .composer-activity-shape {
     animation: none;
+  }
+}
+
+.creating-smoke {
+  --tint: color-mix(in srgb, var(--status-active) var(--creating-tint, 26%), transparent);
+  position: relative;
+  mask-image: radial-gradient(closest-side, black 35%, transparent);
+}
+
+.dark .creating-smoke {
+  --creating-tint: 38%;
+}
+
+.creating-smoke > span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 55%;
+  height: 40%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--tint), transparent);
+  opacity: 0;
+  animation: creating-puff var(--duration) ease-out var(--delay) infinite;
+}
+
+@keyframes creating-puff {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--turn)) scale(0.4);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--x)), calc(-50% + var(--y))) rotate(calc(var(--turn) + 90deg)) scale(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .creating-smoke > span {
+    animation: none;
+    opacity: 1;
+    transform: translate(-50%, -50%);
   }
 }
 

@@ -1,9 +1,9 @@
 import { truncateTail, type AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { BackendEvent, Producer, TurnEndReason } from "../../protocol/events.ts";
+import type { BackendEvent, EffortLevel, Producer, TurnEndReason } from "../../protocol/events.ts";
 
 export type ToolResult = AgentToolResult<unknown>;
 export type WorkBrief =
-  | { type: "subagent"; subagentId: string; name: string; description: string }
+  | { type: "subagent"; subagentId: string; name: string; description: string; model?: string; effort?: EffortLevel; producer?: Producer }
   | { type: "background_call"; callId: string; tool: string; producer?: Producer };
 export type Completion = { brief: WorkBrief; state: TurnEndReason; result: ToolResult };
 type Work = { brief: WorkBrief; controller: AbortController; done: Promise<Completion>; state: "running" | "waiting" | TurnEndReason; result: ToolResult };
@@ -49,7 +49,7 @@ export class PiWork {
       work.state = completion.state;
       work.result = completion.result;
       if (brief.type === "subagent") this.jobs.delete(id);
-      this.emit({ ...brief, state: completion.state });
+      this.emit({ ...work.brief, state: completion.state });
       if (background && !this.disposed) this.completed(completion);
       return completion;
     });
@@ -60,6 +60,14 @@ export class PiWork {
     const completion = await done;
     if (completion.state !== "complete") throw new Error(resultText(completion.result));
     return completion.result;
+  }
+
+  /** Record the model and Effort a running Subagent resolved to. */
+  refine(id: string, patch: { model: string; effort: EffortLevel }): void {
+    const work = this.jobs.get(id);
+    if (!work || work.brief.type !== "subagent") return;
+    work.brief = { ...work.brief, ...patch };
+    this.emit({ ...work.brief, state: "running" });
   }
 
   waiting(id: string, waiting: boolean): void {

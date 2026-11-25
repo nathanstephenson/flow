@@ -202,7 +202,7 @@ export function installation(slot: string) {
       if (!active.some(other => other.id === lease.id && other.pid === process.pid && other.root === lease.root)) throw new Error('Update process has no installation lease');
       const selected = host && active.find(other => other.pid === host.pid && other.root === lease.root);
       if (systemdArgs && selected && JSON.stringify(selected.args) !== JSON.stringify(systemdArgs)) throw new Error('Configured systemd hostArgs do not match the running Session Host; correct systemd-update.json before updating');
-      if (active.some(other => other.id !== lease.id && !(host && other.pid === host.pid && other.root === lease.root && (systemdArgs ? JSON.stringify(other.args) === JSON.stringify(systemdArgs) : other.args.includes('--background-host'))))) throw new Error('Stop all other Flow hosts and CLI/TUI clients using this installation first');
+      if (active.some(other => other.id !== lease.id && !(host && other.pid === host.pid && other.root === lease.root && (systemdArgs ? JSON.stringify(other.args) === JSON.stringify(systemdArgs) : other.args.includes('--background-host'))))) throw new Error('Stop all other Flow hosts and CLI clients using this installation first');
       if (host && !active.some(other => other.pid === host.pid && other.root === lease.root)) throw new Error('Stop all pre-guard Flow processes before updating');
       save(barrier);
     });

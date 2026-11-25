@@ -78,7 +78,7 @@ export function ProvidersSettings() {
   );
 }
 
-function backendLabel(backend: string): string {
+export function backendLabel(backend: string): string {
   return backend === "pi" ? "Pi" : backend === "claude" ? "Claude" : backend;
 }
 
@@ -170,17 +170,23 @@ function BackendSettings({
   const currentPermissionMode = providers?.permissionModes?.[backend] ?? "";
   const currentSummary = summary?.modelId ?? "";
   const currentAutomatic = summary?.automatic ?? true;
+  const currentTourModel = providers?.tours?.[backend]?.modelId ?? "";
+  const currentTourEffort = providers?.tours?.[backend]?.effort ?? "";
   const [model, setModel] = useState(currentModel);
   const [effort, setEffort] = useState<EffortLevel | "">(currentEffort);
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode | "">(currentPermissionMode);
   const [summaryModel, setSummaryModel] = useState(currentSummary);
   const [automatic, setAutomatic] = useState(currentAutomatic);
+  const [tourModel, setTourModel] = useState(currentTourModel);
+  const [tourEffort, setTourEffort] = useState<EffortLevel | "">(currentTourEffort);
   function reset() {
     setModel(currentModel);
     setEffort(currentEffort);
     setPermissionMode(currentPermissionMode);
     setSummaryModel(currentSummary);
     setAutomatic(currentAutomatic);
+    setTourModel(currentTourModel);
+    setTourEffort(currentTourEffort);
   }
   useEffect(reset, [
     currentModel,
@@ -188,6 +194,8 @@ function BackendSettings({
     currentPermissionMode,
     currentSummary,
     currentAutomatic,
+    currentTourModel,
+    currentTourEffort,
   ]);
   const selected = listing?.models.find((entry) => entry.id === model);
   const levels = selected?.effortLevels ?? [];
@@ -197,12 +205,16 @@ function BackendSettings({
       ?? (!model ? "Choose a model to confirm its Effort levels." : !selected ? "This model is unavailable; Effort support cannot be confirmed." : undefined);
   const noEffortControl = !!selected && levels.length === 0;
   const invalidEffort = !!effort && (!selected || !levels.includes(effort));
+  const tourLevels = listing?.models.find((entry) => entry.id === tourModel)?.effortLevels ?? [];
+  const invalidTour = !!tourModel && tourLevels.length > 0 && (!tourEffort || !tourLevels.includes(tourEffort));
   const dirty =
     model !== currentModel ||
     effort !== currentEffort ||
     permissionMode !== currentPermissionMode ||
     summaryModel !== currentSummary ||
-    automatic !== currentAutomatic;
+    automatic !== currentAutomatic ||
+    tourModel !== currentTourModel ||
+    tourEffort !== currentTourEffort;
 
   return (
     <details
@@ -302,6 +314,30 @@ function BackendSettings({
                 <Switch checked={automatic} onCheckedChange={setAutomatic} />
               </label>
             ) : null}
+            <ModelField
+              label="Tour Model"
+              backend={backend}
+              listing={listing}
+              loading={loading}
+              value={tourModel}
+              placeholder="Use the Agent Session's model"
+              onChange={setTourModel}
+            />
+            {tourModel ? (
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium">Tour Effort</span>
+                <ConfiguredEffortSelect
+                  value={tourEffort}
+                  levels={tourLevels}
+                  ariaLabel={`${backend} Tour Effort`}
+                  disabled={tourLevels.length === 0}
+                  onChange={setTourEffort}
+                />
+              </div>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {invalidTour ? "Choose a supported Tour Effort." : "Writes the tour in the Git pane."}
+            </p>
           </div>
         </div>
         {(backend === "pi" || backend === "claude") && <div className="flex items-center gap-3">
@@ -313,7 +349,7 @@ function BackendSettings({
         <SaveRow
           dirty={dirty}
           saving={saving}
-          saveDisabled={invalidEffort}
+          saveDisabled={invalidEffort || invalidTour}
           onReset={reset}
           onSave={() =>
             void save(
@@ -325,6 +361,11 @@ function BackendSettings({
                   summaries: {
                     [backend]: summaryModel
                       ? { modelId: summaryModel, automatic }
+                      : null,
+                  },
+                  tours: {
+                    [backend]: tourModel
+                      ? { modelId: tourModel, effort: tourLevels.length > 0 && tourEffort ? tourEffort : "off" }
                       : null,
                   },
                 },

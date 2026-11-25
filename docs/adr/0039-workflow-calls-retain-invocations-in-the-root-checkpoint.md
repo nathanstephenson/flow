@@ -1,0 +1,7 @@
+# 39. Workflow calls retain invocations in the root checkpoint
+
+An awaited workflow-call Step owns a Workflow Invocation, not another Agent Session or execution slot. The root captures every reachable Workflow Definition before effects and stores invocation checkpoints in its existing execution record. This extends [ADR 0023](0023-workflow-executions-own-independent-work-and-human-requests.md): nested work shares Scope, Backend Adapter and captured isolation policy, but keeps separate inputs, attempts and recovery targets. A manifest avoids copying the complete dependency tree into every call.
+
+Calls save input and derived result contracts. A changed contract needs an explicit refresh and mapping repair; implementation-only edits enter future executions. Direct and indirect recursion are rejected. Detached calls, separate child execution files, fixed depth/admission limits and manual child cancellation are excluded.
+
+Inner recovery retains completed work. Explicit corrections follow [ADR 0038](0038-saved-step-corrections-resume-retained-workflow-checkpoints.md) at the exact invocation, without changing other invocations of the same definition. Root cancellation stops all descendants. An explicit call timeout includes human and recovery waits and stops its subtree before the caller's timeout path. Descendants cannot weaken an enclosing explicit ask policy or inherit undeclared secret aliases. Only the root owns naming, completion notices and billed Spend aggregation.

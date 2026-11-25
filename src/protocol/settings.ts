@@ -38,6 +38,13 @@ export interface FilesystemIsolationStatus {
   sandbox: { supported: boolean; reason?: string; path?: string };
 }
 
+export type WorktreeSettings = {
+  /** The web New Agent Session page starts every Agent Session in a Worktree. */
+  always?: boolean;
+  /** Fast-forward the Source Branch to its upstream before any Worktree is cut from it. */
+  updateSource?: boolean;
+};
+
 export type Settings = {
   /** Omitted chooses Bubblewrap only when the machine's real launch probe succeeds. Never sandbox. */
   filesystemIsolation?: FilesystemIsolationMode;
@@ -47,6 +54,7 @@ export type Settings = {
   updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: WorkflowRuntimeSettings;
+  worktrees?: WorktreeSettings;
   retention: {
     /**
      * How long a Settled Agent Session survives before it is reaped — a duration like `"1d"`, or
@@ -122,6 +130,7 @@ export type Settings = {
     permissionModes?: Record<string, AgentPermissionMode>;
     /** Naming stays within the Agent Session's Backend Adapter. Absent means keep the first line. */
     summaries?: Record<string, { modelId: string; automatic: boolean }>;
+    tours?: Record<string, { modelId: string; effort: EffortLevel }>;
     /**
      * The legacy Summary Model — the model that names an Agent Session.
      *
@@ -153,6 +162,7 @@ export type SettingsPatch = {
   updateChannel?: import("./update.ts").UpdateChannel;
   mcp?: import("./mcp.ts").McpConnection[];
   workflowRuntime?: Partial<WorkflowRuntimeSettings>;
+  worktrees?: WorktreeSettings;
   retention?: { settled?: string };
   fonts?: { chrome?: string; monospace?: string };
   /**
@@ -189,6 +199,7 @@ export type SettingsPatch = {
     permissionModes?: Record<string, AgentPermissionMode | "">;
     /** Merges per backend; null clears one summary, including its legacy singleton value. */
     summaries?: Record<string, { modelId: string; automatic?: boolean } | null>;
+    tours?: Record<string, { modelId: string; effort: EffortLevel } | null>;
     /** `automatic` may be omitted when setting a model, and defaults to naming automatically. */
     summary?: { backend: string; modelId: string; automatic?: boolean } | null;
   };

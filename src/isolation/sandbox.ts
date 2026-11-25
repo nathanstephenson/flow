@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, sep } from "node:path";
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { sandboxSupervisorSource } from "./sandbox-supervisor.ts";
 
 export type SandboxProvider = {
-  version: 1; nodePath: string; claudePath: string; claudeAuthDir?: string;
+  version: 1; nodePath: string; claudePath?: string; hostClaudePath?: string; claudeAuthDir?: string;
   probe: string[]; create: string[]; exec: string[]; remove: string[]; shell?: string[];
 };
 export type SandboxSupport =
@@ -31,10 +31,11 @@ export function sandboxProviderPath(stateRoot: string, env: NodeJS.ProcessEnv = 
 export function parseSandboxProvider(text: string): SandboxProvider {
   const value = JSON.parse(text) as Record<string, unknown> | null;
   if (!value || typeof value !== "object" || value.version !== 1) throw new Error("version must be 1");
-  for (const key of ["nodePath", "claudePath", "claudeAuthDir"] as const) {
-    if (key === "claudeAuthDir" && value[key] === undefined) continue;
+  for (const key of ["nodePath", "claudePath", "hostClaudePath", "claudeAuthDir"] as const) {
+    if (key !== "nodePath" && value[key] === undefined) continue;
     if (typeof value[key] !== "string" || !isAbsolute(value[key])) throw new Error(`${key} must be an absolute path`);
   }
+  if (value.claudePath !== undefined && value.hostClaudePath !== undefined) throw new Error("set claudePath or hostClaudePath, not both");
   for (const [command, { allowed, required }] of Object.entries(placeholders)) {
     const template = value[command];
     if (command === "shell" && template === undefined) continue;
@@ -47,6 +48,24 @@ export function parseSandboxProvider(text: string): SandboxProvider {
     for (const part of required) if (!template.includes(part)) throw new Error(`${command} must contain ${part}`);
   }
   return value as SandboxProvider;
+}
+
+const elfMachines: Partial<Record<NodeJS.Architecture, number>> = { x64: 62, arm64: 183 };
+
+/** Resolves a host-installed native Claude and the dedicated directory that holds its versions. */
+export function hostClaude(path: string): { executable: string; directory: string } {
+  const executable = realpathSync(path);
+  if (!statSync(executable).isFile()) throw new Error(`host Claude ${executable} is not a file`);
+  const header = Buffer.alloc(20);
+  const fd = openSync(executable, "r");
+  try { readSync(fd, header, 0, header.length, 0); } finally { closeSync(fd); }
+  if (header.readUInt32BE(0) !== 0x7f454c46) throw new Error(`host Claude ${executable} is not a Linux native executable; the sandbox cannot run it`);
+  const machine = header[5] === 1 ? header.readUInt16LE(18) : header.readUInt16BE(18);
+  if (header[4] !== 2 || machine !== elfMachines[process.arch]) throw new Error(`host Claude ${executable} is not a 64-bit ${process.arch} executable`);
+  const directory = dirname(executable);
+  const other = readdirSync(directory, { withFileTypes: true }).find((entry) => !entry.isFile());
+  if (other) throw new Error(`host Claude directory ${directory} holds ${other.name}, which is not a regular file; only a dedicated versions directory is mounted`);
+  return { executable, directory };
 }
 
 export function fillTemplate(template: string[], values: Record<string, string>): string[] {
@@ -117,7 +136,18 @@ function runProvider(argv: string[], timeoutMs: number, signal?: AbortSignal): P
   });
 }
 
+/** Reclaim an occurrence-owned VM even if no execution checkpoint was written.
+ * Keep its ownership record on provider failure so pruning can retry safely. */
+export async function removeOwnedSandbox(provider: SandboxProvider, specPath: string, expectedName: string): Promise<void> {
+  if (!existsSync(specPath)) return;
+  const saved = JSON.parse(readFileSync(specPath, 'utf8'));
+  if (saved.schemaVersion !== '1' || saved.name !== expectedName) throw new Error('Invalid Sandbox ownership record');
+  await runProvider(fillTemplate(provider.remove, { name: expectedName }), 120_000);
+  rmSync(specPath, { force: true });
+}
+
 export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec, specPath: string, signal?: AbortSignal): Promise<Sandbox> {
+  signal?.throwIfAborted();
   for (const mount of spec.mounts) {
     const stat = statSync(mount.path);
     if (realpathSync(mount.path) !== mount.path || stat.dev !== mount.dev || stat.ino !== mount.ino) throw new Error(`Sandbox mount changed since validation: ${mount.path}`);
@@ -131,27 +161,31 @@ export async function createSandbox(provider: SandboxProvider, spec: SandboxSpec
   if (stale) await remove().catch(() => {});
   const startup = { remove: performance.now() - start, create: 0 };
   start = performance.now();
-  try { await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
+  try { signal?.throwIfAborted(); await runProvider(fillTemplate(provider.create, { spec: specPath, name: spec.name }), 600_000, signal); }
   catch (error) { await remove().catch(() => {}); throw error; }
   startup.create = performance.now() - start;
-  let holds = 0, closed = false, removing = false;
-  let finish!: (outcome: Promise<void>) => void;
-  const removed = new Promise<void>((resolve) => { finish = resolve as (outcome: Promise<void>) => void; });
-  removed.catch(() => {});
-  const settle = () => {
-    if (closed && !holds && !removing) { removing = true; finish(remove().then(() => rmSync(specPath, { force: true }))); }
-  };
+  let holds = 0, closed = false;
+  let unheld!: () => void;
+  let drained = Promise.resolve();
+  let removal: Promise<void> | undefined;
   return {
     name: spec.name,
     nodePath: provider.nodePath,
     startup,
     hold: () => {
       if (closed) throw new Error(`Sandbox ${spec.name} is stopping`);
-      holds++;
+      if (!holds++) drained = new Promise<void>(resolve => { unheld = resolve; });
       let released = false;
-      return () => { if (!released) { released = true; holds--; settle(); } };
+      return () => { if (!released) { released = true; if (!--holds) unheld(); } };
     },
-    close: () => { closed = true; settle(); return removed; },
+    close: () => {
+      closed = true;
+      return removal ??= (async () => {
+        if (holds) await drained;
+        await remove();
+        rmSync(specPath, { force: true });
+      })().catch(error => { removal = undefined; throw error; });
+    },
     command: (cwd, argv, env) => {
       const [command, ...args] = fillTemplate(provider.exec, { name: spec.name, cwd });
       return { command: command!, args: [...args, provider.nodePath, "-e", sandboxSupervisorSource, "--", "env",

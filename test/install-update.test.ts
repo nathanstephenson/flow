@@ -30,7 +30,7 @@ const bundle = await build({ stdin: { contents: bootstrap, resolveDir: resolve('
 } }] });
 const hostCode = `
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 export async function runCli() {
@@ -57,7 +57,9 @@ else {
  process.on('SIGTERM', () => server.close(() => { try { unlinkSync(join(root, 'daemon.json')); } catch {} process.exit(0); }));
  server.listen(settings.port, settings.address, () => {
   identity = { pid: process.pid, instanceId: randomUUID(), version, url: 'http://127.0.0.1:' + server.address().port, token: 'test', mode: process.env.TEST_MODE ?? 'background', settings };
-  writeFileSync(join(root, 'daemon.json'), JSON.stringify(identity));
+  const daemon = join(root, 'daemon.json');
+  writeFileSync(daemon + '.tmp', JSON.stringify(identity));
+  renameSync(daemon + '.tmp', daemon);
  });
 }
 }
@@ -98,27 +100,73 @@ else {
   const env: NodeJS.ProcessEnv = { ...process.env, FLOW_STATE_DIR: root, TEST_PREFIX: prefix, PATH: `${join(temp, 'bin')}:${process.env.PATH}` };
   delete env.NODE_OPTIONS;
   for (const key of Object.keys(env)) if (key.startsWith('FLOW_OIDC_')) delete env[key as keyof typeof env];
-  const children: ChildProcess[] = [];
+  const children: { child: ChildProcess; done: Promise<unknown>; updater: boolean }[] = [];
   const roots = new Set([root]);
   function start(args: string[], extra: Record<string, string> = {}) {
     roots.add(extra.FLOW_STATE_DIR ?? root);
     const child = spawn(process.execPath, [join(slot, 'dist/cli/bootstrap.js'), ...args], { env: { ...env, ...extra }, cwd: temp, stdio: ['ignore', 'pipe', 'pipe'] });
-    children.push(child);
     let output = ''; child.stdout!.on('data', data => output += data); child.stderr!.on('data', data => output += data);
     const done = once(child, 'close').then(([code]) => ({ code, output }));
+    children.push({ child, done, updater: args[0] === 'update' });
     return { child, done };
   }
   const install = installation(slot);
   const leases = () => readdirSync(install.directory).filter(name => name.startsWith('lease-')).map(name => json<Lease>(join(install.directory, name))!);
   return { temp, prefix, slot, root, env, install, leases, start, async close() {
+    await Promise.all(children.filter(child => child.updater).map(child => child.done));
+    for (const stateRoot of roots) {
+      const path = join(stateRoot, 'flow-update.service.pid');
+      if (existsSync(path)) {
+        const pid = Number(readFileSync(path, 'utf8'));
+        await until(() => !alive(pid));
+      }
+    }
+    const hosts = new Set<number>();
     for (const stateRoot of roots) {
       const host = json<{ pid: number }>(join(stateRoot, 'daemon.json'));
-      if (host) { try { process.kill(host.pid, 'SIGTERM'); } catch {} }
+      if (host) {
+        hosts.add(host.pid);
+        try { process.kill(host.pid, 'SIGTERM'); } catch {}
+      }
     }
-    for (const child of children) if (child.exitCode === null) child.kill('SIGTERM');
-    await delay(100); rmSync(temp, { recursive: true, force: true });
+    for (const { child } of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+    await Promise.all(children.map(child => child.done));
+    await Promise.all([...hosts].map(pid => until(() => !alive(pid))));
+    rmSync(temp, { recursive: true, force: true });
   } };
 }
+
+test('fixture cleanup waits for the updater before stopping a delayed host', async () => {
+  const f = fixture();
+  writeFileSync(join(f.slot, 'dist/cli/bootstrap.js'), `
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const root = process.env.FLOW_STATE_DIR;
+process.on('SIGTERM', () => setTimeout(() => process.exit(existsSync(process.env.TEST_PREFIX) ? 0 : 1), 300));
+writeFileSync(join(root, 'daemon.json'), JSON.stringify({ pid: process.pid }));
+setInterval(() => {}, 1000);
+`);
+  const host = f.start([]);
+  let worker: ChildProcess | undefined;
+  try {
+    await until(() => existsSync(join(f.root, 'daemon.json')));
+    worker = spawn(process.execPath, ['-e', `
+const fs = require('node:fs'), p = require('node:path');
+fs.writeFileSync(p.join(process.env.FLOW_STATE_DIR, 'flow-update.service.pid'), String(process.pid));
+process.stdout.write('ready');
+setTimeout(() => process.exit(fs.existsSync(p.join(process.env.FLOW_STATE_DIR, 'daemon.json')) ? 0 : 1), 300);
+`], { env: f.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const workerDone = once(worker, 'close');
+    await once(worker.stdout!, 'data');
+    await f.close();
+    assert.equal((await workerDone)[0], 0, 'cleanup must not stop the host during an update');
+    assert.equal((await host.done).code, 0, 'cleanup must not remove files before the host exits');
+    assert.equal(existsSync(f.temp), false);
+  } finally {
+    worker?.kill('SIGKILL');
+    await f.close();
+  }
+});
 
 test('ordinary system-global startup skips update registration; self-update refuses', async () => {
   for (const kind of ['shared', 'foreign-owner', 'root']) {
@@ -227,7 +275,7 @@ test('registry rejects old builds, concurrent roots, invalid owners, and dead up
   const f = fixture();
   try {
     await assert.rejects(f.install.register('old-build', f.root, ['list']), /replaced/);
-    const lease = await f.install.register('test-build', '/other-root', ['tui']);
+    const lease = await f.install.register('test-build', '/other-root', ['list']);
     const refused = await f.start(['update']).done;
     assert.equal(refused.code, 1); assert.match(refused.output, /other Flow/);
     assert.equal(existsSync(join(f.prefix, 'npm-log')), false);

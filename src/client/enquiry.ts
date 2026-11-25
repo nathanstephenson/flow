@@ -55,12 +55,6 @@ export function cursorAfter(current: number, delta: number, rows: number): numbe
   return (((current + delta) % rows) + rows) % rows;
 }
 
-/** Where the cursor lands after moving by `delta`, clamped — the TUI's idiom, as every list there clamps. */
-export function cursorClamped(current: number, delta: number, rows: number): number {
-  if (rows <= 0) return 0;
-  return Math.min(rows - 1, Math.max(0, current + delta));
-}
-
 /**
  * Where the cursor goes when the box gains or loses its first character.
  *

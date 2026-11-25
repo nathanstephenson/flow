@@ -97,3 +97,28 @@ describe("deep links to the Settings", () => {
     assert.equal(formatRoute({ sessionId: undefined, settings: "keyboard" }), "#/?settings=keyboard");
   });
 });
+
+describe("the Spend page", () => {
+  it("round-trips its hash", () => {
+    assert.deepEqual(parseRoute("#/spend"), { sessionId: undefined, spend: true });
+    assert.equal(formatRoute({ sessionId: undefined, spend: true }), "#/spend");
+  });
+});
+
+describe("the Pull Requests page", () => {
+  it("round-trips its hash", () => {
+    const routes: Route[] = [
+      { sessionId: undefined, pullRequests: true },
+      { sessionId: undefined, pullRequests: true, project: "/home/me/repo a" },
+      { sessionId: undefined, pullRequests: true, project: "/home/me/repo a", pullRequest: 42 },
+    ];
+    for (const route of routes) assert.deepEqual(parseRoute(formatRoute(route)), route);
+    assert.equal(formatRoute(routes[2]!), "#/pull-requests/%2Fhome%2Fme%2Frepo%20a/42");
+  });
+
+  it("ignores a number that is not a pull request number", () => {
+    for (const number of ["0", "-1", "1.5", "abc"]) {
+      assert.deepEqual(parseRoute(`#/pull-requests/repo/${number}`), { sessionId: undefined, pullRequests: true, project: "repo" });
+    }
+  });
+});

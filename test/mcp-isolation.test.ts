@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { McpSession } from "../src/backend/mcp.ts";
+import { SessionHost } from "../src/daemon/host.ts";
 import { prepareFilesystemIsolation } from "../src/isolation/filesystem.ts";
 
 const fixture = {
@@ -189,6 +190,40 @@ test("disposal during asynchronous stdio preparation never starts the server and
     writeFileSync(release, "go");
     await mcp.dispose();
     if (saved === undefined) delete process.env.FLOW_BWRAP_PATH; else process.env.FLOW_BWRAP_PATH = saved;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workflow authoring MCP discovery cannot write its Scope", { timeout: 30_000 }, async (t) => {
+  if (!await available(t)) return;
+  const root = mkdtempSync(join(tmpdir(), "flow-mcp-authoring-"));
+  const scope = join(root, "scope"); mkdirSync(scope);
+  const marker = join(scope, "written");
+  const connection = { ...fixture, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`] };
+  const host = new SessionHost({ mcpConnections: () => [connection] });
+  const mcp = await host.openWorkflowMcpAuthoring(scope, connection.id, "bubblewrap");
+  try {
+    await mcp.open();
+    assert.equal(existsSync(marker), false);
+  } finally {
+    await mcp.dispose();
+    await host.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stdio MCP cannot write a read-only Scope", { timeout: 30_000 }, async (t) => {
+  if (!await available(t)) return;
+  const root = mkdtempSync(join(tmpdir(), "flow-mcp-read-only-"));
+  const scope = join(root, "scope"); mkdirSync(scope);
+  const marker = join(scope, "written");
+  const mcp = new McpSession([{ ...fixture, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unsafe')`] }], scope,
+    undefined, false, undefined, undefined, undefined, "bubblewrap", undefined, undefined, true);
+  try {
+    await mcp.open();
+    assert.equal(existsSync(marker), false);
+  } finally {
+    await mcp.dispose();
     rmSync(root, { recursive: true, force: true });
   }
 });

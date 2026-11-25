@@ -21,6 +21,7 @@ import { ConditionEditor } from "./workflow-condition.tsx";
 import { WorkflowCode } from "./workflow-code.tsx";
 import { MappingEditor } from "./workflow-mapping.tsx";
 import { McpStepEditor } from "./workflow-mcp.tsx";
+import { WorkflowCallEditor } from "./workflow-call.tsx";
 import { WorkflowInstructions } from "./workflow-instructions.tsx";
 import { StepTest } from "./workflow-test.tsx";
 import { SettingsGroup } from "./settings-parts.tsx";
@@ -150,12 +151,14 @@ export default function WorkflowsSettings() {
             ? { ...base, kind, code: "return {};", outputSchema }
             : kind === "branch"
               ? { ...base, kind, condition: { operator: "truthy", path: [] } }
+              : kind === "workflow" ? { ...base, kind, workflowId: "unselected", contract: { inputSchema: outputSchema as WorkflowDefinition["inputSchema"], outputSchema } }
               : kind === "mcp" ? { ...base, kind, tool: { connectionId: "unselected", connectionName: "", identity: "0".repeat(64), serverIdentity: "0".repeat(64), toolName: "unselected", inputSchema: { type: "object" } }, mapping: { kind: "template", template: { kind: "object", fields: {} } } } : { ...base, kind };
     setDefinition({ ...definition, steps: [...definition.steps, next] });
     selectStep(id);
   };
   return (
     <SettingsGroup title="Workflows">
+      <p className="mb-3 text-sm"><a className="underline" href="#/schedules">Manage scheduled and repeating workflows</a></p>
       <div className="workflow-editor text-sm">
         <div className="workflow-header">
           <Select
@@ -353,7 +356,7 @@ export default function WorkflowsSettings() {
                 {builderOpen ? "Hide builder agent" : "Build with agent"}
               </Button>
               {(
-                ["agent", "mcp", "shell", "typescript", "branch", "join"] as const
+                ["agent", "mcp", "shell", "typescript", "branch", "join", "workflow"] as const
               ).map((kind) => (
                 <Button
                   size="sm"
@@ -563,6 +566,7 @@ export default function WorkflowsSettings() {
                     </>
                   )}
                   {step.kind === "mcp" && <McpStepEditor key={step.id} definition={definition} step={step} onChange={update} />}
+                  {step.kind === "workflow" && <WorkflowCallEditor key={step.id} definition={definition} step={step} onChange={update} />}
                   {step.kind === "shell" && (
                     <>
                       <label className="flex flex-col gap-1">

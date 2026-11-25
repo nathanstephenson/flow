@@ -10,7 +10,8 @@
  * nothing today and would be actively wrong on the day it does. The contrast that is real is
  * between the Project's own checkout and a Worktree cut from it, so that is the one named.
  */
-export function scopeKindLabel(scope: { worktree?: true }): string {
+export function scopeKindLabel(scope: { worktree?: true; readOnly?: true }): string {
+  if (scope.readOnly) return "Read-only Project Root";
   return scope.worktree ? "Worktree" : "Project checkout";
 }
 
@@ -18,11 +19,11 @@ export function scopeKindLabel(scope: { worktree?: true }): string {
  * Why the checkout is a label and never a control.
  *
  * A Scope is fixed for an Agent Session's whole life, so there is no version of this someone could
- * change from here — a different directory is a different Agent Session. Exported as prose because
- * both front-ends want to say it: the web client as a tooltip, and it is the reason the TUI's
- * branch overlay offers no way to move between checkouts.
+ * change from here — a different directory is a different Agent Session. Exported as prose so the web
+ * client can say it as a tooltip.
  */
-export function scopeKindHint(scope: { worktree?: true }): string {
+export function scopeKindHint(scope: { worktree?: true; readOnly?: true }): string {
+  if (scope.readOnly) return "The Project Root, read-only. This Agent Session can read it but not write to it, for its whole life.";
   return scope.worktree
     ? "A worktree the Session Host made for this Agent Session. It is bound to it for its whole life."
     : "The Project's own checkout. This Agent Session is bound to it for its whole life.";

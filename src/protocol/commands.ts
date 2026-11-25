@@ -1,11 +1,10 @@
 /** Commands a client may send to the Session Host. */
 import type { IncomingAttachment } from "./attachments.ts";
-import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision } from "./events.ts";
-import type { Branch } from "./git.ts";
+import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
+import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
 import type { ImportMode, ImportSource } from "./imports.ts";
-import type { PullRequestActionInput, PullRequestCommentInput, PullRequestThreadInput } from "./pull-request.ts";
-import type { StackInput } from "./stack.ts";
-import type { PublishInput } from "./publish.ts";
+import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestReviewInput, PullRequestTarget, PullRequestThreadInput } from "./pull-request.ts";
+import type { StackInput, StackReviewAction } from "./stack.ts";
 
 export type SendWhen = "now" | "after_turn";
 
@@ -41,6 +40,14 @@ export type SessionAttention = {
   version: number;
   /** Transcript boundary visible when this attention was raised. */
   observedSeq: number;
+};
+
+export type AttentionRaised = {
+  sessionId: string;
+  title: string;
+  reason: SessionAttention["reason"];
+  version: number;
+  at: string;
 };
 
 export type SessionSummary = {
@@ -120,6 +127,7 @@ export type SessionSummary = {
    * one.
    */
   branch?: Branch;
+  git?: GitState;
   /**
    * Set when this Scope is a worktree the Session Host made, rather than a directory its owner
    * named.
@@ -131,6 +139,7 @@ export type SessionSummary = {
    * the first.
    */
   worktree?: true;
+  readOnly?: true;
   /** Set when the Agent Session is stopped and its Scope no longer exists, so it must relocate before a Revive. */
   scopeMissing?: true;
   /** A folder that is probably the missing Scope, for the relocation dialog to offer. */
@@ -147,6 +156,7 @@ export type Command =
       modelId?: string;
       effort?: EffortLevel;
       permissionMode?: AgentPermissionMode;
+      readOnly?: true;
       /**
        * Start this Agent Session in a fresh worktree instead of in `scope` itself.
        *
@@ -155,9 +165,7 @@ export type Command =
        * derived. It is still bound for the session's whole life; a worktree is a Scope chosen at
        * birth, never a Scope switched into later.
        *
-       * `from` is an existing branch the client picked. `branch` overrides the derived name and is
-       * the web client's alone: the TUI has no text entry outside its prompt line, so it never
-       * sends one, and nothing it cannot do is hidden behind this field.
+       * `from` is an existing branch the client picked. `branch` overrides the derived name.
        */
       worktree?: { from: string; branch?: string };
     }
@@ -173,10 +181,6 @@ export type Command =
        * beforehand — a paste the human never sends should not leave anything behind, and one they do
        * send should reach the Session Host in the same act. The host writes each one down and mints
        * the id, which is why `user_message` carries ids and this does not.
-       *
-       * The web client's alone, like `create.worktree.branch` and for the same reason: a terminal
-       * has no clipboard image to paste, so the TUI never sends one and nothing it cannot do is
-       * hidden behind this field.
        */
       attachments?: IncomingAttachment[];
     }
@@ -203,17 +207,34 @@ export type Command =
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
   | { type: "pull_request"; sessionId: string }
+  | { type: "pull_request"; project: string; number: number }
   | { type: "pull_branch"; sessionId: string; branch: string }
-  | { type: "change_pull_request"; sessionId: string; action: "rebase" | "merge"; input: PullRequestActionInput }
-  | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
-  | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
+  | ({ type: "change_pull_request"; action: "rebase" | "merge"; input: PullRequestActionInput } & PullRequestTarget)
+  | ({ type: "comment_pull_request"; input: PullRequestCommentInput } & PullRequestTarget)
+  | ({ type: "resolve_pull_request_thread"; input: PullRequestThreadInput } & PullRequestTarget)
+  | ({ type: "edit_pull_request"; input: PullRequestEditInput } & PullRequestTarget)
+  | ({ type: "set_pull_request_draft"; input: PullRequestDraftInput } & PullRequestTarget)
+  | ({ type: "rerun_pull_request_checks"; input: PullRequestRerunInput } & PullRequestTarget)
+  | ({ type: "pull_request_check_log"; pr: PullRequestRef; jobId: number } & PullRequestTarget)
+  | ({ type: "submit_pull_request_review"; input: PullRequestReviewInput } & PullRequestTarget)
+  | { type: "project_pull_requests"; project: string; query?: string }
+  | { type: "pull_request_changes"; project: string; pr: PullRequestRef }
+  | { type: "pull_request_diff"; project: string; pr: PullRequestRef; path: string }
+  | { type: "start_pull_request_session"; project: string; pr: PullRequestRef }
   | { type: "stack_status"; sessionId: string }
-  | { type: "prepare_stack"; sessionId: string; action: "submit" | "sync" }
+  | { type: "prepare_stack"; sessionId: string; action: StackReviewAction }
   | { type: "change_stack"; sessionId: string; input: StackInput }
   | { type: "assist_stack"; sessionId: string }
-  | { type: "git_status"; sessionId: string }
-  | { type: "prepare_publish"; sessionId: string }
-  | { type: "publish"; sessionId: string; input: PublishInput }
+  | { type: "refresh_git"; sessionId: string; pullRequest?: boolean }
+  | { type: "git_changes"; sessionId: string; view: ChangesView }
+  | { type: "git_diff"; sessionId: string; view: ChangesView; path: string }
+  | ({ type: "commit"; sessionId: string } & CommitInput)
+  | { type: "push_state"; sessionId: string }
+  | ({ type: "push"; sessionId: string } & PushInput)
+  | ({ type: "create_pull_request"; sessionId: string } & PullRequestInput)
+  | { type: "suggest_git_text"; sessionId: string; kind: GitTextKind; paths?: string[] }
+  | { type: "start_tour" | "tour" | "cancel_tour"; sessionId: string }
+  | { type: "start_tour" | "tour" | "cancel_tour"; project: string; pr: PullRequestRef }
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
    * Move a **Scope's** checkout, with no Agent Session in it yet.
@@ -253,6 +274,13 @@ export type Command =
    * `instructions` steer what the summary keeps. Both backends take them; neither requires them.
    */
   | { type: "compact"; sessionId: string; instructions?: string }
+  /**
+   * Return to just before a user message. Refused while the Agent Session has a turn, a queued
+   * message, or live background work. Answers with the user message's text and Attachment ids.
+   */
+  | { type: "rewind"; sessionId: string; userMessageId: string; restore: RewindRestore }
+  /** Start a new Agent Session from just before a user message. Answers with the new session id. */
+  | { type: "fork"; sessionId: string; userMessageId: string; worktree?: { from: string; branch?: string } }
   /**
    * The Skills this Agent Session's Scope offers, for the composer's menu.
    *

@@ -38,8 +38,8 @@ state root.
 
 Each `FLOW_STATE_DIR` permits one Session Host.
 
-- A TUI attaches to an existing host. It does not stop that host when the TUI exits.
-- If the TUI starts its own host, that host stops when the TUI exits.
+- `flow list` attaches to an existing host. It does not stop that host when it exits.
+- If `flow list` starts its own host, that host stops when it exits.
 - A one-shot prompt refuses a state root that another host occupies.
 
 ## Durability

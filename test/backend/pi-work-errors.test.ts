@@ -65,7 +65,7 @@ for (const background of [false, true]) {
     const session = await fixture.create();
     await session.prompt("Launch");
     await until(() => fixture.events.filter((event) => event.type === "turn_ended").length === (background ? 2 : 1));
-    assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state), ["running", "error"]);
+    assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state), ["running", "running", "error"]);
     assert.ok(JSON.stringify(fixture.requests.at(-1)?.messages).includes("Child provider refused"));
     if (!background) {
       const tool = fixture.events.find((event) => event.type === "tool_ended" && event.callId === "spawn-1");
@@ -184,7 +184,7 @@ it("reports a Subagent waiting on its Provider and running again when tools resu
   const session = await fixture.create();
   await session.prompt("Launch");
   assert.deepEqual(fixture.events.filter((event) => event.type === "subagent").map((event) => event.state),
-    ["running", "waiting", "running", "complete"]);
+    ["running", "running", "waiting", "running", "complete"]);
   const resumed = fixture.events.findIndex((event, index) => index > 0 && event.type === "subagent" && event.state === "running"
     && fixture.events.slice(0, index).some((prior) => prior.type === "subagent" && prior.state === "waiting"));
   const tool = fixture.events.findIndex((event) => event.type === "tool_started" && event.producer);

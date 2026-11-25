@@ -4,6 +4,9 @@ import { piWorkflowBuilderTools } from "./workflow-builder.ts";
 import { piMcpTools } from "./mcp.ts";
 import type { McpSession } from "../mcp.ts";
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { USER_MESSAGE_MAP } from "./state.ts";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -14,10 +17,11 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle, ReadOnlyScope } from "../types.ts";
 import type { AutoCompaction } from "../../protocol/settings.ts";
 import { PiWorkflowSubagent } from "./workflow-subagent.ts";
 import { piEffortLevels } from "./effort-capabilities.ts";
+import { findPiModel, piModelUnavailable } from "./model-selection.ts";
 import type {
   BackendEvent,
   Capabilities,
@@ -28,12 +32,17 @@ import type {
 } from "../../protocol/events.ts";
 import { clampEffort } from "../effort.ts";
 import { piAutoCompaction } from "./auto-compaction.ts";
+import { createWorkerPiModelRuntime } from "./model-auth.ts";
+import { streamingCacheWarming } from "./cache-warming.ts";
 import { compactionExtensionError, compactionModelExtension } from "./compaction-model.ts";
 import { ASK_TOOL, PiEnquiries } from "./enquiries.ts";
 import { backgroundTools } from "./background-calls.ts";
 import { SUBAGENT_TOOL, subagentTool, type SubagentInput } from "./subagents.ts";
 import { PiAgentPermissions } from "./agent-permissions.ts";
-import type { AgentPermissionMode, PermissionDecision } from "../../protocol/events.ts";
+import type { AgentPermissionMode, PermissionDecision, Spend } from "../../protocol/events.ts";
+import type { SpendTotal } from "../../protocol/spend.ts";
+import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
+import { fetchAnthropicPlanLimits, fetchCodexPlanLimits } from "./plan-limits.ts";
 import { PiWork, callIdFor, resultText, textResult, type Completion, type ToolResult } from "./work.ts";
 
 /**
@@ -73,6 +82,8 @@ export type PiBackendOptions = {
 
 export class PiSession implements BackendSession {
   capabilities: Capabilities;
+  spend: Spend | undefined;
+  private counted: SpendTotal;
   readonly answerEnquiry?: (askId: string, answers: string[][]) => Promise<boolean>;
 
   private readonly enquiries: PiEnquiries | undefined;
@@ -88,7 +99,7 @@ export class PiSession implements BackendSession {
     this.unsubscribe();
     current.dispose();
     this.session = await this.recreate(current);
-    this.unsubscribe = this.session.subscribe((event) => this.translate(event));
+    this.unsubscribe = this.bindSession();
   }
   private readonly standingAuthorisations: readonly string[];
   private readonly agentPermissions: PiAgentPermissions | undefined;
@@ -118,9 +129,11 @@ export class PiSession implements BackendSession {
   private effort: EffortLevel | undefined;
   private messageSeq = 0;
   private currentMessageId: string | undefined;
+  /** Host user message ids sent but not yet seen as pi user messages, oldest first. */
+  private readonly unmappedMessageIds: string[] = [];
 
   constructor(session: AgentSession, emit: (event: BackendEvent) => void, sessionDir?: string,
-    support: { workflowBuilder?: boolean; mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
+    support: { workflowBuilder?: boolean; mcp?: McpSession; enquiries?: PiEnquiries; work?: PiWork; subagents?: boolean; standingAuthorisations?: readonly string[]; agentPermissions?: PiAgentPermissions; permissionProducer?: { subagentId: string }; autoCompaction?: (model: PiModel | undefined) => void; priorSpend?: Spend; workflowAutoCompaction?: AutoCompaction; workflowCompactionModelId?: string; recreate?: (current: AgentSession) => Promise<AgentSession> } = {}) {
     this.workflowBuilder = support.workflowBuilder ?? false;
     this.mcp = support.mcp;
     this.recreate = support.recreate;
@@ -128,6 +141,8 @@ export class PiSession implements BackendSession {
     this.agentPermissions = support.agentPermissions;
     if (support.permissionProducer) this.permissionProducer = support.permissionProducer;
     this.session = session;
+    this.spend = support.priorSpend;
+    this.counted = statsOf(session);
     this.applyAutoCompaction = support.autoCompaction;
     this.workflowAutoCompaction = support.workflowAutoCompaction;
     this.workflowCompactionModelId = support.workflowCompactionModelId;
@@ -140,7 +155,16 @@ export class PiSession implements BackendSession {
     if (this.agentPermissions) this.answerPermission = async (callId, decision) => this.agentPermissions!.answer(callId, decision);
     if (enquiries) this.answerEnquiry = async (askId, answers) => enquiries.answer(askId, answers);
     this.capabilities = capabilitiesOf(session, support.enquiries !== undefined, support.subagents ?? false, !this.workflowBuilder);
-    this.unsubscribe = session.subscribe((event) => this.translate(event));
+    this.unsubscribe = this.bindSession();
+  }
+
+  private bindSession(): () => void {
+    const stream = this.session.agent?.streamFunction;
+    if (stream) this.session.agent.streamFunction = (...args) => {
+      if (this.disposed) throw new Error("Backend Session stopped");
+      return stream(...args);
+    };
+    return this.session.subscribe((event) => this.translate(event));
   }
 
   startWorkflowSubagent(options: WorkflowSubagentOptions): WorkflowSubagentHandle {
@@ -159,7 +183,9 @@ export class PiSession implements BackendSession {
     return this.sessionDir;
   }
 
-  async prompt(text: string, attachments?: PromptAttachment[]): Promise<void> {
+  async prompt(text: string, attachments?: PromptAttachment[], messageId?: string): Promise<void> {
+    if (this.disposed) return;
+    if (messageId && this.sessionDir) this.unmappedMessageIds.push(messageId);
     this.turnId = `turn-${++this.messageSeq}`;
     this.emit({ type: "turn_started", turnId: this.turnId });
     await this.session.prompt(text, {
@@ -182,10 +208,8 @@ export class PiSession implements BackendSession {
 
   async setModel(modelId: string): Promise<void> {
     const available = await this.session.modelRuntime.getAvailable();
-    const qualified = available.find((candidate) => describeModel(candidate).id === modelId);
-    const legacy = available.filter((candidate) => candidate.id === modelId);
-    const model = qualified ?? (legacy.length === 1 ? legacy[0] : undefined);
-    if (!model) throw new Error(`Unknown model: ${modelId}`);
+    const model = findPiModel(available, modelId, true);
+    if (!model) throw new Error(piModelUnavailable(modelId));
     await this.session.setModel(model);
     this.applyAutoCompaction?.(this.session.model);
     // Which levels are on offer follows the model, and pi may have clamped its own thinking level
@@ -267,6 +291,15 @@ export class PiSession implements BackendSession {
         ...(prompt.argumentHint ? { argumentHint: prompt.argumentHint } : {}),
       })),
     ];
+  }
+
+  async planLimits(): Promise<PlanLimitWindows[]> {
+    const read = async (provider: string, fetchLimits: (token: string) => Promise<PlanLimitWindows | undefined>) => {
+      const token = (await this.session.modelRuntime.getAuth(provider).catch(() => undefined))?.auth.apiKey;
+      return token ? await fetchLimits(token).catch(() => undefined) : undefined;
+    };
+    const limits = await Promise.all([read("anthropic", fetchAnthropicPlanLimits), read("openai-codex", fetchCodexPlanLimits)]);
+    return limits.filter((limit) => limit !== undefined);
   }
 
   private applyEffort(wanted: EffortLevel): void {
@@ -358,6 +391,15 @@ export class PiSession implements BackendSession {
     this.scheduleCompletions();
   }
 
+  /** pi appends the entry just after `message_end` reaches listeners, so look it up after that. */
+  private mapUserMessage(messageId: string, message: unknown): void {
+    queueMicrotask(() => {
+      const entry = this.session.sessionManager.getBranch().findLast((candidate) => candidate.type === "message" && candidate.message === message);
+      if (!entry || !this.sessionDir) return;
+      writeFileSync(join(this.sessionDir, USER_MESSAGE_MAP), JSON.stringify({ ...readUserMessageMap(this.sessionDir), [messageId]: entry.id }), { mode: 0o600 });
+    });
+  }
+
   private translate(event: AgentSessionEvent): void {
     switch (event.type) {
       case "agent_start":
@@ -376,6 +418,7 @@ export class PiSession implements BackendSession {
       case "message_end":
         this.emitMessage(event.message, true);
         this.currentMessageId = undefined;
+        if (event.message.role === "user" && this.unmappedMessageIds.length) this.mapUserMessage(this.unmappedMessageIds.shift()!, event.message);
         return;
 
       case "tool_execution_start":
@@ -407,7 +450,7 @@ export class PiSession implements BackendSession {
       }
 
       case "agent_settled":
-        this.finishTurn(this.aborting ? "aborted" : this.turnReason);
+        this.finishTurn(event.aborted || this.aborting ? "aborted" : this.turnReason);
         return;
 
       case "auto_retry_start":
@@ -480,10 +523,25 @@ export class PiSession implements BackendSession {
   }
 
   private reportContextUsage(): void {
+    this.countSpend();
     const usage = this.session.getContextUsage();
     if (usage && typeof usage.tokens === "number") {
-      this.emit({ type: "context_usage", used: usage.tokens, window: usage.contextWindow });
+      this.emit({ type: "context_usage", used: usage.tokens, window: usage.contextWindow, ...(this.spend ? { spend: this.spend } : {}) });
     }
+  }
+
+  private countSpend(): void {
+    const now = statsOf(this.session);
+    const added = { tokens: now.tokens - this.counted.tokens, cached: now.cached - this.counted.cached, costUSD: now.costUSD - this.counted.costUSD };
+    this.counted = now;
+    if (added.tokens <= 0 && added.costUSD <= 0) return;
+    const id = this.session.model ? describeModel(this.session.model).id : "unknown";
+    const spend = this.spend ?? { tokens: 0, cached: 0, costUSD: 0, models: [] };
+    const model = spend.models.find((item) => item.id === id) ?? { id, tokens: 0, cached: 0, costUSD: 0 };
+    this.spend = {
+      tokens: spend.tokens + added.tokens, cached: spend.cached + added.cached, costUSD: spend.costUSD + added.costUSD,
+      models: [...spend.models.filter((item) => item.id !== id), { id, tokens: model.tokens + added.tokens, cached: model.cached + added.cached, costUSD: model.costUSD + added.costUSD }],
+    };
   }
 }
 
@@ -498,10 +556,16 @@ export class PiBackend implements AgentBackend {
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {
     const agentDir = getAgentDir();
+    const modelRuntime = options.piAuth
+      ? await createWorkerPiModelRuntime(options.piAuth, join(agentDir, "models.json"), options.signal, {
+        ...(options.stateDir ? { modelsStorePath: join(options.stateDir, 'models-store.json') } : {}),
+        discovery: options.refreshModels ? 'refresh' : 'automatic',
+      })
+      : undefined;
     // Extensions are not loaded: they expect pi's own UI surface, and a background session that
     // registers UI hooks has nowhere to render them.
     const builder = options.workflowBuilder;
-    const settingsManager = builder ? SettingsManager.inMemory() : SettingsManager.create(options.scope, agentDir);
+    const settingsManager = builder ? SettingsManager.inMemory({ cacheWarming: "streaming" }) : SettingsManager.create(options.scope, agentDir);
     const agentPermissions = builder || options.tools === "none" ? undefined : new PiAgentPermissions(options.permissionMode ?? "always", options.standingAuthorisations ?? [], options.emit);
     const resourceLoader = new DefaultResourceLoader({
       cwd: options.scope,
@@ -515,6 +579,7 @@ export class PiBackend implements AgentBackend {
         systemPromptOverride: () => builder.instructions,
       } : {
         extensionFactories: [
+          streamingCacheWarming(settingsManager),
           ...(agentPermissions ? [agentPermissions.extension()] : []),
           ...(options.compactionModelId ? [compactionModelExtension(options.compactionModelId,
             (text) => options.emit({ type: "notice", level: "error", text }))] : []),
@@ -536,7 +601,7 @@ export class PiBackend implements AgentBackend {
     const builderTools = builder ? piWorkflowBuilderTools(builder) : [];
     const tools = builder ? builderTools.map(tool => tool.name) : options.tools === "none" ? [] : [...(this.options.tools ?? [
       ...defaults, ASK_TOOL, SUBAGENT_TOOL, ...(defaults.includes("bash") ? ["bash_output", "kill_shell"] : []),
-    ])];
+    ])].filter((name) => !readOnlyDeniedTools(options.readOnly).includes(name));
     const mcp = builder || options.tools === "none" ? undefined : options.mcp;
     const workflowTools = workflowParentTools(builder || options.tools === "none" ? undefined : options.workflow);
     const sessionTools = piSessionTools(builder || options.tools === "none" ? undefined : options.sessionTools);
@@ -560,6 +625,7 @@ export class PiBackend implements AgentBackend {
         agentDir,
         resourceLoader,
         settingsManager,
+        ...(modelRuntime ? { modelRuntime } : {}),
         customTools: [...customTools, ...mcpTools],
         tools: [...tools, ...mcpTools.map((tool) => tool.name)],
         ...(current ? { sessionManager: current.sessionManager, modelRuntime: current.modelRuntime, thinkingLevel: current.thinkingLevel, ...(current.model ? { model: current.model } : {}) }
@@ -568,6 +634,11 @@ export class PiBackend implements AgentBackend {
       });
     };
     let { session, extensionsResult } = await start();
+    if (options.resumeBefore && sessionDir) {
+      const entryId = readUserMessageMap(sessionDir)[options.resumeBefore];
+      if (!entryId) { session.dispose(); throw new Error("This message cannot be rewound: pi has no record of it"); }
+      await session.navigateTree(entryId);
+    }
 
     const extensionError = options.compactionModelId && compactionExtensionError(extensionsResult.errors);
     if (extensionError) {
@@ -576,10 +647,12 @@ export class PiBackend implements AgentBackend {
     }
 
     const autoCompaction = structuredClone(options.autoCompaction);
-    const piSession = new PiSession(session, options.emit, sessionDir, { workflowBuilder: !!builder, ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
-    if (options.modelId) {
+    const piSession = new PiSession(session, options.emit, sessionDir, { workflowBuilder: !!builder, ...(mcp ? { mcp } : {}), work, subagents, standingAuthorisations: options.standingAuthorisations ?? [], ...(agentPermissions ? { agentPermissions } : {}), ...(options.priorSpend ? { priorSpend: options.priorSpend } : {}), autoCompaction: piAutoCompaction(settingsManager, autoCompaction), ...(autoCompaction ? { workflowAutoCompaction: autoCompaction } : {}), ...(options.compactionModelId ? { workflowCompactionModelId: options.compactionModelId } : {}), ...(enquiries ? { enquiries } : {}), ...(mcp ? { recreate: async (current: AgentSession) => (session = (await start(current)).session) } : {}) });
+    const modelId = options.modelId ?? (settingsManager.getDefaultProvider() === "azure-openai-responses" && settingsManager.getDefaultModel()
+      ? `azure-openai-responses/${settingsManager.getDefaultModel()}` : undefined);
+    if (modelId) {
       try {
-        await piSession.setModel(options.modelId);
+        await piSession.setModel(modelId);
       } catch (error) {
         await piSession.dispose();
         throw error;
@@ -612,17 +685,23 @@ export class PiBackend implements AgentBackend {
   }
 }
 
+function readOnlyDeniedTools(readOnly: ReadOnlyScope | undefined): string[] {
+  if (!readOnly) return [];
+  return ["edit", "write", ...(readOnly === "tools" ? ["bash", "bash_output", "kill_shell", "powershell"] : [])];
+}
+
 async function runSubagent(parent: AgentSession, scope: string, agentDir: string, work: PiWork, id: string,
   input: SubagentInput, signal: AbortSignal, emit: (event: BackendEvent) => void, mcp?: McpSession, compactionModelId?: string, agentPermissions?: PiAgentPermissions): Promise<ToolResult> {
   const available = parent.modelRuntime.getAvailableSnapshot();
-  const model = input.model ? available.find((model) => describeModel(model).id === input.model) : parent.model;
-  if (!model) throw new Error(`Unknown model: ${input.model}. Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
+  const model = input.model ? findPiModel(available, input.model) : parent.model;
+  if (!model) throw new Error(`${piModelUnavailable(input.model ?? "(inherited)")} Available: ${available.map((model) => describeModel(model).id).join(", ")}`);
   const effort = (input.effort ?? parent.thinkingLevel) as EffortLevel;
   const tools = [...new Set([...parent.getActiveToolNames(), ...piMcpTools(mcp).map((tool) => tool.name)])].filter((name) => name !== ASK_TOOL && name !== SUBAGENT_TOOL && !name.startsWith("workflow_") && !name.startsWith("session_"));
   const settingsManager = SettingsManager.create(scope, agentDir);
   const producer = { subagentId: id };
   const resourceLoader = new DefaultResourceLoader({ cwd: scope, agentDir, settingsManager, noExtensions: true,
     extensionFactories: [
+      streamingCacheWarming(settingsManager),
       ...(agentPermissions ? [agentPermissions.extension(producer)] : []),
       ...(compactionModelId ? [compactionModelExtension(compactionModelId,
         (text) => emit({ type: "notice", level: "error", text }))] : []),
@@ -669,7 +748,9 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
   try {
     signal.throwIfAborted();
     await adapter.setEffort(effort);
+    work.refine(id, { model: describeModel(model).id, effort: child.thinkingLevel as EffortLevel });
     signal.throwIfAborted();
+    emit({ type: "subagent_instruction", id: `${id}:brief`, text: input.prompt, producer });
     await adapter.prompt(input.prompt);
     if (reason !== "complete") throw new Error(failure ?? `Subagent ${reason}`);
     return textResult(output || "Subagent completed without text output");
@@ -679,6 +760,11 @@ async function runSubagent(parent: AgentSession, scope: string, agentDir: string
     await adapter.dispose();
     if (input.run_in_background === false) await work.stopOwnedCalls(id);
   }
+}
+
+function readUserMessageMap(sessionDir: string): Record<string, string> {
+  const path = join(sessionDir, USER_MESSAGE_MAP);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, string> : {};
 }
 
 function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: boolean, permissions = true): Capabilities {
@@ -691,7 +777,8 @@ function capabilitiesOf(session: AgentSession, enquiries: boolean, subagents: bo
     models,
     compaction: true,
     autoCompaction: "model-change",
-    fork: false,
+    fork: true,
+    rewind: true,
     subagents,
     enquiries,
     permissions,
@@ -730,4 +817,9 @@ function joinBlocks(content: unknown, kind: "text" | "thinking"): string {
 
 function isString(value: string | undefined): value is string {
   return typeof value === "string";
+}
+
+function statsOf(session: AgentSession): SpendTotal {
+  const stats = session.getSessionStats();
+  return { tokens: stats.tokens.total, cached: stats.tokens.cacheRead, costUSD: stats.cost };
 }

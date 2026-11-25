@@ -13,6 +13,7 @@ import {
   reconcileLayout,
   rememberShell,
   selectSubagent,
+  showedPullRequest,
   setActive,
   setSize,
   subagentsSide,
@@ -44,7 +45,12 @@ export type DockAction =
   | { type: "add-tab"; side: DockSide; tabId?: string }
   /** Chosen from the picker. Fills the unchosen tab it was shown for, or adds one if there was none. */
   | { type: "open-shell"; side: DockSide; tabId?: string }
-  | { type: "open-git"; side: DockSide; tabId?: string }
+  /**
+   * Show the Git pane. A pill for this branch's pull request leaves out `side` and asks for the
+   * pull request: an existing Git tab in either Dock wins, as for the Subagents.
+   */
+  | { type: "open-git"; side?: DockSide; tabId?: string; pullRequest?: true }
+  | { type: "pull-request-shown"; side: DockSide; tabId: string }
   /** The Shell has been opened and has an id; the tab has been waiting for it. */
   | { type: "remember-shell"; side: DockSide; tabId: string; shellId: string }
   /**
@@ -66,7 +72,7 @@ export type DockAction =
 
 export type DockReveal = {
   sessionId: string;
-  kind: "workflows" | "subagents";
+  kind: "workflows" | "subagents" | "git";
   nonce: number;
 };
 
@@ -106,6 +112,9 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
           nonce: ++revealNonce.current,
         });
       }
+      if (action.type === "open-git" && action.side === undefined) {
+        setReveal({ sessionId, kind: "git", nonce: ++revealNonce.current });
+      }
       update(sessionId, (layout) => {
         // Resolved from the layout rather than named by the caller, so it runs before the shared
         // derivation below — which assumes every other action says which Dock it means.
@@ -114,6 +123,13 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
           const target = layout[side];
           const existing = target.tabs.find(t => t.content?.kind === "workflows");
           const filled = fillWithWorkflows(target, existing?.id ?? action.tabId ?? newTabId());
+          return { ...layout, [side]: { ...filled, minimised: false } };
+        }
+        if (action.type === "open-git") {
+          const side = action.side ?? (["right", "bottom"] as const).find(s => layout[s].tabs.some(t => t.content?.kind === "git")) ?? "right";
+          const target = layout[side];
+          const existing = target.tabs.find(t => t.content?.kind === "git");
+          const filled = fillWithGit(target, action.tabId ?? existing?.id ?? newTabId(), action.pullRequest);
           return { ...layout, [side]: { ...filled, minimised: false } };
         }
         if (action.type === "open-subagents") {
@@ -139,8 +155,8 @@ export function useDocks(sessionId: string | undefined, knownSessionIds: readonl
             return { ...layout, [action.side]: toggleMinimised(dock) };
           case "add-tab":
             return { ...layout, [action.side]: addTab(dock, action.tabId ?? newTabId()) };
-          case "open-git":
-            return { ...layout, [action.side]: fillWithGit(dock, action.tabId ?? newTabId()) };
+          case "pull-request-shown":
+            return { ...layout, [action.side]: showedPullRequest(dock, action.tabId) };
           case "open-shell":
             return { ...layout, [action.side]: fillWithShell(dock, action.tabId ?? newTabId()) };
           case "select-subagent":

@@ -1,11 +1,11 @@
-import type { Command, SessionSummary } from "../protocol/commands.ts";
+import type { AttentionRaised, Command, SessionSummary } from "../protocol/commands.ts";
 import type { BranchList } from "../protocol/git.ts";
 import type { LoggedEvent } from "../protocol/events.ts";
 import type { PresentationPage, PresentationSnapshot, PresentationUpdate } from "../protocol/presentation.ts";
 
 /**
- * A client's view of the Session Host. The TUI and the web UI both reach the daemon through this
- * shape, so neither can quietly grow a shortcut into a session object.
+ * A client's view of the Session Host. Every front-end reaches the daemon through this shape, so
+ * none can quietly grow a shortcut into a session object.
  */
 export type Connection = {
   command<T = unknown>(command: Command): Promise<T>;
@@ -13,8 +13,8 @@ export type Connection = {
   /**
    * What a Scope could be switched to, or have a worktree cut from.
    *
-   * Here rather than left to each front-end's own fetch because the TUI has no other way to reach a
-   * GET, and the alternative — making the list a Command — would put a query that changes outside
+   * Here rather than left to each front-end's own fetch because a non-browser client has no other way to
+   * reach a GET, and the alternative — making the list a Command — would put a query that changes outside
    * Flow through the door meant for things that change it.
    */
   branches(scope: string): Promise<BranchList>;
@@ -24,6 +24,8 @@ export type Connection = {
   readPresentation(sessionId: string, before: number, signal?: AbortSignal): Promise<PresentationPage>;
   /** Current state and a tail snapshot first, then reduced changes. Reconnect refreshes loaded rows. */
   subscribePresentation(options: PresentationSubscribeOptions): () => void;
+  /** New Attention raises from now on, with no replay. Returns an unsubscribe. */
+  subscribeAttention(onRaise: (raised: AttentionRaised) => void): () => void;
 };
 
 export type PresentationSubscribeOptions = {
@@ -167,6 +169,47 @@ export function connect(options: { url: string; token?: string | undefined; auth
           if (stopped) return;
           attempt = Date.now() - openedAt >= BACKOFF_MIN_MS ? 1 : attempt + 1;
           onLink?.("retrying");
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, backoffMs(attempt));
+            wake = () => { clearTimeout(timer); resolve(); };
+          });
+          wake = undefined;
+        }
+      })();
+      return () => { stopped = true; stream?.abort(); wake?.(); };
+    },
+
+    subscribeAttention(onRaise) {
+      let stopped = false;
+      let stream: AbortController | undefined;
+      let wake: (() => void) | undefined;
+      let attempt = 0;
+      void (async () => {
+        while (!stopped) {
+          const controller = new AbortController();
+          stream = controller;
+          const arm = () => setTimeout(() => controller.abort(), SILENCE_MS);
+          let watchdog = arm();
+          const receivedChunk = () => { clearTimeout(watchdog); watchdog = arm(); };
+          const openedAt = Date.now();
+          try {
+            const response = await fetch(`${options.url}/api/attention/events`, {
+              headers, ...credentials, signal: controller.signal,
+            });
+            if (FATAL_STATUS.has(response.status)) return;
+            if (response.ok && response.body) {
+              for await (const raised of readEventStream<AttentionRaised>(response.body, receivedChunk)) {
+                if (stopped) return;
+                onRaise(raised);
+              }
+            }
+          } catch {
+            if (stopped) return;
+          } finally {
+            clearTimeout(watchdog);
+          }
+          if (stopped) return;
+          attempt = Date.now() - openedAt >= BACKOFF_MIN_MS ? 1 : attempt + 1;
           await new Promise<void>(resolve => {
             const timer = setTimeout(resolve, backoffMs(attempt));
             wake = () => { clearTimeout(timer); resolve(); };

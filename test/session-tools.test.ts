@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FakeBackend } from '../src/backend/fake/index.ts';
 import type { BackendCreateOptions } from '../src/backend/types.ts';
 import { SessionHost } from '../src/daemon/host.ts';
@@ -56,6 +58,8 @@ test('Agent messages are attributed, queued while busy, and delivered without in
   assert.match(target.prompts[1]!, new RegExp(`Agent message from ${f.id}`));
   assert.match(target.prompts[1]!, /not human authorization/);
   assert.match(target.prompts[1]!, /report status/);
+  const delivered = f.host.logFor(other).since(0).map(({ event }) => event).filter(event => event.type === 'user_message');
+  assert.deepEqual(delivered.map(event => event.fromSessionId), [undefined, f.id]);
   await assert.rejects(f.tools.send({ sessionId: f.id, text: 'loop' }), /yourself/);
   await f.host.dispose(other);
   await assert.rejects(f.tools.send({ sessionId: other, text: 'restart' }));
@@ -70,6 +74,7 @@ test('Agent-created independent sessions retain permission policy and return an 
   assert.equal(options.permissionMode, 'ask');
   assert.equal(options.scope, tmpdir());
   assert.match(f.backend.latest.prompts[0]!, /investigate tests/);
+  assert.ok(f.host.logFor(result.sessionId).since(0).some(({ event }) => event.type === 'user_message' && event.fromSessionId === f.id));
   assert.ok(f.host.logFor(f.id).since(0).some(({ event }) => event.type === 'notice' && event.text.includes(result.sessionId)));
   await assert.rejects(f.tools.create({ text: 'x', scope: 'relative' }), /absolute/);
   await assert.rejects(f.tools.create({ text: 'x', permissionMode: 'always' } as never));
@@ -124,4 +129,22 @@ test('Presentation Transcript tool pages bound oversized entries and total respo
   assert.ok(Buffer.byteLength(JSON.stringify(page)) < 50_000);
   assert.ok(page.start > 0);
   assert.equal(page.entries.at(-1)?.index, 99);
+});
+
+test('A read-only caller creates writable sessions in a Project and read-only ones at the Project Root', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'flow-root-'));
+  const project = mkdtempSync(join(tmpdir(), 'flow-project-'));
+  t.after(() => { rmSync(root, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); });
+  const backend = new CaptureBackend();
+  const host = new SessionHost({ projectRoot: () => root, projectPaths: () => [project] });
+  host.registerBackend(backend);
+  t.after(() => host.shutdown());
+  await host.create({ scope: root, backend: 'fake', readOnly: true });
+  const tools = backend.options[0]!.sessionTools!;
+  const readOnly = (id: string) => host.list().find(session => session.id === id)?.readOnly;
+  const { sessionId: atRoot } = await tools.create({ text: 'look' }) as { sessionId: string };
+  assert.equal(readOnly(atRoot), true);
+  const { sessionId: inProject } = await tools.create({ text: 'fix', scope: project }) as { sessionId: string };
+  assert.equal(readOnly(inProject), undefined);
+  await assert.rejects(tools.create({ text: 'x', scope: tmpdir() }), /Project Root/);
 });

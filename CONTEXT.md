@@ -18,16 +18,25 @@ _Avoid_: history, log, messages
 **Conversation Context**: What the model can currently see, owned and compacted by the backend.
 _Avoid_: history, transcript, memory
 
-**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and Git publish text are excluded.
+**Spend**: Cumulative billing for an Agent Session across models, including Subagents and Workflow Executions; not Conversation Context occupancy. Summary Model naming and commit and Pull Request text are excluded. A Fork's Spend counts only its own work.
 _Avoid_: usage, cost, tokens, context
 
-**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session.
+**Plan Limit**: A subscription's share of model use in a rolling window, as a Backend Adapter reports it. Not Spend.
+_Avoid_: quota, rate limit
+
+**Spend Ledger**: The durable record of all billed model use on the Session Host, by Spend Source and model. It outlives Reaping.
+_Avoid_: usage log, cost history
+
+**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, commit and Pull Request text, Pull Request Tour or Workflow Builder.
+_Avoid_: category, kind
+
+**Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session. Work started by backgrounded work is backgrounded too.
 _Avoid_: child session, task, sidechain, agent
 
 **Background Call**: A tool call continuing past its turn, owned by its Backend Session and identified by the call. Unlike a Subagent, it has no conversation; it does not occupy the Agent Session.
 _Avoid_: background task, async tool, Subagent
 
-**Session Host**: The daemon owning Agent Sessions and the Steering Queue.
+**Session Host**: The daemon owning Agent Sessions, scheduled work and the Steering Queue.
 _Avoid_: server, manager, supervisor
 
 **Backend Adapter**: The translation of an agent SDK into Agent Events and session commands.
@@ -36,8 +45,17 @@ _Avoid_: driver, provider, runtime, plugin
 **Workflow Definition**: A saved graph of typed Workflow Steps, copied when a Workflow Execution starts.
 _Avoid_: script, pipeline
 
-**Workflow Execution**: Work owned by one Agent Session, with a retained Workflow Definition and an independent execution slot. Its requests do not occupy the parent turn.
+**Workflow Execution**: Work owned by an Agent Session or a scheduled Workflow Occurrence, with a retained Workflow Definition and an independent execution slot. Scheduled work acquires an Agent Session only for agent work, human input or recovery. Its requests do not occupy the parent turn.
 _Avoid_: parent turn, Background Call
+
+**Workflow Schedule**: A saved recurrence and launch configuration for a Workflow Definition, admitted while the Session Host runs.
+_Avoid_: cron, timer, job
+
+**Workflow Occurrence**: One due time of a Workflow Schedule, retaining its launch configuration and outcome independently of any Agent Session.
+_Avoid_: Agent Session, job
+
+**Workflow Invocation**: One awaited call of a Workflow Definition, owned by a calling Workflow Step within its Workflow Execution. It has its own inputs, attempts, results and recovery checkpoint.
+_Avoid_: child Agent Session, detached execution
 
 **Workflow Step**: One typed operation in a Workflow Definition. Each attempt owns its work until it stops.
 _Avoid_: turn, node
@@ -61,6 +79,9 @@ _Avoid_: slash command, action, tool
 
 **Skill**: A named prompt expanded by the backend at the start of a message. Unlike a Command, it enters both records as an ordinary user turn.
 _Avoid_: command, prompt template, macro
+
+**Tour**: A read-only, markdown walk through a branch's committed changes, started from the Git pane or the Pull Requests page. From the Git pane, a Subagent writes it on the Agent Session's Backend Session, and its Spend counts on the Agent Session. From the Pull Requests page, there is no Agent Session: a Backend Session of the Session Host writes it from a read-only copy of the Pull Request head, and its Spend is a Pull Request Tour. Unlike a Command, it does not occupy the Agent Session and does not enter the Presentation Transcript. The Session Host keeps only the latest Tour per Agent Session and per Pull Request, in memory.
+_Avoid_: review, summary, walkthrough
 
 **Enquiry**: A tool call asking the human one to four Questions, answered once as a whole within its turn. It requests input, not authorisation. Only an Enquiry from the parent turn occupies the Agent Session.
 _Avoid_: prompt, dialog, poll, permission
@@ -100,6 +121,8 @@ _Avoid_: group, tier, section, bucket
 **Attention**: Durable machine-wide inbox state, separate from activity and Lifecycle. Needs input contains unresolved Enquiries and Permission Prompts; Unread contains qualifying unseen outcomes. An acknowledgement names the version actually observed so a delayed client cannot consume newer output. The rail orders Needs input, Unread, then the existing Bands.
 _Avoid_: activity, occupancy, per-client read state
 
+**Notification**: Browser alert for a new Attention raise. Shown only while the Flow tab is hidden, and only in a browser where the user turned it on.
+
 **Dormant**: No Backend Session is running; the Presentation Transcript is readable and the Agent Session can be Revived.
 _Avoid_: idle, stopped, dead
 
@@ -112,6 +135,12 @@ _Avoid_: cleanup, purge, expire
 **Revive**: Attach a fresh Backend Session to a Dormant Agent Session, continuing its Presentation Transcript; also un-settles a Settled Agent Session.
 _Avoid_: resume, restart, reconnect
 
+**Rewind**: Return an Agent Session's Conversation Context, and optionally its Scope's files, to just before one of its user messages. The Presentation Transcript records it and keeps the rewound entries.
+_Avoid_: undo, revert, reset
+
+**Fork**: A new Agent Session started from just before a user message of another Agent Session, with a copy of that session's Presentation Transcript up to that point. The source session does not change.
+_Avoid_: branch, clone, copy
+
 **Ended**: Deliberately disposed of, with no Backend Session running. Its Presentation Transcript remains readable, but it cannot be Revived and is never Reaped.
 _Avoid_: closed, deleted, settled
 
@@ -120,8 +149,11 @@ _Avoid_: migrate, sync, adopt
 
 ### Directories and shells
 
-**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036).
+**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036). A Scope can be a Read-only Scope.
 _Avoid_: workspace, project, repo
+
+**Read-only Scope**: A Scope that its Agent Session can read but not write, fixed when the Agent Session is created. Only the Project Root can be one. A Fork keeps it. Under Bubblewrap and a per-session Sandbox it is enforced; elsewhere it is best effort, not a boundary (ADR 0046).
+_Avoid_: scopeless, sandbox
 
 **Project**: A directory its owner has opted into as a candidate Scope, independent of any Agent Session.
 _Avoid_: scope, workspace, repo
@@ -129,7 +161,7 @@ _Avoid_: scope, workspace, repo
 **Candidate**: A discovered repository beneath the Project Root that is not yet a Project or offered as a Scope.
 _Avoid_: project, suggestion
 
-**Worktree**: A Scope created and owned by the Session Host from a Project. Bound at Agent Session creation and removed on Reap only when clean.
+**Worktree**: A Scope created and owned by the Session Host from a Project for an Agent Session or scheduled Workflow Occurrence. Removed only when safe; scheduled work can transfer its existing Worktree to an Agent Session.
 _Avoid_: checkout, clone, workspace
 
 **Project Root**: The configured directory beneath which Candidates are discovered; does not restrict Project locations.
@@ -144,6 +176,26 @@ _Avoid_: terminal, pty, console, session
 **Scrollback**: Bounded recent Shell output retained for reconnecting clients; lossy and never written to disk.
 _Avoid_: transcript, history, log
 
+### Git
+
+**Pull Request**: A GitHub pull request into the base repository of a Project. The Pull Request of a Scope is the one from its branch, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
+_Avoid_: merge request, review, change
+
+**Review**: A verdict submitted on a Pull Request: Approve, Request changes or Comment.
+_Avoid_: Tour, approval, check
+
+**Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
+_Avoid_: target branch, trunk, upstream
+
+**Source Branch**: The Project branch a Worktree is cut from.
+_Avoid_: base branch, main worktree
+
+**Stack**: An ordered list of branches on a trunk, registered in the repository of a Scope. Each branch builds on the branch below it, and the lowest branch builds on the trunk. The branch below is the Base Branch of its Pull Request. A chain of Pull Request bases or of commits that is not registered is not a Stack.
+_Avoid_: inferred stack, stack graph, candidate
+
+**Git State**: The summary of a Scope that the Session Host holds and shows with each Agent Session in it: changed files, commits ahead of and behind the upstream, and the status of its Pull Request. It is derived again when needed. It is not stored and is not part of the Presentation Transcript.
+_Avoid_: git status, branch state, repository state
+
 ### Settings and models
 
 **Settings**: Session Host values governing all Agent Sessions on the machine, not one Scope.
@@ -152,7 +204,7 @@ _Avoid_: config, preferences, profile
 **Isolation Mode**: The machine-wide filesystem policy for new work: none (unrestricted), Bubblewrap, or Sandbox. Automatic selection never chooses Sandbox.
 _Avoid_: isolation on/off, enabled
 
-**Sandbox**: The Docker Sandboxes (sbx) microVM serving one Agent Session in Sandbox mode, or all of them when it is the Shared Sandbox. Its Backend Sessions, MCP clients and Workflow code run in it. Never restarted: a per-session Sandbox is removed when its owned work stops, and replaced on Revive.
+**Sandbox**: The Docker Sandboxes (sbx) microVM serving an Agent Session or scheduled Workflow Execution in Sandbox mode, or shared work when it is the Shared Sandbox. Its Backend Sessions, MCP clients and Workflow code run in it. Never restarted: a per-session Sandbox is removed when its owned work stops, and replaced on Revive.
 _Avoid_: container, VM (alone)
 
 **Sandbox Sharing**: The setting that selects one Sandbox for each Agent Session, or one Shared Sandbox for all of them.
@@ -161,7 +213,7 @@ _Avoid_: VM reuse, pooling
 **Shared Sandbox**: The one Sandbox that serves all Agent Sessions in Sandbox mode when Sandbox Sharing is shared. It lives while the Session Host runs. It accepts only Scopes under the Project Root, a Worktree or a Workflow builder.
 _Avoid_: global VM, pool
 
-**Sandbox Provider**: The file naming the sbx commands and guest paths that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
+**Sandbox Provider**: The file naming the sbx commands, guest paths and an optional host Claude path that Flow uses to create, run in and remove Sandboxes. Read once at Session Host startup.
 _Avoid_: harness (the harness only supplies a base environment)
 
 **MCP Connection**: A machine-wide definition of an external tool service. Selected for an Agent Session and inherited by its Subagents and Workflow Steps. Its identity survives edits.
@@ -179,8 +231,11 @@ _Avoid_: preferred model, fallback model
 **Default Effort**: Per-Backend Adapter Effort choice for new Agent Sessions when none is specified; never reapplied on Revive or inherited by a Summary Model.
 _Avoid_: default thinking, reasoning budget
 
-**Summary Model**: Per-Backend Adapter model used to name Agent Sessions and draft editable Git publish text through a throwaway Backend Session, outside their Spend.
+**Summary Model**: Per-Backend Adapter model used to name Agent Sessions and suggest editable commit and Pull Request text through a throwaway Backend Session, outside their Spend.
 _Avoid_: naming model, title model, small model
+
+**Tour Model**: Per-Backend Adapter model and Effort used to write a Tour. When none is set, the Tour uses the Agent Session's current model and Effort, or the Default Model of the Default Backend for a Pull Request Tour.
+_Avoid_: review model
 
 **Effort**: How hard a model is asked to think, with available levels declared per model.
 _Avoid_: thinking, reasoning, budget

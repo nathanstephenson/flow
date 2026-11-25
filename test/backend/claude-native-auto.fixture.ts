@@ -133,6 +133,7 @@ export async function runNativeAutoScenario(scenario: Scenario): Promise<NativeA
     allowedTools: [], env: {
       ...process.env, ANTHROPIC_API_KEY: "sk-ant-api03-native-auto-fixture",
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, CLAUDE_CONFIG_DIR: join(root, ".claude"), CLAUDE_CODE_ENABLE_AUTO_MODE: "1",
+      CLAUDE_CODE_AUTO_MODE_SERVER: "0",
       DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     },
     canUseTool: async (tool, input, extra) => {
@@ -194,7 +195,7 @@ export async function runNativeAutoSubagentIncompatibilityScenario(): Promise<Na
     if (toolResultIncludes(body.messages, "native-auto-executed")) commandExecuted = true;
     if (transcript.includes("native child marker") && !hasToolResult) {
       streamMessage(response, { type: "tool_use", id: "sub-tool-1", name: "Bash", input: {
-        command: "echo native-auto-executed &",
+        command: "echo native-auto-executed & wait",
       } }, "tool_use");
     } else if (!hasToolResult) {
       streamMessage(response, { type: "tool_use", id: "agent-call-1", name: "Agent", input: {
@@ -230,6 +231,7 @@ export async function runNativeAutoSubagentIncompatibilityScenario(): Promise<Na
         ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
         CLAUDE_CONFIG_DIR: join(root, ".claude"),
         CLAUDE_CODE_ENABLE_AUTO_MODE: "1",
+        CLAUDE_CODE_AUTO_MODE_SERVER: "0",
         DISABLE_TELEMETRY: "1",
         DISABLE_ERROR_REPORTING: "1",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

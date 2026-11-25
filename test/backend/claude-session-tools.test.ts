@@ -109,7 +109,8 @@ for (const variant of ["absent", "none", "builder"] as const) it(`Claude exclude
     ...(variant === "none" ? { tools: "none" as const } : { workflowBuilder: builder }) });
   assert.equal(f.launch.mcpServers?.flow_sessions, undefined);
   assert.equal(f.launch.allowedTools?.some(name => name.startsWith(prefix)), false);
-  assert.equal(f.launch.hooks?.PreToolUse, undefined);
+  if (variant === "absent") assert.equal(f.launch.hooks?.PreToolUse?.some(hook => hook.matcher !== undefined), false);
+  else assert.equal(f.launch.hooks?.PreToolUse, undefined);
   if (variant !== "absent") for (const name of names) assert.equal((await f.ask(name))?.behavior, "deny");
 });
 

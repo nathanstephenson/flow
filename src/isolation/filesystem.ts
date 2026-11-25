@@ -27,6 +27,7 @@ export type FilesystemIsolationOptions = {
   readablePaths?: string[];
   credentials?: "pi" | "claude" | "none";
   workflowBuilder?: boolean;
+  scopeReadOnly?: boolean;
 };
 
 export type FilesystemIsolation = {
@@ -321,7 +322,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     const privateHome = join(scratch, "home");
     mkdirSync(join(privateHome, ".pi/agent"), { recursive: true, mode: 0o700 });
     mkdirSync(join(privateHome, ".claude"), { mode: 0o700 });
-    args.push("--bind-fd", pinned(scope, options.expectedScopeIdentity), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
+    args.push(options.scopeReadOnly ? "--ro-bind-fd" : "--bind-fd", pinned(scope, options.expectedScopeIdentity), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
       "--dir", `${virtualRoot}/run`, "--bind-fd", pinned(backend), virtualState);
     for (const path of directoryMasks) args.push("--remount-ro", path);
 
@@ -345,7 +346,11 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
       }
     };
     if (options.credentials === "pi") {
-      for (const name of ["auth.json", "models.json", "settings.json"]) stage(join(piDir, name), join(env.PI_CODING_AGENT_DIR!, name));
+      const auth = join(piDir, 'auth.json');
+      if (existsSync(auth) && (!statSync(auth).isFile() || realpathSync(auth) !== resolve(auth))) {
+        throw new Error(`Credential must be a regular, non-symlink file: ${auth}`);
+      }
+      for (const name of ["models.json", "settings.json"]) stage(join(piDir, name), join(env.PI_CODING_AGENT_DIR!, name));
       if (!options.workflowBuilder) resources("Pi", piDir, env.PI_CODING_AGENT_DIR!, ["AGENTS.md", "skills", "prompts", "themes", "extensions", "packages", "bin", "tools"]);
     } else if (options.credentials === "claude") {
       stage(join(claudeAuthDir, ".credentials.json"), join(env.CLAUDE_CONFIG_DIR!, ".credentials.json"));

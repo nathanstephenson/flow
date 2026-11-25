@@ -1,13 +1,14 @@
 import { ChevronLeft } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import type { Entry } from "@client/reduce.ts";
-import { useActivityKeys, useAgentSession, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
+import { useActivityKeys, useAgentSession, useChrome, useEntry, useTranscriptHistory, useTranscriptKeys } from "@/agent-session-view.tsx";
 import { TranscriptEntry } from "@/components/transcript-entry.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { useNow } from "@/lib/use-now.ts";
-import { ordered, subagentKeys, timing } from "@/presentation/subagent-list.ts";
-import { memberKeys } from "@/presentation/subagent-rows.ts";
+import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
+import { ordered, runningCalls, subagentKeys, subtitle as subtitleOf, timing } from "@/presentation/subagent-list.ts";
+import { ownKeys } from "@/presentation/subagent-rows.ts";
 import type { AgentSessionView } from "@/store/contract.ts";
 import { cn } from "@/lib/utils.ts";
 
@@ -43,7 +44,7 @@ export function SubagentsPane({ sessionId, subagentId, onSelect }: SubagentsPane
   return subagentId === undefined ? (
     <SubagentList view={view} onSelect={onSelect} />
   ) : (
-    <SubagentTranscript view={view} subagentId={subagentId} onBack={() => onSelect(undefined)} />
+    <SubagentTranscript view={view} subagentId={subagentId} onSelect={onSelect} />
   );
 }
 
@@ -75,8 +76,8 @@ function SubagentList({
   return (
     <div className="min-h-0 flex-1 overflow-auto p-2">
       <ul className="flex flex-col gap-1">
-        {rows.map((key) => (
-          <SubagentRow key={key} view={view} entryKey={key} now={now} onSelect={() => onSelect(key)} />
+        {rows.map(({ key, depth }) => (
+          <SubagentRow key={key} view={view} keys={keys} entryKey={key} depth={depth} now={now} onSelect={() => onSelect(key)} />
         ))}
       </ul>
     </div>
@@ -92,16 +93,22 @@ function SubagentList({
  */
 function SubagentRow({
   view,
+  keys,
   entryKey: key,
+  depth,
   now,
   onSelect,
 }: {
   view: AgentSessionView;
+  keys: readonly string[];
   entryKey: string;
+  depth: number;
   now: number;
   onSelect: () => void;
 }) {
   const entry = useEntry(view, key);
+  const models = useChrome(view).capabilities?.models ?? [];
+  const calls = useRunningCalls(view, keys, key);
   if (entry?.kind !== "subagent") return null;
   const waiting = entry.status === "waiting";
   const live = entry.status === "running" || waiting;
@@ -111,10 +118,10 @@ function SubagentRow({
   // and they usually are the same type. The type is the answer to a second question, so it sits
   // under it. Falls back to the type when no brief was recorded, rather than leading with nothing.
   const title = entry.description ?? entry.name;
-  const subtitle = entry.description === undefined ? undefined : entry.name;
+  const subtitle = subtitleOf(entry, models);
 
   return (
-    <li>
+    <li style={{ paddingLeft: `calc(var(--spacing) * ${depth * 4})` }}>
       <button
         type="button"
         onClick={onSelect}
@@ -138,6 +145,11 @@ function SubagentRow({
           {subtitle === undefined ? null : (
             <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{subtitle}</span>
           )}
+          {calls === 0 ? null : (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {calls} call{calls === 1 ? "" : "s"} running
+            </span>
+          )}
           {when.at === "" ? null : (
             <span className="ml-auto shrink-0 text-xs text-muted-foreground/70" title={`${when.label} ${when.at}`}>
               {when.at}
@@ -147,6 +159,13 @@ function SubagentRow({
       </button>
     </li>
   );
+}
+
+/** A number, so the row re-renders only when the count moves rather than on every transcript tick. */
+function useRunningCalls(view: AgentSessionView, keys: readonly string[], subagent: string): number {
+  const subscribe = useCallback((listener: () => void) => view.subscribeTranscript(listener), [view]);
+  const snapshot = useCallback(() => runningCalls(keys, (key) => view.getEntry(key), subagent), [view, keys, subagent]);
+  return useSyncExternalStore(subscribe, snapshot);
 }
 
 /**
@@ -184,16 +203,16 @@ function StatusDot({ status }: { status: Extract<Entry, { kind: "subagent" }>["s
 function SubagentTranscript({
   view,
   subagentId,
-  onBack,
+  onSelect,
 }: {
   view: AgentSessionView;
   subagentId: string;
-  onBack: () => void;
+  onSelect: (subagentId: string | undefined) => void;
 }) {
   const keys = useTranscriptKeys(view);
   const history = useTranscriptHistory(view);
   const getEntry = useMemo(() => (key: string) => view.getEntry(key), [view]);
-  const rows = useMemo(() => memberKeys(keys, getEntry, subagentId), [keys, getEntry, subagentId]);
+  const rows = useMemo(() => ownKeys(keys, getEntry, subagentId), [keys, getEntry, subagentId]);
   const subagent = useEntry(view, subagentId);
 
   return (
@@ -212,7 +231,10 @@ function SubagentTranscript({
                 : subagent?.kind === "subagent" && subagent.status === "running" ? "Working. Nothing to show yet." : "This agent produced no rows of its own."}
             </p>
           ) : (
-            rows.map((key: string) => <SubagentRowEntry key={key} view={view} entryKey={key} />)
+            // A nested Subagent's card opens that Subagent here, in place of this one.
+            <SubagentOpenProvider value={onSelect}>
+              {rows.map((key: string) => <SubagentRowEntry key={key} view={view} entryKey={key} />)}
+            </SubagentOpenProvider>
           )}
       </div>
 
@@ -225,7 +247,7 @@ function SubagentTranscript({
         <Button
           variant="outline"
           size="sm"
-          onClick={onBack}
+          onClick={() => onSelect(undefined)}
           className="pointer-events-auto w-full justify-start rounded-xl border bg-card/85 shadow-lg backdrop-blur-sm"
         >
           <ChevronLeft aria-hidden data-icon="inline-start" />

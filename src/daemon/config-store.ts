@@ -90,6 +90,8 @@ export class ConfigStore {
   /** Read when a sandbox-mode Backend Session starts. */
   readonly sandboxSharing = (): SandboxSharing => this.config.sandboxSharing ?? "session";
 
+  readonly updateSourceBranch = (): boolean => this.config.worktrees?.updateSource === true;
+
   readonly updateChannel = (): UpdateChannel => this.config.updateChannel ?? "stable";
 
   /** The current Config, in the file's own units. Cheap: held in memory, not re-read. */
@@ -170,6 +172,8 @@ export class ConfigStore {
     if (summary) return { backend, ...summary };
     return providers?.summary?.backend === backend ? providers.summary : undefined;
   };
+
+  readonly tourModel = (backend: string) => this.config.providers?.tours?.[backend];
 
   readonly defaultPermissionMode = (backend: string) => this.config.providers?.permissionModes?.[backend];
 
@@ -258,6 +262,7 @@ function settingsOf(config: Config): Settings {
     ...(config.filesystemIsolation === undefined ? {} : { filesystemIsolation: config.filesystemIsolation }),
     ...(config.sandboxSharing === undefined ? {} : { sandboxSharing: config.sandboxSharing }),
     ...(config.updateChannel === undefined ? {} : { updateChannel: config.updateChannel }),
+    ...(config.worktrees === undefined ? {} : { worktrees: config.worktrees }),
     // Omitted rather than defaulted when there is no Project Root, which is what
     // `Settings["projects"]` being optional means — see src/protocol/settings.ts.
     ...(config.projects === undefined ? {} : { projects: config.projects }),

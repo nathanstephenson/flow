@@ -256,7 +256,7 @@ function millisecondOfDay(now: Date): number {
   return now.getTime() - midnight;
 }
 
-async function refExists(repo: string, branch: string): Promise<boolean> {
+export async function refExists(repo: string, branch: string): Promise<boolean> {
   const found = await run(
     repo,
     ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
@@ -282,8 +282,7 @@ export type WorktreePlan = { branch: string; path: string };
  *
  * A name the reader supplied is never bumped. Someone who typed a name and got a different one has
  * been ignored, so an existing ref is a failure carrying git's own conclusion; bumping exists only
- * for the derived name, and only because the TUI never types and would otherwise be stuck on the
- * second worktree of the day.
+ * for the derived name, which would otherwise be stuck on the second worktree of the day.
  */
 export async function planWorktree(options: {
   repo: string;
@@ -359,13 +358,41 @@ export async function createWorktree(options: {
   return { ok: true, value: planned.value };
 }
 
-export async function removeMergedBranch(repo: string, branch: string): Promise<GitResult<void>> {
-  const target = await head(repo);
-  if (!target.ok) return target;
-  if (target.value.detached) return refuse(`delete refs/heads/${branch}`, "The source repository has a detached HEAD");
+/**
+ * Fast-forward the Source Branch `branch` in the Project `repo` to its upstream.
+ *
+ * Only a fast-forward: git refuses a diverged branch, and refuses to move a branch that is
+ * checked out in a linked worktree, so nothing local is ever lost.
+ */
+export async function updateSourceBranch(repo: string, branch: string): Promise<GitResult<void>> {
+  const upstream = await run(repo, ["rev-parse", "--symbolic-full-name", `${branch}@{upstream}`], GIT_READ_TIMEOUT_MS);
+  if (!upstream.ok) return upstream;
+  const remote = await run(repo, ["config", "--get", `branch.${branch}.remote`], GIT_READ_TIMEOUT_MS);
+  if (!remote.ok) return remote;
+  const fetched = await run(repo, ["fetch", "--quiet", remote.value.trim()], GIT_WRITE_TIMEOUT_MS);
+  if (!fetched.ok) return fetched;
+  const target = upstream.value.trim();
+  const contained = await run(repo, ["merge-base", "--is-ancestor", target, `refs/heads/${branch}`], GIT_READ_TIMEOUT_MS);
+  if (contained.ok) return { ok: true, value: undefined };
+  if (contained.failure.code !== 1) return contained;
+  const current = await head(repo);
+  if (!current.ok) return current;
+  const updated = !current.value.detached && current.value.name === branch
+    ? await run(repo, ["merge", "--ff-only", "--quiet", target], GIT_WRITE_TIMEOUT_MS)
+    : await run(repo, ["fetch", ".", `${target}:refs/heads/${branch}`], GIT_WRITE_TIMEOUT_MS);
+  if (!updated.ok) return updated;
+  return { ok: true, value: undefined };
+}
 
+export async function removeMergedBranch(repo: string, branch: string, from?: string): Promise<GitResult<void>> {
+  if (from === undefined) {
+    const target = await head(repo);
+    if (!target.ok) return target;
+    if (target.value.detached) return refuse(`delete refs/heads/${branch}`, "The source repository has a detached HEAD");
+    from = target.value.name;
+  }
   const branchRef = `refs/heads/${branch}`;
-  const targetRef = `refs/heads/${target.value.name}`;
+  const targetRef = `refs/heads/${from}`;
   const merged = await run(repo, ["merge-base", "--is-ancestor", branchRef, targetRef], GIT_READ_TIMEOUT_MS);
   if (!merged.ok) return merged;
 
@@ -407,6 +434,17 @@ export async function removeWorktree(options: {
   );
   if (!removed.ok) return removed;
   return { ok: true, value: undefined };
+}
+
+/** Check out `oid` with a detached HEAD at `path`, for read-only host work such as a Tour. */
+export async function addDetachedCheckout(repo: string, oid: string, path: string): Promise<GitResult<void>> {
+  const added = await run(repo, ["worktree", "add", "--detach", path, oid], GIT_WRITE_TIMEOUT_MS);
+  return added.ok ? { ok: true, value: undefined } : added;
+}
+
+export async function removeDetachedCheckout(repo: string, path: string): Promise<void> {
+  await run(repo, ["worktree", "remove", "--force", path], GIT_WRITE_TIMEOUT_MS);
+  await run(repo, ["worktree", "prune"], GIT_WRITE_TIMEOUT_MS);
 }
 
 /**

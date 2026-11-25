@@ -1,0 +1,45 @@
+import type { VisualSchema, WorkflowDefinition } from '../protocol/workflows.ts';
+import { validateDefinition } from './graph.ts';
+import { WorkflowValidationError } from './errors.ts';
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([, value]) => value !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, value]) => [key, canonical(value)]));
+  return value;
+}
+
+export function deriveResultSchema(definition: WorkflowDefinition): VisualSchema {
+  return validateDefinition(definition).resultSchema;
+}
+
+export function resolveWorkflowCalls(definition: WorkflowDefinition, lookup: (id: string) => WorkflowDefinition, testStepId?: string): Record<string, WorkflowDefinition> {
+  const retained = new Map<string, WorkflowDefinition>();
+  const visited = new Set<string>();
+  const visit = (candidate: WorkflowDefinition, ancestry: Set<string>, selected?: string): void => {
+    if (ancestry.has(candidate.id)) throw new WorkflowValidationError(`Recursive Workflow call: ${candidate.id}`);
+    const graph = validateDefinition(candidate);
+    const current = graph.definition;
+    if (selected !== undefined && !current.steps.some(step => step.id === selected)) throw new WorkflowValidationError('Unknown test step');
+    retained.set(current.id, current);
+    const path = new Set([...ancestry, current.id]);
+    for (const step of current.steps) {
+      if (step.kind !== 'workflow' || (selected !== undefined && step.id !== selected)) continue;
+      if (path.has(step.workflowId)) throw new WorkflowValidationError(`Recursive Workflow call: ${step.workflowId}`);
+      let target = retained.get(step.workflowId);
+      if (!target) {
+        try { target = lookup(step.workflowId); }
+        catch (error) {
+          if ((error as { code?: string } | null)?.code === 'ENOENT') throw new WorkflowValidationError(`Missing Workflow call target: ${step.workflowId}`);
+          throw error;
+        }
+      }
+      if (!target || target.id !== step.workflowId) throw new WorkflowValidationError(`Missing Workflow call target: ${step.workflowId}`);
+      const called = validateDefinition(target);
+      if (JSON.stringify(canonical(step.contract.inputSchema)) !== JSON.stringify(canonical(called.definition.inputSchema)) || JSON.stringify(canonical(step.contract.outputSchema)) !== JSON.stringify(canonical(called.resultSchema))) throw new WorkflowValidationError(`Workflow call contract does not match target: ${step.workflowId}`);
+      if (!visited.has(target.id)) visit(called.definition, path);
+    }
+    visited.add(current.id);
+  };
+  visit(definition, new Set(), testStepId);
+  return Object.fromEntries(retained);
+}

@@ -20,6 +20,7 @@ export interface CodeExecutorOptions {
   resolveSecret?: (reference: string, signal: AbortSignal) => Promise<string>;
   /** Sandbox mode: the Agent Session's VM, which Workflow code shares (ADR 0032). */
   sandbox?: (sessionId: string) => Promise<Sandbox>;
+  readOnly?: (sessionId: string) => boolean;
 }
 const environment = { PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' };
 
@@ -93,7 +94,7 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
     const stateRoot = options.stateRoot ? { stateRoot: options.stateRoot } : {};
     const scope = canonicalScope(context.scope);
     const runtimePath = realpathSync(options.runtimePath);
-    const sandbox = isolationMode === 'sandbox' ? await options.sandbox!(context.sessionId) : undefined;
+    const sandbox = isolationMode === 'sandbox' ? await options.sandbox!(context.ownerId ?? context.sessionId!) : undefined;
     const nodePath = sandbox ? sandbox.nodePath : realpathSync(options.nodePath);
     const args = ['--noprofile', '--norc', '-c', 'ulimit -c 0; exec "$@"', 'flow-workflow', nodePath, '--max-old-space-size=128', runtimePath];
     const timeout = Math.min(context.step.timeoutMs ?? 60_000, 2_147_000_000);
@@ -107,7 +108,8 @@ export async function createCodeExecutors(options: CodeExecutorOptions): Promise
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
     const launch = sandbox?.command(scope, ['/bin/bash', ...args], environment);
     const isolation = isolationEnabled && !sandbox ? await prepareFilesystemIsolation({ scope, expectedScope: resolve(context.scope),
-      ...stateRoot, command: '/bin/bash', args, env, readablePaths: [nodePath, runtimePath], credentials: 'none' }) : undefined;
+      ...stateRoot, command: '/bin/bash', args, env, readablePaths: [nodePath, runtimePath], credentials: 'none',
+      scopeReadOnly: context.sessionId !== undefined && !!options.readOnly?.(context.sessionId) }) : undefined;
     const release = sandbox?.hold();
     try {
       context.signal.throwIfAborted();

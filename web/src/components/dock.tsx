@@ -1,11 +1,12 @@
 import { Activity, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Plus, SquareTerminal, X } from "lucide-react";
+import { Bot, GitBranch, Plus, SquareTerminal, Workflow, X } from "lucide-react";
 
 import { dockSizeStep, tabLabel, type Dock as DockState, type DockSide, type DockTab } from "@/presentation/docks.ts";
 import type { MobileDetail } from "@/presentation/mobile-navigation.ts";
 import type { DockAction } from "@/docks.ts";
 import { DockResizeHandle } from "@/components/dock-resize-handle.tsx";
 import { GitPane } from "@/components/git-pane.tsx";
+import type { AppendResult } from "@/components/composer.tsx";
 import { SubagentsPane } from "@/components/subagents-pane.tsx";
 import { ShellPane, type ShellStatus } from "@/components/shell-pane.tsx";
 import { Button } from "@/components/ui/button.tsx";
@@ -23,7 +24,7 @@ export type MobileDockNavigation = {
 /**
  * One desktop Dock, or the body selected by the unified mobile tab row.
  *
- * Non-Shell tab bodies stay mounted while hidden. That is what preserves an unfinished Git publish,
+ * Non-Shell tab bodies stay mounted while hidden. That is what preserves an unfinished commit message,
  * Workflow input, or graph selection when a reader changes mobile views. Shells are the deliberate
  * exception: hiding one disconnects its renderer while its host pty continues running, exactly as
  * minimising a desktop Dock always has.
@@ -33,19 +34,23 @@ export function Dock({
   dock,
   sessionId,
   shells,
+  git = true,
   dispatch,
   visible = true,
   mobile = false,
   mobileNavigation,
+  onAddToDraft,
 }: {
   side: DockSide;
   dock: DockState;
   sessionId: string;
   shells: boolean;
+  git?: boolean;
   dispatch: (action: DockAction) => void;
   visible?: boolean;
   mobile?: boolean;
   mobileNavigation?: MobileDockNavigation;
+  onAddToDraft: (block: string) => AppendResult;
 }) {
   const root = useRef<HTMLElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
@@ -160,7 +165,7 @@ export function Dock({
         {dock.tabs.length === 0 ? (
           <ContentPicker
             onChooseWorkflows={() => dispatch({ type: "open-workflows", side })}
-            onChooseGit={() => dispatch({ type: "open-git", side })}
+            {...(git ? { onChooseGit: () => dispatch({ type: "open-git", side }) } : {})}
             onChooseSubagents={() => dispatch({ type: "open-subagents", side })}
             {...(shells ? { onChooseShell: () => dispatch({ type: "open-shell", side }) } : {})}
           />
@@ -174,9 +179,11 @@ export function Dock({
               visible={visible && tab.id === active?.id}
               sessionId={sessionId}
               shells={shells}
+              git={git}
               dispatch={dispatch}
               onStatus={(status) => noteStatus(tab.id, status)}
               mobileNavigation={mobileNavigation?.tabId === tab.id ? mobileNavigation : undefined}
+              onAddToDraft={onAddToDraft}
             />
           ))
         )}
@@ -192,9 +199,11 @@ function DockTabPanel({
   visible,
   sessionId,
   shells,
+  git,
   dispatch,
   onStatus,
   mobileNavigation,
+  onAddToDraft,
 }: {
   side: DockSide;
   tab: DockTab;
@@ -202,9 +211,11 @@ function DockTabPanel({
   visible: boolean;
   sessionId: string;
   shells: boolean;
+  git: boolean;
   dispatch: (action: DockAction) => void;
   onStatus: (status: ShellStatus) => void;
   mobileNavigation?: MobileDockNavigation;
+  onAddToDraft: (block: string) => AppendResult;
 }) {
   const content = tab.content;
   return (
@@ -228,7 +239,13 @@ function DockTabPanel({
           />
         </Suspense>
       ) : content?.kind === "git" ? (
-        <GitPane key={`${sessionId}-${tab.id}`} sessionId={sessionId} />
+        <GitPane
+          key={`${sessionId}-${tab.id}`}
+          sessionId={sessionId}
+          pullRequest={content.pullRequest === true}
+          onPullRequestShown={() => dispatch({ type: "pull-request-shown", side, tabId: tab.id })}
+          onAddToDraft={onAddToDraft}
+        />
       ) : content?.kind === "subagents" ? (
         <SubagentsPane
           key={tab.id}
@@ -259,7 +276,7 @@ function DockTabPanel({
       ) : (
         <ContentPicker
           onChooseWorkflows={() => dispatch({ type: "open-workflows", side, tabId: tab.id })}
-          onChooseGit={() => dispatch({ type: "open-git", side, tabId: tab.id })}
+          {...(git ? { onChooseGit: () => dispatch({ type: "open-git", side, tabId: tab.id }) } : {})}
           onChooseSubagents={() => dispatch({ type: "open-subagents", side, tabId: tab.id })}
           {...(shells ? { onChooseShell: () => dispatch({ type: "open-shell", side, tabId: tab.id }) } : {})}
         />
@@ -276,7 +293,7 @@ function ContentPicker({
   onChooseGit,
 }: {
   onChooseWorkflows: () => void;
-  onChooseGit: () => void;
+  onChooseGit?: () => void;
   onChooseShell?: () => void;
   onChooseSubagents: () => void;
 }) {
@@ -288,8 +305,16 @@ function ContentPicker({
           Shell
         </Button>
       )}
-      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>Git</Button>
-      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseWorkflows}>Workflows</Button>
+      {onChooseGit === undefined ? null : (
+        <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseGit}>
+          <GitBranch aria-hidden data-icon="inline-start" />
+          Git
+        </Button>
+      )}
+      <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseWorkflows}>
+        <Workflow aria-hidden data-icon="inline-start" />
+        Workflows
+      </Button>
       <Button variant="outline" size="sm" className="max-lg:min-h-10" onClick={onChooseSubagents}>
         <Bot aria-hidden data-icon="inline-start" />
         Agents

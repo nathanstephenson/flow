@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 
 import type { Entry } from "../../../src/client/reduce.ts";
 import { entryKey } from "./entry-key.ts";
-import { memberKeys, ownKeys, producerKey, subagentKey } from "./subagent-rows.ts";
+import { producerKey, subagentKey } from "../../../src/client/subagent-tree.ts";
+import { ownKeys } from "./subagent-rows.ts";
 
 const parentSaid: Entry = { kind: "assistant", id: "m1", text: "dispatching", final: true };
 const subagentEntry: Entry = { kind: "subagent", id: "call_1", name: "Explore", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
@@ -30,7 +31,22 @@ const spawningCall: Entry = { kind: "tool", id: "call_1", name: "Agent", input: 
 const backgroundedCall: Entry = { kind: "tool", id: "call_2", name: "Bash", input: { command: "npm test -- --watch" }, status: "complete" };
 const backgroundCard: Entry = { kind: "background_call", id: "call_2", tool: "Bash", status: "running", startedAt: "2026-01-01T00:00:00.000Z" };
 
-const ENTRIES = [parentSaid, spawningCall, subagentEntry, childSaid, childTool, parentTool, backgroundedCall, backgroundCard];
+/** A Subagent the first one spawned, with its own spawning call and its own row. */
+const nestedCall: Entry = { kind: "tool", id: "call_3", name: "Agent", input: {}, status: "complete", producer: { subagentId: "call_1" } };
+const nestedEntry: Entry = {
+  kind: "subagent",
+  id: "call_3",
+  name: "Explore",
+  status: "running",
+  startedAt: "2026-01-01T00:00:00.000Z",
+  producer: { subagentId: "call_1" },
+};
+const nestedSaid: Entry = { kind: "assistant", id: "m3", text: "deeper", final: true, producer: { subagentId: "call_3" } };
+
+const ENTRIES = [
+  parentSaid, spawningCall, subagentEntry, childSaid, childTool, parentTool, backgroundedCall, backgroundCard,
+  nestedCall, nestedEntry, nestedSaid,
+];
 const KEYS = ENTRIES.map(entryKey);
 const getEntry = (key: string): Entry | undefined => ENTRIES.find((entry) => entryKey(entry) === key);
 
@@ -84,14 +100,35 @@ describe("splitting a Subagent's rows from the session's own", () => {
   });
 
   it("gives one Subagent its own rows and nobody else's", () => {
-    assert.deepEqual(memberKeys(KEYS, getEntry, subagentKey("call_1")), [
+    assert.deepEqual(ownKeys(KEYS, getEntry, subagentKey("call_1")), [
       entryKey(childSaid),
       entryKey(childTool),
+      entryKey(nestedEntry),
     ]);
   });
 
+  it("puts an instruction in the receiving Subagent's rows, not the session's", () => {
+    const instruction: Entry = { kind: "user", id: "i1", text: "Also check the tests", producer: { subagentId: "call_1" } };
+    const keys = [entryKey(subagentEntry), entryKey(instruction)];
+    const get = (key: string) => (key === entryKey(instruction) ? instruction : getEntry(key));
+    assert.deepEqual(ownKeys(keys, get), [entryKey(subagentEntry)]);
+    assert.deepEqual(ownKeys(keys, get, subagentKey("call_1")), [entryKey(instruction)]);
+  });
+
+  it("shows a nested Subagent's card in its parent's rows, not in the session's", () => {
+    assert.ok(!ownKeys(KEYS, getEntry).includes(entryKey(nestedEntry)));
+    const parentRows = ownKeys(KEYS, getEntry, subagentKey("call_1"));
+    assert.ok(parentRows.includes(entryKey(nestedEntry)));
+    assert.ok(!parentRows.includes(entryKey(nestedCall)), "its spawning call goes, as at the root");
+    assert.ok(!parentRows.includes(entryKey(nestedSaid)), "and its work stays its own");
+  });
+
+  it("gives a nested Subagent only its own rows", () => {
+    assert.deepEqual(ownKeys(KEYS, getEntry, subagentKey("call_3")), [entryKey(nestedSaid)]);
+  });
+
   it("gives a Subagent that produced nothing an empty transcript", () => {
-    assert.deepEqual(memberKeys(KEYS, getEntry, subagentKey("never-ran")), []);
+    assert.deepEqual(ownKeys(KEYS, getEntry, subagentKey("never-ran")), []);
   });
 
   it("keeps a key whose Entry has gone rather than hiding the row", () => {

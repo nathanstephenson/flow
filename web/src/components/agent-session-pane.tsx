@@ -25,13 +25,19 @@ import { sessionProject } from "@/presentation/session-project.ts";
 import type { DraftStash } from "@/drafts.ts";
 import type { AgentSessionView, Chrome } from "@/store/contract.ts";
 import { AgentSessionPaneHeader } from "@/components/agent-session-pane-header.tsx";
-import { Composer } from "@/components/composer.tsx";
+import { appendToComposer, Composer, type ComposerHandle } from "@/components/composer.tsx";
 import { Dock } from "@/components/dock.tsx";
 import { TranscriptSearchField } from "@/components/transcript-search-field.tsx";
 import { SubagentOpenProvider } from "@/components/subagent-open.tsx";
+import { PullRequestOpenProvider } from "@/components/pull-request-open.tsx";
+import { samePullRequest } from "@/presentation/github-link.ts";
+import { MessageActionsProvider, type MessageActions } from "@/components/message-actions.tsx";
+import type { Draft, PendingAttachment } from "@/presentation/drafts.ts";
+import type { RewindRestore } from "../../../src/protocol/events.ts";
 import { TranscriptView } from "@/components/transcript-view.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { useSidebar } from "@/components/ui/sidebar.tsx";
+import { toast } from "@/components/ui/toaster.tsx";
 import { cn } from "@/lib/utils.ts";
 
 /**
@@ -69,6 +75,8 @@ export type AgentSessionPaneProps = {
   drafts: DraftStash;
   /** Open the New Agent Session view with this Project chosen. */
   onOpenProject: (path: string) => void;
+  /** Focus another Agent Session, e.g. a new Fork. */
+  onOpenSession: (sessionId: string) => void;
 };
 
 export function AgentSessionPane({
@@ -79,6 +87,7 @@ export function AgentSessionPane({
   onCloseSearch,
   drafts,
   onOpenProject,
+  onOpenSession,
 }: AgentSessionPaneProps) {
   const view = useAgentSession(sessionId);
 
@@ -87,6 +96,7 @@ export function AgentSessionPane({
   return (
     <AttachedPane
       key={sessionId}
+      onOpenSession={onOpenSession}
       view={view}
       sessionId={sessionId}
       searchOpen={searchOpen}
@@ -123,6 +133,7 @@ function AttachedPane({
   onCloseSearch,
   drafts,
   onOpenProject,
+  onOpenSession,
 }: { view: AgentSessionView } & AgentSessionPaneProps) {
   const chrome = useChrome(view);
   const running = useRunningWork(view);
@@ -131,6 +142,42 @@ function AttachedPane({
   // The verbs this composer's controls stand for. Built here rather than inside the Composer, which
   // no longer knows there is a session behind it — see web/src/composer-actions.ts.
   const actions = useSessionActions(sessionId);
+  const [prefill, setPrefill] = useState<{ nonce: number; draft: Draft }>();
+  const summary = sessions.find((candidate) => candidate.id === sessionId);
+  const pullRequestUrl = summary?.readOnly ? undefined : summary?.git?.pr?.url;
+  const { dispatch } = docks;
+  const openPullRequest = useCallback((href: string) => {
+    if (pullRequestUrl === undefined || !samePullRequest(href, pullRequestUrl)) return false;
+    dispatch({ type: "open-git", pullRequest: true });
+    return true;
+  }, [dispatch, pullRequestUrl]);
+  const messageActions = useMemo((): MessageActions => {
+    const capabilities = chrome.capabilities;
+    if (!capabilities || chrome.status === "ended") return { openSession: onOpenSession };
+    const busy = chrome.status === "running" || chrome.status === "awaiting" || chrome.queueDepth > 0 ||
+      chrome.activeSubagents > 0 || chrome.activeBackgroundCalls > 0;
+    return {
+      openSession: onOpenSession,
+      ...(capabilities.rewind ? { rewind: {
+        files: capabilities.rewindFiles === true,
+        blocked: busy ? "Wait for the turn, queued messages and background work to finish, or abort them, to rewind" : undefined,
+        run: (userMessageId: string, restore: RewindRestore) => void (async () => {
+          const message = await run<{ text: string; attachments: string[] }>({ type: "rewind", sessionId, userMessageId, restore });
+          if (!message || restore === "files") return;
+          const draft = { text: message.text, attachments: await rewoundAttachments(sessionId, message.attachments) };
+          setPrefill((previous) => ({ nonce: (previous?.nonce ?? 0) + 1, draft }));
+        })(),
+      } } : {}),
+      ...(capabilities.fork ? { fork: {
+        worktree: chrome.branch !== undefined && !chrome.branch.detached,
+        run: (userMessageId: string, worktree: boolean) => void (async () => {
+          const created = await run<string>({ type: "fork", sessionId, userMessageId,
+            ...(worktree && chrome.branch ? { worktree: { from: chrome.branch.name } } : {}) });
+          if (created) onOpenSession(created);
+        })(),
+      } } : {}),
+    };
+  }, [chrome.activeBackgroundCalls, chrome.activeSubagents, chrome.branch, chrome.capabilities, chrome.queueDepth, chrome.status, onOpenSession, run, sessionId]);
   const [query, setQuery] = useState("");
   const mobile = useIsMobile();
   const { openMobile } = useSidebar();
@@ -209,6 +256,13 @@ function AttachedPane({
     }
   }, [docks.layout, docks.reveal, mobile, sessionId, writeMobileView]);
 
+  const composer = useRef<ComposerHandle | null>(null);
+  const addToDraft = useCallback((block: string) => {
+    const result = appendToComposer(composer.current, drafts, sessionId, block);
+    if (result === "added" && mobile && mobileViewRef.current.kind !== "transcript") toast.info("Added to Draft", "Open the transcript to see the Draft.");
+    return result;
+  }, [drafts, mobile, sessionId]);
+
   const selectMobileTab = useCallback((side: DockSide, tabId: string) => {
     docks.dispatch({ type: "activate", side, tabId });
     const key = `${side}:${tabId}`;
@@ -240,7 +294,6 @@ function AttachedPane({
     else writeMobileView({ kind: "dock", side: shownMobileView.side, tabId: shownMobileView.tabId }, true);
   }, [shownMobileView, writeMobileView]);
 
-  const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
   const { config } = useHost();
   const project = summary ? sessionProject(summary, config.projectList ?? []) : undefined;
@@ -301,6 +354,8 @@ function AttachedPane({
       <SubagentOpenProvider
         value={(subagentKey) => docks.dispatch({ type: "open-subagents", subagentId: subagentKey })}
       >
+        <PullRequestOpenProvider value={openPullRequest}>
+        <MessageActionsProvider value={messageActions}>
         <TranscriptView
           view={view}
           query={query}
@@ -311,9 +366,14 @@ function AttachedPane({
           observedBoundary={summary?.attention?.observedSeq}
           onObserved={observe}
         />
+        </MessageActionsProvider>
+        </PullRequestOpenProvider>
       </SubagentOpenProvider>
 
       <Composer
+        handle={composer}
+        key={prefill?.nonce ?? 0}
+        seed={prefill?.draft}
         id={sessionId}
         chrome={chrome}
         actions={actions}
@@ -343,14 +403,15 @@ function AttachedPane({
          * transcript before the prompt is raised.
          */
         authorisingSummary={authorisingSummary(view, chrome)}
+        controls={summary?.readOnly ? { branches: false } : undefined}
         work={running}
         // An agent opens in whichever Dock already shows the Subagents, so a reader who keeps them
         // in the bottom Dock is not handed a second copy on the right. Opened rather than toggled,
         // or a click would close the thing it asked to see. A Background Call has no pane of its
         // own, so it goes to the tool row that launched it.
         onOpenWork={(work) =>
-          work.kind === "agent"
-            ? docks.dispatch({ type: "open-subagents", subagentId: work.key })
+          work.kind === "agent" || work.subagent
+            ? docks.dispatch({ type: "open-subagents", subagentId: work.kind === "agent" ? work.key : work.subagent! })
             : revealEntry(work.key)
         }
       />
@@ -371,11 +432,12 @@ function AttachedPane({
     >
       <AgentSessionPaneHeader
         sessionId={sessionId}
-        project={summary ? projectName(summary.scope, summary.worktree) : undefined}
+        project={summary ? projectName(summary.scope, summary.worktree, summary.readOnly) : undefined}
         onOpenProject={project ? () => onOpenProject(project.path) : undefined}
         title={title}
         chrome={chrome}
         docks={mobile ? undefined : docks}
+        {...(summary?.readOnly ? {} : { onOpenPullRequest: () => docks.dispatch({ type: "open-git", pullRequest: true }) })}
       />
 
       {mobile ? (
@@ -383,6 +445,7 @@ function AttachedPane({
           layout={docks.layout}
           selected={shownMobileView}
           shells={shells}
+          git={!summary?.readOnly}
           onTranscript={() => writeMobileView(MOBILE_TRANSCRIPT)}
           onSelect={selectMobileTab}
           onNew={() => {
@@ -423,8 +486,10 @@ function AttachedPane({
           dock={bottom}
           sessionId={sessionId}
           shells={shells}
+          git={!summary?.readOnly}
           dispatch={docks.dispatch}
           mobile={mobile}
+          onAddToDraft={addToDraft}
           visible={mobile ? selectedDock?.side === "bottom" : bottomOpen}
           mobileNavigation={mobile && selectedDock?.side === "bottom" ? {
             tabId: selectedDock.tabId,
@@ -438,8 +503,10 @@ function AttachedPane({
           dock={right}
           sessionId={sessionId}
           shells={shells}
+          git={!summary?.readOnly}
           dispatch={docks.dispatch}
           mobile={mobile}
+          onAddToDraft={addToDraft}
           visible={mobile ? selectedDock?.side === "right" : rightOpen}
           mobileNavigation={mobile && selectedDock?.side === "right" ? {
             tabId: selectedDock.tabId,
@@ -457,6 +524,7 @@ function MobileViewSelector({
   layout,
   selected,
   shells,
+  git,
   onTranscript,
   onSelect,
   onNew,
@@ -465,6 +533,7 @@ function MobileViewSelector({
   layout: Docks["layout"];
   selected: MobileView;
   shells: boolean;
+  git: boolean;
   onTranscript: () => void;
   onSelect: (side: DockSide, tabId: string) => void;
   onNew: () => void;
@@ -529,7 +598,7 @@ function MobileViewSelector({
         className="h-auto min-h-10 shrink-0 rounded-none"
         onClick={onNew}
         aria-label="New tab in the right Dock"
-        title={shells ? "New tab" : "New Git, Workflows, or Agents tab"}
+        title={shells ? "New tab" : git ? "New Git, Workflows, or Agents tab" : "New Workflows or Agents tab"}
       >
         <Plus aria-hidden />
       </Button>
@@ -563,4 +632,21 @@ function revealEntry(key: string): void {
   row.classList.remove("entry-flash");
   void row.offsetWidth;
   row.classList.add("entry-flash");
+}
+
+/** A rewound message's Attachments, fetched back from the Session Host so the Composer can send them again. */
+async function rewoundAttachments(sessionId: string, ids: string[]): Promise<PendingAttachment[]> {
+  const loaded = await Promise.all(ids.map(async (id) => {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(id)}`);
+    if (!response.ok) return undefined;
+    const blob = await response.blob();
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    return { key: id, mediaType: blob.type as PendingAttachment["mediaType"], data, url: URL.createObjectURL(blob) };
+  }));
+  return loaded.filter((attachment) => attachment !== undefined);
 }

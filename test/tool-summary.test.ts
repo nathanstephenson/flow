@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { toolSummary } from "../src/client/tool-summary.ts";
+import { fullToolSummary, toolSummary } from "../src/client/tool-summary.ts";
 
 describe("a tool call's argument précis", () => {
   it("names the file an edit or a write touched", () => {
@@ -18,8 +18,13 @@ describe("a tool call's argument précis", () => {
     assert.equal(summary?.length, 60);
   });
 
+  it("shows the description the model wrote for a call, ahead of its arguments", () => {
+    assert.equal(toolSummary({ command: "npm test", description: "run the tests" }), "run the tests");
+    assert.equal(toolSummary({ description: "Review the diff", prompt: "Read every file", subagent_type: "reviewer" }), "Review the diff");
+  });
+
   it("shows the beginning of a command, which is the part that says what it does", () => {
-    assert.equal(toolSummary({ command: "npm test", description: "run the tests" }), "npm test");
+    assert.equal(toolSummary({ command: "npm test", description: " " }), "npm test");
 
     const long = toolSummary({ command: `git log --oneline ${"--author=someone ".repeat(10)}` });
     assert.equal(long?.startsWith("git log --oneline"), true);
@@ -49,5 +54,16 @@ describe("a tool call's argument précis", () => {
     assert.equal(toolSummary({ limit: 20, offset: 0 }), undefined);
     assert.equal(toolSummary({ left: "one", right: "two" }), undefined, "two strings, no way to choose");
     assert.equal(toolSummary({ file_path: "   " }), undefined);
+  });
+
+  it("gives the main argument in full, without the description", () => {
+    const command = `git log --oneline ${"--author=someone ".repeat(10)}`.trim();
+    assert.equal(fullToolSummary({ command, description: "show the log" }), command);
+    assert.equal(fullToolSummary({ command: "cd /repo &&\n  npm test" }), "cd /repo && npm test");
+
+    const path = `/repo/${"nested/".repeat(20)}deep.ts`;
+    assert.equal(fullToolSummary({ file_path: path }), path);
+    assert.equal(fullToolSummary({ limit: 20 }), undefined);
+    assert.equal(fullToolSummary({ description: "Review the diff", prompt: "Read every file" }), "Read every file");
   });
 });

@@ -46,3 +46,47 @@ export type BranchList = {
   /** Set when the list was cut short, the same courtesy `DirectoryMatches` extends. */
   truncated?: true;
 };
+
+export type GitFile = { path: string; status: string };
+export type ChangesView = "uncommitted" | "branch";
+export type GitChanges = { files: GitFile[]; commits: string[]; base?: string; fingerprint?: string; branch?: string; defaultBranch?: string; canRename?: boolean };
+export type GitDiff = { text: string } | { binary: true } | { tooLarge: true };
+
+export type CheckStatus = "passing" | "failing" | "pending" | "none";
+
+export type PullRequestSummary = {
+  number: number;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  checks: CheckStatus;
+  checksCompleted: number;
+  reviewDecision: string | null;
+  unresolvedThreads: number;
+  updatedAt: string;
+};
+
+export type GitState = {
+  revision: string;
+  branch?: string;
+  head?: string;
+  defaultBranch?: string;
+  changed: number;
+  ahead: number;
+  behind: number;
+  upstream: boolean;
+  github?: true;
+  pr?: PullRequestSummary;
+};
+
+export type CommitInput = { fingerprint: string; paths: string[]; message: string; branch?: string };
+export type PushState = { branch: string; head: string; remote?: string; replaced: string[] };
+export type PushInput = { head: string; replace?: string };
+export type PullRequestInput = { head: string; title: string; body: string; draft: boolean };
+export type GitTextKind = "commit" | "pull_request" | "branch";
+export type GitText = { message?: string; title?: string; body?: string; branch?: string };
+export type TourView =
+  | { state: "idle" }
+  | { state: "running"; branch?: string; head?: string }
+  | { state: "done"; text: string; branch: string; head: string; repo: string }
+  | { state: "failed"; problem: string; branch?: string; head?: string };

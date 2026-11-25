@@ -12,6 +12,14 @@ function ownedProjects(stateDir: string): string {
   return projects;
 }
 
+/** File checkpoints, kept beside the records so a Revive can still rewind files. */
+function ownedFileHistory(stateDir: string): string {
+  const history = join(realpathSync(stateDir), "claude-file-history");
+  if (!existsSync(history)) mkdirSync(history, { mode: 0o700 });
+  if (!lstatSync(history).isDirectory() || realpathSync(history) !== history) throw new Error("Unsafe Claude file checkpoint directory");
+  return history;
+}
+
 /** Claude's Scope key, including the CLI's suffix for paths longer than 200 characters. */
 export function projectKey(scope: string): string {
   const key = scope.replace(/[^a-zA-Z0-9]/g, "-");
@@ -30,6 +38,17 @@ export function relocateClaudeState(stateDir: string, from: string, to: string):
   if (!existsSync(source) || source === destination) return;
   if (existsSync(destination)) throw new Error(`A Claude record for ${to} already exists`);
   renameSync(source, destination);
+}
+
+/** Copy the record `from.resume` and its sidecars for a Fork. File checkpoints are not copied: they name `from.scope` paths. */
+export function forkClaudeState(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(from.resume)) throw new Error("Invalid Claude resume ID");
+  const source = join(ownedProjects(from.stateDir), projectKey(from.scope));
+  const destination = join(ownedProjects(to.stateDir), projectKey(to.scope));
+  mkdirSync(destination, { recursive: true, mode: 0o700 });
+  copyRecord(join(source, `${from.resume}.jsonl`), join(destination, `${from.resume}.jsonl`));
+  if (existsSync(join(source, from.resume))) copyRecord(join(source, from.resume), join(destination, from.resume));
+  return from.resume;
 }
 
 /** Copy only regular, unlinked records; never follow a link into other host state. */
@@ -186,6 +205,7 @@ export function prepareClaudeState(stateDir: string | undefined, inherited: Node
   const cleanup = () => rmSync(config, { recursive: true, force: true });
   try {
     symlinkSync(projects, join(config, "projects"), "dir");
+    symlinkSync(ownedFileHistory(stateDir), join(config, "file-history"), "dir");
     for (const name of [".config.json", ".claude.json"]) {
       const from = name === ".claude.json" && !existsSync(join(source, name)) ? join(home, name) : join(source, name);
       if (existsSync(from) && statSync(from).isFile()) copyFileSync(from, join(config, name));

@@ -40,6 +40,24 @@ test("worker provides synchronous snapshots and updates them before emitting mod
   await session.compact!();
 });
 
+test("a mounted read-only Scope reaches the adapter and refuses writes in the worker", isolationIntegration, async (t) => {
+  const { session, scope, events } = await fixture(t, { readOnly: "mounted" });
+  await session.prompt("read-only");
+  const event = events.findLast(event => event.type === "message" && event.id === "read-only");
+  assert.ok(event?.type === "message");
+  assert.deepEqual(JSON.parse(event.text), { readOnly: "mounted", write: "EROFS" });
+  await assert.rejects(readFile(join(scope, "read-only-probe")));
+});
+
+test("a tool-less Backend Session cannot write its Scope", isolationIntegration, async (t) => {
+  const { session, scope, events } = await fixture(t, { tools: "none" });
+  await session.prompt("read-only");
+  const event = events.findLast(event => event.type === "message" && event.id === "read-only");
+  assert.ok(event?.type === "message");
+  assert.equal(JSON.parse(event.text).write, "EROFS");
+  await assert.rejects(readFile(join(scope, "read-only-probe")));
+});
+
 test("worker preserves startup permission policy and confirms live changes through IPC", isolationIntegration, async t => {
   const { session, events } = await fixture(t, { permissionMode: "ask" });
   const readMode = async () => {
@@ -311,4 +329,24 @@ test("installed Pi SDK operates across the worker boundary with isolated state",
   assert.equal(events.at(-1)?.type, "turn_ended");
   assert.equal(f.requests.length, 1);
   await session.dispose();
+});
+
+async function lostWorker(t: TestContext, prompt: string, options: { diagnosticsWindowMs?: number } = {}) {
+  const scope = await mkdtemp(join(tmpdir(), "flow-worker-lost-"));
+  const events: BackendEvent[] = [];
+  const session = await new WorkerBackend({ backendModule, isolationMode: () => "none", ...options })
+    .create({ scope, emit: (event) => events.push(event) });
+  t.after(async () => { await session.dispose(); await rm(scope, { recursive: true, force: true }); });
+  await session.prompt(prompt);
+  await until(() => events.some((event) => event.type === "notice"));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  return events.filter((event) => event.type === "notice").map((event) => (event as { text: string }).text);
+}
+
+test("worker exit reports the exit and its stderr, not the SDK shadowing warning or a disconnect", async (t) => {
+  assert.deepEqual(await lostWorker(t, "sandbox-lost"), ["Backend worker exited (1): error: context canceled"]);
+});
+
+test("worker exit reports only recent stderr", async (t) => {
+  assert.deepEqual(await lostWorker(t, "stale-stderr", { diagnosticsWindowMs: 200 }), ["Backend worker exited (1): recent output"]);
 });

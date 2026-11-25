@@ -16,7 +16,7 @@ import { compactTokens } from "./context-usage.ts";
 import { deriveStatus } from "./status.ts";
 
 /**
- * The reducer both front-ends share. The TUI and the web UI import this same function, which is
+ * The reducer every front-end shares. The CLI and the web UI import this same function, which is
  * what stops them drifting.
  *
  * Pure and order-dependent only on `seq`: replaying a Presentation Transcript twice gives the same
@@ -65,10 +65,11 @@ export type Authorisation = "asked" | "allowed" | "always" | "denied";
  */
 export type OpenPermission = { callId: string; tool: string; context?: string; allowAlways?: boolean; authorizationScope?: string; producer?: Producer };
 
-export type Entry =
+/** `rewound` marks an entry a Rewind took out of the Conversation Context. It stays in the Presentation Transcript. */
+export type Entry = ({ rewound?: true }) & (
   /** `attachments` are ids; a front-end fetches the bytes from the Session Host to show them. */
   /** `at`: when the message was logged. */
-  | { kind: "user"; id: string; text: string; attachments?: string[]; at?: string }
+  | { kind: "user"; id: string; text: string; note?: string; attachments?: string[]; at?: string; fromSessionId?: string; producer?: Producer }
   /** `endedAt`: when the turn ended, on the parent's last message of that turn only. */
   | { kind: "assistant"; id: string; text: string; final: boolean; producer?: Producer; endedAt?: string }
   | { kind: "thinking"; id: string; text: string; final: boolean; producer?: Producer }
@@ -116,6 +117,8 @@ export type Entry =
       id: string;
       name: string;
       description?: string;
+      model?: string;
+      effort?: EffortLevel;
       status: SubagentStatus;
       waitingOn?: SubagentWait;
       producer?: Producer;
@@ -187,7 +190,7 @@ export type Entry =
       context?: string;
       producer?: Producer;
     }
-  | { kind: "notice"; id: string; level: NoticeLevel; text: string }
+  | { kind: "notice"; id: string; level: NoticeLevel; text: string; sessionId?: string }
   /**
    * Going Dormant, Settling and Reviving are structural facts about an Agent Session's life, not
    * messages about it — ADR 0003 calls a Revive "a visible marker". Collapsing them into `notice`
@@ -199,7 +202,7 @@ export type Entry =
    * a fact about the Conversation Context rather than the Agent Session, and a reader needs to tell
    * "the model was given a summary of what it had read" apart from "this session stopped".
    */
-  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted"; text: string };
+  | { kind: "marker"; id: string; marker: "dormant" | "settled" | "revived" | "compacted" | "rewound" | "forked"; text: string; fromSessionId?: string });
 
 function combinedSpend(values: Spend[]): Spend {
   const result: Spend = { tokens: 0, cached: 0, costUSD: 0, models: [] };
@@ -355,7 +358,7 @@ export function reduceAll(entries: Iterable<LoggedEvent>, from: ViewState = init
 function stampTurnEnd(entries: Entry[], at: string): Entry[] {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]!;
-    if (entry.kind === "user") return entries;
+    if (entry.kind === "user" && entry.producer === undefined) return entries;
     if (entry.kind === "assistant" && entry.producer === undefined) {
       if (entry.endedAt === at) return entries;
       const next = entries.slice();
@@ -424,11 +427,17 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: upsert(state.entries, {
           kind: "user",
           id: event.id,
-          text: event.text,
+          ...(event.fromSessionId === undefined
+            ? { text: event.text }
+            : { text: event.text.slice(event.text.indexOf("\n") + 1), fromSessionId: event.fromSessionId }),
+          ...(event.note === undefined ? {} : { note: event.note }),
           ...(event.attachments === undefined ? {} : { attachments: event.attachments }),
           at,
         }),
       };
+
+    case "subagent_instruction":
+      return { ...state, entries: upsert(state.entries, { kind: "user", id: event.id, text: event.text, producer: event.producer, at }) };
 
     case "turn_started":
       return { ...state, turnInFlight: true };
@@ -504,6 +513,9 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
           id: event.subagentId,
           name: event.name,
           ...(event.description === undefined ? {} : { description: event.description }),
+          ...(event.model === undefined ? {} : { model: event.model }),
+          ...(event.effort === undefined ? {} : { effort: event.effort }),
+          ...(event.producer === undefined ? {} : { producer: event.producer }),
           status: event.state,
           // Only ever set alongside "waiting", so a Subagent that resumes drops it rather than
           // carrying a stale object it is no longer waiting on.
@@ -673,7 +685,8 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
     case "notice":
       return {
         ...state,
-        entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text }],
+        entries: [...state.entries, { kind: "notice", id: `notice-${state.entries.length}`, level: event.level, text: event.text,
+          ...(event.sessionId === undefined ? {} : { sessionId: event.sessionId }) }],
       };
 
     case "compacting":
@@ -724,6 +737,28 @@ function applyEvent(state: ViewState, event: AgentEvent, at: string): ViewState 
         entries: [
           ...state.entries,
           { kind: "marker", id: `settled-${state.entries.length}`, marker: "settled", text: "Settled" },
+        ],
+      };
+
+    case "rewound": {
+      const from = state.entries.findIndex((entry) => entry.kind === "user" && entry.id === event.userMessageId);
+      const text = event.restore === "files" ? "Files rewound" : event.restore === "both" ? "Rewound conversation and files" : "Rewound conversation";
+      return {
+        ...state,
+        entries: [
+          ...(from < 0 || event.restore === "files" ? state.entries
+            : state.entries.map((entry, index) => index < from || entry.rewound ? entry : { ...entry, rewound: true as const })),
+          { kind: "marker", id: `rewound-${state.entries.length}`, marker: "rewound", text },
+        ],
+      };
+    }
+
+    case "forked":
+      return {
+        ...state,
+        entries: [
+          ...state.entries,
+          { kind: "marker", id: `forked-${state.entries.length}`, marker: "forked", text: "Forked", fromSessionId: event.fromSessionId },
         ],
       };
 

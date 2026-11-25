@@ -7,6 +7,7 @@ import type { WorkflowActivity, WorkflowActivityPage } from "../../../src/protoc
 import { isPinned } from "../presentation/stick-to-bottom.ts";
 import { entryKey } from "../presentation/entry-key.ts";
 import { pollAfterInitialLoad } from "../presentation/workflow-transcript-polling.ts";
+import { workflowActivityQuery } from "../presentation/workflow-calls.ts";
 import { TranscriptEntry } from "./transcript-entry.tsx";
 import { workflowApi } from "./workflow-api.ts";
 import { Button } from "./ui/button.tsx";
@@ -22,8 +23,8 @@ const POLL_MS = 2_000;
  * merging makes reconnects and overlapping pages idempotent. The scroller uses the same pin rule as
  * the parent transcript: output follows only while the reader is already at the bottom.
  */
-export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, completed }: { base: string; sessionId: string; stepId: string; attempt: number; legacy: boolean; completed: boolean }) {
-  const query = `stepId=${encodeURIComponent(stepId)}${legacy ? "" : `&attempt=${attempt}`}`;
+export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, completed, invocationId }: { base: string; sessionId?: string | undefined; stepId: string; attempt: number; legacy: boolean; completed: boolean; invocationId?: string | undefined }) {
+  const query = workflowActivityQuery(stepId, attempt, legacy, invocationId);
   const [activity, setActivity] = useState<WorkflowActivity[]>([]);
   const events = useRef<WorkflowActivity[]>([]);
   const [previous, setPrevious] = useState<number>();
@@ -190,12 +191,12 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
     };
   }, []);
 
-  const transcript = useMemo(() => reduceAll(activity.flatMap(item => item.event.type === "spend" ? [] : [{
+  const transcript = useMemo(() => reduceAll(sessionId ? activity.flatMap(item => item.event.type === "spend" ? [] : [{
     sessionId,
     seq: item.sequence,
     at: new Date(item.at).toISOString(),
     event: item.event,
-  } as LoggedEvent])), [activity, sessionId]);
+  } as LoggedEvent]) : []), [activity, sessionId]);
   const entries = transcript.entries;
   const compacting = !completed && transcript.compacting === true;
 
@@ -230,13 +231,13 @@ export function WorkflowTranscript({ base, sessionId, stepId, attempt, legacy, c
             {!entries.length ? <Button size="sm" variant="outline" onClick={() => retry(value => value + 1)}>Retry</Button> : null}
           </div>
         ) : null}
-        {entries.map(entry => <TranscriptEntry key={entryKey(entry)} entry={entry} query="" sessionId={sessionId} />)}
+        {sessionId ? entries.map(entry => <TranscriptEntry key={entryKey(entry)} entry={entry} query="" sessionId={sessionId} />) : activity.map(item => <p key={item.sequence} className="whitespace-pre-wrap break-words p-2 text-xs">{item.event.type === 'notice' ? item.event.text : JSON.stringify(item.event)}</p>)}
         {compacting ? (
           <p className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground" role="status" data-testid="workflow-compacting">
             <Loader2 className="size-3.5 animate-spin" aria-hidden />Compacting context…
           </p>
         ) : null}
-        {!loading && !entries.length && !compacting && !error ? <p className="p-2 text-xs text-muted-foreground">No activity recorded for this attempt.</p> : null}
+        {!loading && !entries.length && !activity.length && !compacting && !error ? <p className="p-2 text-xs text-muted-foreground">No activity recorded for this attempt.</p> : null}
       </div>
       {!atBottom && activity.length ? (
         <button type="button" onClick={toLatest} aria-label="Jump to latest Workflow activity" className="absolute right-3 bottom-3 rounded-full border bg-popover p-2 text-popover-foreground shadow-md hover:bg-muted">

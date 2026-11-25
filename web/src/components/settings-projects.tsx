@@ -8,6 +8,7 @@ import { groupProjects, includeEntryFor } from "@/presentation/projects.ts";
 import { SaveRow, SettingsGroup, useSaveSettings } from "@/components/settings-parts.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { Switch } from "@/components/ui/switch.tsx";
 import { authenticatedFetch } from "@/authentication.ts";
 
 /**
@@ -67,6 +68,33 @@ export function ProjectsSettings() {
       <Candidates candidates={candidates} hasRoot={config.projects?.root !== undefined} onAdd={add} />
       <DirectorySearch onAdd={add} />
       <ProjectRootField current={configuredRoot} saving={saving} onSave={save} onSaved={refresh} />
+      <SettingsGroup title="Worktrees" description="Machine-wide.">
+        <label className="flex items-center justify-between gap-4">
+          <span className="text-sm">Always start new Agent Sessions in a Worktree</span>
+          <Switch
+            checked={config.worktrees?.always === true}
+            disabled={saving}
+            onCheckedChange={(always) =>
+              void save({ worktrees: { always } }, always ? "New Agent Sessions start in a Worktree." : "New Agent Sessions start in the Project.")
+            }
+          />
+        </label>
+        <label className="flex items-center justify-between gap-4">
+          <span className="flex flex-col gap-1">
+            <span className="text-sm">Update the Source Branch before cutting a Worktree</span>
+            <span className="text-xs text-muted-foreground">
+              Fast-forwards the branch from its upstream in the Project. If this fails, the Worktree is cut from the local branch and a warning is shown.
+            </span>
+          </span>
+          <Switch
+            checked={config.worktrees?.updateSource === true}
+            disabled={saving}
+            onCheckedChange={(updateSource) =>
+              void save({ worktrees: { updateSource } }, updateSource ? "Source Branches are updated before a Worktree is cut." : "Worktrees are cut from the local branch.")
+            }
+          />
+        </label>
+      </SettingsGroup>
     </>
   );
 }

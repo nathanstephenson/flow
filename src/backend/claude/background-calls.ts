@@ -107,13 +107,16 @@ export class BackgroundCalls {
   }
 
   /**
-   * Forget this turn's announced calls.
+   * Forget this turn's announced calls, except those `keep` accepts — a call made by detached work
+   * belongs to no turn.
    *
    * Open Background Calls and their task ids deliberately survive: one outlives the turn that made
    * it, and the snapshot closing it is emitted turns later from the brief kept here.
    */
-  clear(): void {
-    this.pending.clear();
+  clear(keep: (brief: BackgroundBrief) => boolean = () => false): void {
+    for (const [callId, brief] of this.pending) {
+      if (!keep(brief)) this.pending.delete(callId);
+    }
   }
 
   /** Forget open Calls too, for a Backend Session being taken away. They are children of it. */
