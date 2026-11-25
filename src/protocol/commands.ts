@@ -216,7 +216,7 @@ export type Command =
   | ({ type: "rerun_pull_request_checks"; input: PullRequestRerunInput } & PullRequestTarget)
   | ({ type: "pull_request_check_log"; pr: PullRequestRef; jobId: number } & PullRequestTarget)
   | ({ type: "submit_pull_request_review"; input: PullRequestReviewInput } & PullRequestTarget)
-  | { type: "project_pull_requests"; project: string }
+  | { type: "project_pull_requests"; project: string; query?: string }
   | { type: "pull_request_changes"; project: string; pr: PullRequestRef }
   | { type: "pull_request_diff"; project: string; pr: PullRequestRef; path: string }
   | { type: "start_pull_request_session"; project: string; pr: PullRequestRef }

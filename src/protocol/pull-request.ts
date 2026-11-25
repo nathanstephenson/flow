@@ -52,6 +52,6 @@ export type PullRequestRerunInput = { pr: PullRequestRef; runId: number };
 export type PullRequestCheckLog = { text: string; truncated: boolean };
 /** Where a Pull Request is read: the branch of an Agent Session's Scope, or a number in a Project. */
 export type PullRequestTarget = { sessionId: string; project?: never } | { project: string; sessionId?: never };
-export type PullRequestListItem = PullRequestRef & { title: string; author: string; isDraft: boolean; updatedAt: string; reviewRequested: boolean };
+export type PullRequestListItem = PullRequestRef & { title: string; author: string; state: "OPEN" | "CLOSED" | "MERGED"; isDraft: boolean; updatedAt: string; reviewRequested: boolean };
 export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 export type PullRequestReviewInput = { pr: PullRequestRef; event: ReviewEvent; body: string };

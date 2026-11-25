@@ -2818,7 +2818,8 @@ export class SessionHost {
       }
       case "project_pull_requests": {
         const scope = this.projectScope(command.project);
-        return await this.readGit(() => listPullRequests(scope));
+        const query = typeof command.query === "string" ? command.query.trim() : "";
+        return await this.readGit(() => listPullRequests(scope, gh, query || undefined));
       }
       case "pull_request_changes":
       case "pull_request_diff": {

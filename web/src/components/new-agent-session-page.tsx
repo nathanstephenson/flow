@@ -625,7 +625,7 @@ const SMOKE_PUFFS: [x: number, y: number, turn: number, duration: number, delay:
   [-62, -30, 170, 6.4, -0.9],
 ];
 
-type Creating = { text: string; attachments: IncomingAttachment[]; from: DOMRect | undefined; scrolled: number };
+export type Creating = { text: string; attachments: IncomingAttachment[]; from: DOMRect | undefined; scrolled: number };
 
 function originOf(selector: string): Pick<Creating, "from" | "scrolled"> {
   return {
@@ -634,7 +634,7 @@ function originOf(selector: string): Pick<Creating, "from" | "scrolled"> {
   };
 }
 
-function CreatingAgentSession({ text, attachments, from, scrolled }: Creating) {
+export function CreatingAgentSession({ text, attachments, from, scrolled }: Creating) {
   const message = useRef<HTMLDivElement>(null);
   const card = useRef<HTMLParagraphElement>(null);
   useLayoutEffect(() => {

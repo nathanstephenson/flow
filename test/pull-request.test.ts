@@ -556,6 +556,19 @@ test("lists open pull requests of the base repository, review requests first", a
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+test("searches all pull requests of the base repository by title, and drops other repositories", async () => {
+  const path = await scope();
+  try {
+    const node = (number: number, state: string, repo = "base/repo") => ({ id: `PR_${number}`, number, title: `T${number}`, state, isDraft: false, updatedAt: "2025-01-01", author: null, reviewRequests: { nodes: [] }, repository: { nameWithOwner: repo } });
+    const { github, calls } = mock({ list: [node(5, "MERGED"), node(6, "OPEN", "other/repo"), {}, node(7, "CLOSED", "Base/Repo")] });
+    const found = await listPullRequests(path, github, "read only");
+    assert.deepEqual(found.map(item => [item.number, item.state, item.author]), [[5, "MERGED", "[deleted]"], [7, "CLOSED", "[deleted]"]]);
+    assert.ok(found.every(item => !("repository" in item)));
+    assert.ok(calls.at(-1)!.includes("q=repo:base/repo is:pr in:title sort:updated-desc read only"));
+    assert.equal(calls.at(-1)!.filter(arg => arg.startsWith("query=")).length, 1);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("a Review is one mutation, and needs a comment unless it approves", async () => {
   const path = await scope();
   try {
@@ -647,6 +660,7 @@ function mock(options: Options = {}) {
       if (options.fail) return JSON.stringify({ errors: [{ message: "denied" }] });
       data = { result: {} };
     } else if (query.includes("pullRequest(number:$number)")) data = { repository: { pullRequest: args.includes("number=1") ? { ...open, headRefName: "feature", baseRefOid: options.baseOid ?? "b".repeat(40), headRefOid: options.headOid ?? open.headRefOid } : null } };
+    else if (query.includes("search(type:ISSUE")) data = { viewer: { login: "me" }, search: { nodes: options.list ?? [] } };
     else if (query.includes("pullRequests(states:OPEN")) data = { viewer: { login: "me" }, repository: { pullRequests: { nodes: options.list ?? [] } } };
     else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: { nodes: options.candidates ?? [{ ...open, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefOid: options.headOid ?? open.headRefOid, baseRefName: options.baseBranch ?? "main", ...(resolved++ && options.later) }] } } };
     else if (query.includes("PullRequestReviewThread{pullRequest")) data = { node: { pullRequest: { id: options.threadPr ?? ref.id } } };

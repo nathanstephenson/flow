@@ -1,5 +1,5 @@
 import { ChevronLeft } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GitChanges, GitDiff } from "../../../src/protocol/git.ts";
 import type { PullRequestDetails, PullRequestListItem } from "../../../src/protocol/pull-request.ts";
 import { useAgentSessions } from "@/agent-sessions.tsx";
@@ -7,7 +7,7 @@ import type { DraftStash } from "@/drafts.ts";
 import { useHost } from "@/host.tsx";
 import { appendToComposer, type AppendResult } from "@/components/composer.tsx";
 import { ChangedFiles } from "@/components/changed-files.tsx";
-import { ProjectPicker } from "@/components/new-agent-session-page.tsx";
+import { CreatingAgentSession, ProjectPicker, type Creating } from "@/components/new-agent-session-page.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
 import { TourPane } from "@/components/tour-pane.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { failureText } from "@/presentation/git.ts";
 import { groupProjects } from "@/presentation/projects.ts";
 import { pullRequestNumber } from "@/presentation/pull-request.ts";
+import { cn } from "@/lib/utils.ts";
 
 type Props = {
   project: string | undefined;
@@ -30,9 +31,12 @@ type Props = {
 export function PullRequestsPage({ project, pullRequest, drafts, onNavigate, onSession }: Props) {
   const { config } = useHost();
   const projects = config.projectList ?? [];
+  const main = useRef<HTMLElement>(null);
+  const [creating, setCreating] = useState<Creating>();
   return (
-    <main className="@container/pull-requests min-h-0 overflow-y-auto p-4 pt-12 sm:p-8" aria-label="Pull Requests">
-      <div className="mx-auto grid max-w-3xl grid-cols-1 gap-6">
+    <main ref={main} className={cn("@container/pull-requests relative min-h-0 overflow-y-auto p-4 pt-12 sm:p-8", creating && "overflow-hidden")} aria-label="Pull Requests">
+      {creating ? <CreatingAgentSession {...creating} /> : null}
+      <div inert={creating !== undefined} className={cn("mx-auto grid max-w-3xl grid-cols-1 gap-6", creating && "animate-out fade-out-0 fill-mode-forwards")}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="relative flex items-center gap-2">
             {project && pullRequest ? (
@@ -66,6 +70,7 @@ export function PullRequestsPage({ project, pullRequest, drafts, onNavigate, onS
             number={pullRequest}
             drafts={drafts}
             onSession={onSession}
+            onCreating={(text) => setCreating(text === undefined ? undefined : { text, attachments: [], from: document.activeElement?.getBoundingClientRect(), scrolled: main.current?.scrollTop ?? 0 })}
           />
         ) : (
           <PullRequestList key={project} project={project} onOpen={(number) => onNavigate(project, number)} />
@@ -77,19 +82,19 @@ export function PullRequestsPage({ project, pullRequest, drafts, onNavigate, onS
 
 function PullRequestList({ project, onOpen }: { project: string; onOpen: (number: number) => void }) {
   const { connection } = useHost();
-  const [list, setList] = useState<PullRequestListItem[]>();
-  const [error, setError] = useState("");
+  const [read, setRead] = useState<{ query: string; list: PullRequestListItem[] } | { query: string; error: string }>();
   const [text, setText] = useState("");
   const number = pullRequestNumber(text);
+  const query = number ? "" : text.trim();
 
   useEffect(() => {
     let cancelled = false;
-    void connection.command<PullRequestListItem[]>({ type: "project_pull_requests", project }).then(
-      (value) => { if (!cancelled) setList(value); },
-      (failure: unknown) => { if (!cancelled) setError(failureText(failure)); },
-    );
-    return () => { cancelled = true; };
-  }, [connection, project]);
+    const timer = setTimeout(() => void connection.command<PullRequestListItem[]>({ type: "project_pull_requests", project, ...(query ? { query } : {}) }).then(
+      (list) => { if (!cancelled) setRead({ query, list }); },
+      (failure: unknown) => { if (!cancelled) setRead({ query, error: failureText(failure) }); },
+    ), query ? 300 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [connection, project, query]);
 
   return (
     <>
@@ -97,17 +102,18 @@ function PullRequestList({ project, onOpen }: { project: string; onOpen: (number
         event.preventDefault();
         if (number) onOpen(number);
       }}>
-        <Input aria-label="Pull request number or URL" placeholder="Pull request number or URL" value={text} onChange={(event) => setText(event.target.value)} />
+        <Input aria-label="Search, or open by number or URL" placeholder="Search, or open by number or URL" value={text} onChange={(event) => setText(event.target.value)} />
         <Button type="submit" disabled={!number}>Open</Button>
       </form>
-      {error ? <p role="alert">{error}</p> : !list ? <p>Reading pull requests…</p> : list.length === 0 ? (
-        <p className="text-muted-foreground">No open pull requests.</p>
+      {!read ? <p>Reading pull requests…</p> : "error" in read ? <p role="alert">{read.error}</p> : read.list.length === 0 ? (
+        <p className="text-muted-foreground">{read.query ? "No pull requests match." : "No open pull requests."}</p>
       ) : (
-        <section aria-label="Open pull requests" className="grid gap-3">
-          {list.map((item) => (
+        <section aria-label={read.query ? "Matching pull requests" : "Open pull requests"} aria-busy={read.query !== query} className="grid gap-3">
+          {read.list.map((item) => (
             <button key={item.id} className="rounded-lg border p-4 text-left hover:bg-muted focus-visible:outline-2" onClick={() => onOpen(item.number)}>
               <span className="flex flex-wrap items-center gap-2">
                 <strong>#{item.number} {item.title}</strong>
+                {item.state === "MERGED" ? <Badge variant="outline">Merged</Badge> : item.state === "CLOSED" ? <Badge variant="outline">Closed</Badge> : null}
                 {item.isDraft ? <Badge variant="outline">Draft</Badge> : null}
                 {item.reviewRequested ? <Badge variant="secondary">Review requested</Badge> : null}
               </span>
@@ -120,11 +126,12 @@ function PullRequestList({ project, onOpen }: { project: string; onOpen: (number
   );
 }
 
-function PullRequestDetail({ project, number, drafts, onSession }: {
+function PullRequestDetail({ project, number, drafts, onSession, onCreating }: {
   project: string;
   number: number;
   drafts: DraftStash;
   onSession: (sessionId: string) => void;
+  onCreating: (text: string | undefined) => void;
 }) {
   const { connection } = useHost();
   const { sessions, nudge } = useAgentSessions();
@@ -156,6 +163,7 @@ function PullRequestDetail({ project, number, drafts, onSession }: {
 
   async function start(block?: string): Promise<AppendResult> {
     setStarting(true);
+    onCreating(block ?? "");
     try {
       const sessionId = await connection.command<string>({ type: "start_pull_request_session", project, pr: ref! });
       setStarted({ sessionId, ...(block ? { block } : {}) });
@@ -163,6 +171,7 @@ function PullRequestDetail({ project, number, drafts, onSession }: {
       return "added";
     } catch (failure) {
       setStarting(false);
+      onCreating(undefined);
       throw failure;
     }
   }
