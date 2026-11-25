@@ -74,6 +74,19 @@ describe("worktrees", () => {
       assert.deepEqual(warnings(host, id), []);
     });
 
+    it("cuts a tracking branch from a remote branch without a warning", async () => {
+      const host = await hostWith(DAY, true);
+      const upstream = repository(work, "upstream", ["feature"]);
+      const repo = join(work, "api");
+      git(work, "clone", "--quiet", upstream, repo);
+
+      const id = await host.create({ scope: repo, backend: "fake", worktree: { from: "origin/feature", branch: "feature" } });
+
+      const scope = host.list().find((entry) => entry.id === id)!.scope;
+      assert.equal(git(scope, "rev-parse", "--abbrev-ref", "feature@{upstream}").trim(), "origin/feature");
+      assert.deepEqual(warnings(host, id), []);
+    });
+
     it("cuts from the local branch with a warning when the update fails", async () => {
       const host = await hostWith(DAY, true);
       const repo = repository(work, "api");

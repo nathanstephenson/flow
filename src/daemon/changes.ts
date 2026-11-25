@@ -22,15 +22,19 @@ async function baseRef(scope: string, remote: string, branch: string, preferLoca
   return undefined;
 }
 
-async function rangeFiles(scope: string, base: string): Promise<GitFile[]> {
-  const raw = (await git(scope, ["diff", "--name-status", "-z", "--no-renames", `${base}...HEAD`, "--"])).split("\0").filter(Boolean);
+async function rangeFiles(scope: string, base: string, to: string): Promise<GitFile[]> {
+  const raw = (await git(scope, ["diff", "--name-status", "-z", "--no-renames", `${base}...${to}`, "--"])).split("\0").filter(Boolean);
   const files: GitFile[] = [];
   for (let index = 0; index < raw.length; index += 2) files.push({ status: raw[index]!, path: raw[index + 1]! });
   return files;
 }
 
-async function rangeCommits(scope: string, base: string): Promise<string[]> {
-  return (await git(scope, ["log", "--format=%h %s", `${base}..HEAD`, "--"])).trim().split("\n").filter(Boolean);
+async function rangeCommits(scope: string, base: string, to: string): Promise<string[]> {
+  return (await git(scope, ["log", "--format=%h %s", `${base}..${to}`, "--"])).trim().split("\n").filter(Boolean);
+}
+
+export async function rangeChanges(scope: string, base: string, to: string): Promise<GitChanges> {
+  return { files: await rangeFiles(scope, base, to), commits: await rangeCommits(scope, base, to) };
 }
 
 type PullRequestBase = (branch: string) => string | undefined;
@@ -50,7 +54,7 @@ async function branchBase(scope: string, pullRequestBase: PullRequestBase | unde
 export async function changes(scope: string, view: ChangesView, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<GitChanges> {
   if (view !== "branch") return { files: await files(scope), commits: [] };
   const base = await branchBase(scope, pullRequestBase, github);
-  return { files: await rangeFiles(scope, base), commits: await rangeCommits(scope, base), base: base.replace(/^refs\/(heads|remotes)\//, "") };
+  return { ...await rangeChanges(scope, base, "HEAD"), base: base.replace(/^refs\/(heads|remotes)\//, "") };
 }
 
 function added(path: string, content: string): string {
@@ -76,16 +80,19 @@ async function blobSize(scope: string, object: string): Promise<number> {
 }
 
 export async function diff(scope: string, view: ChangesView, path: string, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<GitDiff> {
-  const base = view === "branch" ? await branchBase(scope, pullRequestBase, github) : undefined;
-  const listed = base ? await rangeFiles(scope, base) : await files(scope);
+  return fileDiff(scope, path, view === "branch" ? await branchBase(scope, pullRequestBase, github) : undefined, "HEAD");
+}
+
+export async function fileDiff(scope: string, path: string, base: string | undefined, to: string): Promise<GitDiff> {
+  const listed = base ? await rangeFiles(scope, base, to) : await files(scope);
   const file = listed.find(item => item.path === path);
   if (!file) throw new Error("This file is not in the list of changes. Read the list again.");
   if (file.status === "??") return untracked(scope, path);
-  const from = base ? (await git(scope, ["merge-base", base, "HEAD"])).trim() : (await run(scope, ["rev-parse", "--verify", "--quiet", "HEAD"], GIT_READ_TIMEOUT_MS)).ok ? "HEAD" : EMPTY_TREE;
+  const from = base ? (await git(scope, ["merge-base", base, to])).trim() : (await run(scope, ["rev-parse", "--verify", "--quiet", "HEAD"], GIT_READ_TIMEOUT_MS)).ok ? "HEAD" : EMPTY_TREE;
   const oldSize = await blobSize(scope, `${from}:${path}`);
-  const newSize = base ? await blobSize(scope, `HEAD:${path}`) : (await lstat(resolve(scope, path)).catch(() => undefined))?.size ?? 0;
+  const newSize = base ? await blobSize(scope, `${to}:${path}`) : (await lstat(resolve(scope, path)).catch(() => undefined))?.size ?? 0;
   if (oldSize > SIDE_LIMIT || newSize > SIDE_LIMIT) return { tooLarge: true };
-  const range = base ? [from, "HEAD"] : [from];
+  const range = base ? [from, to] : [from];
   const numstat = await git(scope, ["--literal-pathspecs", "diff", "--numstat", ...range, "--", path]);
   if (numstat.startsWith("-\t-\t")) return { binary: true };
   return { text: await git(scope, ["--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", ...range, "--", path]) };
@@ -105,12 +112,19 @@ export async function commitContext(scope: string, branch: string | undefined, p
 }
 
 export async function changesText(scope: string, view: ChangesView, paths: string[] | undefined, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<string> {
-  const listed = await changes(scope, view, pullRequestBase, github);
+  return textOf(await changes(scope, view, pullRequestBase, github), paths, path => diff(scope, view, path, pullRequestBase, github));
+}
+
+export async function rangeText(scope: string, base: string, to: string): Promise<string> {
+  return textOf(await rangeChanges(scope, base, to), undefined, path => fileDiff(scope, path, base, to));
+}
+
+async function textOf(listed: GitChanges, paths: string[] | undefined, read: (path: string) => Promise<GitDiff>): Promise<string> {
   let text = listed.commits.length > 0 ? `Commits:\n${listed.commits.join("\n")}\n` : "";
   for (const file of listed.files) {
     if (text.length > 24_000) break;
     if (paths && !paths.includes(file.path)) continue;
-    const shown = await diff(scope, view, file.path, pullRequestBase, github);
+    const shown = await read(file.path);
     text += "text" in shown ? shown.text : `${file.status} ${file.path}: no text diff\n`;
   }
   return text;

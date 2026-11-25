@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository } from "./git-fixture.ts";
 import { FakeBackend, type FakeWorkflowSubagent } from "../src/backend/fake/index.ts";
 import { SessionHost } from "../src/daemon/host.ts";
+import { TranscriptStore } from "../src/daemon/store.ts";
 import { tourInput, tourText } from "../src/daemon/tour.ts";
 import type { Gh } from "../src/daemon/github.ts";
 import type { TourView } from "../src/protocol/git.ts";
@@ -162,4 +163,66 @@ describe("Tour", () => {
       assert.deepEqual(host.tour(id), { state: "idle" });
     });
   }
+});
+
+describe("Pull Request Tour", () => {
+  const ref = { repo: "test/repo", number: 1, id: "PR_1" };
+  let prHost: SessionHost;
+  let prBackend: FakeBackend;
+  let spent: string[][];
+
+  beforeEach(async () => {
+    const head = git(repo, "rev-parse", "HEAD").trim();
+    const base = git(repo, "rev-parse", "main").trim();
+    writeFileSync(join(root, "pr.json"), JSON.stringify({ data: { repository: { pullRequest: {
+      id: "PR_1", number: 1, url: "https://github.com/test/repo/pull/1", title: "Search", baseRefName: "main", headRefOid: head, baseRefOid: base, headRefName: "feature/tour",
+      state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2026-01-01", closedAt: null, headRepository: { id: "R_repo" }, commits: { nodes: [] }, reviewThreads: { nodes: [] },
+    } } } }));
+    writeFileSync(join(root, "bin", "gh"), `#!/bin/sh\ncase "$1 $2" in\n'auth status') exit 0;;\n'repo view') echo '{"id":"R_repo","defaultBranchRef":{"name":"main"},"isFork":false}';;\n'api graphql') cat '${join(root, "pr.json")}';;\n*) echo '[]';;\nesac\n`);
+    git(repo, "switch", "--quiet", "main");
+    prHost = new SessionHost({ store: new TranscriptStore(join(root, "state")) });
+    prBackend = new FakeBackend();
+    prHost.registerBackend(prBackend);
+    spent = [];
+    prHost.recordSpend = (source, key, scope) => { spent.push([source, key, String(scope)]); };
+  });
+
+  afterEach(async () => { await prHost.shutdown(); });
+
+  const prSubagent = (): Promise<FakeWorkflowSubagent> => until(() => prBackend.sessions.flatMap((session) => session.workflowSubagents)[0]);
+  const checkouts = () => git(repo, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree ")).length;
+
+  it("writes a Tour from a read-only checkout of the head, records its Spend and removes the checkout", async () => {
+    assert.deepEqual(prHost.pullRequestTour(repo, ref), { state: "idle" });
+    assert.equal(prHost.startPullRequestTour(repo, ref).state, "running");
+    const tour = await prSubagent();
+    const session = prBackend.sessions[0]!;
+    assert.ok(session.scope.startsWith(join(root, "state", "worktrees", ".tours")));
+    assert.ok(existsSync(join(session.scope, "search.txt")));
+    assert.match(String(tour.options.input), /Branch: feature\/tour\nBase: main\n[\s\S]*\+search/);
+    assert.equal(tour.options.modelId, "fake-1");
+    tour.emit({ type: "spend", spend });
+    await until(() => spent.length === 1 ? true : undefined);
+    assert.equal(spent[0]![0], "tour");
+    assert.equal(spent[0]![2], repo);
+    tour.complete({ tour: "# Tour" });
+    const view = await until(() => { const value = prHost.pullRequestTour(repo, ref); return value.state === "running" ? undefined : value; });
+    assert.deepEqual(view, { state: "done", text: "# Tour", branch: "feature/tour", head: git(repo, "rev-parse", "feature/tour").trim(), repo: "test/repo" });
+    await until(() => !existsSync(session.scope) && session.disposed ? true : undefined);
+    assert.equal(checkouts(), 1);
+  });
+
+  it("removes the checkout when the Tour is cancelled", async () => {
+    prHost.startPullRequestTour(repo, ref);
+    await prSubagent();
+    const scope = prBackend.sessions[0]!.scope;
+    assert.deepEqual(prHost.cancelPullRequestTour(repo, ref), { state: "idle" });
+    await until(() => !existsSync(scope) ? true : undefined);
+    assert.equal(checkouts(), 1);
+    assert.deepEqual(prHost.pullRequestTour(repo, ref), { state: "idle" });
+  });
+
+  it("refuses a Project that is not a repository", () => {
+    assert.throws(() => prHost.startPullRequestTour(root, ref), /not a git repository/);
+  });
 });

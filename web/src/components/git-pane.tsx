@@ -166,7 +166,7 @@ export function GitPane({ sessionId, pullRequest, onPullRequestShown, onAddToDra
         <StackPane key={sessionId} sessionId={sessionId} git={git} refresh={reads.stack} disabled={busy} onAvailable={(stack: boolean) => setAvailable(current => current.stack === stack ? current : { ...current, stack })} onChange={() => reread("mount")} />
       </TabsContent>
       <TabsContent value="Pull request" keepMounted>
-        <PullRequestPane key={`${sessionId}:${reads.mount}`} sessionId={sessionId} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
+        <PullRequestPane key={`${sessionId}:${reads.mount}`} target={{ sessionId }} revision={reads.pullRequest} summary={git?.pr} disabled={busy} onAvailable={(pullRequest: boolean) => setAvailable(current => current.pullRequest === pullRequest ? current : { ...current, pullRequest })} onAddToDraft={onAddToDraft} />
       </TabsContent>
     </Tabs>
   );

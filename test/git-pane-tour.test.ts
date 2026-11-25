@@ -50,7 +50,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve()
 function tour(views: any[]) {
   const sent: string[] = [];
   const pane = component("tour-pane", async input => { sent.push(input.type); return views.shift(); });
-  const render = () => pane.render("TourPane", { sessionId: "session" });
+  const render = () => pane.render("TourPane", { target: { sessionId: "session" } });
   return { pane, sent, render };
 }
 
@@ -61,7 +61,7 @@ it("switches between the branch diff and the Tour in the Branch view of Changes"
   assert.throws(() => branchViews("uncommitted"));
   assert.throws(() => find(render("branch"), "TourPane"));
   branchViews("branch").props.onValueChange("tour");
-  assert.equal(find(render("branch"), "TourPane").props.sessionId, "session");
+  assert.equal(find(render("branch"), "TourPane").props.target.sessionId, "session");
   assert.doesNotMatch(textContent(render("branch")), /Reading changes/);
   assert.throws(() => find(render("uncommitted"), "TourPane"));
   branchViews("branch").props.onValueChange("diff");

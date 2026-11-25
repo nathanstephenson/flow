@@ -256,7 +256,7 @@ function millisecondOfDay(now: Date): number {
   return now.getTime() - midnight;
 }
 
-async function refExists(repo: string, branch: string): Promise<boolean> {
+export async function refExists(repo: string, branch: string): Promise<boolean> {
   const found = await run(
     repo,
     ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
@@ -434,6 +434,17 @@ export async function removeWorktree(options: {
   );
   if (!removed.ok) return removed;
   return { ok: true, value: undefined };
+}
+
+/** Check out `oid` with a detached HEAD at `path`, for read-only host work such as a Tour. */
+export async function addDetachedCheckout(repo: string, oid: string, path: string): Promise<GitResult<void>> {
+  const added = await run(repo, ["worktree", "add", "--detach", path, oid], GIT_WRITE_TIMEOUT_MS);
+  return added.ok ? { ok: true, value: undefined } : added;
+}
+
+export async function removeDetachedCheckout(repo: string, path: string): Promise<void> {
+  await run(repo, ["worktree", "remove", "--force", path], GIT_WRITE_TIMEOUT_MS);
+  await run(repo, ["worktree", "prune"], GIT_WRITE_TIMEOUT_MS);
 }
 
 /**

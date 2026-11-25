@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "./pull-request.ts";
+import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, orderedChecks, pullRequestNumber, readableStatus, safePullRequestUrl, threadDraftBlock } from "./pull-request.ts";
 
 const check = (name: string, status: string, runId?: number) => ({ name, status, url: "", ...(runId === undefined ? {} : { runId, jobId: 1 }) });
 
@@ -80,5 +80,10 @@ describe("Draft blocks", () => {
     assert.equal(checkDraftBlock(check, { text: "error: failed", truncated: false }), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2\n\nJob log:\n```text\nerror: failed\n```");
     assert.equal(checkDraftBlock(check, { text: "error: failed", truncated: true }), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2\n\nPart of the job log:\n```text\nerror: failed\n```");
     assert.equal(checkDraftBlock(check), "Failed check: test\nURL: https://github.com/o/r/actions/runs/1/job/2");
+  });
+
+  it("reads a pull request number from a number or a GitHub URL", () => {
+    for (const text of ["42", " #42 ", "https://github.com/o/r/pull/42", "https://github.com/o/r/pull/42/files", "https://github.com/o/r/pull/42#discussion"]) assert.equal(pullRequestNumber(text), 42, text);
+    for (const text of ["", "0", "abc", "4 2", "https://github.com/o/r/issues/42", "https://example.com/o/r/pull/42"]) assert.equal(pullRequestNumber(text), undefined, text);
   });
 });

@@ -1,6 +1,6 @@
 import { head, run, GIT_READ_TIMEOUT_MS } from "./git.ts";
 import { gh, type Gh } from "./github.ts";
-import { changes, changesText } from "./changes.ts";
+import { changes, changesText, rangeText } from "./changes.ts";
 import { resolveRepository } from "./repository.ts";
 
 export const TOUR_INSTRUCTIONS = [
@@ -29,6 +29,12 @@ export async function tourInput(scope: string, github: Gh = gh): Promise<{ branc
     repo: repository.head.repo,
     input: `Branch: ${branch.value.name}\nBase: ${listed.base}\n${await changesText(scope, "branch", undefined, undefined, github)}`,
   };
+}
+
+export async function pullRequestTourInput(scope: string, range: { base: string; head: string }, pr: { headRefName: string; baseRefName: string }): Promise<string> {
+  const text = await rangeText(scope, range.base, range.head);
+  if (!text) throw new Error("This pull request has no committed changes to tour.");
+  return `Branch: ${pr.headRefName}\nBase: ${pr.baseRefName}\n${text}`;
 }
 
 export function tourText(raw: string): string {

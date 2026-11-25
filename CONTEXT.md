@@ -27,7 +27,7 @@ _Avoid_: quota, rate limit
 **Spend Ledger**: The durable record of all billed model use on the Session Host, by Spend Source and model. It outlives Reaping.
 _Avoid_: usage log, cost history
 
-**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, commit and Pull Request text or Workflow Builder.
+**Spend Source**: What a Spend Ledger entry paid for: Agent Session, Workflow Execution, Summary Model naming, commit and Pull Request text, Pull Request Tour or Workflow Builder.
 _Avoid_: category, kind
 
 **Subagent**: Delegated work with its own conversation, owned by a Backend Session and identified by its spawning tool call or Workflow Step attempt, not its name. Backgrounded work can outlive a turn, but not the Backend Session, and does not occupy the Agent Session. Work started by backgrounded work is backgrounded too.
@@ -80,7 +80,7 @@ _Avoid_: slash command, action, tool
 **Skill**: A named prompt expanded by the backend at the start of a message. Unlike a Command, it enters both records as an ordinary user turn.
 _Avoid_: command, prompt template, macro
 
-**Tour**: A read-only, markdown walk through a branch's committed changes, started from the Git pane. A Subagent writes it on the Agent Session's Backend Session, and its Spend counts on the Agent Session. Unlike a Command, it does not occupy the Agent Session and does not enter the Presentation Transcript. The Session Host keeps only the latest Tour per Agent Session, in memory.
+**Tour**: A read-only, markdown walk through a branch's committed changes, started from the Git pane or the Pull Requests page. From the Git pane, a Subagent writes it on the Agent Session's Backend Session, and its Spend counts on the Agent Session. From the Pull Requests page, there is no Agent Session: a Backend Session of the Session Host writes it from a read-only copy of the Pull Request head, and its Spend is a Pull Request Tour. Unlike a Command, it does not occupy the Agent Session and does not enter the Presentation Transcript. The Session Host keeps only the latest Tour per Agent Session and per Pull Request, in memory.
 _Avoid_: review, summary, walkthrough
 
 **Enquiry**: A tool call asking the human one to four Questions, answered once as a whole within its turn. It requests input, not authorisation. Only an Enquiry from the parent turn occupies the Agent Session.
@@ -173,8 +173,11 @@ _Avoid_: transcript, history, log
 
 ### Git
 
-**Pull Request**: The GitHub pull request from the branch of a Scope, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
+**Pull Request**: A GitHub pull request into the base repository of a Project. The Pull Request of a Scope is the one from its branch, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
 _Avoid_: merge request, review, change
+
+**Review**: A verdict submitted on a Pull Request: Approve, Request changes or Comment.
+_Avoid_: Tour, approval, check
 
 **Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
 _Avoid_: target branch, trunk, upstream
@@ -226,7 +229,7 @@ _Avoid_: default thinking, reasoning budget
 **Summary Model**: Per-Backend Adapter model used to name Agent Sessions and suggest editable commit and Pull Request text through a throwaway Backend Session, outside their Spend.
 _Avoid_: naming model, title model, small model
 
-**Tour Model**: Per-Backend Adapter model and Effort used to write a Tour. When none is set, the Tour uses the Agent Session's current model and Effort.
+**Tour Model**: Per-Backend Adapter model and Effort used to write a Tour. When none is set, the Tour uses the Agent Session's current model and Effort, or the Default Model of the Default Backend for a Pull Request Tour.
 _Avoid_: review model
 
 **Effort**: How hard a model is asked to think, with available levels declared per model.

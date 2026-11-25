@@ -2,7 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
 import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
-import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestThreadInput } from "./pull-request.ts";
+import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestReviewInput, PullRequestTarget, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput, StackReviewAction } from "./stack.ts";
 
 export type SendWhen = "now" | "after_turn";
@@ -198,14 +198,20 @@ export type Command =
    * git's own verb costs nothing and stops the command reading as bookkeeping.
    */
   | { type: "pull_request"; sessionId: string }
+  | { type: "pull_request"; project: string; number: number }
   | { type: "pull_branch"; sessionId: string; branch: string }
-  | { type: "change_pull_request"; sessionId: string; action: "rebase" | "merge"; input: PullRequestActionInput }
-  | { type: "comment_pull_request"; sessionId: string; input: PullRequestCommentInput }
-  | { type: "resolve_pull_request_thread"; sessionId: string; input: PullRequestThreadInput }
-  | { type: "edit_pull_request"; sessionId: string; input: PullRequestEditInput }
-  | { type: "set_pull_request_draft"; sessionId: string; input: PullRequestDraftInput }
-  | { type: "rerun_pull_request_checks"; sessionId: string; input: PullRequestRerunInput }
-  | { type: "pull_request_check_log"; sessionId: string; pr: PullRequestRef; jobId: number }
+  | ({ type: "change_pull_request"; action: "rebase" | "merge"; input: PullRequestActionInput } & PullRequestTarget)
+  | ({ type: "comment_pull_request"; input: PullRequestCommentInput } & PullRequestTarget)
+  | ({ type: "resolve_pull_request_thread"; input: PullRequestThreadInput } & PullRequestTarget)
+  | ({ type: "edit_pull_request"; input: PullRequestEditInput } & PullRequestTarget)
+  | ({ type: "set_pull_request_draft"; input: PullRequestDraftInput } & PullRequestTarget)
+  | ({ type: "rerun_pull_request_checks"; input: PullRequestRerunInput } & PullRequestTarget)
+  | ({ type: "pull_request_check_log"; pr: PullRequestRef; jobId: number } & PullRequestTarget)
+  | ({ type: "submit_pull_request_review"; input: PullRequestReviewInput } & PullRequestTarget)
+  | { type: "project_pull_requests"; project: string }
+  | { type: "pull_request_changes"; project: string; pr: PullRequestRef }
+  | { type: "pull_request_diff"; project: string; pr: PullRequestRef; path: string }
+  | { type: "start_pull_request_session"; project: string; pr: PullRequestRef }
   | { type: "stack_status"; sessionId: string }
   | { type: "prepare_stack"; sessionId: string; action: StackReviewAction }
   | { type: "change_stack"; sessionId: string; input: StackInput }
@@ -218,9 +224,8 @@ export type Command =
   | ({ type: "push"; sessionId: string } & PushInput)
   | ({ type: "create_pull_request"; sessionId: string } & PullRequestInput)
   | { type: "suggest_git_text"; sessionId: string; kind: GitTextKind; paths?: string[] }
-  | { type: "start_tour"; sessionId: string }
-  | { type: "tour"; sessionId: string }
-  | { type: "cancel_tour"; sessionId: string }
+  | { type: "start_tour" | "tour" | "cancel_tour"; sessionId: string }
+  | { type: "start_tour" | "tour" | "cancel_tour"; project: string; pr: PullRequestRef }
   | { type: "switch_branch"; sessionId: string; branch: string }
   /**
    * Move a **Scope's** checkout, with no Agent Session in it yet.

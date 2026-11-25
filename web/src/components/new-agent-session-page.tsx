@@ -558,14 +558,14 @@ export function NewAgentSessionPage({
 
 const READ_ONLY_ROOT: Project = { path: "read-only-project-root", name: "<chat>" };
 
-function ProjectPicker({
+export function ProjectPicker({
   fieldRef,
   groups,
   projects,
   project,
   onPick,
 }: {
-  fieldRef: RefObject<HTMLLabelElement | null>;
+  fieldRef?: RefObject<HTMLLabelElement | null>;
   groups: ProjectGroup[];
   projects: Project[];
   project: Project | undefined;

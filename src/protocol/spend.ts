@@ -1,6 +1,6 @@
 import type { ModelSpend } from "./events.ts";
 
-export const SPEND_SOURCES = ["session", "workflow", "naming", "publish", "builder"] as const;
+export const SPEND_SOURCES = ["session", "workflow", "naming", "publish", "tour", "builder"] as const;
 export type SpendSource = (typeof SPEND_SOURCES)[number];
 
 export const SPEND_WINDOWS = ["day", "week", "month", "lifetime"] as const;
