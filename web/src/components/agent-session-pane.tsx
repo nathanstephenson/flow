@@ -426,7 +426,7 @@ function AttachedPane({
     >
       <AgentSessionPaneHeader
         sessionId={sessionId}
-        project={summary ? projectName(summary.scope, summary.worktree) : undefined}
+        project={summary ? projectName(summary.scope, summary.worktree, summary.readOnly) : undefined}
         onOpenProject={project ? () => onOpenProject(project.path) : undefined}
         title={title}
         chrome={chrome}

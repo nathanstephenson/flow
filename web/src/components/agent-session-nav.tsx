@@ -352,7 +352,7 @@ function AgentSessionRow({
             <span className="sr-only agent-session-status-text">{activityStatusText({ ...summary, status })}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
-            <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
+            <span className="truncate">{projectName(summary.scope, summary.worktree, summary.readOnly)}</span>
             {/* Attention rows show the qualifying event's age above. Ordinary rows keep Resting,
                 the same timestamp that orders their group. */}
             {!summary.attention ? (

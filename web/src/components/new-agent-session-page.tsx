@@ -556,7 +556,7 @@ export function NewAgentSessionPage({
   );
 }
 
-const READ_ONLY_ROOT: Project = { path: "read-only-project-root", name: "<none>" };
+const READ_ONLY_ROOT: Project = { path: "read-only-project-root", name: "<chat>" };
 
 function ProjectPicker({
   fieldRef,
