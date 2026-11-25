@@ -22,6 +22,7 @@ import { RailResizeHandle } from "@/components/rail-resize-handle.tsx";
 import { SettingsDialog } from "@/components/settings-dialog.tsx";
 import { WorkflowSchedulesPage } from "@/components/workflow-schedules-page.tsx";
 import { SpendPage } from "@/components/spend-page.tsx";
+import { PullRequestsPage } from "@/components/pull-requests-page.tsx";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar.tsx";
 import { toast } from "@/components/ui/toaster.tsx";
 
@@ -59,7 +60,7 @@ export function AppShell() {
     route,
     sessionId: focusedId,
     focus,
-    openNewAgentSession, openSchedules, openSpend,
+    openNewAgentSession, openSchedules, openSpend, openPullRequests,
     openSettings,
     leaveSettings,
   } = useRoute();
@@ -149,7 +150,7 @@ export function AppShell() {
   const [landed, setLanded] = useState(false);
   useEffect(() => {
     if (landed) return;
-    if (route.schedules || route.spend) {
+    if (route.schedules || route.spend || route.pullRequests) {
       setLanded(true);
       return;
     }
@@ -170,7 +171,7 @@ export function AppShell() {
     // Nothing worth opening when there are none or every Agent Session is Filed away.
     if (!candidate || railGroup(candidate) === "filed-away") return;
     focus(candidate.id);
-  }, [landed, loaded, sessions, focusedId, focus, route.settings, route.schedules]);
+  }, [landed, loaded, sessions, focusedId, focus, route.settings, route.schedules, route.pullRequests]);
 
   // Keep the cursor on the same Agent Session across reordering. Only choose a replacement when
   // that identity was Reaped or hidden in a collapsed section, never merely because it moved to
@@ -329,6 +330,7 @@ export function AppShell() {
             onOpenSettings={openSettings}
             onSchedules={() => openSchedules()}
             onSpend={openSpend}
+            onPullRequests={() => openPullRequests()}
           />
         </Sidebar>
 
@@ -343,7 +345,7 @@ export function AppShell() {
            * the handle itself is the affordance.
            */}
           <SidebarTrigger className="mobile-rail-trigger absolute z-30 lg:hidden" />
-          {route.spend ? <SpendPage /> : route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
+          {route.spend ? <SpendPage /> : route.pullRequests ? <PullRequestsPage project={route.project} pullRequest={route.pullRequest} drafts={drafts} onNavigate={openPullRequests} onSession={focus} /> : route.schedules ? <WorkflowSchedulesPage scheduleId={route.scheduleId} occurrenceId={route.occurrenceId} onNavigate={openSchedules} onSession={focus} /> : focusedId === undefined ? (
             /*
              * The New Agent Session view *is* the empty state — nothing focused and "you are
              * starting one" were always the same moment. Held back until the auto-open rule above has

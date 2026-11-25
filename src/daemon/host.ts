@@ -7,10 +7,13 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { validateFilesystemScope } from "../isolation/filesystem.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "./pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, pullBranch, changePullRequest, createPullRequest, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog, dropUnchangedBranch, fetchBranch, listPullRequests, projectPullRequest, projectTarget, pullRequestRange, remoteUrl, submitReview, type Find } from "./pull-request.ts";
 import { otherWorktreeRebase, stackStatus, stackTitles, cleanStack, stackFingerprint, changeStack, stackConflictMessage, mergeableStack, stackMergeMethods } from "./stack.ts";
 import type { StackInput, StackReview, StackReviewAction, StackStatus } from "../protocol/stack.ts";
-import { changes, changesText, commitContext, diff } from "./changes.ts";
+import { changes, changesText, commitContext, diff, fileDiff, rangeChanges } from "./changes.ts";
+import { gh } from "./github.ts";
+import { resolveRepository } from "./repository.ts";
+import type { PullRequestRef, PullRequestTarget } from "../protocol/pull-request.ts";
 import { commit } from "./commit.ts";
 import { push, pushState } from "./push.ts";
 import { GitStates, readStatus } from "./git-state.ts";
@@ -54,6 +57,7 @@ import type { Branch, CommitInput, GitChanges, GitDiff, GitText, GitTextKind, To
 // Session Host's refusal-and-record wrapper, and the import is the git invocation it wraps.
 import {
   createWorktree,
+  refExists,
   head,
   isClean,
   isRepository,
@@ -478,6 +482,37 @@ export class SessionHost {
       if (status.view && !await stackTitles(scope, status.view)) status.notice = "Pull request titles could not be read. Copy uses the links.";
       return status;
     });
+  }
+
+  private projectScope(project: string): string {
+    if (typeof project !== "string" || !isRepository(project)) throw new CommandRefused(`${project} is not a git repository.`);
+    return project;
+  }
+
+  private pullRequestPlace(target: PullRequestTarget): { scope: string; find?: Find } {
+    if (target.project === undefined) return { scope: this.record(target.sessionId).scope };
+    return { scope: this.projectScope(target.project), find: projectTarget };
+  }
+
+  /** Start an Agent Session in a Worktree on the head branch of a Pull Request, or focus the one already on it. */
+  async startPullRequestSession(project: string, ref: PullRequestRef): Promise<string> {
+    const scope = this.projectScope(project);
+    const pr = await this.readGit(() => projectTarget(scope, ref, gh));
+    const repository = await this.readGit(() => resolveRepository(scope, undefined, gh));
+    if (pr.state !== "OPEN") throw new CommandRefused("This pull request is not open.");
+    if (pr.headRepository?.id !== repository.base.id) throw new CommandRefused("This pull request comes from a fork. Flow can start an Agent Session only on a branch in the base repository.");
+    const existing = [...this.sessions.values()].find(record => record.lifecycle !== "ended" && scopeKey(record.worktree?.repo ?? record.scope) === scopeKey(scope) && !record.branch?.detached && record.branch?.name === pr.headRefName);
+    if (existing) return existing.id;
+    if (await refExists(scope, pr.headRefName)) throw new CommandRefused(`The branch ${pr.headRefName} already exists in ${scope}. Start an Agent Session on it from the New Agent Session page.`);
+    const { remote } = await this.readGit(() => remoteUrl(scope, pr.repo));
+    if (!remote) throw new CommandRefused(`No remote in ${scope} points to ${pr.repo}. Add one.`);
+    const fetched = await this.readGit(() => fetchBranch(scope, remote, pr.headRefName));
+    try {
+      return await this.create({ scope, worktree: { from: `${remote}/${pr.headRefName}`, branch: pr.headRefName } });
+    } catch (error) {
+      await dropUnchangedBranch(scope, pr.headRefName, fetched);
+      throw error;
+    }
   }
 
   private gitScope(sessionId: string): string {
@@ -1280,7 +1315,7 @@ export class SessionHost {
     if (!this.store) throw new CommandRefused("This Session Host keeps no state, so it cannot make a worktree");
     if (!isRepository(repo)) throw new CommandRefused(`${repo} is not a git repository`);
 
-    const updated = this.updateSourceBranch?.() ? await updateSourceBranch(repo, options.from) : undefined;
+    const updated = this.updateSourceBranch?.() && await refExists(repo, options.from) ? await updateSourceBranch(repo, options.from) : undefined;
     const created = await createWorktree({
       repo,
       from: options.from,
@@ -2645,24 +2680,61 @@ export class SessionHost {
         return await this.setEffort(command.sessionId, command.effort);
       case "pull_branch":
         return await this.withGitOperation(this.record(command.sessionId).scope, () => pullBranch(this.record(command.sessionId).scope, command.branch));
-      case "change_pull_request":
-        return await this.withGitOperation(this.record(command.sessionId).scope, () => this.afterPullRequestWrite(this.record(command.sessionId).scope, changePullRequest(this.record(command.sessionId).scope, command.action, command.input)));
+      case "change_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        const change = () => this.afterPullRequestWrite(scope, changePullRequest(scope, command.action, command.input, gh, find));
+        return await (find ? this.readGit(change) : this.withGitOperation(scope, change));
+      }
       case "pull_request": {
+        if ("project" in command) {
+          const scope = this.projectScope(command.project);
+          return await this.readGit(() => projectPullRequest(scope, command.number));
+        }
         const scope = this.record(command.sessionId).scope;
         return await this.readGit(() => pullRequest(scope, this.gitStates.pullRequestRef(scope)));
       }
-      case "comment_pull_request":
-        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, commentPullRequest(this.record(command.sessionId).scope, command.input));
-      case "resolve_pull_request_thread":
-        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, resolvePullRequestThread(this.record(command.sessionId).scope, command.input));
-      case "edit_pull_request":
-        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, editPullRequest(this.record(command.sessionId).scope, command.input));
-      case "set_pull_request_draft":
-        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, setPullRequestDraft(this.record(command.sessionId).scope, command.input));
-      case "rerun_pull_request_checks":
-        return await this.afterPullRequestWrite(this.record(command.sessionId).scope, rerunPullRequestChecks(this.record(command.sessionId).scope, command.input));
-      case "pull_request_check_log":
-        return await checkLog(this.record(command.sessionId).scope, command.pr, command.jobId);
+      case "comment_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, commentPullRequest(scope, command.input, gh, find));
+      }
+      case "resolve_pull_request_thread": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, resolvePullRequestThread(scope, command.input, gh, find));
+      }
+      case "edit_pull_request": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, editPullRequest(scope, command.input, gh, find));
+      }
+      case "set_pull_request_draft": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, setPullRequestDraft(scope, command.input, gh, find));
+      }
+      case "rerun_pull_request_checks": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, rerunPullRequestChecks(scope, command.input, gh, find));
+      }
+      case "pull_request_check_log": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await checkLog(scope, command.pr, command.jobId, gh, find);
+      }
+      case "submit_pull_request_review": {
+        const { scope, find } = this.pullRequestPlace(command);
+        return await this.afterPullRequestWrite(scope, submitReview(scope, command.input, gh, find));
+      }
+      case "project_pull_requests": {
+        const scope = this.projectScope(command.project);
+        return await this.readGit(() => listPullRequests(scope));
+      }
+      case "pull_request_changes":
+      case "pull_request_diff": {
+        const scope = this.projectScope(command.project);
+        return await this.readGit(async () => {
+          const range = await pullRequestRange(scope, command.pr);
+          return command.type === "pull_request_diff" ? await fileDiff(scope, command.path, range.base, range.head) : await rangeChanges(scope, range.base, range.head);
+        });
+      }
+      case "start_pull_request_session":
+        return await this.startPullRequestSession(command.project, command.pr);
       case "stack_status":
         return await this.readStack(command.sessionId);
       case "prepare_stack":

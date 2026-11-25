@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git, repository, unbornRepository } from "./git-fixture.ts";
-import { changes, commitContext, diff } from "../src/daemon/changes.ts";
+import { changes, commitContext, diff, fileDiff, rangeChanges } from "../src/daemon/changes.ts";
 import { resolveRepository } from "../src/daemon/repository.ts";
 import type { Gh } from "../src/daemon/github.ts";
 
@@ -184,4 +184,20 @@ it("reads the commit context without GitHub, from the cached identity or the loc
   assert.deepEqual(await commitContext(repo, "feature", () => true), { branch: "feature", defaultBranch: "main", canRename: false });
   assert.deepEqual(await commitContext(repo, undefined, () => false), { defaultBranch: "main", canRename: false });
   assert.deepEqual(calls, []);
+});
+
+it("reads changes and a file diff between two commits without checking them out", async () => {
+  const base = git(repo, "rev-parse", "HEAD").trim();
+  git(repo, "switch", "--quiet", "-c", "feature");
+  writeFileSync(join(repo, "a.ts"), "a\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "--quiet", "-m", "change");
+  const head = git(repo, "rev-parse", "HEAD").trim();
+  git(repo, "switch", "--quiet", "main");
+  const read = await rangeChanges(repo, base, head);
+  assert.deepEqual(read.files, [{ status: "A", path: "a.ts" }]);
+  assert.match(read.commits[0]!, / change$/);
+  const shown = await fileDiff(repo, "a.ts", base, head);
+  assert.ok("text" in shown && shown.text.includes("+a"));
+  await assert.rejects(fileDiff(repo, "README.md", base, head), /not in the list/);
 });

@@ -77,3 +77,9 @@ export function mergeUnavailable(pr: Pick<PullRequestDetails, "isDraft" | "merge
   if (pr.mergeMethods.length === 0) return "You cannot merge this Pull Request in this repository.";
   return undefined;
 }
+
+export function pullRequestNumber(text: string): number | undefined {
+  const match = /^\s*#?(\d+)\s*$/.exec(text) ?? /^\s*https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)(?:[/?#].*)?\s*$/.exec(text);
+  const number = Number(match?.[1]);
+  return number > 0 ? number : undefined;
+}

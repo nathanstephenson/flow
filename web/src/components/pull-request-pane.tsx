@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Command } from "../../../src/protocol/commands.ts";
 import type { GitText, PullRequestSummary } from "../../../src/protocol/git.ts";
-import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestCheckLog, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview } from "../../../src/protocol/pull-request.ts";
+import type { MergeMethod, PullRequestActionInput, PullRequestCheck, PullRequestCheckLog, PullRequestRef, PullRequestComment, PullRequestCommentInput, PullRequestDetails, PullRequestEditInput, PullRequestReview, PullRequestTarget, ReviewEvent } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import type { AppendResult } from "@/components/composer.tsx";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion.tsx";
@@ -14,7 +14,7 @@ import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 import { failureText, pullRequestIndicators } from "@/presentation/git.ts";
 import { checkDraftBlock, checksSummary, failedCheck, failedRuns, matchesSummary, mergeUnavailable, methodLabels, orderedChecks, readableStatus, safePullRequestUrl, threadDraftBlock } from "@/presentation/pull-request.ts";
 
-type Props = { sessionId: string; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onAddToDraft: (block: string) => AppendResult };
+type Props = { target: PullRequestTarget; number?: number; revision?: number; summary?: PullRequestSummary; disabled?: boolean; onAvailable?: (available: boolean) => void; onRead?: (pr: PullRequestDetails | null) => void; onAddToDraft?: ((block: string) => AppendResult | Promise<AppendResult>) | undefined };
 type Confirm = { action: "merge" | "rebase"; input: PullRequestActionInput };
 
 const notAdded: Record<Exclude<AppendResult, "added">, string> = {
@@ -22,13 +22,15 @@ const notAdded: Record<Exclude<AppendResult, "added">, string> = {
   locked: "This Agent Session cannot take a message. Nothing was added.",
 };
 
+const reviewLabels: Record<ReviewEvent, string> = { COMMENT: "Comment", APPROVE: "Approve", REQUEST_CHANGES: "Request changes" };
+
 
 function link(url: string, children: ReactNode) {
   const href = safePullRequestUrl(url);
   return href ? <a className="break-words underline underline-offset-2" href={href} target="_blank" rel="noreferrer">{children}</a> : <span>{children}</span>;
 }
 
-export function PullRequestPane({ sessionId, revision = 0, summary, disabled = false, onAvailable, onAddToDraft }: Props) {
+export function PullRequestPane({ target, number, revision = 0, summary, disabled = false, onAvailable, onRead, onAddToDraft }: Props) {
   const { connection } = useHost();
   const [pr, setPr] = useState<PullRequestDetails | null>();
   const [busy, setBusy] = useState(false);
@@ -40,6 +42,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
   const [confirm, setConfirm] = useState<Confirm>();
   const [edit, setEdit] = useState<PullRequestEditInput>();
   const [added, setAdded] = useState<{ key: string; text: string }>();
+  const [review, setReview] = useState<{ event: ReviewEvent; body: string }>({ event: "COMMENT", body: "" });
   const readingLogs = useRef(new Set<string>());
   const latest = useRef(0);
   const summaryKey = JSON.stringify(summary ?? null);
@@ -48,7 +51,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
 
   function read() {
     const request = ++latest.current;
-    void connection.command<PullRequestDetails | null>({ type: "pull_request", sessionId }).then(
+    void connection.command<PullRequestDetails | null>(target.project === undefined ? { type: "pull_request", sessionId: target.sessionId } : { type: "pull_request", project: target.project, number: number! }).then(
       (value) => {
         if (request !== latest.current) return;
         const shown = (input: { pr: PullRequestRef } | undefined) => Boolean(input && value && input.pr.id === value.id && input.pr.number === value.number && input.pr.repo === value.repo);
@@ -57,6 +60,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
         setConfirm(current => shown(current?.input) ? current : undefined);
         setEdit(current => shown(current) ? current : undefined);
         onAvailable?.(Boolean(value));
+        onRead?.(value);
       },
       (failure: unknown) => {
         if (request !== latest.current) return;
@@ -77,7 +81,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     const visible = () => { if (document.visibilityState === "visible") read(); };
     document.addEventListener("visibilitychange", visible);
     return () => document.removeEventListener("visibilitychange", visible);
-  }, [connection, sessionId, revision]);
+  }, [connection, target.sessionId, target.project, number, revision]);
 
   async function write(command: Command, success: string, done?: () => void) {
     setBusy(true);
@@ -96,15 +100,17 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     setBusy(true);
     setError(undefined);
     try {
-      const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId, kind: "pull_request" });
+      const text = await connection.command<GitText>({ type: "suggest_git_text", sessionId: target.sessionId!, kind: "pull_request" });
       setEdit(current => current && { ...current, ...(text.title ? { title: text.title } : {}), ...(text.body ? { body: text.body } : {}) });
     } catch (failure) { setError({ text: `No suggestion. ${failureText(failure)}`, read: false }); }
     finally { setBusy(false); }
   }
 
-  function addToDraft(key: string, block: string, text = "Added to Draft.") {
-    const result = onAddToDraft(block);
-    setAdded({ key, text: result === "added" ? text : notAdded[result] });
+  async function addToDraft(key: string, block: string, text = "Added to Draft.") {
+    try {
+      const result = await onAddToDraft!(block);
+      setAdded({ key, text: result === "added" ? text : notAdded[result] });
+    } catch (failure) { setAdded({ key, text: failureText(failure) }); }
   }
 
   async function addCheck(key: string, check: PullRequestCheck, pr: PullRequestRef) {
@@ -113,11 +119,11 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     readingLogs.current.add(key);
     setAdded({ key, text: "Reading the job log…" });
     let log: PullRequestCheckLog | null;
-    try { log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", sessionId, pr, jobId: check.jobId }); }
+    try { log = await connection.command<PullRequestCheckLog | null>({ type: "pull_request_check_log", ...target, pr, jobId: check.jobId }); }
     catch (failure) { return setAdded({ key, text: failureText(failure) }); }
     finally { readingLogs.current.delete(key); }
-    if (log) addToDraft(key, checkDraftBlock(check, log));
-    else addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. The job log could not be read or is too large.");
+    if (log) await addToDraft(key, checkDraftBlock(check, log));
+    else await addToDraft(key, checkDraftBlock(check), "Added to Draft without a log. The job log could not be read or is too large.");
   }
 
   const addedStatus = (key: string, className = "") => <span role="status" className={`text-xs text-muted-foreground ${className}`}>{added?.key === key ? added.text : ""}</span>;
@@ -127,7 +133,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
     return (
       <form aria-label={label} className="space-y-2" onSubmit={(event) => {
         event.preventDefault();
-        if (!locked && text.trim()) void write({ type: "comment_pull_request", sessionId, input: { ...input, body: text } }, "Comment posted.", () => setDrafts(current => ({ ...current, [key]: "" })));
+        if (!locked && text.trim()) void write({ type: "comment_pull_request", ...target, input: { ...input, body: text } }, "Comment posted.", () => setDrafts(current => ({ ...current, [key]: "" })));
       }}>
         <label className="block space-y-1"><span className="text-xs font-medium">{label}</span><Textarea value={text} onChange={(event) => setDrafts(current => ({ ...current, [key]: event.target.value }))} disabled={locked} /></label>
         <Button type="submit" size="sm" disabled={locked || !text.trim()}>{input.threadId ? "Reply" : "Post comment"}</Button>
@@ -137,7 +143,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
 
   const body = () => {
     if (pr === undefined) return <p>{error ? "Pull request unavailable." : "Reading pull request…"}</p>;
-    if (pr === null) return <p>No pull request found for this branch.</p>;
+    if (pr === null) return <p>{target.project === undefined ? "No pull request found for this branch." : "No pull request found."}</p>;
     const ref = { repo: pr.repo, number: pr.number, id: pr.id };
     const markdown = (text: string) => <PullRequestMarkdown body={text} repo={pr.headRepository ?? pr.repo} headRefName={pr.headRefName} />;
     const entry = (item: PullRequestComment | PullRequestReview) => (
@@ -176,7 +182,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
             <p>{checksSummary(pr.checks)}</p>
             {failedRuns(pr.checks).map(run => (
               <div key={run.runId} className="flex min-w-0 flex-wrap items-center gap-2">
-                <Button size="xs" variant="outline" disabled={locked} onClick={() => void write({ type: "rerun_pull_request_checks", sessionId, input: { pr: ref, runId: run.runId } }, "Re-run started.")}>Re-run failed jobs</Button>
+                <Button size="xs" variant="outline" disabled={locked} onClick={() => void write({ type: "rerun_pull_request_checks", ...target, input: { pr: ref, runId: run.runId } }, "Re-run started.")}>Re-run failed jobs</Button>
                 <span className="min-w-0 truncate text-xs text-muted-foreground">{run.names.join(", ")}</span>
               </div>
             ))}
@@ -187,7 +193,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
                   <li key={index} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                     {link(check.url, check.name)}
                     <span className="ml-auto flex items-center gap-2">
-                      {failedCheck(check) ? <Button size="xs" variant="outline" disabled={readingLogs.current.has(key)} onClick={() => void addCheck(key, check, ref)}>Add to Draft</Button> : null}
+                      {failedCheck(check) ? <Button size="xs" variant="outline" disabled={!onAddToDraft || readingLogs.current.has(key)} onClick={() => void addCheck(key, check, ref)}>Add to Draft</Button> : null}
                       <span>{readableStatus(check.status)}</span>
                     </span>
                     {addedStatus(key, "basis-full")}
@@ -219,12 +225,12 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
                         {thread.diffHunk ? <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 text-xs" aria-label="Diff context"><code>{thread.diffHunk}</code></pre> : null}
                         {thread.comments.map(entry)}
                         <div className="flex flex-wrap items-center gap-2">
-                          <Button size="sm" variant="outline" onClick={() => addToDraft(`thread:${thread.id}`, threadDraftBlock(thread))}>Add to Draft</Button>
+                          <Button size="sm" variant="outline" disabled={!onAddToDraft} onClick={() => void addToDraft(`thread:${thread.id}`, threadDraftBlock(thread))}>Add to Draft</Button>
                           {addedStatus(`thread:${thread.id}`)}
                         </div>
                         {thread.viewerCanReply ? commentForm(`thread:${thread.id}`, `Reply to thread in ${place}`, { pr: ref, threadId: thread.id }) : null}
                         {(thread.isResolved ? thread.viewerCanUnresolve : thread.viewerCanResolve) ? (
-                          <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "resolve_pull_request_thread", sessionId, input: { pr: ref, threadId: thread.id, resolved: !thread.isResolved } }, thread.isResolved ? "Thread reopened." : "Thread resolved.")}>
+                          <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "resolve_pull_request_thread", ...target, input: { pr: ref, threadId: thread.id, resolved: !thread.isResolved } }, thread.isResolved ? "Thread reopened." : "Thread resolved.")}>
                             {thread.isResolved ? "Reopen thread" : "Resolve thread"}
                           </Button>
                         ) : null}
@@ -241,6 +247,21 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
           <AccordionContent className="space-y-3">
             {discussion.length ? discussion.map(entry) : <p className="text-muted-foreground">No comments or reviews.</p>}
             {pr.viewerCanComment ? commentForm(`comment:${pr.id}`, "Add comment", { pr: ref }) : <p className="text-muted-foreground">You cannot comment on this pull request.</p>}
+            {pr.state === "OPEN" && pr.viewerCanComment ? (
+              <form aria-label="Review" className="space-y-2" onSubmit={(event) => {
+                event.preventDefault();
+                if (!locked) void write({ type: "submit_pull_request_review", ...target, input: { pr: ref, ...review } }, "Review submitted.", () => setReview({ event: "COMMENT", body: "" }));
+              }}>
+                <label className="block space-y-1"><span className="text-xs font-medium">Review</span><Textarea value={review.body} onChange={(event) => setReview({ ...review, body: event.target.value })} disabled={locked} /></label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select value={review.event} disabled={locked} onValueChange={(event: ReviewEvent | null) => { if (event) setReview({ ...review, event }); }}>
+                    <SelectTrigger size="sm" aria-label="Review event"><SelectValue>{reviewLabels[review.event]}</SelectValue></SelectTrigger>
+                    <SelectContent>{(Object.keys(reviewLabels) as ReviewEvent[]).map(event => <SelectItem key={event} value={event}>{reviewLabels[event]}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button type="submit" size="sm" disabled={locked || (review.event !== "APPROVE" && !review.body.trim())}>Submit review</Button>
+                </div>
+              </form>
+            ) : null}
             {link(pr.url, "Continue on GitHub")}
           </AccordionContent>
         </AccordionItem>
@@ -256,9 +277,9 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
       {pr && open && actionInput ? (<>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={locked || !!confirm || !!mergeReason} onClick={() => setConfirm({ action: "merge", input: { ...actionInput, method: pr.mergeMethods[0]! } })}>Merge</Button>
-          <Button size="sm" variant="outline" disabled={locked || !!confirm} onClick={() => setConfirm({ action: "rebase", input: actionInput })}>Rebase</Button>
+          {target.project === undefined ? <Button size="sm" variant="outline" disabled={locked || !!confirm} onClick={() => setConfirm({ action: "rebase", input: actionInput })}>Rebase</Button> : null}
           <Button size="sm" variant="outline" disabled={locked || !!edit} onClick={() => setEdit({ pr: actionInput.pr, title: pr.title, body: pr.body })}>Edit</Button>
-          <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "set_pull_request_draft", sessionId, input: { pr: actionInput.pr, draft: !pr.isDraft } }, pr.isDraft ? "Marked ready for review." : "Converted to draft.")}>
+          <Button size="sm" variant="outline" disabled={locked} onClick={() => void write({ type: "set_pull_request_draft", ...target, input: { pr: actionInput.pr, draft: !pr.isDraft } }, pr.isDraft ? "Marked ready for review." : "Converted to draft.")}>
             {pr.isDraft ? "Ready for review" : "Convert to draft"}
           </Button>
         </div>
@@ -271,7 +292,7 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
           event.preventDefault();
           if (locked) return;
           setConfirm(undefined);
-          void write({ type: "change_pull_request", sessionId, action: confirm.action, input: confirm.input }, confirm.action === "merge" ? "Pull request merged." : "Branch rebased locally. Nothing was pushed.");
+          void write({ type: "change_pull_request", ...target, action: confirm.action, input: confirm.input }, confirm.action === "merge" ? "Pull request merged." : "Branch rebased locally. Nothing was pushed.");
         }}>
           <p>{confirm.action === "merge" ? `Merge #${pr.number} into ${confirm.input.baseBranch} on GitHub?` : `Rebase only ${pr.headRefName} locally onto the latest ${confirm.input.baseBranch}. No push or stack rebase. Requires a clean Scope. Conflicts abort the rebase.`}</p>
           {confirm.action === "merge" && confirm.input.method ? (
@@ -292,11 +313,11 @@ export function PullRequestPane({ sessionId, revision = 0, summary, disabled = f
       {pr && edit ? (
         <form aria-label="Edit pull request" className="space-y-3 rounded-md border p-3" onSubmit={(event) => {
           event.preventDefault();
-          if (!locked && edit.title.trim()) void write({ type: "edit_pull_request", sessionId, input: edit }, "Pull request updated.", () => setEdit(undefined));
+          if (!locked && edit.title.trim()) void write({ type: "edit_pull_request", ...target, input: edit }, "Pull request updated.", () => setEdit(undefined));
         }}>
           <div className="flex items-center justify-between gap-2">
             <h3 className="font-medium">Edit pull request</h3>
-            <Button type="button" size="xs" variant="ghost" disabled={locked} onClick={() => void suggest()}>Suggest</Button>
+            {target.project === undefined ? <Button type="button" size="xs" variant="ghost" disabled={locked} onClick={() => void suggest()}>Suggest</Button> : null}
           </div>
           <label className="block space-y-1">Title<Input required value={edit.title} onChange={(event) => setEdit({ ...edit, title: event.target.value })} disabled={locked} /></label>
           <label className="block space-y-1">Body<Textarea value={edit.body} onChange={(event) => setEdit({ ...edit, body: event.target.value })} disabled={locked} /></label>

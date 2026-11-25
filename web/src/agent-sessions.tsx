@@ -147,7 +147,7 @@ export function useCommand(): <T>(command: Command) => Promise<T | undefined> {
         nudge();
         return result;
       } catch (error) {
-        if ((error as { code?: unknown }).code === "scope_missing" && "sessionId" in command) {
+        if ((error as { code?: unknown }).code === "scope_missing" && "sessionId" in command && command.sessionId !== undefined) {
           relocate(command.sessionId);
           nudge();
           return undefined;

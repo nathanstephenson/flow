@@ -1,4 +1,4 @@
-import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Lock, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, GitPullRequest, Lock, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -85,6 +85,7 @@ export type AgentSessionNavProps = {
   onOpenSettings: () => void;
   onSchedules?: () => void;
   onSpend?: () => void;
+  onPullRequests?: () => void;
 };
 
 export function AgentSessionNav(props: AgentSessionNavProps) {
@@ -197,7 +198,7 @@ export function AgentSessionNav(props: AgentSessionNavProps) {
         ) : null}
       </SidebarContent>
 
-      <RailFooter onSchedules={props.onSchedules ? () => { props.onSchedules!(); closeMobile(); } : undefined} onSpend={props.onSpend ? () => { props.onSpend!(); closeMobile(); } : undefined} onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
+      <RailFooter onSchedules={props.onSchedules ? () => { props.onSchedules!(); closeMobile(); } : undefined} onSpend={props.onSpend ? () => { props.onSpend!(); closeMobile(); } : undefined} onPullRequests={props.onPullRequests ? () => { props.onPullRequests!(); closeMobile(); } : undefined} onNew={navigationProps.onNew} onOpenSettings={navigationProps.onOpenSettings} />
     </>
   );
 }
@@ -546,7 +547,7 @@ function CollapsibleGroup({
  * exists — find-in-page moved to Cmd-F — and the Settings' Keyboard page lists every binding there
  * is. A footer that teaches an arbitrary two, wrongly, is worse than one that teaches none.
  */
-function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend }: { onNew: () => void; onOpenSettings: () => void; onSchedules?: (() => void) | undefined; onSpend?: (() => void) | undefined }) {
+function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend, onPullRequests }: { onNew: () => void; onOpenSettings: () => void; onSchedules?: (() => void) | undefined; onSpend?: (() => void) | undefined; onPullRequests?: (() => void) | undefined }) {
   return (
     <SidebarFooter className="flex-row items-center gap-2 border-t border-sidebar-border py-1.5">
       <Tooltip>
@@ -582,6 +583,15 @@ function RailFooter({ onNew, onOpenSettings, onSchedules, onSpend }: { onNew: ()
             <span className="sr-only">Spend</span>
           </TooltipTrigger>
           <TooltipContent>Spend</TooltipContent>
+        </Tooltip>
+      )}
+      {onPullRequests && (
+        <Tooltip>
+          <TooltipTrigger render={<Button size="icon" variant="ghost" className="size-6 shrink-0" onClick={onPullRequests} />}>
+            <GitPullRequest aria-hidden />
+            <span className="sr-only">Pull Requests</span>
+          </TooltipTrigger>
+          <TooltipContent>Pull Requests</TooltipContent>
         </Tooltip>
       )}
 

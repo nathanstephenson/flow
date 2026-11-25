@@ -173,8 +173,11 @@ _Avoid_: transcript, history, log
 
 ### Git
 
-**Pull Request**: The GitHub pull request from the branch of a Scope, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
+**Pull Request**: A GitHub pull request into the base repository of a Project. The Pull Request of a Scope is the one from its branch, in the repository that the branch pushes to, into the Base Branch. The base repository is that repository, or its parent when it is a fork.
 _Avoid_: merge request, review, change
+
+**Review**: A verdict submitted on a Pull Request: Approve, Request changes or Comment.
+_Avoid_: Tour, approval, check
 
 **Base Branch**: The branch a Pull Request merges into: the parent branch when the branch is in a Stack, otherwise the default branch of the base repository.
 _Avoid_: target branch, trunk, upstream

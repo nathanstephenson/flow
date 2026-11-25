@@ -37,6 +37,9 @@ export type Route = {
   backend?: string;
   schedules?: true;
   spend?: true;
+  pullRequests?: true;
+  project?: string;
+  pullRequest?: number;
   scheduleId?: string;
   occurrenceId?: string;
   /** The open section of the Settings Dialog. Undefined when the Dialog is closed. */
@@ -59,6 +62,14 @@ export function parseRoute(hash: string): Route {
 
 function sessionPart(parts: string[]): Route {
   if (parts[0] === "spend") return { sessionId: undefined, spend: true };
+  if (parts[0] === "pull-requests") {
+    const project = decode(parts[1] ?? "");
+    const number = Number(parts[2]);
+    if (!project) return { sessionId: undefined, pullRequests: true };
+    return Number.isSafeInteger(number) && number > 0
+      ? { sessionId: undefined, pullRequests: true, project, pullRequest: number }
+      : { sessionId: undefined, pullRequests: true, project };
+  }
   if (parts[0] === 'schedules') {
     const route: Route = { sessionId: undefined, schedules: true };
     if (parts[1] === 'occurrences') {
@@ -80,7 +91,7 @@ function sessionPart(parts: string[]): Route {
 
 export function formatRoute(route: Route): string {
   const path =
-    route.spend ? "#/spend" : route.schedules ? `#/schedules${route.occurrenceId ? `/occurrences/${encodeURIComponent(route.occurrenceId)}` : route.scheduleId ? `/${encodeURIComponent(route.scheduleId)}` : ''}` : route.sessionId !== undefined
+    route.spend ? "#/spend" : route.pullRequests ? `#/pull-requests${route.project ? `/${encodeURIComponent(route.project)}${route.pullRequest ? `/${route.pullRequest}` : ""}` : ""}` : route.schedules ? `#/schedules${route.occurrenceId ? `/occurrences/${encodeURIComponent(route.occurrenceId)}` : route.scheduleId ? `/${encodeURIComponent(route.scheduleId)}` : ''}` : route.sessionId !== undefined
       ? `#/s/${encodeURIComponent(route.sessionId)}`
       : route.backend
         ? `#/new/${encodeURIComponent(route.backend)}`

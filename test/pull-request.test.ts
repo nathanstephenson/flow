@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { git, repository } from "./git-fixture.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
 import type { MergeMethod, PullRequestDetails, PullRequestRef } from "../src/protocol/pull-request.ts";
-import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog } from "../src/daemon/pull-request.ts";
+import { pullRequest, commentPullRequest, resolvePullRequestThread, changePullRequest, pullBranch, editPullRequest, setPullRequestDraft, rerunPullRequestChecks, checkLog, dropUnchangedBranch, listPullRequests, projectPullRequest, projectTarget, pullRequestRange, submitReview } from "../src/daemon/pull-request.ts";
 import { resolveRepository } from "../src/daemon/repository.ts";
 import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import type { Gh } from "../src/daemon/github.ts";
@@ -529,6 +529,84 @@ test("PR actions and Pull share the Scope operation safeguards", async () => {
   } finally { await host.shutdown(); await rm(path, { recursive: true, force: true }); }
 });
 
+test("a Project target reads a pull request by number, without the branch, and refuses a changed one", async () => {
+  const path = await scope();
+  try {
+    const { github, calls, mutations } = mock();
+    assert.equal((await projectPullRequest(path, 1, github))?.id, ref.id);
+    assert.equal(await projectPullRequest(path, 2, github), null);
+    calls.length = 0;
+    await commentPullRequest(path, { pr: ref, body: "text" }, github, projectTarget);
+    assert.ok(calls.every(call => !call.join(" ").includes("headRefName:$branch")));
+    assert.equal(mutations.length, 1);
+    await assert.rejects(commentPullRequest(path, { pr: { ...ref, id: "PR_other" }, body: "text" }, github, projectTarget), /has changed/);
+    await assert.rejects(commentPullRequest(path, { pr: { ...ref, repo: "other/repo" }, body: "text" }, github, projectTarget), /has changed/);
+    await assert.rejects(changePullRequest(path, "rebase", actionInput, github, projectTarget), /Agent Session/);
+    await changePullRequest(path, "merge", { ...actionInput, method: "SQUASH" }, github, projectTarget);
+    assert.match(mutations.at(-1)!.join(" "), /mergePullRequest/);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("lists open pull requests of the base repository, review requests first", async () => {
+  const path = await scope();
+  try {
+    const node = (number: number, login?: string) => ({ id: `PR_${number}`, number, title: `T${number}`, isDraft: false, updatedAt: "2025-01-01", author: { login: "user" }, reviewRequests: { nodes: login ? [{ requestedReviewer: { login } }, { requestedReviewer: {} }] : [] } });
+    const list = await listPullRequests(path, mock({ list: [node(1), node(2, "me"), node(3, "other")] }).github);
+    assert.deepEqual(list.map(item => [item.number, item.reviewRequested, item.repo]), [[2, true, "base/repo"], [1, false, "base/repo"], [3, false, "base/repo"]]);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("a Review is one mutation, and needs a comment unless it approves", async () => {
+  const path = await scope();
+  try {
+    const { github, mutations } = mock();
+    await submitReview(path, { pr: ref, event: "APPROVE", body: "" }, github, projectTarget);
+    assert.match(mutations[0]!.join(" "), /addPullRequestReview/);
+    assert.ok(mutations[0]!.includes("event=APPROVE"));
+    await assert.rejects(submitReview(path, { pr: ref, event: "REQUEST_CHANGES", body: " " }, github, projectTarget), /Enter a comment/);
+    await assert.rejects(submitReview(path, { pr: ref, event: "DISMISS" as "COMMENT", body: "x" }, github, projectTarget), /Invalid review/);
+    assert.equal(mutations.length, 1);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("a pull request range fetches missing commits once and writes no refs", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "flow-pr-range-"));
+  try {
+    const server = repository(parent, "server");
+    git(server, "switch", "--quiet", "-c", "feature");
+    await writeFile(join(server, "a.ts"), "a\n");
+    git(server, "add", ".");
+    git(server, "commit", "--quiet", "-m", "change");
+    const head = git(server, "rev-parse", "HEAD").trim();
+    const base = git(server, "rev-parse", "main").trim();
+    git(server, "update-ref", "refs/pull/1/head", head);
+    const path = await scope();
+    git(path, "config", `url.${server}.insteadOf`, "https://github.com/base/repo.git");
+    const refs = git(path, "for-each-ref");
+    const { github } = mock({ headOid: head, baseOid: base });
+    assert.deepEqual(await pullRequestRange(path, ref, github), { base, head });
+    assert.equal(git(path, "for-each-ref"), refs);
+    git(server, "update-ref", "-d", "refs/pull/1/head");
+    assert.deepEqual(await pullRequestRange(path, ref, github), { base, head });
+    git(server, "update-ref", "refs/pull/1/head", head);
+    await assert.rejects(pullRequestRange(path, ref, mock({ headOid: "c".repeat(40), baseOid: base }).github), /has changed/);
+    await rm(path, { recursive: true, force: true });
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
+test("drops a branch only while it still points at the fetched commit", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "flow-pr-drop-"));
+  try {
+    const path = repository(parent, "repo", ["feature"]);
+    const oid = git(path, "rev-parse", "feature").trim();
+    git(path, "branch", "moved");
+    git(path, "update-ref", "refs/heads/moved", git(path, "commit-tree", "HEAD^{tree}", "-p", oid, "-m", "local").trim());
+    await dropUnchangedBranch(path, "moved", oid);
+    await dropUnchangedBranch(path, "feature", oid);
+    assert.deepEqual(git(path, "branch", "--format=%(refname:short)").trim().split("\n"), ["main", "moved"]);
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
 const ref = { repo: "base/repo", number: 1, id: "PR_one" };
 const actionInput = { pr: ref, headOid: "a".repeat(40), baseBranch: "main" };
 const open = { ...ref, url: "https://github.com/base/repo/pull/1", title: "Change", baseRefName: "main", headRefOid: "a".repeat(40), state: "OPEN", isDraft: false, reviewDecision: null, updatedAt: "2025-01-01", closedAt: null, headRepository: { id: "R_source" }, commits: { nodes: [] }, reviewThreads: { nodes: [] } };
@@ -536,7 +614,7 @@ const repositoryView = (args: string[]) => JSON.stringify(args[2] === "base/repo
   ? { id: "R_base", defaultBranchRef: { name: "main" }, isFork: false }
   : { id: "R_source", defaultBranchRef: { name: "main" }, isFork: true, parent: { name: "repo", owner: { login: "base" } } });
 const entry = { id: "C_one", author: { login: "user" }, body: "![image](url)", url: "url", createdAt: "2025-01-01", diffHunk: "@@ -1 +1 @@" };
-type Options = { candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" | "nested"; threadPr?: string; runSha?: string; log?: string | Error; later?: object; headRepositoryId?: string };
+type Options = { list?: object[]; baseOid?: string; candidates?: readonly object[]; fail?: boolean; locked?: boolean; archived?: boolean; permission?: string; state?: string; methods?: MergeMethod[]; headOid?: string; baseBranch?: string; draft?: boolean; elsewhere?: string; threads?: number; checks?: number; checkNodes?: object[]; more?: "comments" | "reviews" | "threads" | "thread" | "checks" | "nested"; threadPr?: string; runSha?: string; log?: string | Error; later?: object; headRepositoryId?: string };
 function mock(options: Options = {}) {
   const mutations: string[][] = [];
   const calls: string[][] = [];
@@ -568,7 +646,9 @@ function mock(options: Options = {}) {
       mutations.push(args);
       if (options.fail) return JSON.stringify({ errors: [{ message: "denied" }] });
       data = { result: {} };
-    } else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: { nodes: options.candidates ?? [{ ...open, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefOid: options.headOid ?? open.headRefOid, baseRefName: options.baseBranch ?? "main", ...(resolved++ && options.later) }] } } };
+    } else if (query.includes("pullRequest(number:$number)")) data = { repository: { pullRequest: args.includes("number=1") ? { ...open, headRefName: "feature", baseRefOid: options.baseOid ?? "b".repeat(40), headRefOid: options.headOid ?? open.headRefOid } : null } };
+    else if (query.includes("pullRequests(states:OPEN")) data = { viewer: { login: "me" }, repository: { pullRequests: { nodes: options.list ?? [] } } };
+    else if (query.includes("headRefName:$branch")) data = { repository: { pullRequests: { nodes: options.candidates ?? [{ ...open, state: options.state ?? "OPEN", isDraft: options.draft ?? false, headRefOid: options.headOid ?? open.headRefOid, baseRefName: options.baseBranch ?? "main", ...(resolved++ && options.later) }] } } };
     else if (query.includes("PullRequestReviewThread{pullRequest")) data = { node: { pullRequest: { id: options.threadPr ?? ref.id } } };
     else if (query.includes("after:$cursor")) {
       const field = /\{(\w+)\(first:100,after/.exec(query)![1]!;

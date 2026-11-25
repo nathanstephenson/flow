@@ -461,7 +461,7 @@ function prPane(details: Record<string, unknown> = prDetails(), read?: () => Pro
   }, { document });
   const added: string[] = [];
   const draft = { result: "added" };
-  const props: Record<string, unknown> = { sessionId: "session", revision: 0, disabled: false, onAvailable() {}, onChange() {}, onAddToDraft(block: string) { added.push(block); return draft.result; } };
+  const props: Record<string, unknown> = { target: { sessionId: "session" }, revision: 0, disabled: false, onAvailable() {}, onChange() {}, onAddToDraft(block: string) { added.push(block); return draft.result; } };
   const render = () => pane.render("PullRequestPane", props);
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const load = async (revision = 0) => { props.revision = revision; render(); pane.effects.at(-1)!(); await flush(); };
@@ -651,6 +651,46 @@ for (const action of ["merge", "rebase"]) it(`PR ${action} requires confirmation
   find(render(), "form", node => node.props["aria-label"] === (action === "merge" ? "Confirm merge" : "Confirm rebase")).props.onSubmit({ preventDefault() {} });
   await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "change_pull_request", sessionId: "session", action, input: { pr: prRef, headOid: "a".repeat(40), baseBranch: "main", ...(action === "merge" ? { method: "REBASE" } : {}) } }]);
+});
+
+it("reads a project pull request by number, hides Rebase and Suggest, and sends the project with each write", async () => {
+  const { render, load, flush, calls, props, writes } = prPane();
+  Object.assign(props, { target: { project: "/repo" }, number: 1 });
+  await load();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), { type: "pull_request", project: "/repo", number: 1 });
+  assert.throws(() => findButton(render(), "Rebase"));
+  findButton(render(), "Edit").props.onClick();
+  assert.throws(() => findButton(render(), "Suggest"));
+  findButton(render(), "Convert to draft").props.onClick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "set_pull_request_draft", project: "/repo", input: { pr: prRef, draft: true } }]);
+});
+
+it("submits a review, with a body unless it approves", async () => {
+  const { render, load, flush, writes } = prPane();
+  await load();
+  const form = () => find(render(), "form", node => node.props["aria-label"] === "Review");
+  assert.equal(findButton(form(), "Submit review").props.disabled, true);
+  find(form(), "Select").props.onValueChange("APPROVE");
+  assert.equal(findButton(form(), "Submit review").props.disabled, false);
+  find(form(), "Select").props.onValueChange("REQUEST_CHANGES");
+  find(form(), "Textarea").props.onChange({ target: { value: "Fix this." } });
+  form().props.onSubmit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(writes())), [{ type: "submit_pull_request_review", sessionId: "session", input: { pr: prRef, event: "REQUEST_CHANGES", body: "Fix this." } }]);
+  assert.equal(find(form(), "Textarea").props.value, "");
+});
+
+it("disables Add to Draft without a handler and shows a refusal from the handler", async () => {
+  const { render, load, flush, props } = prPane();
+  await load();
+  const item = () => find(render(), "AccordionItem", node => node.props.value === "T_open");
+  props.onAddToDraft = undefined;
+  assert.equal(findButton(item(), "Add to Draft").props.disabled, true);
+  props.onAddToDraft = async () => { throw new Error("409 Conflict: This pull request is not open."); };
+  findButton(item(), "Add to Draft").props.onClick();
+  await flush();
+  assert.equal(rowStatus(item()), "This pull request is not open.");
 });
 
 it("PR merge is unavailable without a permitted method or for a draft", async () => {
@@ -1166,13 +1206,30 @@ it("shows Git State and gives the PR pane the summary when the pull request summ
   gitState = undefined;
 });
 
+// Renders GitChanges with its ChangedFiles, and runs the ChangedFiles effect as a commit would.
+function changesComponent(command: (input: any) => Promise<any>) {
+  const pane = component("git-changes", command);
+  const files = component("changed-files", command);
+  return {
+    effects: pane.effects,
+    render: (name: string, props: any): Element => {
+      const tree = pane.render(name, props);
+      const list = findAll(tree, "ChangedFiles")[0];
+      if (!list) return tree;
+      const shown = files.render("ChangedFiles", list.props);
+      files.effects.at(-1)!();
+      return { type: "root", props: { children: [tree, shown] } };
+    },
+  };
+}
+
 function changesPane() {
   const calls: any[] = [];
   let listed = [{ status: " M", path: "a.ts" }, { status: "??", path: "b.ts" }];
   const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
-  const pane = component("git-changes", async input => {
+  const pane = changesComponent(async input => {
     calls.push(input);
-    if (input.type === "git_changes") return { files: listed, commits: input.view === "branch" ? ["abc Add a"] : [], ...(input.view === "uncommitted" ? { fingerprint: "f", branch: "feature", defaultBranch: "main", canRename: false } : {}) };
+    if (input.type === "git_changes") return { files: [...listed], commits: input.view === "branch" ? ["abc Add a"] : [], ...(input.view === "uncommitted" ? { fingerprint: "f", branch: "feature", defaultBranch: "main", canRename: false } : {}) };
     return { text: `--- a/${input.path}\n+++ b/${input.path}\n@@ -1 +1 @@\n-old\n+${calls.length}\n` };
   });
   const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
@@ -1217,6 +1274,8 @@ it("reads the Changes list and open diffs again when the revision changes", asyn
   pane.render("GitChanges", props);
   pane.effects.at(-1)!();
   await flush();
+  pane.render("GitChanges", props);
+  await flush();
   assert.equal(calls.filter(call => call.type === "git_changes").length, 2);
   assert.deepEqual(diffs().map(call => call.path), ["b.ts", "b.ts"]);
 });
@@ -1231,17 +1290,19 @@ it("switches the Changes view between uncommitted and branch", async () => {
   find(render(), "Accordion").props.onValueChange(["a.ts"]);
   await flush();
   find(render(), "Tabs").props.onValueChange("branch");
-  render();
+  assert.throws(() => find(render(), "ChangedFiles"));
   pane.effects.at(-1)!();
   await flush();
   assert.deepEqual(calls.filter(call => call.type === "git_changes").map(call => call.view), ["uncommitted", "branch"]);
-  assert.deepEqual(plain(find(render(), "Accordion").props.value), []);
+  find(render(), "Accordion").props.onValueChange(["b.ts"]);
+  await flush();
+  assert.deepEqual(plain(calls.at(-1)), { type: "git_diff", sessionId: "session", view: "branch", path: "b.ts" });
   assert.equal(textContent(find(render(), "ul", node => node.props["aria-label"] === "Branch commits")), "abc Add a");
 });
 
 it("keeps the newest diff when an older response arrives last", async () => {
   const pending: ((value: unknown) => void)[] = [];
-  const pane = component("git-changes", input => input.type === "git_changes"
+  const pane = changesComponent(input => input.type === "git_changes"
     ? Promise.resolve({ files: [{ status: " M", path: "a.ts" }], commits: [] })
     : new Promise(resolve => pending.push(resolve)));
   const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
@@ -1255,6 +1316,7 @@ it("keeps the newest diff when an older response arrives last", async () => {
   pane.render("GitChanges", props);
   pane.effects.at(-1)!();
   await flush();
+  pane.render("GitChanges", props);
   assert.equal(pending.length, 2);
   pending[1]!({ text: "new" });
   await flush();

@@ -256,7 +256,7 @@ function millisecondOfDay(now: Date): number {
   return now.getTime() - midnight;
 }
 
-async function refExists(repo: string, branch: string): Promise<boolean> {
+export async function refExists(repo: string, branch: string): Promise<boolean> {
   const found = await run(
     repo,
     ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
