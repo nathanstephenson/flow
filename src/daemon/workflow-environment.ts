@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isSea } from 'node:sea';
@@ -32,8 +32,9 @@ export class WorkflowEnvironment {
   readonly mode: FilesystemIsolationMode;
   readonly stateDir: string;
   readonly readablePaths: string[];
-  constructor(host: SessionHost, ownerId: string, scope: string, connectionIds: string[], mode: FilesystemIsolationMode, stateDir: string, readablePaths: string[] = []) {
-    this.host = host; this.ownerId = ownerId; this.scope = scope; this.connectionIds = connectionIds; this.mode = mode; this.stateDir = stateDir; this.readablePaths = readablePaths;
+  readonly scopeReadOnly: boolean;
+  constructor(host: SessionHost, ownerId: string, scope: string, connectionIds: string[], mode: FilesystemIsolationMode, stateDir: string, readablePaths: string[] = [], scopeReadOnly = false) {
+    this.host = host; this.ownerId = ownerId; this.scope = scope; this.connectionIds = connectionIds; this.mode = mode; this.stateDir = stateDir; this.readablePaths = readablePaths; this.scopeReadOnly = scopeReadOnly;
   }
 
   async prepare(signal?: AbortSignal): Promise<void> {
@@ -76,13 +77,14 @@ export class WorkflowEnvironment {
       const roots = shared?.roots();
       if (roots && !roots.slice(0, 3).some(root => this.scope === root || this.scope.startsWith(root + '/'))) throw new Error('Scope is outside shared Sandbox roots');
       const attachment = shared ? this.host.scheduledSandboxMounts(this.scope) : { writable: [], readable: [] };
-      const mounts = sandboxMounts([...(roots ?? [this.scope, this.stateDir]), ...attachment.writable], [packageRoot, ...this.readablePaths, ...nodeExecutionAssets([bundle]), ...attachment.readable]);
+      const mounts = sandboxMounts([...(roots ?? (this.scopeReadOnly ? [this.stateDir] : [this.scope, this.stateDir])), ...attachment.writable],
+        [...(this.scopeReadOnly ? [this.scope] : []), packageRoot, ...this.readablePaths, ...nodeExecutionAssets([bundle]), ...attachment.readable]);
       if (shared) {
         const lease = await shared.acquire(support.provider, roots![0]!, mounts, signal);
         this.sandbox = lease.sandbox; this.release = lease.release;
       } else {
         this.ownedProvider = support.provider;
-        this.sandbox = await createSandbox(support.provider, { name: `flow-${this.ownerId}`, workspace: this.scope, mounts, env: {} }, join(this.stateDir, 'sandbox.json'), signal);
+        this.sandbox = await createSandbox(support.provider, { name: `flow-${this.ownerId}`, workspace: this.scopeReadOnly ? realpathSync(this.stateDir) : this.scope, mounts, env: {} }, join(this.stateDir, 'sandbox.json'), signal);
       }
     }
     signal.throwIfAborted();

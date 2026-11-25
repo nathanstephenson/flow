@@ -299,6 +299,16 @@ Explicit human Shells and host-owned Git operations remain distinct.
 _Avoid_: workspace, project, repo — a Project is a distinct thing, defined below, and calling a
 Scope one confuses a binding with a candidate for it.
 
+**Read-only Scope**:
+A Scope that its Agent Session can read but not write. It is fixed when the Agent Session is
+created, and only the Project Root can be one. A Fork keeps it. It refuses a Worktree, Git writes,
+a Tour and a file Rewind. Under Bubblewrap and a per-session Sandbox the Scope is mounted read-only.
+Under unrestricted mode and a Shared Sandbox it is best effort: the agent loses its file-writing
+tools and Bash, and the UI says that this is not a boundary. A read-only Agent Session that creates
+an Agent Session outside a Project gives it a Read-only Scope too. Human Shells are unchanged. See
+ADR 0046.
+_Avoid_: scopeless, sandbox
+
 **Project**:
 A directory its owner has opted into starting Agent Sessions from. A *candidate* Scope, not a Scope:
 it exists before any Agent Session, outlives every one bound to it, and may have several at once.

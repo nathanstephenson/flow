@@ -1,4 +1,4 @@
-import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Pin, PinOff, Plus, Settings } from "lucide-react";
+import { CalendarClock, ChartColumn, ChevronDown, CircleCheck, FolderGit2, GitBranch, Lock, Pin, PinOff, Plus, Settings } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 
 import type { SessionStatus, SessionSummary } from "../../../src/protocol/commands.ts";
@@ -352,7 +352,7 @@ function AgentSessionRow({
             <span className="sr-only agent-session-status-text">{activityStatusText({ ...summary, status })}</span>
             <BackendIcon backend={summary.backend} />
             <span className="sr-only">{summary.backend}</span>
-            <span className="truncate">{projectName(summary.scope, summary.worktree)}</span>
+            <span className="truncate">{projectName(summary.scope, summary.worktree, summary.readOnly)}</span>
             {/* Attention rows show the qualifying event's age above. Ordinary rows keep Resting,
                 the same timestamp that orders their group. */}
             {!summary.attention ? (
@@ -427,7 +427,8 @@ function AgentSessionRow({
 }
 
 /**
- * Where this Agent Session's edits land: which branch, and which of the two checkouts.
+ * Where this Agent Session's edits land: which branch, and which of the two checkouts. A read-only
+ * Scope has no edits to land, so it says that in words instead.
  *
  * Absent when the Scope is not a repository, which is the same signal the composer's Scope Strip
  * hides its branch control on — a Project need not be a repository at all (ADR 0011), and a row that
@@ -443,6 +444,14 @@ function AgentSessionRow({
  * the pane header.
  */
 function ScopeLine({ summary }: { summary: SessionSummary }) {
+  if (summary.readOnly) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Lock aria-hidden className="size-3! shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{scopeKindLabel(summary)}</span>
+      </span>
+    );
+  }
   if (!summary.branch) return null;
   const Glyph = summary.worktree ? FolderGit2 : GitBranch;
 

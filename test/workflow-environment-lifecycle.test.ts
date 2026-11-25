@@ -29,6 +29,18 @@ function fixture(t: import('node:test').TestContext, connections: string[] = [],
   return { ...f, environment, host };
 }
 
+test('a read-only Scope is a read-only Sandbox mount and the state folder is the workspace', async t => {
+  let environment: WorkflowEnvironment | undefined;
+  t.after(() => environment?.close());
+  const f = fakeProvider(t);
+  const host = new SessionHost({ filesystemIsolationMode: () => 'sandbox', sandboxSupport: () => f.support, mcpConnections: () => [connection] });
+  environment = new WorkflowEnvironment(host, 'occurrence-test', f.scope, [], 'sandbox', f.state, [], true);
+  await environment.prepare();
+  const spec = f.spec();
+  assert.equal(spec.workspace, f.state);
+  assert.deepEqual(spec.additionalWorkspaces.filter((mount: { path: string }) => mount.path === f.scope), [{ path: f.scope, readOnly: true }]);
+});
+
 test('Sandbox removal failure retains its journal and close retries after holds drain', async t => {
   const f = fakeProvider(t);
   const path = join(f.state, 'sandbox.json');

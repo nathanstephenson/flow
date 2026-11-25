@@ -1990,3 +1990,74 @@ if (args[0] === "api") out({ data: { repository: { pullRequests: { nodes: exists
     } finally { await cleanup(); }
   });
 });
+
+describe("Read-only Scope", () => {
+  class CaptureBackend extends FakeBackend {
+    readOnly: unknown[] = [];
+    override async create(options: import("../src/backend/types.ts").BackendCreateOptions) {
+      this.readOnly.push(options.readOnly);
+      return super.create(options);
+    }
+  }
+
+  it("binds only to the Project Root, never a Worktree, and persists the flag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    const state = mkdtempSync(join(tmpdir(), "flow-state-"));
+    const { TranscriptStore } = await import("../src/daemon/store.ts");
+    const store = new TranscriptStore(state);
+    const none = new SessionHost();
+    none.registerBackend(new FakeBackend());
+    await assert.rejects(none.create({ scope: root, backend: "fake", readOnly: true }), CommandRefused);
+    await none.shutdown();
+    const host = new SessionHost({ store, projectRoot: () => root });
+    host.registerBackend(new FakeBackend());
+    await assert.rejects(host.create({ scope: tmpdir(), backend: "fake", readOnly: true }), (error: Error) => error instanceof CommandRefused && /Project Root/.test(error.message));
+    await assert.rejects(host.create({ scope: root, backend: "fake", readOnly: true, worktree: { from: "main" } }), (error: Error) => error instanceof CommandRefused && /Worktree/.test(error.message));
+    const id = await host.create({ scope: root, backend: "fake", readOnly: true });
+    assert.equal(host.list().find(session => session.id === id)?.readOnly, true);
+    await host.shutdown();
+    const reloaded = new SessionHost({ store, projectRoot: () => root });
+    reloaded.registerBackend(new FakeBackend());
+    await reloaded.load();
+    assert.equal(reloaded.list().find(session => session.id === id)?.readOnly, true);
+    await reloaded.shutdown();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+
+  it("is mounted read-only where isolation allows and tool-restricted elsewhere", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    for (const [mode, sharing, expected] of [
+      ["bubblewrap", "session", "mounted"],
+      ["sandbox", "session", "mounted"],
+      ["sandbox", "shared", "tools"],
+      ["none", "session", "tools"],
+    ] as const) {
+      const backend = new CaptureBackend();
+      const host = new SessionHost({ projectRoot: () => root, filesystemIsolationMode: () => mode, sandboxSharing: () => sharing });
+      host.registerBackend(backend);
+      await host.create({ scope: root, backend: "fake" });
+      await host.create({ scope: root, backend: "fake", readOnly: true });
+      assert.deepEqual(backend.readOnly, [undefined, expected], `${mode} ${sharing}`);
+      await host.shutdown();
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses Git writes and Tour", async () => {
+    const root = mkdtempSync(join(tmpdir(), "flow-root-"));
+    const host = new SessionHost({ projectRoot: () => root });
+    host.registerBackend(new FakeBackend());
+    const id = await host.create({ scope: root, backend: "fake", readOnly: true });
+    for (const command of [
+      { type: "switch_branch", sessionId: id, branch: "main" },
+      { type: "pull_branch", sessionId: id, branch: "main" },
+      { type: "commit", sessionId: id, fingerprint: "x", paths: ["a"], message: "Add" },
+      { type: "push", sessionId: id, head: "x" },
+      { type: "start_tour", sessionId: id },
+    ] satisfies Command[]) await assert.rejects(host.execute(command), (error: Error) => error instanceof CommandRefused && /read-only/i.test(error.message), command.type);
+    await assert.rejects(host.relocate(id, tmpdir()), (error: Error) => error instanceof CommandRefused && /Read-only/.test(error.message));
+    await host.shutdown();
+    rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -19,7 +19,7 @@ import {
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle } from "../types.ts";
+import type { AgentBackend, BackendCreateOptions, BackendSession, PromptAttachment, WorkflowSubagentOptions, WorkflowSubagentHandle, ReadOnlyScope } from "../types.ts";
 import type { AutoCompaction } from "../../protocol/settings.ts";
 import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
 import { anthropicPlanLimits } from "../plan-limits.ts";
@@ -247,6 +247,11 @@ const DEFAULT_ALLOWED_TOOLS = [
   "Agent",
 ];
 
+function readOnlyDeniedTools(readOnly: ReadOnlyScope | undefined): string[] {
+  if (!readOnly) return [];
+  return ["Write", "Edit", "NotebookEdit", ...(readOnly === "tools" ? ["Bash", "mcp__workflow__bash"] : [])];
+}
+
 class ClaudeSession implements BackendSession {
   capabilities: Capabilities = { providers: ["anthropic"], models: [], compaction: true, autoCompaction: "startup", fork: true, rewind: true, rewindFiles: true, subagents: true, enquiries: true, permissions: true };
 
@@ -312,6 +317,7 @@ class ClaudeSession implements BackendSession {
 
   private readonly options: BackendCreateOptions;
   private readonly backendOptions: ClaudeBackendOptions;
+  private readonly disallowedTools: string[];
   private readonly workflowAutoCompaction: AutoCompaction | undefined;
   private readonly claudeState: ReturnType<typeof prepareClaudeState>;
 
@@ -322,6 +328,8 @@ class ClaudeSession implements BackendSession {
       : workflowParentServer(options.tools === "none" ? undefined : options.workflow);
     this.parentSessions = sessionToolsServer(options.workflowBuilder || options.tools === "none" ? undefined : options.sessionTools);
     if (options.workflowBuilder) this.capabilities = { ...this.capabilities, subagents: false, enquiries: false, permissions: false };
+    if (options.readOnly) this.capabilities = { ...this.capabilities, rewindFiles: false };
+    this.disallowedTools = [...backendOptions.disallowedTools ?? [], ...readOnlyDeniedTools(options.readOnly)];
     this.options = options;
     this.permissionMode = options.permissionMode ?? "ask";
     this.backendOptions = backendOptions;
@@ -338,7 +346,7 @@ class ClaudeSession implements BackendSession {
     // `BackendCreateOptions.tools`. The deny in `canUseTool` below is the half that makes it hold.
     const builder = options.workflowBuilder;
     const toolless = !builder && options.tools === "none";
-    const preApproved = builder ? claudeWorkflowBuilderToolNames : toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover", "mcp__flow_workflow__workflow_relay_enquiry", "mcp__flow_workflow__workflow_relay_permission"] : [])];
+    const preApproved = builder ? claudeWorkflowBuilderToolNames : toolless ? [] : [...(backendOptions.allowedTools ?? DEFAULT_ALLOWED_TOOLS).filter((tool) => !this.disallowedTools.includes(tool)), ...(options.workflow ? ["mcp__flow_workflow__workflow_inspect", "mcp__flow_workflow__workflow_recover", "mcp__flow_workflow__workflow_relay_enquiry", "mcp__flow_workflow__workflow_relay_permission"] : [])];
     if (!builder && !toolless && options.sessionTools) preApproved.push(...claudeSessionReadTools);
     this.allowed = new Set(toolless ? [] : [...preApproved, ...(options.standingAuthorisations ?? [])]);
     // `allowedTools` is what the CLI auto-approves before the callback, and it is given only the
@@ -372,7 +380,7 @@ class ClaudeSession implements BackendSession {
       // set, and canUseTool catches only the fall-through so nothing can stall waiting on a prompt.
       permissionMode: "default",
       allowedTools: preApproved,
-      ...(backendOptions.disallowedTools ? { disallowedTools: backendOptions.disallowedTools } : {}),
+      ...(this.disallowedTools.length ? { disallowedTools: this.disallowedTools } : {}),
       ...(builder ? {
         tools: [], settingSources: [], skills: [], plugins: [], agents: {},
         settings: { disableAllHooks: true, enabledPlugins: {}, syncClaudeAiSkills: false, syncClaudeAiPlugins: false,
@@ -385,7 +393,7 @@ class ClaudeSession implements BackendSession {
       ...(startingEffort ? { effort: startingEffort } : {}),
       ...(options.resume ? { resume: options.resume } : {}),
       ...(resumeAt ? { resumeSessionAt: resumeAt } : {}),
-      ...(builder || toolless ? {} : { enableFileCheckpointing: true }),
+      ...(builder || toolless || options.readOnly ? {} : { enableFileCheckpointing: true }),
       ...(backendOptions.pathToClaudeCodeExecutable
         ? { pathToClaudeCodeExecutable: backendOptions.pathToClaudeCodeExecutable }
         : {}),
@@ -413,6 +421,7 @@ class ClaudeSession implements BackendSession {
           : { behavior: "deny" as const, message: "This workflow builder tool is not enabled" };
         if (extra.agentID && toolName.startsWith(SESSION_TOOL_PREFIX)) return { behavior: "deny" as const,
           message: "Agent Session tools are available only to the parent Agent Session" };
+        if (this.disallowedTools.includes(toolName)) return { behavior: "deny" as const, message: `${toolName} is disabled for this session` };
         if (toolName === ASK_TOOL) return await this.ask(extra.toolUseID, input);
         if (this.permissionMode === "always" || this.allowed.has(toolName) || this.workflowGrants.has(toolName)) return { behavior: "allow" as const, updatedInput: input };
         // The SDK calls this field agentID, but for an ordinary Agent it is the task id announced by
@@ -816,7 +825,7 @@ class ClaudeSession implements BackendSession {
     if (this.options.tools === "none") throw new Error("This Backend Session runs no tools");
     const handle = new ClaudeWorkflowSubagent({ cwd: this.options.scope,
       mcpServers: claudeMcpServers(this.options.mcp),
-      ...(this.backendOptions.disallowedTools ? { disallowedTools: this.backendOptions.disallowedTools } : {}),
+      ...(this.disallowedTools.length ? { disallowedTools: this.disallowedTools } : {}),
       ...(this.backendOptions.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: this.backendOptions.pathToClaudeCodeExecutable } : {}),
     }, options, this.workflowGrants, {
       ...(this.backendOptions.query ? { query: this.backendOptions.query } : {}),

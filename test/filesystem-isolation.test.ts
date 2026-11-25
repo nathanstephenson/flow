@@ -240,6 +240,27 @@ describe("real Bubblewrap filesystem boundary", integration, () => {
     assert.equal(existsSync(join(f.scope, "remove")), false);
   });
 
+  it("mounts a read-only Scope with --ro-bind-fd and refuses writes inside it", async (t) => {
+    const f = fixture(); t.after(f.cleanup);
+    writeFileSync(join(f.scope, "keep"), "scope");
+    const prepared = await prepareFilesystemIsolation(f.options({ scopeReadOnly: true, args: ["-e", String.raw`
+      const fs = require('node:fs'), assert = require('node:assert/strict');
+      const p = JSON.parse(process.argv[1]);
+      assert.equal(fs.readFileSync(p.scope + '/keep', 'utf8'), 'scope');
+      assert.throws(() => fs.writeFileSync(p.scope + '/keep', 'bad'), {code:'EROFS'});
+      assert.throws(() => fs.writeFileSync(p.scope + '/new', 'bad'), {code:'EROFS'});
+      console.log('read-only');
+    `, JSON.stringify(f)] }));
+    t.after(prepared.cleanup);
+    const scopeBind = prepared.args.findIndex((arg, index) => prepared.args[index + 2] === prepared.scope && arg.endsWith("bind-fd"));
+    assert.equal(prepared.args[scopeBind], "--ro-bind-fd");
+    const launch = filesystemStdioLaunch(prepared);
+    const { stdout } = await execute(launch.command, launch.args, { env: prepared.env, timeout: 15_000 });
+    assert.equal(stdout.trim(), "read-only");
+    assert.equal(readFileSync(join(f.scope, "keep"), "utf8"), "scope");
+    assert.equal(existsSync(join(f.scope, "new")), false);
+  });
+
   it("hides host state/auth/socket scratch and host /proc; scrubs overrides even if launcher merges env", async (t) => {
     const f = fixture(); t.after(f.cleanup);
     const hostScratch = join(f.root, "host-socket");

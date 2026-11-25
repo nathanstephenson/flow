@@ -11,6 +11,7 @@ import { WorkflowBuilderService } from './workflow-builder.ts';
 import { workflowCatalogue } from './workflow-routes.ts';
 import { WorkflowMcpAuthoringService } from './workflow-mcp-authoring.ts';
 import { SessionHost } from './host.ts';
+import { includedProjects } from './projects.ts';
 import { McpAuth } from './mcp-auth.ts';
 import { serve, type RunningServer } from './server.ts';
 import { ShellRegistry } from './shell.ts';
@@ -60,6 +61,7 @@ export async function startRuntime(options: {
       mcpConnections: config.mcpConnections, mcpAuth,
       filesystemIsolationMode: config.filesystemIsolationMode, sandboxSupport: config.sandboxSupport,
       sandboxSharing: config.sandboxSharing, updateSourceBranch: config.updateSourceBranch, projectRoot: config.projectRoot,
+      projectPaths: () => includedProjects(config.rawProjectRoot(), config.projectInclude()).map(project => project.path),
       standingAuthorisations: config.standingAuthorisations, allowTool: config.allowTool,
       defaultBackend: config.defaultBackend, defaultModel: config.defaultModel,
       defaultEffort: config.defaultEffort, defaultPermissionMode: config.defaultPermissionMode, autoCompaction: config.autoCompaction, compactionModel: config.compactionModel, summaryModel: config.summaryModel, tourModel: config.tourModel,

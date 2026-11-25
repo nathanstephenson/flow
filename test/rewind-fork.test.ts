@@ -145,4 +145,19 @@ describe("Rewind and Fork", () => {
     assert.ok(sent?.type === "user_message" && sent.attachments?.[0]);
     assert.ok(store.readAttachment(forkId, sent.attachments[0]!));
   });
+  it("keeps a Read-only Scope in a Fork and rewinds only its conversation", async () => {
+    await host.shutdown();
+    host = new SessionHost({ store, projectRoot: () => tmpdir() });
+    host.registerBackend(backend);
+    sessionId = await host.create({ scope: tmpdir(), backend: "fake", readOnly: true });
+    await turn("first");
+    const second = await turn("second");
+
+    await assert.rejects(() => host.rewind(sessionId, second, "files"), /read-only/i);
+    await assert.rejects(() => host.rewind(sessionId, second, "both"), /read-only/i);
+    await host.rewind(sessionId, second, "conversation");
+    const forkId = await host.fork(sessionId, second);
+
+    assert.equal(host.list().find((session) => session.id === forkId)?.readOnly, true);
+  });
 });

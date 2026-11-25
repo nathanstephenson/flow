@@ -105,6 +105,7 @@ export type SessionMeta = {
    * *basename* — and `branch` is flattened on its way into the path, so both are written down.
    */
   worktree?: { path: string; repo: string; branch: string };
+  readOnly?: true;
   scheduledOccurrenceId?: string;
 };
 

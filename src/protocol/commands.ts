@@ -130,6 +130,7 @@ export type SessionSummary = {
    * the first.
    */
   worktree?: true;
+  readOnly?: true;
   /** Set when the Agent Session is stopped and its Scope no longer exists, so it must relocate before a Revive. */
   scopeMissing?: true;
   /** A folder that is probably the missing Scope, for the relocation dialog to offer. */
@@ -146,6 +147,7 @@ export type Command =
       modelId?: string;
       effort?: EffortLevel;
       permissionMode?: AgentPermissionMode;
+      readOnly?: true;
       /**
        * Start this Agent Session in a fresh worktree instead of in `scope` itself.
        *

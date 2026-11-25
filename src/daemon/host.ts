@@ -225,6 +225,7 @@ type SessionRecord = {
   branchGeneration: number;
   /** Set when this Scope is a worktree this host made, and so may remove again. */
   worktree: { path: string; repo: string; branch: string } | undefined;
+  readOnly?: true;
   scheduledOccurrenceId?: string;
   /**
    * A line held back to ride along with the next message, telling the model the branch moved under
@@ -264,6 +265,7 @@ export type SessionHostOptions = {
   updateSourceBranch?: () => boolean;
   /** The Project Root that a Shared Sandbox mounts. */
   projectRoot?: () => string | undefined;
+  projectPaths?: () => readonly string[];
   mcpConnections?: () => import("../protocol/mcp.ts").McpConnection[];
   mcpAuth?: import("./mcp-auth.ts").McpAuth;
   /**
@@ -615,6 +617,8 @@ export class SessionHost {
   private readonly sandbox: SessionHostOptions["sandboxSupport"];
   private readonly sandboxSharing: SessionHostOptions["sandboxSharing"];
   private readonly updateSourceBranch: SessionHostOptions["updateSourceBranch"];
+  private readonly projectRoot: SessionHostOptions["projectRoot"];
+  private readonly projectPaths: SessionHostOptions["projectPaths"];
   private readonly shared: SharedSandbox | undefined;
   private readonly mcpConnections: SessionHostOptions["mcpConnections"];
   private readonly mcpAuth: SessionHostOptions["mcpAuth"];
@@ -625,6 +629,8 @@ export class SessionHost {
     this.sandbox = options.sandboxSupport;
     this.sandboxSharing = options.sandboxSharing;
     this.updateSourceBranch = options.updateSourceBranch;
+    this.projectRoot = options.projectRoot;
+    this.projectPaths = options.projectPaths;
     this.shared = options.store ? new SharedSandbox(options.store.root, options.projectRoot ?? (() => undefined)) : undefined;
     this.mcpConnections = options.mcpConnections;
     this.mcpAuth = options.mcpAuth;
@@ -932,6 +938,7 @@ export class SessionHost {
           ...(record.branch ? { branch: record.branch } : {}),
           ...(git ? { git } : {}),
           ...(record.worktree ? { worktree: true as const } : {}),
+          ...(record.readOnly ? { readOnly: true as const } : {}),
           ...(record.session || existsSync(record.scope) ? {} : {
             scopeMissing: true as const,
             ...this.suggestion(record.scope),
@@ -1004,6 +1011,7 @@ export class SessionHost {
         branch: branchFrom(entries),
         branchGeneration: 0,
         worktree: meta.worktree,
+        ...(meta.readOnly ? { readOnly: true as const } : {}),
         ...(meta.scheduledOccurrenceId ? { scheduledOccurrenceId: meta.scheduledOccurrenceId } : {}),
         pendingBranchNote: undefined,
         capabilities: capabilitiesFrom(entries),
@@ -1082,6 +1090,7 @@ export class SessionHost {
     permissionMode?: AgentPermissionMode;
     /** Cut a worktree from `scope` and bind the Agent Session to that instead. */
     worktree?: { from: string; branch?: string };
+    readOnly?: true;
     fork?: { source: SessionRecord; userMessageId: string; prefix: LoggedEvent[] };
   }): Promise<string> {
     if (options.scheduled) {
@@ -1101,6 +1110,11 @@ export class SessionHost {
     // Reject an unsupported policy before creating a worktree or any durable Agent Session state.
     const permissionMode = options.permissionMode ?? this.permissionDefault(backend.name);
     this.validatePermissionMode(backend.name, permissionMode);
+    if (options.readOnly) {
+      const root = this.projectRoot?.();
+      if (root === undefined || scopeKey(options.scope) !== scopeKey(root)) throw new CommandRefused("A Read-only Scope must be the Project Root.");
+      if (options.worktree) throw new CommandRefused("A Read-only Scope cannot be a Worktree.");
+    }
     const cut = options.scheduled?.worktree || !options.worktree ? undefined : await this.cutWorktree(options.scope, options.worktree);
     const worktree = options.scheduled?.worktree ?? cut?.worktree;
     // The Scope from here down, and for this Agent Session's whole life. Resolved before any record
@@ -1144,6 +1158,7 @@ export class SessionHost {
       branch: undefined,
       branchGeneration: 0,
       worktree,
+      ...(options.readOnly ? { readOnly: true as const } : {}),
       pendingBranchNote: undefined,
       capabilities: undefined,
       spend: undefined,
@@ -1314,6 +1329,7 @@ export class SessionHost {
   async relocate(sessionId: string, scope: string, repo?: string): Promise<void> {
     const record = this.record(sessionId);
     const from = record.scope;
+    if (record.readOnly) throw new CommandRefused("An Agent Session with a Read-only Scope cannot relocate.");
     if (record.session || record.reviving) throw new CommandRefused("This Agent Session is running. Only a stopped Agent Session can relocate.");
     if (existsSync(from)) throw new CommandRefused(`Scope ${from} still exists. An Agent Session keeps its Scope while it exists.`);
     const to = this.relocationFolder(scope);
@@ -1812,6 +1828,7 @@ export class SessionHost {
       throw new CommandRefused("Wait for the turn, the queued messages and the background work to finish, or abort them, before rewinding");
     }
     const files = restore !== "conversation";
+    if (files && record.readOnly) throw new CommandRefused("This Agent Session has a Read-only Scope. Rewind only its conversation.");
     const conversation = restore !== "files";
     if (conversation && !session.capabilities.rewind) throw new CommandRefused(`${record.backendName} cannot rewind a Conversation Context`);
     if (files && (!session.capabilities.rewindFiles || !session.rewindFiles)) throw new CommandRefused(`${record.backendName} cannot rewind files`);
@@ -1856,6 +1873,7 @@ export class SessionHost {
       permissionMode: source.permissionMode,
       mcpConnectionIds: source.mcpConnectionIds ?? [],
       ...(worktree === undefined ? {} : { worktree }),
+      ...(source.readOnly ? { readOnly: true as const } : {}),
       fork: { source, userMessageId, prefix: events.filter((entry) => entry.seq < at.seq) },
     });
   }
@@ -2586,6 +2604,9 @@ export class SessionHost {
   }
 
   async execute(command: Command): Promise<unknown> {
+    if (READ_ONLY_REFUSED.has(command.type) && "sessionId" in command && this.record(command.sessionId).readOnly) {
+      throw new CommandRefused("This Agent Session has a Read-only Scope. It cannot change Git state or run a Tour.");
+    }
     switch (command.type) {
       case "create":
         return await this.create({
@@ -2596,6 +2617,7 @@ export class SessionHost {
           ...(command.permissionMode === undefined ? {} : { permissionMode: command.permissionMode }),
           ...(command.mcpConnectionIds === undefined ? {} : { mcpConnectionIds: command.mcpConnectionIds }),
           ...(command.worktree === undefined ? {} : { worktree: command.worktree }),
+          ...(command.readOnly ? { readOnly: true as const } : {}),
         });
       case "send":
         return await this.send(command.sessionId, command.text, command.when, command.attachments);
@@ -2762,6 +2784,8 @@ export class SessionHost {
     return { writable: mounts.flatMap(item => item.writable), readable: mounts.flatMap(item => item.readable) };
   }
 
+  isReadOnly(sessionId: string): boolean { return this.record(sessionId).readOnly === true; }
+
   sharedSandbox(): SharedSandbox | undefined { return this.sandboxSharing?.() === "shared" ? this.shared : undefined; }
 
   async openWorkflowMcp(id: string, connectionId: string, isolationMode = this.filesystemIsolationMode(), signal?: AbortSignal) {
@@ -2779,7 +2803,7 @@ export class SessionHost {
     const { McpSession } = await import('../backend/mcp.ts');
     const scope = this.workflowSession(id).scope;
     signal?.throwIfAborted();
-    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
+    return new McpSession([connection], scope, this.mcpAuth ? connection => this.mcpAuth!.provider(connection) : undefined, true, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, undefined, undefined, this.isReadOnly(id));
   }
 
   /** Metadata discovery owned by authoring, never by an Agent/Backend Session. */
@@ -2889,7 +2913,10 @@ export class SessionHost {
         check(signal);
         const { text, scope = source.scope, backend: name = source.backendName, modelId, effort, worktree } = sessionCreateInput.parse(input);
         if (!isAbsolute(scope)) throw new CommandRefused('Scope must be an absolute directory');
+        const readOnly = source.readOnly && !(this.projectPaths?.() ?? []).some(path => scopeKey(path) === scopeKey(scope));
+        if (readOnly && scopeKey(scope) !== scopeKey(this.projectRoot?.() ?? scope)) throw new CommandRefused('A read-only Agent Session can create Agent Sessions only in a Project or at the Project Root');
         const sessionId = await this.create({ scope, backend: name,
+          ...(readOnly ? { readOnly: true as const } : {}),
           ...(modelId === undefined ? {} : { modelId }),
           ...(effort === undefined ? {} : { effort }),
           ...(worktree === undefined ? {} : { worktree: { from: worktree.from, ...(worktree.branch === undefined ? {} : { branch: worktree.branch }) } }),
@@ -2926,7 +2953,7 @@ export class SessionHost {
     const isolationMode = this.filesystemIsolationMode();
     const mcp = isolationMode === "sandbox"
       ? new SandboxMcpSession(selected, record.scope, oauth, this.resolveSecret)
-      : new McpSession(selected, record.scope, oauth, false, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode);
+      : new McpSession(selected, record.scope, oauth, false, this.resolveSecret, undefined, this.filesystemStateRoot(), isolationMode, undefined, undefined, record.readOnly === true);
     record.mcp = mcp;
     const openingMcp = mcp.open();
     const autoCompaction = this.autoCompaction?.(backend.name);
@@ -2949,6 +2976,7 @@ export class SessionHost {
         relayPermission: (input, signal) => { this.assertWorkflowSession(record.id, session); if (!this.workflowOwner) throw new Error('Workflow execution is unavailable'); return this.workflowOwner.parent(record.id).relayPermission(input, signal); },
       },
       scope: record.scope,
+      ...(record.readOnly ? { readOnly: isolationMode === "bubblewrap" || (isolationMode === "sandbox" && this.sandboxSharing?.() !== "shared") ? "mounted" as const : "tools" as const } : {}),
       emit: (event) => {
         if (!attached || record.session === attached) this.onBackendEvent(record.id, event);
       },
@@ -3513,6 +3541,7 @@ export class SessionHost {
       permissionMode: record.permissionMode,
       ...(record.initialEffortUnconfirmed ? { initialEffortUnconfirmed: true } : {}),
       ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
+      ...(record.readOnly ? { readOnly: true as const } : {}),
     };
     this.store.writeMeta(meta);
   }
@@ -3770,6 +3799,12 @@ function firstLine(text: string): string {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+const READ_ONLY_REFUSED = new Set<Command["type"]>([
+  "switch_branch", "pull_branch", "change_pull_request", "comment_pull_request", "resolve_pull_request_thread",
+  "edit_pull_request", "set_pull_request_draft", "rerun_pull_request_checks", "prepare_stack", "change_stack",
+  "assist_stack", "commit", "push", "create_pull_request", "start_tour",
+]);
 
 function scopeKey(scope: string): string {
   try {

@@ -143,7 +143,8 @@ function AttachedPane({
   // no longer knows there is a session behind it — see web/src/composer-actions.ts.
   const actions = useSessionActions(sessionId);
   const [prefill, setPrefill] = useState<{ nonce: number; draft: Draft }>();
-  const pullRequestUrl = sessions.find((session) => session.id === sessionId)?.git?.pr?.url;
+  const summary = sessions.find((candidate) => candidate.id === sessionId);
+  const pullRequestUrl = summary?.readOnly ? undefined : summary?.git?.pr?.url;
   const { dispatch } = docks;
   const openPullRequest = useCallback((href: string) => {
     if (pullRequestUrl === undefined || !samePullRequest(href, pullRequestUrl)) return false;
@@ -293,7 +294,6 @@ function AttachedPane({
     else writeMobileView({ kind: "dock", side: shownMobileView.side, tabId: shownMobileView.tabId }, true);
   }, [shownMobileView, writeMobileView]);
 
-  const summary = sessions.find((candidate) => candidate.id === sessionId);
   const title = summary ? sessionLabel(summary) : sessionId;
   const { config } = useHost();
   const project = summary ? sessionProject(summary, config.projectList ?? []) : undefined;
@@ -397,6 +397,7 @@ function AttachedPane({
          * transcript before the prompt is raised.
          */
         authorisingSummary={authorisingSummary(view, chrome)}
+        controls={summary?.readOnly ? { branches: false } : undefined}
         work={running}
         // An agent opens in whichever Dock already shows the Subagents, so a reader who keeps them
         // in the bottom Dock is not handed a second copy on the right. Opened rather than toggled,
@@ -425,12 +426,12 @@ function AttachedPane({
     >
       <AgentSessionPaneHeader
         sessionId={sessionId}
-        project={summary ? projectName(summary.scope, summary.worktree) : undefined}
+        project={summary ? projectName(summary.scope, summary.worktree, summary.readOnly) : undefined}
         onOpenProject={project ? () => onOpenProject(project.path) : undefined}
         title={title}
         chrome={chrome}
         docks={mobile ? undefined : docks}
-        onOpenPullRequest={() => docks.dispatch({ type: "open-git", pullRequest: true })}
+        {...(summary?.readOnly ? {} : { onOpenPullRequest: () => docks.dispatch({ type: "open-git", pullRequest: true }) })}
       />
 
       {mobile ? (
@@ -438,6 +439,7 @@ function AttachedPane({
           layout={docks.layout}
           selected={shownMobileView}
           shells={shells}
+          git={!summary?.readOnly}
           onTranscript={() => writeMobileView(MOBILE_TRANSCRIPT)}
           onSelect={selectMobileTab}
           onNew={() => {
@@ -478,6 +480,7 @@ function AttachedPane({
           dock={bottom}
           sessionId={sessionId}
           shells={shells}
+          git={!summary?.readOnly}
           dispatch={docks.dispatch}
           mobile={mobile}
           onAddToDraft={addToDraft}
@@ -494,6 +497,7 @@ function AttachedPane({
           dock={right}
           sessionId={sessionId}
           shells={shells}
+          git={!summary?.readOnly}
           dispatch={docks.dispatch}
           mobile={mobile}
           onAddToDraft={addToDraft}
@@ -514,6 +518,7 @@ function MobileViewSelector({
   layout,
   selected,
   shells,
+  git,
   onTranscript,
   onSelect,
   onNew,
@@ -522,6 +527,7 @@ function MobileViewSelector({
   layout: Docks["layout"];
   selected: MobileView;
   shells: boolean;
+  git: boolean;
   onTranscript: () => void;
   onSelect: (side: DockSide, tabId: string) => void;
   onNew: () => void;
@@ -586,7 +592,7 @@ function MobileViewSelector({
         className="h-auto min-h-10 shrink-0 rounded-none"
         onClick={onNew}
         aria-label="New tab in the right Dock"
-        title={shells ? "New tab" : "New Git, Workflows, or Agents tab"}
+        title={shells ? "New tab" : git ? "New Git, Workflows, or Agents tab" : "New Workflows or Agents tab"}
       >
         <Plus aria-hidden />
       </Button>

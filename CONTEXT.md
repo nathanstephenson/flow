@@ -144,8 +144,11 @@ _Avoid_: closed, deleted, settled
 
 ### Directories and shells
 
-**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036).
+**Scope**: The working directory an Agent Session is bound to; under a restricted Isolation Mode, local model work may write there and in private execution state, not elsewhere on the host. In Sandbox mode it is mounted at the same path in the Agent Session's Sandbox. In unrestricted mode it is only a working directory, not a filesystem boundary. If the Scope folder no longer exists, a stopped Agent Session can relocate to a new folder (ADR 0036). A Scope can be a Read-only Scope.
 _Avoid_: workspace, project, repo
+
+**Read-only Scope**: A Scope that its Agent Session can read but not write, fixed when the Agent Session is created. Only the Project Root can be one. A Fork keeps it. Under Bubblewrap and a per-session Sandbox it is enforced; elsewhere it is best effort, not a boundary (ADR 0046).
+_Avoid_: scopeless, sandbox
 
 **Project**: A directory its owner has opted into as a candidate Scope, independent of any Agent Session.
 _Avoid_: scope, workspace, repo

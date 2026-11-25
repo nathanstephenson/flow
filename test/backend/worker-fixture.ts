@@ -41,6 +41,11 @@ const backend: AgentBackend = {
           return;
         }
         if (text === "entry") options.emit({ type: "message", id: "entry", text: process.argv[1]!, final: true });
+        if (text === "read-only") {
+          let write = "ok";
+          try { await writeFile(join(options.scope, "read-only-probe"), "bad"); } catch (error) { write = (error as NodeJS.ErrnoException).code ?? "error"; }
+          options.emit({ type: "message", id: "read-only", text: JSON.stringify({ readOnly: options.readOnly, write }), final: true });
+        }
         if (text === "permission-mode") options.emit({ type: "message", id: "permission-mode", text: permissionMode, final: true });
         if (text === "late-crash") {
           options.emit({ type: "subagent", subagentId: "child", name: "child", state: "running" });

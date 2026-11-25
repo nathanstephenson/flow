@@ -27,6 +27,7 @@ export type FilesystemIsolationOptions = {
   readablePaths?: string[];
   credentials?: "pi" | "claude" | "none";
   workflowBuilder?: boolean;
+  scopeReadOnly?: boolean;
 };
 
 export type FilesystemIsolation = {
@@ -321,7 +322,7 @@ export async function prepareFilesystemIsolation(options: FilesystemIsolationOpt
     const privateHome = join(scratch, "home");
     mkdirSync(join(privateHome, ".pi/agent"), { recursive: true, mode: 0o700 });
     mkdirSync(join(privateHome, ".claude"), { mode: 0o700 });
-    args.push("--bind-fd", pinned(scope, options.expectedScopeIdentity), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
+    args.push(options.scopeReadOnly ? "--ro-bind-fd" : "--bind-fd", pinned(scope, options.expectedScopeIdentity), scope, "--dir", virtualRoot, "--bind-fd", pinned(privateHome), virtualHome,
       "--dir", `${virtualRoot}/run`, "--bind-fd", pinned(backend), virtualState);
     for (const path of directoryMasks) args.push("--remount-ro", path);
 
