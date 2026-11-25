@@ -14,6 +14,7 @@ import { railWidthValue } from "@/presentation/rail-width.ts";
 import { nextHeldAttention, visibleSessions, withHeldAttention, type HeldAttention } from "@/presentation/rail-sections.ts";
 import { moveSessionCursor, retainSessionCursor } from "@/presentation/session-cursor.ts";
 import { useRoute } from "@/route.ts";
+import { useAttentionNotifications } from "@/notifications.ts";
 import { AgentSessionPane } from "@/components/agent-session-pane.tsx";
 import { AgentSessionNav } from "@/components/agent-session-nav.tsx";
 import { KeyboardLayer, type KeyboardHandlers } from "@/components/keyboard-layer.tsx";
@@ -54,6 +55,7 @@ import { toast } from "@/components/ui/toaster.tsx";
  */
 export function AppShell() {
   useMobileViewport();
+  useAttentionNotifications();
   const { config } = useHost();
   const { sessions, loaded } = useAgentSessions();
   const {

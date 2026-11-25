@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input.tsx";
 import { UpdateSettings } from "@/components/settings-update.tsx";
 import { IsolationSettings } from "@/components/settings-isolation.tsx";
+import { NotificationSettings } from "@/components/settings-notifications.tsx";
 
 /**
  * General: machine-wide isolation, the retention window, and what this Session Host is.
@@ -42,6 +43,7 @@ export function GeneralSettings() {
     return (
       <>
         <UpdateSettings />
+        <NotificationSettings />
         <SettingsGroup title="Retention">
           <p className="text-sm text-muted-foreground">This Session Host serves no Settings.</p>
         </SettingsGroup>
@@ -64,6 +66,7 @@ export function GeneralSettings() {
   return (
     <>
       <UpdateSettings />
+      <NotificationSettings />
       <IsolationSettings />
       <SettingsGroup
         title="Retention"
