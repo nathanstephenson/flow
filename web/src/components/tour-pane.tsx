@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { TourView } from "../../../src/protocol/git.ts";
+import type { PullRequestRef } from "../../../src/protocol/pull-request.ts";
 import { useHost } from "@/host.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { PullRequestMarkdown } from "@/components/pull-request-markdown.tsx";
 
-export function TourPane({ sessionId }: { sessionId: string }) {
+export type TourTarget = { sessionId: string } | { project: string; pr: PullRequestRef };
+
+export function TourPane({ target }: { target: TourTarget }) {
   const { connection } = useHost();
   const [view, setView] = useState<TourView>();
   const [error, setError] = useState("");
@@ -14,12 +17,12 @@ export function TourPane({ sessionId }: { sessionId: string }) {
     const current = ++generation.current;
     setError("");
     try {
-      const value = await connection.command<TourView>({ type, sessionId });
+      const value = await connection.command<TourView>({ type, ...target });
       if (current === generation.current) setView(value);
     } catch (failure) { if (current === generation.current) setError(String(failure)); }
   }
 
-  useEffect(() => { void send("tour"); }, [connection, sessionId]);
+  useEffect(() => { void send("tour"); }, [connection, JSON.stringify(target)]);
   useEffect(() => {
     if (view?.state !== "running") return;
     const timer = window.setTimeout(() => void send("tour"), 2_000);

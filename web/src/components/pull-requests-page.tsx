@@ -8,9 +8,11 @@ import { appendToComposer, type AppendResult } from "@/components/composer.tsx";
 import { ChangedFiles } from "@/components/changed-files.tsx";
 import { ProjectPicker } from "@/components/new-agent-session-page.tsx";
 import { PullRequestPane } from "@/components/pull-request-pane.tsx";
+import { TourPane } from "@/components/tour-pane.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import { failureText } from "@/presentation/git.ts";
 import { groupProjects } from "@/presentation/projects.ts";
 import { pullRequestNumber } from "@/presentation/pull-request.ts";
@@ -121,6 +123,7 @@ function PullRequestDetail({ project, number, drafts, onBack, onSession }: {
   const [changesError, setChangesError] = useState("");
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
+  const [view, setView] = useState<"diff" | "tour">("diff");
   const ref = pr ? { repo: pr.repo, number: pr.number, id: pr.id } : undefined;
   const fork = Boolean(pr && pr.headRepository?.toLowerCase() !== pr.repo.toLowerCase());
 
@@ -168,7 +171,13 @@ function PullRequestDetail({ project, number, drafts, onBack, onSession }: {
       {ref ? (
         <section aria-label="Changed files" className="space-y-3">
           <h2 className="font-medium">Changed files</h2>
-          {changesError ? <p role="status" className="text-muted-foreground">{changesError}</p> : !changes ? <p>Reading changes…</p> : changes.files.length === 0 ? <p>No changed files.</p> : (
+          <Tabs value={view} onValueChange={(value: "diff" | "tour") => setView(value)}>
+            <TabsList aria-label="Change views">
+              <TabsTrigger value="diff">Diff</TabsTrigger>
+              <TabsTrigger value="tour">Tour</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {view === "tour" ? <TourPane key={`${project}:${ref.number}`} target={{ project, pr: ref }} /> : changesError ? <p role="status" className="text-muted-foreground">{changesError}</p> : !changes ? <p>Reading changes…</p> : changes.files.length === 0 ? <p>No changed files.</p> : (
             <ChangedFiles files={changes.files} readDiff={(path) => connection.command<GitDiff>({ type: "pull_request_diff", project, pr: ref, path })} />
           )}
         </section>

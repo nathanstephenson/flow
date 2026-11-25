@@ -112,12 +112,19 @@ export async function commitContext(scope: string, branch: string | undefined, p
 }
 
 export async function changesText(scope: string, view: ChangesView, paths: string[] | undefined, pullRequestBase?: PullRequestBase, github: Gh = gh): Promise<string> {
-  const listed = await changes(scope, view, pullRequestBase, github);
+  return textOf(await changes(scope, view, pullRequestBase, github), paths, path => diff(scope, view, path, pullRequestBase, github));
+}
+
+export async function rangeText(scope: string, base: string, to: string): Promise<string> {
+  return textOf(await rangeChanges(scope, base, to), undefined, path => fileDiff(scope, path, base, to));
+}
+
+async function textOf(listed: GitChanges, paths: string[] | undefined, read: (path: string) => Promise<GitDiff>): Promise<string> {
   let text = listed.commits.length > 0 ? `Commits:\n${listed.commits.join("\n")}\n` : "";
   for (const file of listed.files) {
     if (text.length > 24_000) break;
     if (paths && !paths.includes(file.path)) continue;
-    const shown = await diff(scope, view, file.path, pullRequestBase, github);
+    const shown = await read(file.path);
     text += "text" in shown ? shown.text : `${file.status} ${file.path}: no text diff\n`;
   }
   return text;

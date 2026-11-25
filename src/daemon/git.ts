@@ -436,6 +436,17 @@ export async function removeWorktree(options: {
   return { ok: true, value: undefined };
 }
 
+/** Check out `oid` with a detached HEAD at `path`, for read-only host work such as a Tour. */
+export async function addDetachedCheckout(repo: string, oid: string, path: string): Promise<GitResult<void>> {
+  const added = await run(repo, ["worktree", "add", "--detach", path, oid], GIT_WRITE_TIMEOUT_MS);
+  return added.ok ? { ok: true, value: undefined } : added;
+}
+
+export async function removeDetachedCheckout(repo: string, path: string): Promise<void> {
+  await run(repo, ["worktree", "remove", "--force", path], GIT_WRITE_TIMEOUT_MS);
+  await run(repo, ["worktree", "prune"], GIT_WRITE_TIMEOUT_MS);
+}
+
 /**
  * Reconnect a worktree and its repository after one or both moved. Run from the repository.
  *

@@ -155,7 +155,7 @@ export async function dropUnchangedBranch(scope: string, branch: string, oid: st
 
 const hasCommit = async (scope: string, oid: string) => (await run(scope, ["cat-file", "-e", `${oid}^{commit}`], GIT_READ_TIMEOUT_MS)).ok;
 
-export async function pullRequestRange(scope: string, ref: PullRequestRef, github: Gh = gh): Promise<{ base: string; head: string }> {
+export async function pullRequestRange(scope: string, ref: PullRequestRef, github: Gh = gh): Promise<{ base: string; head: string; pr: ResolvedPullRequest }> {
   validate(ref);
   const pr = await projectTarget(scope, ref, github);
   if (!await hasCommit(scope, pr.headRefOid) || !await hasCommit(scope, pr.baseRefOid)) {
@@ -163,7 +163,7 @@ export async function pullRequestRange(scope: string, ref: PullRequestRef, githu
     await git(scope, ["fetch", "--no-tags", "--no-write-fetch-head", (await remoteUrl(scope, pr.repo)).url, `refs/pull/${pr.number}/head`, `refs/heads/${pr.baseBranch}`]);
     if (!await hasCommit(scope, pr.headRefOid) || !await hasCommit(scope, pr.baseRefOid)) throw new Error("The pull request has changed. Reload it before continuing.");
   }
-  return { base: pr.baseRefOid, head: pr.headRefOid };
+  return { base: pr.baseRefOid, head: pr.headRefOid, pr };
 }
 
 async function target(scope: string, ref: PullRequestRef, github: Gh): Promise<ResolvedPullRequest & { branch: string }> {

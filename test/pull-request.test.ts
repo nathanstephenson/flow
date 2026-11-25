@@ -584,10 +584,10 @@ test("a pull request range fetches missing commits once and writes no refs", asy
     git(path, "config", `url.${server}.insteadOf`, "https://github.com/base/repo.git");
     const refs = git(path, "for-each-ref");
     const { github } = mock({ headOid: head, baseOid: base });
-    assert.deepEqual(await pullRequestRange(path, ref, github), { base, head });
+    assert.deepEqual(await pullRequestRange(path, ref, github).then(range => [range.base, range.head]), [base, head]);
     assert.equal(git(path, "for-each-ref"), refs);
     git(server, "update-ref", "-d", "refs/pull/1/head");
-    assert.deepEqual(await pullRequestRange(path, ref, github), { base, head });
+    assert.deepEqual(await pullRequestRange(path, ref, github).then(range => [range.base, range.head]), [base, head]);
     git(server, "update-ref", "refs/pull/1/head", head);
     await assert.rejects(pullRequestRange(path, ref, mock({ headOid: "c".repeat(40), baseOid: base }).github), /has changed/);
     await rm(path, { recursive: true, force: true });

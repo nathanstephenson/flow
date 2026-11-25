@@ -77,7 +77,7 @@ export function GitChanges({ sessionId, revision, view, onViewChange, onCommitte
           </TabsList>
         </Tabs>
       ) : null}
-      {view === "branch" && branchView === "tour" ? <TourPane key={sessionId} sessionId={sessionId} /> : error ? <p role="status" className="text-muted-foreground">{error}</p> : !changes ? <p>Reading changes…</p> : <>
+      {view === "branch" && branchView === "tour" ? <TourPane key={sessionId} target={{ sessionId }} /> : error ? <p role="status" className="text-muted-foreground">{error}</p> : !changes ? <p>Reading changes…</p> : <>
         {changes.base ? <p className="text-xs text-muted-foreground">Changes since {changes.base}.</p> : null}
         {changes.commits.length > 0 ? <ul aria-label="Branch commits" className="space-y-0.5 font-mono text-xs">{changes.commits.map(commit => <li key={commit} className="truncate">{commit}</li>)}</ul> : null}
         {changes.files.length === 0 ? <p>{noChanges(view)}</p> : (
