@@ -49,6 +49,15 @@ test("a mounted read-only Scope reaches the adapter and refuses writes in the wo
   await assert.rejects(readFile(join(scope, "read-only-probe")));
 });
 
+test("a tool-less Backend Session cannot write its Scope", isolationIntegration, async (t) => {
+  const { session, scope, events } = await fixture(t, { tools: "none" });
+  await session.prompt("read-only");
+  const event = events.findLast(event => event.type === "message" && event.id === "read-only");
+  assert.ok(event?.type === "message");
+  assert.equal(JSON.parse(event.text).write, "EROFS");
+  await assert.rejects(readFile(join(scope, "read-only-probe")));
+});
+
 test("worker preserves startup permission policy and confirms live changes through IPC", isolationIntegration, async t => {
   const { session, events } = await fixture(t, { permissionMode: "ask" });
   const readMode = async () => {

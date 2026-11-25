@@ -153,7 +153,7 @@ export class WorkerBackend implements AgentBackend {
     let proxy: WorkerSession | undefined;
     try {
       const auth = support.provider.claudeAuthDir && (shared || this.name === "claude") ? [support.provider.claudeAuthDir] : [];
-      const readOnly = options.readOnly === "mounted";
+      const readOnly = scopeReadOnly(options);
       const mounts = sandboxMounts([...roots ?? (readOnly ? [stateDir] : [scope, stateDir]), ...auth], readOnly ? [scope, ...assets] : assets);
       let sandbox: Sandbox, startup: Sandbox["startup"];
       if (shared) {
@@ -229,7 +229,7 @@ export class WorkerBackend implements AgentBackend {
       ...(options.stateDir ? { stateDir: options.stateDir } : {}),
       ...(this.options.stateRoot ? { stateRoot: this.options.stateRoot } : {}),
       env: this.options.env ?? {}, credentials: this.name, workflowBuilder: !!options.workflowBuilder, worker: true, readablePaths: assets,
-      scopeReadOnly: options.readOnly === "mounted" });
+      scopeReadOnly: scopeReadOnly(options) });
     let proxy: WorkerSession | undefined;
     try {
       this.assertRunning();
@@ -471,4 +471,8 @@ class WorkerSession implements BackendSession {
       finally { this.fail(new Error("Backend Session stopped")); this.cleanup(); }
     })();
   }
+}
+
+function scopeReadOnly(options: BackendCreateOptions): boolean {
+  return options.readOnly === "mounted" || (options.tools === "none" && !options.workflowBuilder);
 }

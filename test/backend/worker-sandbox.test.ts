@@ -49,6 +49,16 @@ test("a mounted read-only Scope is a read-only sandbox mount and the state folde
   assert.deepEqual(f.calls(), ["create", `exec ${spec.name} ${f.scope}`, `remove ${spec.name}`]);
 });
 
+test("a tool-less Backend Session mounts its Scope read-only in its sandbox", async (t) => {
+  const f = fakeProvider(t);
+  const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
+  const session = await backend.create({ scope: f.scope, tools: "none", emit: () => {} });
+  t.after(() => session.dispose());
+  const spec = f.spec();
+  assert.notEqual(spec.workspace, f.scope);
+  assert.deepEqual(spec.additionalWorkspaces.filter((mount) => mount.path === f.scope), [{ path: f.scope, readOnly: true }]);
+});
+
 test("a Revive after a clean close skips the pre-create remove; a spec left by a crash does not", async (t) => {
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const, sandbox: () => f.support });
@@ -193,7 +203,7 @@ test("a Claude sandbox session shares nothing inside its writable state folder r
   const f = fakeProvider(t);
   const backend = new WorkerBackend({ backend: "claude", backendModule, stateRoot: f.stateRoot, isolationMode: () => "sandbox" as const,
     sandbox: () => f.support });
-  const session = await backend.create({ scope: f.scope, tools: "none", emit: () => {} });
+  const session = await backend.create({ scope: f.scope, emit: () => {} });
   t.after(() => session.dispose());
   const state = f.spec().additionalWorkspaces.find((mount) => !mount.readOnly)!.path;
   assert.deepEqual(f.spec().additionalWorkspaces.filter((mount) => mount.readOnly && mount.path.startsWith(`${state}/`)), []);
