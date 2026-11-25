@@ -1,3 +1,4 @@
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { GitChanges, GitDiff } from "../../../src/protocol/git.ts";
 import type { PullRequestDetails, PullRequestListItem } from "../../../src/protocol/pull-request.ts";
@@ -13,6 +14,7 @@ import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
 import { failureText } from "@/presentation/git.ts";
 import { groupProjects } from "@/presentation/projects.ts";
 import { pullRequestNumber } from "@/presentation/pull-request.ts";
@@ -29,10 +31,21 @@ export function PullRequestsPage({ project, pullRequest, drafts, onNavigate, onS
   const { config } = useHost();
   const projects = config.projectList ?? [];
   return (
-    <main className="min-h-0 overflow-y-auto p-4 pt-12 sm:p-8" aria-label="Pull Requests">
+    <main className="@container/pull-requests min-h-0 overflow-y-auto p-4 pt-12 sm:p-8" aria-label="Pull Requests">
       <div className="mx-auto grid max-w-3xl grid-cols-1 gap-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-2xl font-semibold">Pull Requests</h1>
+          <div className="relative flex items-center gap-2">
+            {project && pullRequest ? (
+              <Tooltip>
+                <TooltipTrigger render={<Button size="icon-sm" variant="ghost" className="@min-[57rem]/pull-requests:absolute @min-[57rem]/pull-requests:right-full @min-[57rem]/pull-requests:mr-2" onClick={() => onNavigate(project)} />}>
+                  <ChevronLeft aria-hidden />
+                  <span className="sr-only">All pull requests</span>
+                </TooltipTrigger>
+                <TooltipContent>All pull requests</TooltipContent>
+              </Tooltip>
+            ) : null}
+            <h1 className="text-2xl font-semibold">Pull Requests</h1>
+          </div>
           {projects.length > 0 ? (
             <ProjectPicker
               groups={groupProjects(projects)}
@@ -52,7 +65,6 @@ export function PullRequestsPage({ project, pullRequest, drafts, onNavigate, onS
             project={project}
             number={pullRequest}
             drafts={drafts}
-            onBack={() => onNavigate(project)}
             onSession={onSession}
           />
         ) : (
@@ -108,11 +120,10 @@ function PullRequestList({ project, onOpen }: { project: string; onOpen: (number
   );
 }
 
-function PullRequestDetail({ project, number, drafts, onBack, onSession }: {
+function PullRequestDetail({ project, number, drafts, onSession }: {
   project: string;
   number: number;
   drafts: DraftStash;
-  onBack: () => void;
   onSession: (sessionId: string) => void;
 }) {
   const { connection } = useHost();
@@ -159,7 +170,6 @@ function PullRequestDetail({ project, number, drafts, onBack, onSession }: {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-4 text-sm">
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={onBack}>All pull requests</Button>
         <Button size="sm" disabled={!ref || fork || starting} onClick={() => {
           setError("");
           start().catch((failure: unknown) => setError(failureText(failure)));
