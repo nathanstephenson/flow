@@ -357,6 +357,31 @@ describe("Session Host transport", () => {
     assert.equal(sessions[0]?.id, sessionId);
   });
 
+  it("streams new Attention raises", async () => {
+    const sessionId = await client.command<string>({ type: "create", scope: "/tmp/scope", backend: "fake" });
+    const controller = new AbortController();
+    const response = await fetch(`${running.url}/api/attention/events`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+
+    await client.command({ type: "send", sessionId, text: "hello", when: "now" });
+    backend.latest.completeTurn("complete");
+
+    const reader = response.body!.getReader();
+    const { value } = await reader.read();
+    controller.abort();
+    const raised = JSON.parse(new TextDecoder().decode(value).replace(/^data: /, ""));
+    assert.equal(raised.sessionId, sessionId);
+    assert.equal(raised.reason, "Completed");
+  });
+
+  it("refuses an unauthenticated Attention stream", async () => {
+    const response = await fetch(`${running.url}/api/attention/events`);
+    assert.equal(response.status, 401);
+  });
+
   it("replays from `since` and then follows live", async () => {
     const sessionId = await client.command<string>({
       type: "create",

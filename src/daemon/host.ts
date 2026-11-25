@@ -33,6 +33,7 @@ import type {
   SessionLifecycle,
   SessionStatus,
   SessionSummary,
+  AttentionRaised,
 } from "../protocol/commands.ts";
 import type {
   AgentEvent,
@@ -608,6 +609,7 @@ export class SessionHost {
     | undefined;
   private readonly tourModel: SessionHostOptions["tourModel"];
   private readonly closedListeners = new Set<(sessionId: string) => void>();
+  private readonly attentionListeners = new Set<(raised: AttentionRaised) => void>();
   private readonly backendFailures = new Set<Promise<void>>();
   private readonly keptListeners = new Set<
     (kept: { path: string; branch: string; reason: string }) => void
@@ -661,6 +663,11 @@ export class SessionHost {
   onSessionClosed(listener: (sessionId: string) => void): () => void {
     this.closedListeners.add(listener);
     return () => this.closedListeners.delete(listener);
+  }
+
+  onAttentionRaised(listener: (raised: AttentionRaised) => void): () => void {
+    this.attentionListeners.add(listener);
+    return () => this.attentionListeners.delete(listener);
   }
 
   private announceClosed(sessionId: string): void {
@@ -866,6 +873,9 @@ export class SessionHost {
       key,
     };
     if (reason !== "Input needed") record.latestOutcome = record.latestAttention;
+    for (const listener of this.attentionListeners) {
+      listener({ sessionId: record.id, title: record.title, reason, version, at });
+    }
     return { at, version };
   }
 

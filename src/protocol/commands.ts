@@ -41,6 +41,14 @@ export type SessionAttention = {
   observedSeq: number;
 };
 
+export type AttentionRaised = {
+  sessionId: string;
+  title: string;
+  reason: SessionAttention["reason"];
+  version: number;
+  at: string;
+};
+
 export type SessionSummary = {
   id: string;
   scope: string;

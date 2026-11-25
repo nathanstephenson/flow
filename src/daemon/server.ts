@@ -5,7 +5,7 @@ import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { homedir } from "node:os";
 
 import { mediaTypeOf } from "../protocol/attachments.ts";
-import type { Command } from "../protocol/commands.ts";
+import type { AttentionRaised, Command } from "../protocol/commands.ts";
 import type { SettingsPatch } from "../protocol/settings.ts";
 import { ConfigError } from "./config.ts";
 import { gh } from "./github.ts";
@@ -641,6 +641,16 @@ ${ICON_LINKS}</head><body><script>window.location.replace(${JSON.stringify(locat
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/attention/events") {
+    streamAttention(
+      response,
+      options.host,
+      authentication.kind === "browser" ? options.oidc : undefined,
+      authentication.kind === "browser" ? authentication.sessionId : undefined,
+    );
+    return;
+  }
+
   const eventsMatch = /^\/api\/sessions\/([^/]+)\/events$/.exec(url.pathname);
   const sessionId = eventsMatch?.[1];
   if (request.method === "GET" && sessionId) {
@@ -1120,6 +1130,33 @@ function streamEvents(
     ? oidc.registerConnection(browserSessionId, () => response.end())
     : undefined;
   response.on("close", () => {
+    unsubscribe();
+    detachAuth?.();
+  });
+}
+
+function streamAttention(
+  response: ServerResponse,
+  host: SessionHost,
+  oidc?: OidcGate,
+  browserSessionId?: string,
+): void {
+  response.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  response.flushHeaders();
+  const unsubscribe = host.onAttentionRaised((raised: AttentionRaised) => {
+    response.write(`data: ${JSON.stringify(raised)}\n\n`);
+  });
+  const heartbeat = setInterval(() => response.write(": keepalive\n\n"), 15_000);
+  heartbeat.unref();
+  const detachAuth = oidc && browserSessionId
+    ? oidc.registerConnection(browserSessionId, () => response.end())
+    : undefined;
+  response.on("close", () => {
+    clearInterval(heartbeat);
     unsubscribe();
     detachAuth?.();
   });

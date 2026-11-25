@@ -121,6 +121,8 @@ _Avoid_: group, tier, section, bucket
 **Attention**: Durable machine-wide inbox state, separate from activity and Lifecycle. Needs input contains unresolved Enquiries and Permission Prompts; Unread contains qualifying unseen outcomes. An acknowledgement names the version actually observed so a delayed client cannot consume newer output. The rail orders Needs input, Unread, then the existing Bands.
 _Avoid_: activity, occupancy, per-client read state
 
+**Notification**: Browser alert for a new Attention raise. Shown only while the Flow tab is hidden, and only in a browser where the user turned it on.
+
 **Dormant**: No Backend Session is running; the Presentation Transcript is readable and the Agent Session can be Revived.
 _Avoid_: idle, stopped, dead
 
