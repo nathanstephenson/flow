@@ -138,6 +138,7 @@ describe("New Agent Session tabs integration", () => {
       if (name === "@/components/workflow-editors.tsx") return { initialValue: () => ({}), ValueEditor: "ValueEditor" };
       if (name === "@/lib/quiet-trigger.ts") return { QUIET_TRIGGER: "quiet" };
       if (name === "@/lib/utils.ts") return { cn: (...values: string[]) => values.filter(Boolean).join(" ") };
+      if (name === "@/components/import-conversations.tsx") return { ImportConversations: "ImportConversations", importSourceLabel: String };
       if (name.startsWith("@/components/")) return ui;
       return {};
     },
