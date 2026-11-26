@@ -6,12 +6,13 @@ import { join } from "node:path";
 
 import { projectKey } from "../src/backend/worker/claude-state.ts";
 import { FakeBackend } from "../src/backend/fake/index.ts";
+import { WorkerBackend } from "../src/backend/worker/index.ts";
 import { reduceAll } from "../src/client/reduce.ts";
 import { CommandRefused, SessionHost } from "../src/daemon/host.ts";
 import { TranscriptStore } from "../src/daemon/store.ts";
 import { CONVERSATION, OTHER_CONVERSATION, ordinaryConversation, prompt, reply, writeConversation } from "./claude-code-fixture.ts";
 
-/** Import: Agent Sessions made from Claude Code conversations (ADR 0039). */
+/** Import: Agent Sessions made from Claude Code conversations (ADR 0047). */
 describe("import", () => {
   let root: string;
   let scope: string;
@@ -31,18 +32,24 @@ describe("import", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** A fake that answers to `claude`, since an import is always continued by that adapter. */
+  /** A fake that answers to `claude` and imports as the claude adapter does, from the fixture's records. */
   async function freshHost(): Promise<{ host: SessionHost; backend: FakeBackend }> {
     const backend = new FakeBackend();
     Object.defineProperty(backend, "name", { value: "claude" });
-    const host = new SessionHost({ store, importEnv: { CLAUDE_CONFIG_DIR: config, HOME: root } });
+    const claude = new WorkerBackend({ backend: "claude", env: { CLAUDE_CONFIG_DIR: config, HOME: root } });
+    Object.assign(backend, {
+      listImports: claude.listImports.bind(claude),
+      readImport: claude.readImport.bind(claude),
+      copyImport: claude.copyImport.bind(claude),
+    });
+    const host = new SessionHost({ store });
     host.registerBackend(backend);
     await host.load();
     return { host, backend };
   }
 
   const importAs = (host: SessionHost, mode: "continue" | "view", conversationId = CONVERSATION) =>
-    host.execute({ type: "import", source: "claude-code", scope, conversationId, mode }) as Promise<string>;
+    host.execute({ type: "import", backend: "claude", scope, conversationId, mode }) as Promise<string>;
 
   it("imports a conversation to continue as a Dormant Agent Session", async () => {
     const { host } = await freshHost();
@@ -91,13 +98,13 @@ describe("import", () => {
     await assert.rejects(host.revive(id), /has ended/);
   });
 
-  it("allows a read-only import on a host without the claude adapter", async () => {
-    const host = new SessionHost({ store, importEnv: { CLAUDE_CONFIG_DIR: config, HOME: root } });
+  it("refuses a backend that cannot import", async () => {
+    const host = new SessionHost({ store });
+    host.registerBackend(new FakeBackend());
     await host.load();
-    await assert.rejects(importAs(host, "continue"), CommandRefused);
+    await assert.rejects(host.execute({ type: "list_imports", backend: "fake", scope }), /cannot import/);
+    await assert.rejects(host.execute({ type: "import", backend: "fake", scope, conversationId: CONVERSATION, mode: "view" }), /cannot import/);
     assert.deepEqual(host.list(), []);
-    const id = await importAs(host, "view");
-    assert.equal(host.list().find((session) => session.id === id)?.status, "ended");
   });
 
   it("survives a Session Host restart", async () => {
@@ -117,24 +124,11 @@ describe("import", () => {
     const { host } = await freshHost();
     const id = await importAs(host, "view");
 
-    const listed = await host.execute({ type: "list_imports", source: "claude-code", scope }) as Array<{ id: string; importedAs?: string }>;
+    const listed = await host.execute({ type: "list_imports", backend: "claude", scope }) as Array<{ id: string; importedAs?: string }>;
     assert.deepEqual(listed.map(({ id: conversation, importedAs }) => ({ conversation, importedAs })), [
       { conversation: OTHER_CONVERSATION, importedAs: undefined },
       { conversation: CONVERSATION, importedAs: id },
     ]);
-  });
-
-  it("does not offer Flow's own legacy Claude records back to it", async () => {
-    const { host } = await freshHost();
-    const id = await host.create({ scope, backend: "claude" });
-    await host.shutdown();
-    // What a pre-isolation Agent Session left behind: its resume token naming a global record.
-    // Written after shutdown, which persists the fake's own token over anything written before.
-    store.writeMeta({ ...store.readMeta(id)!, resumeToken: CONVERSATION });
-
-    const second = await freshHost();
-    const listed = await second.host.execute({ type: "list_imports", source: "claude-code", scope }) as Array<{ id: string }>;
-    assert.deepEqual(listed, []);
   });
 
   it("refuses a conversation that does not exist and leaves nothing behind", async () => {

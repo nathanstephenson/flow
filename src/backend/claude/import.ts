@@ -3,12 +3,13 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { projectKey } from "../backend/worker/claude-state.ts";
-import type { AgentEvent } from "../protocol/events.ts";
-import type { ImportableConversation } from "../protocol/imports.ts";
+import { projectKey } from "../worker/claude-state.ts";
+import type { AgentEvent } from "../../protocol/events.ts";
+import type { ImportableConversation } from "../../protocol/imports.ts";
+import type { ImportedConversation, StoreImage } from "../types.ts";
 
 /**
- * Reading Claude Code's own conversation records, for Import (ADR 0039).
+ * Reading Claude Code's own conversation records, for Import (ADR 0047).
  *
  * Claude Code writes one JSONL file per conversation under `<config>/projects/<scope key>/`, keyed
  * by the directory it was started in. That key is the same one Flow's Claude records use
@@ -31,22 +32,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The longest title taken from a first prompt, matching the length a rail row can show. */
 const TITLE_LENGTH = 80;
-
-/** One conversation, translated: the Agent Events a Presentation Transcript replays, with their times. */
-export type ImportedConversation = {
-  title: string;
-  /** Whether Claude Code named the conversation itself, rather than the title being its first prompt. */
-  named: boolean;
-  startedAt: string;
-  updatedAt: string;
-  events: Array<{ at: string; event: AgentEvent }>;
-};
-
-/**
- * Store one image a prompt carried and answer the Attachment id that names it, or `undefined` for a
- * media type Flow cannot hold. A callback so this module never learns where an Agent Session lives.
- */
-export type StoreImage = (mediaType: string, base64: string) => string | undefined;
 
 /** Claude Code's config root, resolved the way the CLI and `migrateLegacyClaudeState` resolve it. */
 export function claudeConfigDir(env: NodeJS.ProcessEnv, scope: string): string {
@@ -92,7 +77,6 @@ export async function listClaudeCodeConversations(env: NodeJS.ProcessEnv, scope:
     const prompts = skimmed.events.filter(({ event }) => event.type === "turn_started").length;
     if (prompts === 0) continue;
     conversations.push({
-      source: "claude-code",
       id,
       title: skimmed.title,
       startedAt: skimmed.startedAt,

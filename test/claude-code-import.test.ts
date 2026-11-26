@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { listClaudeCodeConversations, readClaudeCodeConversation } from "../src/daemon/claude-code-import.ts";
+import { listClaudeCodeConversations, readClaudeCodeConversation } from "../src/backend/claude/import.ts";
 import type { AgentEvent } from "../src/protocol/events.ts";
 import {
   CONVERSATION,
@@ -15,7 +15,7 @@ import {
   writeConversation,
 } from "./claude-code-fixture.ts";
 
-/** Reading Claude Code's conversation records into Agent Events (ADR 0039). */
+/** Reading Claude Code's conversation records into Agent Events (ADR 0047). */
 describe("Claude Code import translation", () => {
   let root: string;
   let scope: string;

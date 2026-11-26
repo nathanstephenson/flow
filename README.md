@@ -88,8 +88,8 @@ Pi cache warming stays limited to active runs unless Pi's global `cacheWarming` 
 | --- | --- |
 | `flow serve [--port N] [--address HOST]` | Run the Session Host in the foreground. |
 | `flow list` | List Agent Sessions. |
-| `flow import [--scope DIR]` | List the Claude Code conversations recorded in a directory. |
-| `flow import ID [--scope DIR] [--view]` | Import one as an Agent Session. `--view` makes it read-only. |
+| `flow import [--backend B] [--scope DIR]` | List the Claude Code or pi conversations recorded in a directory. |
+| `flow import ID [--backend B] [--scope DIR] [--view]` | Import one as an Agent Session. `--view` makes it read-only. |
 | `flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"` | Send one prompt, then exit. |
 | `flow update [--force]` | Update Flow. See [Updating Flow](#updating-flow). |
 | `flow --version` | Show the installed version. |
@@ -109,19 +109,20 @@ A one-shot prompt always uses the current directory, unless `--scope` names a di
 When the Session Host restarts, sessions that were running load as **Dormant**. You can read their
 transcripts. Nothing runs and nothing is spent. The next message revives a Dormant session.
 
-### Importing Claude Code conversations
+### Importing Claude Code and pi conversations
 
-You can bring a conversation you had in Claude Code into Flow. In the web UI, open **New Agent
-Session**, choose a Project, and expand **Import from Claude Code** under the Chat composer. From a terminal, run `flow import` in the directory where
-you ran Claude Code. Flow lists only the conversations recorded in that directory.
+You can bring a conversation you had in Claude Code or pi into Flow. In the web UI, open **New Agent
+Session**, choose a Project and a backend, and expand the **Import** section under the Chat
+composer. From a terminal, run `flow import --backend claude` or `flow import --backend pi` in the
+directory where you ran the tool. Flow lists only the conversations recorded in that directory.
 
 - **Continue** brings the transcript and the conversation's context. The session starts Dormant,
   and your next message revives it where the conversation left off.
 - **Read only** brings the transcript alone. The session is Ended: you can read it, but it does not
   revive.
 
-Importing starts nothing and spends nothing. Flow copies only the conversation you choose, and Claude
-Code's own copy is not changed. [ADR 0039](docs/adr/0039-agent-sessions-can-be-imported-from-claude-code.md)
+Importing starts nothing and spends nothing. Flow copies only the conversation you choose, and the tool's own
+copy is not changed. [ADR 0047](docs/adr/0047-agent-sessions-can-be-imported-from-their-backends-records.md)
 explains the choices.
 
 ### Agent-to-agent communication

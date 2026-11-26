@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { projectKey } from "../src/backend/worker/claude-state.ts";
 
 /**
- * A Claude Code config root holding conversations, for Import tests (ADR 0039).
+ * A Claude Code config root holding conversations, for Import tests (ADR 0047).
  *
  * The records are the shapes Claude Code writes, trimmed to the fields the importer reads plus a
  * little of the bookkeeping it must ignore. Written by hand rather than copied from a real session,

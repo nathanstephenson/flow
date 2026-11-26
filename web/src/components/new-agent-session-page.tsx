@@ -24,7 +24,7 @@ import { groupProjects, type ProjectGroup } from "@/presentation/projects.ts";
 import { workflowIssue } from "@/presentation/workflows.ts";
 import { retainWorkflowLaunch } from "@/workflow-launch.ts";
 import { Composer } from "@/components/composer.tsx";
-import { ImportConversations } from "@/components/import-conversations.tsx";
+import { ImportConversations, importSourceLabel } from "@/components/import-conversations.tsx";
 import { ExpandableImage } from "@/components/expandable-image.tsx";
 import { initialValue, ValueEditor } from "@/components/workflow-editors.tsx";
 import { workflowApi, useWorkflowResource } from "@/components/workflow-api.ts";
@@ -60,7 +60,7 @@ import { cn } from "@/lib/utils.ts";
 
 /**
  * Create an Agent Session for ordinary chat or launch a full Workflow Execution into one. The Chat
- * tab can also import one from a Claude Code conversation instead (ADR 0039).
+ * tab can also import one from a Claude Code conversation instead (ADR 0047).
  *
  * Scope and runtime choices live above/below the tab panels, so switching tabs cannot produce two
  * disagreeing launch forms. The Chat Draft is still owned by `Composer`; the workflow draft stays in
@@ -450,17 +450,19 @@ export function NewAgentSessionPage({
                     * start a chat, not a third kind of work. Collapsed by default, and its panel
                     * unmounts when closed, so the Project's conversations are read only when asked for.
                     */}
-                  <Accordion>
-                    <AccordionItem value="import">
-                      <AccordionTrigger>Import from Claude Code</AccordionTrigger>
-                      <AccordionContent className="grid gap-3">
-                        <p className="text-xs text-muted-foreground">
-                          Conversations Claude Code recorded in {project?.name ?? "the chosen Project"}. They always use the claude backend, and nothing runs until you write to one.
-                        </p>
-                        <ImportConversations scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
-                      </AccordionContent>
-                    </AccordionItem>
-                  </Accordion>
+                  {backend === "" ? null : (
+                    <Accordion>
+                      <AccordionItem value="import">
+                        <AccordionTrigger>Import from {importSourceLabel(backend)}</AccordionTrigger>
+                        <AccordionContent className="grid gap-3">
+                          <p className="text-xs text-muted-foreground">
+                            Conversations {importSourceLabel(backend)} recorded in {project?.name ?? "the chosen Project"}. Nothing runs until you write to one.
+                          </p>
+                          <ImportConversations backend={backend} scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
+                        </AccordionContent>
+                      </AccordionItem>
+                    </Accordion>
+                  )}
                 </TabsContent>
                 <TabsContent value="workflow" keepMounted hidden={false} className="col-start-1 row-start-1 grid content-start gap-3 data-hidden:invisible">
                   {definitions.error ? (

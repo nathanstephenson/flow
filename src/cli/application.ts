@@ -34,8 +34,8 @@ const USAGE = `usage:
   flow serve [--port N] [--address HOST]                run the Session Host in the foreground
   flow serve start|status|stop|restart [--force]          control a background Session Host
   flow list                                             list Agent Sessions
-  flow import [--scope DIR]                             list Claude Code conversations to import
-  flow import ID [--scope DIR] [--view]                 import one; --view makes it read-only
+  flow import [--backend B] [--scope DIR]               list a backend's own conversations to import
+  flow import ID [--backend B] [--scope DIR] [--view]   import one; --view makes it read-only
   flow [--session ID] [--scope DIR] [--backend B] [--model M] [--effort L] "<prompt>"
                                                                one prompt, then exit
 
@@ -203,19 +203,20 @@ async function clientConnection(): Promise<{ connection: Connection; stop: () =>
 }
 
 /**
- * List the Claude Code conversations recorded in a Scope, or import one of them (ADR 0039).
+ * List the conversations a backend's own tool recorded in a Scope, or import one of them (ADR 0047).
  *
  * The Scope defaults to this directory, as a one-shot prompt's does, and not to the Project Root:
- * Claude Code keys its conversations by the directory it was started in, so the directory somebody
- * is standing in is the one whose conversations they mean.
+ * Claude Code and pi key their conversations by the directory they were started in, so the directory
+ * somebody is standing in is the one whose conversations they mean.
  */
-async function importConversation(id: string | undefined, values: { scope?: string; view?: boolean }): Promise<number> {
+async function importConversation(id: string | undefined, values: { scope?: string; backend?: string; view?: boolean }): Promise<number> {
+  const backend = values.backend === undefined ? {} : { backend: values.backend };
   const scope = resolve(values.scope ?? process.cwd());
   const { connection, stop } = await clientConnection();
   try {
     if (id === undefined) {
-      const conversations = await connection.command<ImportableConversation[]>({ type: "list_imports", source: "claude-code", scope });
-      if (conversations.length === 0) console.log(`no Claude Code conversations in ${scope}`);
+      const conversations = await connection.command<ImportableConversation[]>({ type: "list_imports", ...backend, scope });
+      if (conversations.length === 0) console.log(`no conversations to import in ${scope}`);
       for (const conversation of conversations) {
         const imported = conversation.importedAs ? `  (imported as ${conversation.importedAs})` : "";
         console.log(`${conversation.id}  ${conversation.updatedAt.slice(0, 10)}  ${String(conversation.prompts).padStart(3)} prompts  ${conversation.title}${imported}`);
@@ -223,7 +224,7 @@ async function importConversation(id: string | undefined, values: { scope?: stri
       return 0;
     }
     const mode = values.view ? "view" : "continue";
-    const sessionId = await connection.command<string>({ type: "import", source: "claude-code", scope, conversationId: id, mode });
+    const sessionId = await connection.command<string>({ type: "import", ...backend, scope, conversationId: id, mode });
     console.log(mode === "view" ? `session ${sessionId} (read-only)` : `session ${sessionId}\n  continue with: --session ${sessionId}`);
     return 0;
   } finally {

@@ -5,20 +5,27 @@ import { relativeTime } from "../../../src/client/relative-time.ts";
 import { useCommand } from "@/agent-sessions.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { backendLabel } from "@/components/settings-providers.tsx";
+
+export function importSourceLabel(backend: string): string {
+  return backend === "claude" ? "Claude Code" : backendLabel(backend);
+}
 
 /**
- * The Chat tab's Import from Claude Code section: the Claude Code conversations recorded in the chosen
- * Project, each importable to continue or to read (ADR 0039).
+ * The Chat tab's Import section: the conversations the chosen backend's own tool recorded in the
+ * chosen Project, each importable to continue or to read (ADR 0047).
  *
- * Listed per Project rather than machine-wide, because Claude Code keys its conversations by the
+ * Listed per Project rather than machine-wide, because the tool keys its conversations by the
  * directory it ran in and an Agent Session is bound to its Scope for life — a conversation from
  * elsewhere could not be continued here anyway.
  */
 export function ImportConversations({
+  backend,
   scope,
   projectName,
   onImported,
 }: {
+  backend: string;
   scope: string | undefined;
   projectName: string | undefined;
   onImported: (sessionId: string) => void;
@@ -39,46 +46,47 @@ export function ImportConversations({
     // Dropped if the Project changes before it answers, so a slow listing for the last Project
     // cannot replace the one for this.
     let current = true;
-    void listWith.current<ImportableConversation[]>({ type: "list_imports", source: "claude-code", scope }).then((listed) => {
+    void listWith.current<ImportableConversation[]>({ type: "list_imports", backend, scope }).then((listed) => {
       if (current) setConversations(listed ?? null);
     });
     return () => {
       current = false;
     };
-  }, [scope, attempt]);
+  }, [backend, scope, attempt]);
 
   const bring = useCallback(
     async (conversation: ImportableConversation, mode: ImportMode) => {
       if (scope === undefined || importing) return;
       setImporting(conversation.id);
       try {
-        const created = await run<string>({ type: "import", source: "claude-code", scope, conversationId: conversation.id, mode });
+        const created = await run<string>({ type: "import", backend, scope, conversationId: conversation.id, mode });
         if (created) onImported(created);
       } finally {
         setImporting(undefined);
       }
     },
-    [importing, onImported, run, scope],
+    [backend, importing, onImported, run, scope],
   );
 
+  const source = importSourceLabel(backend);
   if (scope === undefined) {
-    return <p className="text-center text-sm text-muted-foreground">Choose a Project to see the Claude Code conversations recorded in it.</p>;
+    return <p className="text-center text-sm text-muted-foreground">Choose a Project to see the {source} conversations recorded in it.</p>;
   }
   if (conversations === null) {
     return (
       <div className="flex items-center gap-2 text-sm text-destructive" role="alert">
-        <span>Could not list the Claude Code conversations in {projectName ?? "this Project"}.</span>
+        <span>Could not list the {source} conversations in {projectName ?? "this Project"}.</span>
         <Button size="sm" variant="ghost" onClick={() => setAttempt((count) => count + 1)}>Try again</Button>
       </div>
     );
   }
   if (conversations === undefined) {
-    return <p className="text-sm text-muted-foreground">Looking for Claude Code conversations…</p>;
+    return <p className="text-sm text-muted-foreground">Looking for {source} conversations…</p>;
   }
   if (conversations.length === 0) {
     return (
       <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-        Claude Code has recorded no conversations in {projectName ?? "this Project"}.
+        {source} has recorded no conversations in {projectName ?? "this Project"}.
       </p>
     );
   }
@@ -88,7 +96,7 @@ export function ImportConversations({
       <p className="text-xs text-muted-foreground">
         Continue brings the conversation&rsquo;s context too, so your next message carries on where it left off. Read only brings the transcript alone.
       </p>
-      <ul className="grid gap-2" aria-label="Claude Code conversations">
+      <ul className="grid gap-2" aria-label={`${source} conversations`}>
         {conversations.map((conversation) => (
           <li key={conversation.id} className="flex items-center justify-between gap-3 rounded-lg border bg-background px-3 py-2">
             <div className="min-w-0">

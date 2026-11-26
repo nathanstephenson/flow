@@ -147,7 +147,7 @@ export function migrateLegacyClaudeState(stateDir: string | undefined, inherited
 }
 
 /**
- * Copy one Claude Code conversation into an Agent Session's owned records, for Import (ADR 0039).
+ * Copy one Claude Code conversation into an Agent Session's owned records, for Import (ADR 0047).
  *
  * The very copy a legacy Revive makes, and deliberately so: it already brings exactly one UUID's
  * record and sidecars, refuses links, and never overwrites a newer owned record. Run at import time

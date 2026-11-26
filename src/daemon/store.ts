@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { ATTACHMENT_MEDIA_TYPES, type AttachmentMediaType } from "../protocol/attachments.ts";
 import type { AgentPermissionMode, EffortLevel, LoggedEvent } from "../protocol/events.ts";
 import type { SessionAttention, SessionLifecycle, SessionStatus } from "../protocol/commands.ts";
-import type { ImportSource } from "../protocol/imports.ts";
 
 /**
  * On-disk home of Presentation Transcripts.
@@ -50,13 +49,13 @@ export type SessionMeta = {
   /** Opaque token letting a Backend Adapter continue this Conversation Context. */
   resumeToken?: string;
   /**
-   * The conversation this Agent Session was imported from (ADR 0039). Absent for one made here.
+   * The conversation this Agent Session was imported from (ADR 0047). Absent for one made here.
    *
    * Kept apart from `resumeToken`, which it starts out equal to for a `continue` import: the token
    * moves whenever the backend forks the conversation, and this has to keep naming the original so
    * the import picker can say it was already brought in.
    */
-  imported?: { source: ImportSource; conversationId: string };
+  imported?: { conversationId: string };
   /** A Rewind not yet followed by a turn: the next Backend Session ends its context before this user message. */
   rewindTo?: string;
   modelId?: string;

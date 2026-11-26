@@ -1,13 +1,5 @@
 /**
- * Import: an Agent Session made from a conversation another tool recorded (ADR 0039).
- *
- * Only Claude Code today. The source is named on the wire anyway, so a second one is a new member
- * of a union rather than a change to every command that already assumes there is only one.
- */
-export type ImportSource = "claude-code";
-
-/**
- * What the imported Agent Session may do afterwards.
+ * Import: an Agent Session made from a conversation a Backend Adapter's own tool recorded (ADR 0047).
  *
  * `continue` carries the Conversation Context with it, so the Agent Session is Dormant and the next
  * message Revives it onto the conversation the model already had. `view` brings the Presentation
@@ -17,8 +9,7 @@ export type ImportMode = "continue" | "view";
 
 /** One conversation a Scope's source tool recorded, as the import picker lists it. */
 export type ImportableConversation = {
-  source: ImportSource;
-  /** The source's own id for the conversation. For Claude Code, its session UUID. */
+  /** The source's own id for the conversation. */
   id: string;
   /** The source's own title where it wrote one, otherwise the first prompt's opening line. */
   title: string;

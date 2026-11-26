@@ -144,7 +144,7 @@ _Avoid_: branch, clone, copy
 **Ended**: Deliberately disposed of, with no Backend Session running. Its Presentation Transcript remains readable, but it cannot be Revived and is never Reaped.
 _Avoid_: closed, deleted, settled
 
-**Import**: Create an Agent Session from one conversation another tool recorded in its Scope, today only Claude Code (ADR 0039). A continue import copies that conversation's Conversation Context and starts Dormant. A view import brings only the Presentation Transcript and starts Ended. Neither starts a Backend Session.
+**Import**: Create an Agent Session from one conversation that the tool behind a Backend Adapter (Claude Code or pi) recorded in its Scope (ADR 0047). A continue import copies that conversation's Conversation Context and starts Dormant. A view import brings only the Presentation Transcript and starts Ended. Neither starts a Backend Session.
 _Avoid_: migrate, sync, adopt
 
 ### Directories and shells
