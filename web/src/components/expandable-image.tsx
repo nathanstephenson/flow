@@ -25,7 +25,7 @@ export function ExpandableImage({ src, alt, className, referrerPolicy, onError }
       >
         <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy={referrerPolicy} onError={onError} className={cn("block", className)} />
       </DialogTrigger>
-      <DialogContent className="w-auto max-w-[80vw] gap-0 p-2 sm:max-w-[80vw]">
+      <DialogContent className="w-max max-w-[80vw] gap-0 p-2 sm:max-w-[80vw]">
         <DialogTitle className="sr-only">{alt || "Image"}</DialogTitle>
         <ZoomPanImage src={src} alt={alt} referrerPolicy={referrerPolicy} />
       </DialogContent>
