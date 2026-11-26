@@ -454,10 +454,7 @@ export function NewAgentSessionPage({
                     <Accordion>
                       <AccordionItem value="import">
                         <AccordionTrigger>Import from {importSourceLabel(backend)}</AccordionTrigger>
-                        <AccordionContent className="grid gap-3">
-                          <p className="text-xs text-muted-foreground">
-                            Conversations {importSourceLabel(backend)} recorded in {project?.name ?? "the chosen Project"}. Nothing runs until you write to one.
-                          </p>
+                        <AccordionContent>
                           <ImportConversations backend={backend} scope={scope} projectName={project?.name} onImported={(id) => onCreated(id)} />
                         </AccordionContent>
                       </AccordionItem>

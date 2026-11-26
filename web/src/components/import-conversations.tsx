@@ -92,33 +92,28 @@ export function ImportConversations({
   }
 
   return (
-    <div className="grid gap-3">
-      <p className="text-xs text-muted-foreground">
-        Continue brings the conversation&rsquo;s context too, so your next message carries on where it left off. Read only brings the transcript alone.
-      </p>
-      <ul className="grid gap-2" aria-label={`${source} conversations`}>
-        {conversations.map((conversation) => (
-          <li key={conversation.id} className="flex items-center justify-between gap-3 rounded-lg border bg-background px-3 py-2">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium">{conversation.title}</span>
-                {conversation.importedAs ? <Badge variant="secondary">Imported</Badge> : null}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {relativeTime(conversation.updatedAt)} · {conversation.prompts} {conversation.prompts === 1 ? "prompt" : "prompts"}
-              </span>
+    <ul className="grid gap-2" aria-label={`${source} conversations`}>
+      {conversations.map((conversation) => (
+        <li key={conversation.id} className="flex items-center justify-between gap-3 rounded-lg border bg-background px-3 py-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-medium">{conversation.title}</span>
+              {conversation.importedAs ? <Badge variant="secondary">Imported</Badge> : null}
             </div>
-            <div className="flex shrink-0 gap-1">
-              <Button size="sm" variant="ghost" disabled={importing !== undefined} onClick={() => void bring(conversation, "view")}>
-                Read only
-              </Button>
-              <Button size="sm" disabled={importing !== undefined} onClick={() => void bring(conversation, "continue")}>
-                {importing === conversation.id ? "Importing…" : "Continue"}
-              </Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
+            <span className="text-xs text-muted-foreground">
+              {relativeTime(conversation.updatedAt)} · {conversation.prompts} {conversation.prompts === 1 ? "prompt" : "prompts"}
+            </span>
+          </div>
+          <div className="flex shrink-0 gap-1">
+            <Button size="sm" variant="ghost" disabled={importing !== undefined} onClick={() => void bring(conversation, "view")}>
+              Read only
+            </Button>
+            <Button size="sm" disabled={importing !== undefined} onClick={() => void bring(conversation, "continue")}>
+              {importing === conversation.id ? "Importing…" : "Continue"}
+            </Button>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
