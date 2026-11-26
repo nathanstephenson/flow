@@ -2,6 +2,7 @@
 import type { IncomingAttachment } from "./attachments.ts";
 import type { Capabilities, EffortLevel, AgentPermissionMode, PermissionDecision, RewindRestore } from "./events.ts";
 import type { Branch, ChangesView, CommitInput, GitState, GitTextKind, PullRequestInput, PushInput } from "./git.ts";
+import type { ImportMode } from "./imports.ts";
 import type { PullRequestActionInput, PullRequestCommentInput, PullRequestDraftInput, PullRequestEditInput, PullRequestRef, PullRequestRerunInput, PullRequestReviewInput, PullRequestTarget, PullRequestThreadInput } from "./pull-request.ts";
 import type { StackInput, StackReviewAction } from "./stack.ts";
 
@@ -337,4 +338,20 @@ export type Command =
    * that is not scoped to it.
    */
   | { type: "answer_permission"; sessionId: string; callId: string; decision: PermissionDecision }
+  /**
+   * The conversations a backend's own tool recorded in `scope`, newest first, for the import picker.
+   *
+   * Keyed by Scope rather than listed machine-wide, because an Agent Session is bound to its Scope
+   * for life and a conversation from somewhere else could not be continued here anyway. Answers
+   * `ImportableConversation[]`.
+   */
+  | { type: "list_imports"; backend?: string; scope: string }
+  /**
+   * Make an Agent Session from one conversation a backend's own tool recorded (ADR 0047). Answers its id.
+   *
+   * One conversation, named by the caller, and never a sweep: the host reads nothing else from the
+   * source's store (ADR 0028). Starts no Backend Session either way — a `continue` import is
+   * Dormant until its first message Revives it, and a `view` import is Ended from birth.
+   */
+  | { type: "import"; backend?: string; scope: string; conversationId: string; mode: ImportMode }
   | { type: "list" };

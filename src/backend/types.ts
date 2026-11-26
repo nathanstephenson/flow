@@ -1,7 +1,9 @@
 import type { AutoCompaction } from "../protocol/settings.ts";
 import type { PlanLimitWindows } from "../protocol/plan-limits.ts";
 import type { AttachmentMediaType } from "../protocol/attachments.ts";
+import type { ImportableConversation } from "../protocol/imports.ts";
 import type {
+  AgentEvent,
   BackendEvent,
   Capabilities,
   EffortLevel,
@@ -216,6 +218,19 @@ export interface BackendSession {
   dispose(): Promise<void>;
 }
 
+/** One recorded conversation, translated into the Agent Events a Presentation Transcript replays (ADR 0047). */
+export type ImportedConversation = {
+  title: string;
+  /** Whether the source named the conversation itself, rather than the title being its first prompt. */
+  named: boolean;
+  startedAt: string;
+  updatedAt: string;
+  events: Array<{ at: string; event: AgentEvent }>;
+};
+
+/** Store one prompt image and answer its Attachment id, or `undefined` for a media type Flow cannot hold. */
+export type StoreImage = (mediaType: string, base64: string) => string | undefined;
+
 export interface AgentBackend {
   readonly name: string;
   /** Mounts needed for later attachment to a non-evictable Shared Sandbox. */
@@ -226,4 +241,10 @@ export interface AgentBackend {
   relocate?(stateDir: string, from: string, to: string): void;
   /** Copy a Conversation Context for a Fork. Returns the resume token for `to`. */
   fork?(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string;
+  /** The conversations this backend's own tool recorded in `scope`, newest first, for Import (ADR 0047). */
+  listImports?(scope: string): Promise<ImportableConversation[]>;
+  /** One recorded conversation, translated. Throws when there is no such conversation. */
+  readImport?(scope: string, conversationId: string, storeImage: StoreImage): ImportedConversation;
+  /** Copy one recorded conversation's Conversation Context into `stateDir`. Returns the resume token. */
+  copyImport?(stateDir: string, scope: string, conversationId: string): string;
 }

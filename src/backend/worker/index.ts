@@ -10,7 +10,8 @@ import { validateFilesystemScope } from "../../isolation/filesystem.ts";
 import { workflowBuilderFolder, type SharedSandbox } from "../../isolation/shared-sandbox.ts";
 import type { FilesystemIsolationMode } from "../../protocol/settings.ts";
 import { nodeExecutionAssets } from "../../isolation/node-assets.ts";
-import type { AgentBackend, BackendCreateOptions, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
+import type { ImportableConversation } from "../../protocol/imports.ts";
+import type { AgentBackend, BackendCreateOptions, ImportedConversation, StoreImage, BackendSession, WorkflowSubagentHandle, WorkflowSubagentOptions, PromptAttachment } from "../types.ts";
 import type { PlanLimitWindows } from "../../protocol/plan-limits.ts";
 import type { AgentPermissionMode, BackendEvent, Capabilities, EffortLevel, PermissionDecision, Skill, Spend } from "../../protocol/events.ts";
 import { launchWorker, workerCommand, type WorkerLaunchOptions } from "./launcher.ts";
@@ -20,8 +21,10 @@ import { SandboxMcpSession } from "./sandbox-mcp.ts";
 import { mcpMetadata, type SessionSnapshot } from "./protocol.ts";
 import { workflowInspectInput, workflowRecoverInput, workflowRelayInput } from "../workflow-tools.ts";
 import { sessionListInput, sessionInspectInput, sessionCreateInput, sessionSendInput } from "../session-tools.ts";
-import { migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
+import { importClaudeConversation, migrateLegacyClaudeState, prepareClaudeState, relocateClaudeState, forkClaudeState } from "./claude-state.ts";
 import { relocatePiState, forkPiState } from "../pi/state.ts";
+import { listClaudeCodeConversations, readClaudeCodeConversation } from "../claude/import.ts";
+import { copyPiConversation, listPiConversations, readPiConversation } from "../pi/import.ts";
 import { createPiModelAuth, type PiModelAuth } from '../pi/model-auth.ts';
 import { recordTiming } from "../../daemon/timings.ts";
 
@@ -184,6 +187,26 @@ export class WorkerBackend implements AgentBackend {
 
   fork(from: { stateDir: string; scope: string; resume: string }, to: { stateDir: string; scope: string }): string {
     return this.name === "claude" ? forkClaudeState(from, to) : forkPiState(from.stateDir, to.stateDir, to.scope);
+  }
+
+  listImports(scope: string): Promise<ImportableConversation[]> {
+    return this.name === "claude" ? listClaudeCodeConversations(this.importEnv(), scope) : listPiConversations(this.importEnv(), scope);
+  }
+
+  readImport(scope: string, conversationId: string, storeImage: StoreImage): ImportedConversation {
+    return this.name === "claude"
+      ? readClaudeCodeConversation(this.importEnv(), scope, conversationId, storeImage)
+      : readPiConversation(this.importEnv(), scope, conversationId, storeImage);
+  }
+
+  copyImport(stateDir: string, scope: string, conversationId: string): string {
+    if (this.name === "pi") return copyPiConversation(this.importEnv(), stateDir, scope, conversationId);
+    importClaudeConversation(stateDir, this.importEnv(), scope, conversationId);
+    return conversationId;
+  }
+
+  private importEnv(): NodeJS.ProcessEnv {
+    return { ...process.env, ...this.options.env };
   }
 
   async create(options: BackendCreateOptions): Promise<BackendSession> {

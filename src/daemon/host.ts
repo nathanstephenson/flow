@@ -20,7 +20,7 @@ import { GitStates, readStatus } from "./git-state.ts";
 import { TOUR_INSTRUCTIONS, TOUR_READ_TOOLS, pullRequestTourInput, tourInput, tourText } from "./tour.ts";
 import { resolveDefaultBackend, type AutoCompaction } from "../protocol/settings.ts";
 
-import type { AgentBackend, BackendSession, PromptAttachment, ReadOnlyScope, WorkflowSubagentHandle } from "../backend/types.ts";
+import type { AgentBackend, BackendSession, ImportedConversation, PromptAttachment, ReadOnlyScope, WorkflowSubagentHandle } from "../backend/types.ts";
 import {
   isAttachmentMediaType,
   mediaTypeOf,
@@ -71,6 +71,7 @@ import {
   switchBranch as gitSwitchBranch,
 } from "./git.ts";
 import { SessionLog } from "./log.ts";
+import type { ImportableConversation, ImportMode } from "../protocol/imports.ts";
 import { probeModels, type BackendModels } from "./models.ts";
 import { PiModelProbeCache } from "./pi-model-cache.ts";
 import { ScheduleValidationError } from "../workflows/schedule-errors.ts";
@@ -249,6 +250,8 @@ type SessionRecord = {
    */
   spend: Spend | undefined;
   resumeToken: string | undefined;
+  /** The conversation this Agent Session was imported from (ADR 0047), or absent for one made here. */
+  imported: { conversationId: string } | undefined;
   rewindTo: string | undefined;
   modelId: string | undefined;
   effort: EffortLevel | undefined;
@@ -1146,6 +1149,7 @@ export class SessionHost {
         spend: spendFrom(entries),
         mcpConnectionIds: meta.mcpConnectionIds ?? [],
         resumeToken: meta.resumeToken,
+        imported: meta.imported,
         rewindTo: meta.rewindTo,
         modelId: meta.modelId,
         effort: meta.effort,
@@ -1292,6 +1296,7 @@ export class SessionHost {
       spend: undefined,
       mcpConnectionIds,
       resumeToken: undefined,
+      imported: undefined,
       rewindTo: undefined,
       /*
        * Resolved here and never again.
@@ -1354,6 +1359,143 @@ export class SessionHost {
      */
     if (!options.scheduled) this.warmSummaryModel(backend.name);
     return id;
+  }
+
+  /** The conversations a backend's own tool recorded in `scope` that could be imported here (ADR 0047). */
+  async listImports(backendName: string | undefined, scope: string): Promise<ImportableConversation[]> {
+    const name = this.importBackendName(backendName);
+    const key = scopeKey(scope);
+    const imported = new Map<string, string>();
+    for (const record of this.sessions.values()) {
+      if (record.imported && record.backendName === name && record.scope === key) imported.set(record.imported.conversationId, record.id);
+    }
+    return (await this.importBackend(name).listImports!(key)).map((conversation) => {
+      const as = imported.get(conversation.id);
+      return as === undefined ? conversation : { ...conversation, importedAs: as };
+    });
+  }
+
+  /**
+   * Make an Agent Session from one conversation a backend's own tool recorded (ADR 0047).
+   *
+   * Starts no Backend Session, which is what keeps an import cheap and safe to try: nothing is
+   * spent and nothing runs until somebody writes to the result. A `continue` import is Dormant, so
+   * that first message Revives it through the ordinary path (ADR 0003); a `view` import is Ended,
+   * which is already the Lifecycle that means "readable, never Revived, never Reaped".
+   *
+   * Everything is read and copied before any record exists, and a failure removes what was written
+   * so far: a half-made import must not load on the next boot as an Agent Session with no transcript.
+   */
+  importConversation(options: { backend?: string; scope: string; conversationId: string; mode: ImportMode }): string {
+    if (options.mode !== "continue" && options.mode !== "view") throw new CommandRefused(`Unknown import mode: ${String(options.mode)}`);
+    const backendName = this.importBackendName(options.backend);
+    const backend = this.importBackend(backendName);
+    const store = this.storeOrThrow();
+    const scope = scopeKey(options.scope);
+    if (!existsSync(scope)) throw new CommandRefused(`${scope} does not exist`);
+    const id = randomUUID();
+    let conversation: ImportedConversation;
+    let resumeToken: string | undefined;
+    try {
+      conversation = backend.readImport!(scope, options.conversationId,
+        (mediaType, base64) => isAttachmentMediaType(mediaType) ? store.writeAttachment(id, mediaType, base64) : undefined);
+      if (options.mode === "continue") resumeToken = backend.copyImport!(store.backendDir(id), scope, options.conversationId);
+    } catch (error) {
+      store.deleteSession(id);
+      throw new CommandRefused(error instanceof Error ? error.message : String(error));
+    }
+
+    const now = new Date().toISOString();
+    const effort = options.mode === "continue" ? this.defaultEffort?.(backendName) : undefined;
+    const record: SessionRecord = {
+      id,
+      scope,
+      backendName,
+      log: this.newLog(id),
+      session: undefined,
+      reviving: undefined,
+      lifecycle: options.mode === "continue" ? "dormant" : "ended",
+      turnInFlight: false,
+      openSubagentIds: new Set(),
+      openBackgroundCallIds: new Set(),
+      // Now, not when the conversation last moved: somebody who has just imported something is
+      // about to look for it, and a week-old resting time would bury it beneath the Bands above.
+      restingAt: now,
+      settledAt: undefined,
+      // What `backendEpoch` reads back on load, since the transcript opens with `session_started`.
+      backendEpoch: 1,
+      latestAttention: undefined,
+      latestOutcome: undefined,
+      seenAttentionKeys: new Set(),
+      readAttentionVersion: 0,
+      outputPreview: undefined,
+      openPermissionAttention: new Map(),
+      openEnquiryAttention: new Map(),
+      buffered: undefined,
+      queue: [],
+      title: conversation.title,
+      // A name the source gave it is as considered as one ours would be, so it is not replaced by
+      // the first line of whatever is typed next. A first prompt is still only a first line.
+      titleSource: conversation.named ? "summary" : "first-line",
+      titleGeneration: 0,
+      branch: undefined,
+      branchGeneration: 0,
+      worktree: undefined,
+      pendingBranchNote: undefined,
+      capabilities: IMPORTED_CAPABILITIES,
+      spend: undefined,
+      mcpConnectionIds: (this.mcpConnections?.() ?? []).filter((connection) => connection.enabledByDefault).map((connection) => connection.id),
+      resumeToken,
+      imported: { conversationId: options.conversationId },
+      rewindTo: undefined,
+      // Resolved once, as `create` resolves them, so a Revive a month from now does not pick up
+      // whatever the defaults are by then.
+      modelId: options.mode === "continue" ? this.defaultModel?.(backendName) : undefined,
+      effort,
+      permissionMode: this.permissionDefault(backendName),
+      initialEffortUnconfirmed: effort !== undefined,
+      createdAt: conversation.startedAt,
+      updatedAt: now,
+    };
+    try {
+      /*
+       * Opened with `session_started` like every other transcript, so a client reducing it learns
+       * the backend and Scope the usual way. Its Capabilities are honest about having none: no
+       * Backend Session has served this Agent Session yet, and the first Revive reports the real
+       * ones (see `reviveOnce`).
+       */
+      record.log.append({
+        type: "session_started",
+        backend: backendName,
+        scope,
+        capabilities: IMPORTED_CAPABILITIES,
+        permissionMode: record.permissionMode,
+      }, conversation.startedAt);
+      for (const { at, event } of conversation.events) record.log.append(event, at);
+      record.log.append(options.mode === "continue"
+        ? { type: "session_dormant", reason: "imported" }
+        : { type: "session_ended", reason: "imported as read-only" });
+      record.outputPreview = latestParentOutputPreview(record.log.since(0));
+      this.sessions.set(id, record);
+      this.persist(record);
+    } catch (error) {
+      this.sessions.delete(id);
+      store.deleteSession(id);
+      throw error;
+    }
+    return id;
+  }
+
+  private importBackendName(name: string | undefined): string {
+    const resolved = name ?? resolveDefaultBackend([...this.backends.keys()], this.defaultBackend?.());
+    if (resolved === undefined) throw new CommandRefused("This Session Host has no backend");
+    return resolved;
+  }
+
+  private importBackend(name: string): AgentBackend {
+    const backend = this.backends.get(name);
+    if (!backend?.listImports || !backend.readImport || !backend.copyImport) throw new CommandRefused(`Backend Adapter ${name} cannot import conversations`);
+    return backend;
   }
 
   /**
@@ -1512,7 +1654,15 @@ export class SessionHost {
     this.closeOpenSubagents(record, record.log.since(0));
     this.closeOpenBackgroundCalls(record, record.log.since(0));
     record.backendEpoch += 1;
-    await this.startPermissionBackend(record);
+    const session = await this.startPermissionBackend(record);
+    // An imported Agent Session's transcript opened with no models, because nothing had served it
+    // (ADR 0047). Its first Revive is the first moment its Capabilities are known, and a client
+    // reads them off the transcript — so they are written there, after `revived` like the rest.
+    // Only when the adapter did not already announce them on its way up, which Claude's does.
+    if (record.imported && capabilitiesFrom(record.log.since(0))?.models.length === 0
+      && !record.buffered?.some((event) => event.type === "capabilities_changed")) {
+      record.buffered?.push({ type: "capabilities_changed", capabilities: session.capabilities });
+    }
     record.lifecycle = "live";
     // Un-settled, so the retention window starts again from the next Settle rather than from the
     // one this Revive just undid.
@@ -2886,6 +3036,10 @@ export class SessionHost {
         return await this.answerPermission(command.sessionId, command.callId, command.decision);
       case "list_skills":
         return await this.listSkills(command.sessionId);
+      case "list_imports":
+        return await this.listImports(command.backend, command.scope);
+      case "import":
+        return this.importConversation(command);
       case "list":
         return this.list();
     }
@@ -3703,6 +3857,7 @@ export class SessionHost {
       readAttentionVersion: record.readAttentionVersion,
       mcpConnectionIds: record.mcpConnectionIds ?? [],
       ...(record.resumeToken === undefined ? {} : { resumeToken: record.resumeToken }),
+      ...(record.imported === undefined ? {} : { imported: record.imported }),
       ...(record.rewindTo === undefined ? {} : { rewindTo: record.rewindTo }),
       ...(record.modelId === undefined ? {} : { modelId: record.modelId }),
       ...(record.effort === undefined ? {} : { effort: record.effort }),
@@ -3938,6 +4093,24 @@ function spendFrom(entries: LoggedEvent[]): Spend | undefined {
   }
   return spend;
 }
+
+/**
+ * The Capabilities an imported Agent Session opens with: none (ADR 0047).
+ *
+ * `create` refuses to return an Agent Session without confirmed models, so an empty model list can
+ * only mean that no Backend Session has served this one yet — which is exactly what `reviveOnce`
+ * checks for. Claiming the Capabilities of whatever the adapter would report today instead would put
+ * a guess into an append-only transcript.
+ */
+const IMPORTED_CAPABILITIES: Capabilities = {
+  providers: [],
+  models: [],
+  compaction: false,
+  fork: false,
+  subagents: false,
+  enquiries: false,
+  permissions: false,
+};
 
 function capabilitiesFrom(entries: LoggedEvent[]): Capabilities | undefined {
   let capabilities: Capabilities | undefined;
